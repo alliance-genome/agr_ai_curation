@@ -8,7 +8,7 @@ import pytest
 from agents import Agent, RunConfig
 from agents.run import CallModelData, ModelInputData
 
-from src.lib.openai_agents.model_context_view import ContextRecoveryError, ModelContextView, run_config_with_history
+from src.lib.openai_agents.model_context_view import ModelContextView, run_config_with_history
 from src.lib.openai_agents.run_history import HistoryScope, RunHistory, exact_json
 
 
@@ -25,10 +25,6 @@ class MemoryStore:
 
 @pytest.fixture
 def setup(monkeypatch):
-    monkeypatch.setenv("AGENT_CONTEXT_TRIGGER_ESTIMATED_TOKENS", "4000")
-    monkeypatch.setenv("AGENT_CONTEXT_TARGET_ESTIMATED_TOKENS", "2500")
-    monkeypatch.setenv("AGENT_CONTEXT_RECENT_TOOL_RESULTS", "1")
-    monkeypatch.setenv("AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS", "512")
     monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "owner")
     monkeypatch.setattr("src.lib.context.get_current_trace_id", lambda: "run")
     monkeypatch.setattr("src.lib.context.get_current_session_id", lambda: None)
@@ -48,7 +44,7 @@ def exchange(index, value):
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_keeps_request_arguments_recent_and_opaque_items_and_recovers_exact_negation(setup):
+async def test_complete_early_results_and_pending_calls_survive_later_calls(setup):
     history, agent = setup
     early = {"content": "NOT present α😀. " * 1400, "next_span_offset": 4}
     items = [{"role": "user", "content": "Extract only negatives."},
@@ -57,60 +53,37 @@ async def test_checkpoint_keeps_request_arguments_recent_and_opaque_items_and_re
              {"type": "function_call", "call_id": "pending", "name": "stage", "arguments": "{}"}]
     original = deepcopy(items)
     view = ModelContextView(history)
-    result = await view.filter(call(agent, items))
+    assert (await view.filter(call(agent, items))).input == original
+    later = items + [{"role": "assistant", "content": "continue"}]
+    assert (await view.filter(call(agent, later))).input == later
     assert items == original
-    assert result.instructions == agent.instructions
-    assert result.input[:3] == items[:3]
-    assert result.input[-3:] == items[-3:]
-    receipt = json.loads(result.input[3]["output"])
-    assert receipt["continuation_fields"] == {"next_span_offset": 4}
-    restored = history.store.rows[receipt["history_event_id"]]
-    assert json.loads(restored["output"]) == early
-    assert view.last_metrics["externalized_output_count"] == 1
-    assert view.last_metrics["after"]["estimated_total_tokens"] < view.last_metrics["before"]["estimated_total_tokens"]
-    # Stable checkpoint at the next request; no prefix churn.
-    later = await view.filter(call(agent, items + [{"role": "assistant", "content": "continue"}]))
-    assert later.input[:len(items)] == result.input
-    assert view.checkpoint == 1
+    assert view.last_metrics["policy"] == "native_compaction"
+    assert view.last_metrics["archive_healthy"]
 
 
 @pytest.mark.asyncio
-async def test_small_runs_are_unchanged_and_budget_counts_instructions_tools_and_reserve(setup):
+async def test_small_runs_are_unchanged_and_have_canonical_checkpoint(setup):
     history, agent = setup
-    agent.model_settings.max_tokens = 500
     view = ModelContextView(history)
     items = [{"role": "user", "content": "tiny task"}]
     result = await view.filter(call(agent, items))
     assert result.input == items
-    assert view.last_metrics["checkpoint"] == 0
-    assert view.last_metrics["before"]["output_reserve_tokens"] == 500
-    assert view.last_metrics["before"]["outbound"]["instructions"]["chars"] > 0
+    assert result.instructions == agent.instructions
+    assert any(kind == "model_context_checkpoint" for kind, _ in history.store.events)
 
 
 @pytest.mark.asyncio
-async def test_toolless_retry_restores_exact_bodies_before_new_native_compaction(setup):
+async def test_native_boundary_is_pruned_but_standalone_canonical_window_stays_intact(setup):
     from src.lib.openai_agents.context_compaction import compaction_key
-
     history, agent = setup
-    early = {"content": "NOT present α😀. " * 1400, "next_span_offset": 4}
     foreign = {"type": "compaction", "encrypted_content": "standalone-canonical-state"}
-    items = [foreign, {"role": "user", "content": "Extract only negatives."},
-             *exchange(1, early), *exchange(2, {"status": "ok"})]
-    projected = await ModelContextView(history).filter(call(agent, items))
-    assert json.loads(projected.input[3]["output"])["content_externalized"]
-    native = {"type": "compaction", "encrypted_content": "summary-of-externalized-ref"}
+    items = [{"role": "user", "content": "Retain this user message."}, foreign,
+             *exchange(1, {"content": "NOT present"})]
+    assert (await ModelContextView(history).filter(call(agent, items))).input == items
+    native = {"type": "compaction", "encrypted_content": "native-state"}
     history.native_compaction_keys.add(compaction_key(native))
-    canonical = items + [native, {"role": "user", "content": "Return the final object."}]
-    original = deepcopy(canonical)
-    retry = ModelContextView(history, allow_projection=False)
-    result = await retry.filter(call(agent, canonical))
-    assert agent.tools == []
-    assert canonical == original
-    assert result.input == items + [canonical[-1]]
-    assert json.loads(result.input[3]["output"]) == early
-    assert retry.last_metrics["compacted_prefix_items"] == 0
-    assert retry.last_metrics["reset_native_compaction_items"] == 1
-    assert retry.last_metrics["externalized_output_count"] == 0
+    final = {"role": "user", "content": "Return the final object."}
+    assert (await ModelContextView(history).filter(call(agent, items + [native, final]))).input == [native, final]
 
 
 @pytest.mark.asyncio
@@ -121,29 +94,20 @@ async def test_actionable_errors_are_not_summarized_away(setup):
     view = ModelContextView(history)
     result = await view.filter(call(agent, items))
     assert result.input == items
-    assert view.last_metrics["above_soft_target"]
     assert history.healthy
 
 
 @pytest.mark.asyncio
-async def test_archive_failure_prohibits_eviction(setup):
+async def test_archive_failure_retains_full_input_when_no_capacity_recovery_is_needed(setup):
     history, agent = setup
     def broken(*args, **kwargs):
         raise OSError("offline")
     history.store.append = broken
     items = [*exchange(1, {"data": "original " * 2500}), *exchange(2, {"ok": True})]
-    with pytest.raises(ContextRecoveryError, match="history could not be saved"):
-        await ModelContextView(history).filter(call(agent, items))
-    assert "original" in items[1]["output"]
-
-
-@pytest.mark.asyncio
-async def test_disabling_projection_keeps_complete_history(setup, monkeypatch):
-    history, agent = setup
-    monkeypatch.setenv("AGENT_CONTEXT_VIEW_ENABLED", "false")
-    items = [*exchange(1, {"data": "original " * 2500}), *exchange(2, {"ok": True})]
     assert (await ModelContextView(history).filter(call(agent, items))).input == items
-    assert len(history.item_refs) == len(items)
+    assert not history.healthy
+
+
 
 
 @pytest.mark.asyncio
@@ -198,35 +162,25 @@ async def test_real_sdk_loop_preserves_canonical_history_and_can_read_old_output
     agent.tools = [*wrap_history_tools([lookup], history), *history_tools(history)]
     agent.run_history = history
     config = run_config_with_history(RunConfig(tracing_disabled=True), history)
-    # Allow the first result to remain for the immediate following model call;
-    # checkpoint once there is an older completed output to externalize.
-    from src.lib.openai_agents import config as runtime_config
-    original_trigger = runtime_config.get_agent_context_trigger_estimated_tokens
-    runtime_config.get_agent_context_trigger_estimated_tokens = lambda: 12000 if len(model.inputs) < 2 else 4000
-    try:
-        if streamed:
-            result = Runner.run_streamed(agent, "Extract negatives; do not lose A.", run_config=config)
-            async for _ in result.stream_events():
-                pass
-        else:
-            result = await Runner.run(agent, "Extract negatives; do not lose A.", run_config=config)
-    finally:
-        runtime_config.get_agent_context_trigger_estimated_tokens = original_trigger
+    if streamed:
+        result = Runner.run_streamed(agent, "Extract negatives; do not lose A.", run_config=config)
+        async for _ in result.stream_events():
+            pass
+    else:
+        result = await Runner.run(agent, "Extract negatives; do not lose A.", run_config=config)
     assert calls == [0, 1]
     canonical = result.to_input_list()
     assert any(expected["objects"][0]["quote"] in item.get("output", "") for item in canonical if isinstance(item, dict))
     last = model.inputs[-1]
-    receipt = next(json.loads(item["output"]) for item in last if isinstance(item, dict)
-                   and item.get("type") == "function_call_output" and item["call_id"] == "lookup-1")
-    assert receipt["content_externalized"] is True
-    original_output = history.store.rows[receipt["history_event_id"]]["output"]
+    original_output = next(item["output"] for item in last if isinstance(item, dict)
+                           and item.get("type") == "function_call_output" and item["call_id"] == "lookup-1")
     import ast
     assert ast.literal_eval(original_output) == expected
 
     assert any(kind == "model_output" for kind, _ in history.store.events)
     completed = [m for m in measurements if m.get("outcome") == "completed"]
     assert completed
-    assert completed[-1]["context_view"]["externalized_output_count"] == 1
+    assert completed[-1]["context_view"]["policy"] == "native_compaction"
     assert "provider_usage" in completed[-1]
 
 
@@ -240,10 +194,9 @@ async def test_native_multimodal_outputs_are_protected_and_toolless_retry_never_
     assert result.input == items
     assert items[1]["output"] == image_output
     text_items = [*exchange(1, {"text": "old evidence " * 3000}), *exchange(2, {"ok": True})]
-    view = ModelContextView(history, allow_projection=False)
+    view = ModelContextView(history)
     result = await view.filter(call(agent, text_items))
     assert result.input == text_items
-    assert not view.retired
 
 
 @pytest.mark.asyncio
@@ -309,23 +262,18 @@ async def test_thirteen_results_then_two_six_read_bursts_keep_original_event_ide
                 {"type": "function_call_output", "call_id": call_id, "output": str(result)},
             ])
         projected = await view.filter(call(agent, items))
-        retired_reads = [json.loads(item["output"]) for item in projected.input
-                         if item.get("type") == "function_call_output" and item["call_id"].startswith("read-")
-                         and item["output"].startswith('{"content_externalized"')]
-        assert retired_reads
-        assert all(item["read"]["event_id"] == ref for item in retired_reads)
-        assert all(item["read"]["detail_path"] == "payload.content" for item in retired_reads)
-    assert view.last_metrics["retrieval_call_count"] == 12
-    assert view.last_metrics["externalized_output_count"] >= 13
+        assert projected.input == items
+        outputs = [item["output"] for item in projected.input if item.get("type") == "function_call_output"
+                   and item["call_id"].startswith("read-")]
+        assert len(outputs) == (burst + 1) * 6
+        assert all("Critical NOT present evidence." in output for output in outputs)
     assert history.store.rows[ref] == original
 
 
-@pytest.mark.parametrize("enabled", ["true", "false"])
 @pytest.mark.parametrize("failure", ["prior", "capture", "checkpoint"])
 @pytest.mark.asyncio
-async def test_archive_failure_preserves_numeric_source_view(setup, monkeypatch, enabled, failure):
+async def test_archive_failure_preserves_numeric_source_view(setup, monkeypatch, failure):
     history, agent = setup
-    monkeypatch.setenv("AGENT_CONTEXT_VIEW_ENABLED", enabled)
     monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(
         return_value={"id": "12345678-1234-1234-1234-123456789abc", "document_id": "doc", "chunk_index": 7}))
     if failure == "prior":

@@ -24,7 +24,7 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_run_failure_reason_max_chars,
     get_agent_studio_flow_run_lookup_max_records,
     get_agent_studio_recent_flow_run_window_days,
-    get_tool_page_default_limit, get_agent_studio_provider_tool_result_inline_max_chars,
+    get_tool_page_default_limit,
 )
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.chat_message import ChatMessage
@@ -107,17 +107,10 @@ def _flow_run_record(row) -> dict:
 
 def _fit_run_page(build, records: list[dict], *, has_more: bool, offset: int, next_arguments: dict):
     """Return the largest newest-first page whose result fits the provider cap."""
-    cap = get_agent_studio_provider_tool_result_inline_max_chars()
-    count = len(records)
-    while True:
-        more = has_more or count < len(records)
-        result = build(records[:count], complete=not more, next_call={
-            "tool": "inspect_saved_studio_resource",
-            "arguments": {**next_arguments, "offset": offset + count},
-        } if more else None)
-        if count <= 1 or len(_serialized({"success": True, **result})) <= cap:
-            return result
-        count -= 1
+    return build(records, complete=not has_more, next_call={
+        "tool": "inspect_saved_studio_resource",
+        "arguments": {**next_arguments, "offset": offset + len(records)},
+    } if has_more else None)
 
 
 def _read_saved_resource(db, *, user_id: int, active_group_ids: list[str], request: SavedResourceInspection):
@@ -284,18 +277,13 @@ def _bounded_saved_record(record: dict, request: SavedResourceInspection) -> dic
         raise ValueError("start exceeds the saved record section length")
     if (request.start or request.content_hash is not None) and request.content_hash != identity:
         raise ValueError("Saved content changed or its identity is missing; restart this section")
-    cap = get_agent_studio_provider_tool_result_inline_max_chars()
-    requested = min(request.max_chars or cap, cap)
+    requested = request.max_chars if request.max_chars is not None else len(serialized)
     common = {"saved": True, "loaded_in_editor": False, "section": request.section,
               "content_hash": identity, "total_chars": len(serialized)}
 
-    def fits(result):
-        # The API dispatcher adds success before provider serialization.
-        return len(_serialized({"success": True, **result})) <= cap
-
     inline = {**(record if request.section == "all" else {"detail": selected}),
               **common, "complete": True, "next_call": None}
-    if request.start == 0 and len(serialized) <= requested and fits(inline):
+    if request.start == 0 and len(serialized) <= requested:
         return inline
 
     def page(end):
@@ -308,19 +296,7 @@ def _bounded_saved_record(record: dict, request: SavedResourceInspection) -> dic
                     "tool": "inspect_saved_studio_resource", "arguments": args,
                 }}
 
-    low, high = request.start + 1, min(request.start + requested, len(serialized))
-    result = page(request.start) if request.start == len(serialized) else None
-    while low <= high:
-        end = (low + high) // 2
-        candidate = page(end)
-        if fits(candidate):
-            result = candidate
-            low = end + 1
-        else:
-            high = end - 1
-    if result is None or not fits(result):
-        raise ValueError("Saved record page metadata cannot fit the configured provider result limit")
-    return result
+    return page(min(request.start + requested, len(serialized)))
 
 
 def inspect_saved_resource(db, *, user_id: int, active_group_ids: list[str], request: SavedResourceInspection):

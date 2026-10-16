@@ -523,7 +523,7 @@ def test_sync_owned_runner_preserves_opaque_model_lifecycle(monkeypatch):
         context={"trace_id": "trace-1"},
         run_config=ANY,
     )
-    assert run_sync.call_args.kwargs["run_config"].call_model_input_filter is None
+    assert callable(run_sync.call_args.kwargs["run_config"].call_model_input_filter)
     build_resources.assert_not_called()
 
 

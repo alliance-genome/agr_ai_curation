@@ -125,6 +125,11 @@ def set_benchmark_invocation_route(agent: Any) -> Any:
     return _active_invocation_route.set((str(slot), route))
 
 
+def current_benchmark_invocation_route():
+    """Identity for direct model calls within the current benchmark invocation."""
+    return _active_invocation_route.get()
+
+
 def reset_benchmark_invocation_route(token: Any) -> None:
     if token is not None:
         _active_invocation_route.reset(token)

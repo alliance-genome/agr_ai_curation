@@ -110,14 +110,6 @@ from .extraction_trace_events import (
     write_extraction_trace_event,
     write_stream_event,
 )
-from .tool_result_bounds import (
-    budget_failure,
-    is_budget_failure,
-    report_budget_failure_result,
-    report_tool_result_budget_escape,
-    serialized_size,
-    tool_result_budget,
-)
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -1025,7 +1017,7 @@ def _compute_adaptive_specialist_max_turns(
     )
     adaptive = max(base_max_turns, 10 + (entity_count * 2))
     adaptive = max(adaptive, min_turn_floor)
-    adaptive = min(adaptive, max_turn_cap)
+    adaptive = min(adaptive, max(base_max_turns, max_turn_cap))
     return adaptive
 
 
@@ -1111,18 +1103,7 @@ def _adapt_tools_with_provider_adapter(tools: List[Any], adapter_key: str) -> Li
             raise ValueError("This provider adapter cannot preserve the profile-specific tool contract")
 
         adapter = adapter_factory()
-        invoke = adapter.on_invoke_tool
-
-        async def invoke_and_report(ctx, input_str, *, _invoke=invoke, _name=tool_name):
-            from src.lib.agent_studio.catalog_service import _report_inline_package_result
-            from src.lib.openai_agents.tool_result_bounds import full_tool_results_are_requested
-
-            result = await _invoke(ctx, input_str)
-            if not full_tool_results_are_requested():
-                _report_inline_package_result(_name, result)
-            return result
-
-        adapted.append(replace(adapter, on_invoke_tool=invoke_and_report))
+        adapted.append(adapter)
     return adapted
 
 
@@ -3042,10 +3023,7 @@ def _reduce_specialist_output_for_supervisor(
         )
         if validator_summary:
             return validator_summary
-        return _structured_specialist_supervisor_summary(
-            payload,
-            expected_output_type=expected_output_type,
-        )
+        return final_output
 
     return final_output
 
@@ -3226,49 +3204,6 @@ def _domain_validator_supervisor_summary(
     return f"{output_type_name} validator result: status={status}.\n" + json.dumps(preview)
 
 
-def _structured_specialist_supervisor_summary(
-    payload: Dict[str, Any],
-    *,
-    expected_output_type: Any,
-) -> str:
-    """Summarize validated structured payloads without raw JSON transport."""
-
-    output_type_name = _output_type_name(expected_output_type)
-    lines = [
-        (
-            f"{output_type_name} structured result accepted. Full validated "
-            "payload is retained by the specialist runtime; the supervisor "
-            "handoff is compact to avoid replaying raw JSON."
-        )
-    ]
-    scalar_fields = _compact_supervisor_mapping_fields(
-        payload,
-        limit=8,
-        skip_keys={
-            "evidence_records",
-            "lookup_attempts",
-            "resolved_objects",
-            "candidates",
-            "candidate_references",
-            "metadata",
-        },
-    )
-    if scalar_fields:
-        lines.append(f"Top-level fields: {scalar_fields}")
-
-    collection_counts: list[str] = []
-    for key, value in sorted(payload.items()):
-        if isinstance(value, list):
-            collection_counts.append(f"{key}={len(value)}")
-        elif isinstance(value, dict):
-            collection_counts.append(f"{key}=object")
-        if len(collection_counts) >= 8:
-            break
-    if collection_counts:
-        lines.append("Structured collections: " + "; ".join(collection_counts))
-    return "\n".join(lines)
-
-
 def _looks_like_domain_validator_result_payload(payload: Dict[str, Any]) -> bool:
     return {
         "status",
@@ -3415,53 +3350,12 @@ def _build_run_state_bound_tool(
         finally:
             reset_active_extraction_builder_workspace(bw_token)
             reset_active_evidence_records(ev_token)
-        return _enforce_run_state_tool_result_budget(tool_name, result)
+        return result
 
     if hasattr(existing_tool, "profile_bound_schema"):
         from src.lib.agent_studio.profile_tools import preserve_profile_tool_contract
         return preserve_profile_tool_contract(_run_state_bound, existing_tool)
     return _run_state_bound
-
-
-def _enforce_run_state_tool_result_budget(tool_name: str, result: Any) -> Any:
-    """Keep builder tool results inside the model-facing budget.
-
-    Builder acknowledgments and pages are compact by construction, so an
-    oversized result is an unexpected contract escape: it is reported once and
-    replaced by a compact failure that still states the operation's outcome.
-    """
-    # Builder helpers return their compact failure as the result body.
-    body = getattr(result, "data", result)
-    if is_budget_failure(body):
-        report_budget_failure_result(
-            body,
-            tool_name=tool_name,
-            component="builder_tool_adapter",
-        )
-        return result
-    budget = tool_result_budget()
-    measured = serialized_size(result)
-    if measured <= budget:
-        return result
-    report_tool_result_budget_escape(
-        tool_name=tool_name,
-        measured=measured,
-        limit=budget,
-        component="builder_tool_adapter",
-        enforced=True,
-    )
-    plain = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
-    failure = budget_failure(tool_name=tool_name, measured=measured, limit=budget)
-    failure["result_bounds"]["reported"] = True
-    if isinstance(plain, dict):
-        failure["operation_status"] = plain.get("status")
-        failure["operation_lookup_status"] = plain.get("lookup_status")
-    failure["message"] = (
-        "The operation ran, but its result was too large to return. Page staged "
-        "candidates with this builder's list_staged_* or find_staged_* tool to "
-        "inspect the current state."
-    )
-    return failure
 
 
 def _bind_run_state_into_tools(
@@ -6195,8 +6089,11 @@ async def run_specialist_with_events(
                     retry_start_time = datetime.now(timezone.utc)
                     from .model_context_view import run_config_with_history
                     retry_agent.run_history = getattr(runtime_agent, "run_history", None)
-                    retry_config = run_config_with_history(effective_config, retry_agent.run_history,
-                                                           allow_projection=False)
+                    retry_config = run_config_with_history(effective_config, retry_agent.run_history)
+                    if retry_agent.run_history is not None:
+                        from .run_history import history_tools
+                        retry_agent.tools = [tool for tool in history_tools(retry_agent.run_history)
+                                             if tool.name == "read_pending_context"]
                     retry_route_token = set_benchmark_invocation_route(retry_agent)
                     try:
                         retry_result = Runner.run_streamed(

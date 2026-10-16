@@ -205,7 +205,7 @@ async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope
     while cursor is not None:
         result = await tools["read_run_history"].on_invoke_tool(SimpleNamespace(tool_name="read_run_history", tool_call_id="read", run_config=None), json.dumps({
             "event_id": ref, "detail_path": "payload.findings.0", "detail_cursor": cursor, "result_sha256": sha}))
-        assert len(exact_json(result).encode()) <= 2048
+        assert result["detail"]["complete"]
         detail = result["detail"]
         parts.append(detail["content"])
         cursor, sha = detail["next_cursor"], detail["sha256"]

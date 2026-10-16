@@ -13,11 +13,6 @@ from src.lib.agent_studio.studio_guide import (
     prepare_studio_prompt_template,
     render_studio_guide_index,
 )
-from src.lib.openai_agents.config import (
-    get_agent_studio_workshop_context_group_prompt_max_chars,
-    get_agent_studio_workshop_context_metadata_max_chars,
-    get_agent_studio_workshop_context_prompt_max_chars,
-)
 from src.lib.prompts.assembly import PromptLayerBundle
 
 
@@ -474,49 +469,11 @@ LinkML-aligned or submission-ready.
             workshop_draft_tools = workshop.draft_tool_ids or []
             draft_prompt = workshop.prompt_draft or ""
             selected_group_prompt = workshop.selected_group_prompt_draft or ""
-            draft_prompt_total_chars = len(draft_prompt)
-            selected_group_prompt_total_chars = len(selected_group_prompt)
             truncated = ""
             group_truncated = ""
-            max_prompt_chars = get_agent_studio_workshop_context_prompt_max_chars()
-            max_group_prompt_chars = (
-                get_agent_studio_workshop_context_group_prompt_max_chars()
-            )
-            if draft_prompt_total_chars > max_prompt_chars:
-                draft_prompt = draft_prompt[:max_prompt_chars]
-                truncated = (
-                    "\n\n[Incomplete preview: retained "
-                    f"{len(draft_prompt)} of {draft_prompt_total_chars} characters. "
-                    "Exact current main prompt content is available through callable "
-                    "`refresh_workshop_prompt` with `target_prompt=\"main\"`: read its "
-                    "content-free summary, then follow each `next_call` through ordered "
-                    "chunks until `complete=true`.]"
-                )
-            if selected_group_prompt_total_chars > max_group_prompt_chars:
-                selected_group_prompt = selected_group_prompt[:max_group_prompt_chars]
-                group_truncated = (
-                    "\n\n[Incomplete preview: retained "
-                    f"{len(selected_group_prompt)} of "
-                    f"{selected_group_prompt_total_chars} characters. Exact current "
-                    "selected-group prompt content is available through callable "
-                    "`refresh_workshop_prompt` with `target_prompt=\"group\"`: read its "
-                    "content-free summary, then follow each `next_call` through ordered "
-                    "chunks until `complete=true`.]"
-                )
-
             metadata_document = workshop_authoring_metadata_json(workshop)
-            metadata_total_chars = len(metadata_document)
-            metadata_max_chars = get_agent_studio_workshop_context_metadata_max_chars()
-            metadata_preview = metadata_document[:metadata_max_chars]
+            metadata_preview = metadata_document
             metadata_truncated = ""
-            if metadata_total_chars > metadata_max_chars:
-                metadata_truncated = (
-                    "\n[Incomplete metadata preview: retained "
-                    f"{len(metadata_preview)} of {metadata_total_chars} characters. "
-                    "Retrieve the exact metadata with `refresh_workshop_prompt` "
-                    "using `target_prompt=\"metadata\"` and follow every `next_call` "
-                    "until `complete=true`.]"
-                )
 
             selected_group_prompt_block = ""
             if workshop.selected_group_id and selected_group_prompt:

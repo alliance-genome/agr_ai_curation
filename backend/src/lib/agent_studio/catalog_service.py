@@ -45,21 +45,7 @@ from src.lib.prompts.assembly import (
     prompt_templates_for_bundle,
 )
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
-from src.lib.openai_agents.tool_result_bounds import (
-    RESULT_VIEW_ARGUMENTS,
-    ToolResultBudgetError,
-    bounded_json_result,
-    budget_failure,
-    canonical_json,
-    full_tool_results_are_requested,
-    invalid_cursor,
-    is_budget_failure,
-    report_budget_failure_result,
-    report_tool_result_budget_escape,
-    result_view_schema_properties,
-    serialized_size,
-    tool_result_budget,
-)
+from src.lib.openai_agents.tool_result_bounds import RESULT_VIEW_ARGUMENTS, bounded_json_result, canonical_json, full_tool_results_are_requested, invalid_cursor, result_view_schema_properties
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -859,7 +845,6 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             await record_runtime_payload("canonical_tool_result", result, tool_name=tool_id,
                                          call_id=getattr(ctx, "tool_call_id", None))
             result = _document_model_result(tool_id, result)
-            _report_inline_package_result(tool_id, result)
             return result
 
         runner = _get_package_tool_runner()
@@ -928,9 +913,8 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
                                      call_id=getattr(ctx, "tool_call_id", None))
         model_result = _document_model_result(tool_id, result.result)
         if not requery_pages:
-            _report_inline_package_result(tool_id, model_result)
             return model_result
-        if is_write and not full_tool_results_are_requested() and serialized_size(result.result) > tool_result_budget():
+        if is_write and not full_tool_results_are_requested():
             result_ref = str(uuid4())
             captured_writes[result_ref] = (scope, request_identity, result.result)
         return _bounded_package_result(
@@ -1037,7 +1021,7 @@ def _bounded_package_result(
     try:
         bounded = bounded_json_result(
             body,
-            budget=tool_result_budget(),
+
             offset=view_arguments.get("result_offset"),
             expected_sha256=view_arguments.get("result_sha256"),
             detail_path=view_arguments.get("detail_path"),
@@ -1047,60 +1031,7 @@ def _bounded_package_result(
         )
     except ValueError as exc:
         return invalid_cursor(str(exc), tool_name=tool_id)
-    except ToolResultBudgetError as exc:
-        failure = budget_failure(
-            tool_name=tool_id,
-            measured=exc.measured,
-            limit=exc.limit,
-            field=view_arguments.get("detail_path"),
-        )
-        if result_ref is not None:
-            failure.update({
-                "result_ref": result_ref,
-                "operation_status": "response_captured",
-                "message": "The write returned and its response was captured. Do not repeat the write; read detail_path='data' with result_ref.",
-            })
-        report_budget_failure_result(
-            failure,
-            tool_name=tool_id,
-            component="package_tool_adapter",
-        )
-        return failure
-    return payload if bounded is None else bounded
-
-
-# Inline tools whose result contract is owned by a sibling change (ALL-1277
-# agent contract discovery); they are neither measured nor reported here.
-_INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT = frozenset({"get_agent_contract"})
-
-
-def _report_inline_package_result(tool_id: str, result: Any) -> None:
-    """Report a self-bounded package tool result that broke its size contract.
-
-    Inline document/evidence tools and builder run-state tools bound their own
-    results: a ``tool_result_budget_unmet`` result is reported once, and any
-    other result over the budget is reported as an escape (observed, result
-    unchanged).
-    """
-    if tool_id in _INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT:
-        return
-    if is_budget_failure(result):
-        report_budget_failure_result(
-            result,
-            tool_name=tool_id,
-            component="package_tool_adapter",
-        )
-        return
-    budget = tool_result_budget()
-    measured = serialized_size(result)
-    if measured > budget:
-        report_tool_result_budget_escape(
-            tool_name=tool_id,
-            measured=measured,
-            limit=budget,
-            component="package_tool_adapter",
-            enforced=False,
-        )
+    return (body if result_ref is not None else payload) if bounded is None else bounded
 
 
 def _tool_category_for_binding(binding: Any) -> str:

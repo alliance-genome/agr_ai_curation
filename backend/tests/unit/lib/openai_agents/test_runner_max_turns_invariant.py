@@ -126,10 +126,10 @@ def test_supervisor_budget_getters_are_positive_documented_defaults(
     max_calls_per_specialist = get_supervisor_max_calls_per_specialist()
 
     assert isinstance(max_specialist_calls_per_turn, int)
-    assert max_specialist_calls_per_turn == 25
+    assert max_specialist_calls_per_turn == 256
     assert max_specialist_calls_per_turn >= 1
     assert isinstance(max_calls_per_specialist, int)
-    assert max_calls_per_specialist == 8
+    assert max_calls_per_specialist == 64
     assert max_calls_per_specialist >= 1
 
 

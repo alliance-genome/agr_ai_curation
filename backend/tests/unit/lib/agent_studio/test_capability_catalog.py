@@ -331,12 +331,12 @@ def test_search_reauthorizes_tools_despite_warm_library_cache(sources, monkeypat
 
 def test_search_cannot_return_a_nonadvancing_empty_page(sources, monkeypatch):
     sources[0].description = "x" * 10_000
-    monkeypatch.setattr(catalog, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 2000)
-    with pytest.raises(catalog.CapabilityCatalogUnavailable):
-        catalog.search_capabilities(
-            db=object(), context=catalog.CapabilityCatalogContext(user_id=7),
-            kinds=["agent"], query="system_agent",
-        )
+    result = catalog.search_capabilities(
+        db=object(), context=catalog.CapabilityCatalogContext(user_id=7),
+        kinds=["agent"], query="system_agent",
+    )
+    assert result["results"]
+    assert result["results"][0]["description"] == "x" * 10_000
 
 
 @pytest.mark.parametrize("accessible", [True, False])

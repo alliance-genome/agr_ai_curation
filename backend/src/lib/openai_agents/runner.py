@@ -1516,6 +1516,8 @@ async def _run_agent_with_owned_resources(
         tool_surface = apply_tool_surface(agent)
         record_tool_surface_prompt(agent, tool_surface, target_agent=agent)
         commit_pending_prompts(agent)
+        if sdk_session is not None:
+            await sdk_session.acquire_run()
         with tool_surface_trace_attributes(tool_surface):
             result = Runner.run_streamed(
                 agent,
@@ -1525,6 +1527,8 @@ async def _run_agent_with_owned_resources(
                 session=sdk_session,
             )
     except BaseException as exc:
+        if sdk_session is not None:
+            await sdk_session.release_run()
         reset_benchmark_invocation_route(benchmark_route_token)
         reset_active_evidence_records(evidence_workspace_token)
         reset_active_extraction_builder_workspace(builder_workspace_token)
@@ -2130,6 +2134,8 @@ async def _run_agent_with_owned_resources(
             # teardown inside this run's lifetime rather than asyncgen finalization.
             await interleaved_stream.aclose()
         finally:
+            if sdk_session is not None:
+                await sdk_session.release_run(result)
             # Clear the live event list reference
             set_live_event_list(None)
             if sentry_span is not None:

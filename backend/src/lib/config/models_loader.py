@@ -37,6 +37,9 @@ class ModelDefinition:
     recommended_for: List[str] = field(default_factory=list)
     avoid_for: List[str] = field(default_factory=list)
     source_label: Optional[str] = None
+    context_window_tokens: Optional[int] = None
+    max_input_tokens: Optional[int] = None
+    max_output_tokens: Optional[int] = None
 
     @classmethod
     def from_yaml(
@@ -104,7 +107,15 @@ class ModelDefinition:
                 source_label=source_label,
             ),
             source_label=source_label,
+            **{key: _capacity_value(data.get(key), key, model_id) for key in
+                ("context_window_tokens", "max_input_tokens", "max_output_tokens")},
         )
+
+
+def _capacity_value(value, key, model_id):
+    if value is not None and (type(value) is not int or value < 1):
+        raise ValueError(f"Model {model_id} {key} must be a positive integer")
+    return value
 
 
 def _parse_string_list(

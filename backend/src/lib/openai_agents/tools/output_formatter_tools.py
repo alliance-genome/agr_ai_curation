@@ -8,6 +8,9 @@ chooses projection operations and application code renders all rows.
 
 from __future__ import annotations
 
+from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
+from src.lib.context import get_current_trace_id, get_current_session_id
+
 import asyncio
 import hashlib
 import json
@@ -19,7 +22,6 @@ from typing import Any, cast, get_args
 from agents import function_tool
 from pydantic import BaseModel, ValidationError
 
-from src.lib.context import get_current_session_id, get_current_trace_id
 from src.lib.flows.chat_output_delivery import (
     record_chat_output_cannot_complete,
     record_chat_output_failure,
@@ -66,8 +68,6 @@ from src.lib.openai_agents.config import (
     get_flow_projection_max_rows,
     get_formatter_preview_max_depth,
     get_output_tool_catalog_page_size,
-    get_output_tool_max_response_chars,
-    get_output_tool_value_read_chars,
 )
 
 
@@ -246,90 +246,15 @@ def _report_context(bundle: FlowOutputArtifactBundle) -> dict[str, Any]:
     }
 
 
-def _budgeted_tool_json(
-    payload: Mapping[str, Any],
-    *,
-    tool_name: str,
-    formatter_agent_id: str,
-    report_context: Mapping[str, Any],
-    committed_keys: Sequence[str] = (),
-) -> str:
-    """Serialize one tool response, never exceeding the configured total budget.
-
-    Paged tools size their pages to the budget, so an escape here is a contract
-    failure: it is reported once and replaced by a compact, actionable error.
-    A committed result (a saved file or delivered output) is never rewritten as
-    an error; it is reduced to its ``committed_keys`` instead.
-    """
-
-    encoded = _tool_json(payload)
-    limit = get_output_tool_max_response_chars()
-    if len(encoded) <= limit:
-        return encoded
-    violation = PayloadContractViolation(
-        category="tool_result_budget_escape",
-        component="output_formatter_tools",
-        message=f"{tool_name} response exceeded the output tool response budget.",
-        measured=len(encoded),
-        limit=limit,
-        setting="OUTPUT_TOOL_MAX_RESPONSE_CHARS",
-    )
-    report_payload_contract_violation(
-        violation,
-        phase="formatter_tool_response",
-        tool_name=tool_name,
-        agent=formatter_agent_id,
-        trace_id=report_context.get("trace_id"),
-        session_id=report_context.get("session_id"),
-        correlation=report_context.get("correlation"),
-    )
-    if committed_keys:
-        return _tool_json(
-            {
-                **{key: payload[key] for key in committed_keys if key in payload},
-                "receipt_reduced_to_budget": True,
-            }
-        )
-    return _tool_json(
-        {
-            "status": "invalid",
-            "code": "response_over_budget",
-            "errors": [
-                f"The {tool_name} response ({len(encoded)} chars) exceeds the "
-                f"{limit}-char tool response budget. Narrow the request: select "
-                "fewer field refs, use a smaller page limit or cursor, or read one "
-                "value with read_output_value."
-            ],
-        }
-    )
-
-
-def _page_to_budget(
+def _selected_page(
     items: Sequence[Any],
     *,
     start: int,
     max_count: int,
-    build_payload: Callable[[list[Any], str], Mapping[str, Any]],
     render: Callable[[Any], Any] = lambda item: item,
 ) -> tuple[list[Any], str]:
-    """Take up to ``max_count`` items from ``start`` that fit the response budget.
-
-    ``render`` converts each item only as it is paged. Returns the rendered page
-    and the next cursor ("" when the items are exhausted). At least one item is
-    returned so continuation always advances; a single oversized item is then
-    caught by the final response budget guard.
-    """
-
-    limit = get_output_tool_max_response_chars()
-    used = len(_tool_json(build_payload([], _CURSOR_PLACEHOLDER)))
-    page: list[Any] = []
-    for raw_item in items[start : start + max_count]:
-        item = render(raw_item)
-        item_chars = len(_tool_json({"i": item})) - len('{"i": }') + 2
-        if page and used + item_chars > limit:
-            break
-        page.append(item)
-        used += item_chars
+    """Return the complete requested page; context capacity is shared."""
+    page = [render(item) for item in items[start : start + max_count]]
     next_offset = start + len(page)
     return page, str(next_offset) if next_offset < len(items) else ""
 
@@ -1297,8 +1222,6 @@ def _capabilities_payload(
             **({"max_report_sections": get_flow_output_chat_max_sections(),
                 "max_report_total_rows": get_flow_projection_max_rows(),
                 "max_report_chars": get_flow_output_chat_max_chars()} if output_format == "chat" else {}),
-            "max_tool_response_chars": get_output_tool_max_response_chars(),
-            "max_value_read_chars": get_output_tool_value_read_chars(),
         },
     }
 
@@ -1454,13 +1377,8 @@ def build_output_formatter_tools(
         *,
         committed_keys: Sequence[str] = (),
     ) -> str:
-        return _budgeted_tool_json(
-            payload,
-            tool_name=tool_name,
-            formatter_agent_id=formatter_agent_id,
-            report_context=_report_context(bundle),
-            committed_keys=committed_keys,
-        )
+        return _tool_json(payload)
+
 
     def plan_response(
         tool_name: str,
@@ -1485,8 +1403,7 @@ def build_output_formatter_tools(
                 "columns": _compact_columns(columns),
                 "plan": plan.model_dump(mode="json", exclude_defaults=True),
             }
-            if len(_tool_json(full)) <= get_output_tool_max_response_chars():
-                return respond(tool_name, full)
+            return respond(tool_name, full)
         if offset > len(columns):
             raise ValueError(f"cursor {offset} is beyond the plan's {len(columns)} columns.")
         column_specs = [column.model_dump(mode="json", exclude_defaults=True) for column in columns]
@@ -1508,11 +1425,11 @@ def build_output_formatter_tools(
                 ),
             }
 
-        page, next_cursor = _page_to_budget(
+        page, next_cursor = _selected_page(
             column_specs,
             start=offset,
             max_count=max(1, len(column_specs)),
-            build_payload=build,
+
         )
         return respond(tool_name, build(page, next_cursor))
 
@@ -1743,11 +1660,11 @@ def build_output_formatter_tools(
                     },
                 }
 
-            page, next_cursor = _page_to_budget(
+            page, next_cursor = _selected_page(
                 entries,
                 start=offset,
                 max_count=page_size,
-                build_payload=build,
+
                 render=lambda field: _catalog_entry(field, example_limit=examples, bundle=bundle),
             )
             return respond("inspect_output_artifacts", build(page, next_cursor))
@@ -1848,11 +1765,11 @@ def build_output_formatter_tools(
                     ],
                 }
 
-            page, _ = _page_to_budget(
+            page, _ = _selected_page(
                 items,
                 start=offset,
                 max_count=page_size,
-                build_payload=build,
+
                 render=render_row,
             )
             next_cursor = _next_row_cursor(offset, len(page), available)
@@ -1939,11 +1856,11 @@ def build_output_formatter_tools(
                     ],
                 }
 
-            page, next_cursor = _page_to_budget(
+            page, next_cursor = _selected_page(
                 values,
                 start=offset,
                 max_count=value_limit,
-                build_payload=build,
+
                 render=lambda item: {
                     "value": _bounded_field_value(examples[item[0]], field_ref=selected_field_ref),
                     "count": item[1],
@@ -1990,8 +1907,7 @@ def build_output_formatter_tools(
                 raise ValueError(
                     f"offset {start} is outside the value's {len(text)} characters."
                 )
-            read_ceiling = get_output_tool_value_read_chars()
-            chunk_size = _positive_limit(max_chars, default=read_ceiling, ceiling=read_ceiling)
+            chunk_size = requested_text_length(max_chars, len(text))
 
             def build(chunk: str, next_offset: int | None) -> dict[str, Any]:
                 return {
@@ -2005,15 +1921,9 @@ def build_output_formatter_tools(
                     "value_slice": chunk,
                 }
 
-            # JSON escaping can expand a slice; shrink until the response fits.
-            budget = get_output_tool_max_response_chars()
-            while True:
-                chunk = text[start : start + chunk_size]
-                end = start + len(chunk)
-                payload = build(chunk, end if end < len(text) else None)
-                if len(_tool_json(payload)) <= budget or chunk_size <= 1:
-                    break
-                chunk_size = max(1, chunk_size // 2)
+            chunk = text[start : start + chunk_size]
+            end = start + len(chunk)
+            payload = build(chunk, end if end < len(text) else None)
             return respond("read_output_value", payload)
         except Exception as exc:
             return respond("read_output_value", {"status": "invalid", "errors": [str(exc)]})
@@ -2152,11 +2062,11 @@ def build_output_formatter_tools(
                     },
                 }
 
-            page, _ = _page_to_budget(
+            page, _ = _selected_page(
                 items,
                 start=offset,
                 max_count=preview_limit,
-                build_payload=build,
+
                 render=lambda item: {
                     "row_ref": item[0],
                     "row": _bounded_row(item[1], row_ref=item[0], field_refs=column_field_refs),

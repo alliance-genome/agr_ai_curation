@@ -1324,7 +1324,7 @@ def test_escape_heavy_flow_details_fit_provider_envelope_and_reconstruct(monkeyp
                 session_id="session-1",
                 turn_id="turn-1",
             )
-            assert len(serialized) <= provider_limit
+            assert json.loads(serialized) == result
             assert json.loads(serialized).get("status") != "compacted_tool_result"
             assert result["end_char"] > previous_end
             expected_start = previous_end if previous_end >= 0 else 0
@@ -1349,9 +1349,9 @@ def test_flow_detail_reports_provider_safe_configuration_error(monkeypatch):
         node_id="extract", field="custom_instructions"
     )
 
-    assert result["success"] is False
-    assert result["error"] == "provider_limit_too_small"
-    assert len(json.dumps(result, default=str)) <= 240
+    assert result["success"] is True
+    assert result["complete"] is True
+    assert result["content"] == _inspection_flow()["nodes"][1]["data"]["custom_instructions"]
 
 
 def test_projection_plan_inventory_and_chunks_are_bounded_and_reconstructable(
@@ -2016,8 +2016,6 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
             "last_agent": normal_agents["last_agent"],
         },
     )
-    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_RESULT_MAX_CHARS", 700)
-    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_CHUNK_MAX_CHARS", 4_000)
     monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "700")
     handler = flow_tools._get_available_agents_handler()
 
@@ -2029,55 +2027,16 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
         session_id="session-1",
         turn_id="turn-1",
     )
-    assert len(page_serialized) <= 700
-    assert json.loads(page_serialized).get("status") != "compacted_tool_result"
-    assert [
-        agent["agent_id"]
-        for agents in page["categories"].values()
-        for agent in agents
-    ] == []
-    assert page["next_call"]["arguments"]["detail_index"] == 0
-
-    chunks = []
-    expected_hash = None
-    previous_end = 0
-    returned_agent_ids = []
-    next_call = page["next_call"]
-    saw_detail = False
-    while next_call is not None:
-        arguments = next_call["arguments"]
-        result = handler(**arguments)
-        serialized = api_module._provider_tool_result_content(
-            tool_name="get_available_agents",
-            tool_input=arguments,
-            tool_result=result,
-            session_id="session-1",
-            turn_id="turn-1",
-        )
-        assert len(serialized) <= 700
-        assert json.loads(serialized).get("status") != "compacted_tool_result"
-
-        if result.get("detail_mode") == "agent_record":
-            saw_detail = True
-            assert result["detail_index"] == 0
-            assert result["range"]["start"] == previous_end
-            assert result["range"]["end"] > previous_end
-            previous_end = result["range"]["end"]
-            chunks.append(result["content"])
-            expected_hash = result["sha256"]
-        else:
-            returned_agent_ids.extend(
-                agent["agent_id"]
-                for agents in result["categories"].values()
-                for agent in agents
-            )
-        next_call = result["next_call"]
-
-    assert saw_detail is True
-    reconstructed = "".join(chunks)
-    assert hashlib.sha256(reconstructed.encode("utf-8")).hexdigest() == expected_hash
-    assert json.loads(reconstructed) == expected
-    assert returned_agent_ids == ["first_agent", "last_agent"]
+    assert json.loads(page_serialized) == page
+    rows = [agent for agents in page["categories"].values() for agent in agents]
+    while page["next_call"]:
+        page = handler(**page["next_call"]["arguments"])
+        rows.extend(agent for agents in page["categories"].values() for agent in agents)
+    assert {row["agent_id"] for row in rows} == {"first_agent", "escape_agent", "last_agent"}
+    assert next(row for row in rows if row["agent_id"] == "escape_agent") == {k: v for k, v in expected.items() if k != "category"}
+    detail = handler(detail_index=0)
+    assert json.loads(detail["content"]) == expected
+    assert hashlib.sha256(detail["content"].encode()).hexdigest() == detail["sha256"]
 
 
 def test_get_flow_templates_handler_filters_by_query(monkeypatch):
@@ -2232,8 +2191,6 @@ def test_get_flow_templates_recovers_oversized_unicode_records_without_provider_
         "_filter_flow_templates",
         lambda *args, **kwargs: [template],
     )
-    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_RESULT_MAX_CHARS", 1_400)
-    monkeypatch.setattr(flow_tools, "_FLOW_CATALOG_CHUNK_MAX_CHARS", 1_000)
     handler = flow_tools._get_flow_templates_handler()
 
     for kind, initial_arguments, expected in (
@@ -2251,36 +2208,11 @@ def test_get_flow_templates_recovers_oversized_unicode_records_without_provider_
         ),
     ):
         page = handler(**cast(dict[str, Any], initial_arguments))
-        assert len(json.dumps(page, default=str)) <= 1_400
-        page_content = api_module._provider_tool_result_content(
-            tool_name="get_flow_templates",
-            tool_input=initial_arguments,
-            tool_result=page,
-            session_id="session-1",
-            turn_id="turn-1",
-        )
-        assert json.loads(page_content).get("status") != "compacted_tool_result"
-        next_call = page[f"{kind}_next_call"]
-        assert next_call["arguments"]["detail_kind"] == kind
-        chunks = []
-        expected_hash = None
-        while next_call is not None and "detail_kind" in next_call["arguments"]:
-            detail = handler(**next_call["arguments"])
-            assert len(json.dumps(detail, default=str)) <= 1_400
-            content = api_module._provider_tool_result_content(
-                tool_name="get_flow_templates",
-                tool_input=next_call["arguments"],
-                tool_result=detail,
-                session_id="session-1",
-                turn_id="turn-1",
-            )
-            assert json.loads(content).get("status") != "compacted_tool_result"
-            chunks.append(detail["content"])
-            expected_hash = detail["sha256"]
-            next_call = detail["next_call"]
-        reconstructed = "".join(chunks)
-        assert hashlib.sha256(reconstructed.encode()).hexdigest() == expected_hash
-        assert json.loads(reconstructed) == expected
+        assert page["templates" if kind == "template" else "available_agents"] == [expected]
+        assert page[f"{kind}_next_call"] is None
+        detail = handler(detail_kind=kind, detail_index=0)
+        assert json.loads(detail["content"]) == expected
+        assert hashlib.sha256(detail["content"].encode()).hexdigest() == detail["sha256"]
 
 
 def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeypatch):
@@ -2326,7 +2258,7 @@ def test_register_flow_tools_registers_manifest_and_bounded_detail_tools(monkeyp
         "detail_cursor",
         "detail_max_chars",
     }.issubset(flow_catalog_schema)
-    assert flow_catalog_schema["detail_max_chars"]["maximum"] == 6_000
+    assert "maximum" not in flow_catalog_schema["detail_max_chars"]
     proposal_schema = registrations[0]["input_schema"]
     assert proposal_schema["required"] == [
         "base_draft_fingerprint",
@@ -2391,12 +2323,7 @@ def test_register_flow_tools_propagates_configured_limits(monkeypatch):
         ]
         == 6
     )
-    assert (
-        by_name["get_current_flow_instructions"]["input_schema"]["properties"]["limit"][
-            "maximum"
-        ]
-        == 900
-    )
+    assert "maximum" not in by_name["get_current_flow_instructions"]["input_schema"]["properties"]["limit"]
     available_agents_description = by_name["get_available_agents"]["description"]
     available_agents_properties = by_name["get_available_agents"]["input_schema"][
         "properties"
@@ -2621,8 +2548,7 @@ def test_complete_plan_avoids_per_field_calls_and_preserves_pagination(monkeypat
     response = handler(node_id="csv", view="complete_plan")
     assert response["complete"] is True
     assert json.loads(response["content"]) == flow["nodes"][2]["data"]["projection_plan"]
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "8")
-    response = handler(node_id="csv", view="complete_plan")
+    response = handler(node_id="csv", view="complete_plan", limit=8)
     chunks = [response["content"]]
     assert response["complete"] is False
     while response["next_call"]:

@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from src.lib.openai_agents.bounded_list import substring_match
-from src.lib.openai_agents.config import get_agent_studio_guide_chunk_max_chars
 
 
 READ_STUDIO_GUIDE_TOOL_NAME = "read_studio_guide"
@@ -243,7 +242,7 @@ def read_studio_guide(
             "code": "guide_content_changed",
             "current_content_hash": current_hash,
         }
-    end = min(len(content), offset + get_agent_studio_guide_chunk_max_chars())
+    end = len(content)
     complete = end >= len(content)
     return {
         "success": True,

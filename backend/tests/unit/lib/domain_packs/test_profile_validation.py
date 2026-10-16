@@ -424,7 +424,7 @@ def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nest
     assert built.request.selected_inputs["mention"] == "MGI:2175911"
     assert built.request.validator_agent.agent_id == "allele_validation"
     assert built.request.expected_result_fields == {"curie": prefix + ".resolved_id"}
-    assert built.request.selected_inputs.get("evidence_quotes", []) == (records if with_context else [])
+    assert built.request.selected_inputs.get("evidence_quotes", []) == ([{k: v for k, v in record.items() if k != "chunk_id"} for record in records] if with_context else [])
     if with_context:
         assert built.request.selected_inputs["taxon"] == "NCBITaxon:10090"
 

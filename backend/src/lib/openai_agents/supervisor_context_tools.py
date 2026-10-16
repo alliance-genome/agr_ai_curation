@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
@@ -47,15 +46,7 @@ from src.lib.openai_agents.config import (
 from src.lib.openai_agents.chat_compaction_session import (
     CHAT_CONTEXT_COMPACTION_MESSAGE_TYPE,
 )
-from src.lib.openai_agents.tool_result_bounds import (
-    ToolResultBudgetError,
-    budget_failure,
-    content_sha256,
-    fit_page,
-    fit_text_window,
-    report_budget_failure_result,
-    tool_result_budget,
-)
+from src.lib.openai_agents.tool_result_bounds import content_sha256, fit_page, fit_text_window
 from src.models.sql.database import SessionLocal
 
 
@@ -65,15 +56,13 @@ from src.models.sql.database import SessionLocal
 _TEXT_PREVIEW_LIMIT = get_supervisor_text_preview_limit()
 _FIELD_TEXT_LIMIT = get_supervisor_field_text_limit()
 _MAX_LIST_LIMIT = get_supervisor_max_list_limit()
-_MAX_TRACE_ARRAY_ITEMS = 20
-_MAX_TRACE_TEXT = 1200
 _MAX_TRACE_INVENTORY_MESSAGES = 5000
 
 
 def _tool_response(status: str, message: str, **extra: Any) -> str:
     payload = {"status": status, "message": message}
     payload.update(extra)
-    return json.dumps(_bounded_json(payload), ensure_ascii=True, default=str)
+    return json.dumps(payload, ensure_ascii=True, default=str)
 
 
 def _recall_response(status: str, message: str, **extra: Any) -> str:
@@ -92,54 +81,6 @@ def _preview_text(value: Any, *, limit: int = _TEXT_PREVIEW_LIMIT) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "..."
-
-
-def _bounded_json(
-    value: Any,
-    *,
-    text_limit: int = _MAX_TRACE_TEXT,
-    list_limit: int = _MAX_TRACE_ARRAY_ITEMS,
-    depth: int = 0,
-) -> Any:
-    if isinstance(value, str):
-        return _preview_text(value, limit=text_limit)
-    if isinstance(value, (int, float, bool)) or value is None:
-        return value
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, UUID):
-        return str(value)
-    if depth >= 8:
-        return "<truncated>"
-    if hasattr(value, "model_dump"):
-        try:
-            value = value.model_dump(mode="json")
-        except TypeError:
-            value = value.model_dump()
-    if isinstance(value, Mapping):
-        return {
-            str(key): _bounded_json(
-                item,
-                text_limit=text_limit,
-                list_limit=list_limit,
-                depth=depth + 1,
-            )
-            for key, item in list(value.items())[:50]
-        }
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        items = [
-            _bounded_json(
-                item,
-                text_limit=text_limit,
-                list_limit=list_limit,
-                depth=depth + 1,
-            )
-            for item in list(value)[:list_limit]
-        ]
-        if len(value) > list_limit:
-            items.append({"truncated_count": len(value) - list_limit})
-        return items
-    return _preview_text(value, limit=text_limit)
 
 
 def _list_session_messages(
@@ -285,19 +226,6 @@ _RECALL_TOOL_NAME = "recall_chat_history"
 _RECALL_MESSAGE_FIELDS = ("content", "flow_assistant_message")
 
 
-def _recall_budget_failure(exc: ToolResultBudgetError, *, detail: str) -> str:
-    failure = budget_failure(
-        tool_name=_RECALL_TOOL_NAME,
-        measured=exc.measured,
-        limit=exc.limit,
-        field=detail,
-    )
-    report_budget_failure_result(
-        failure,
-        tool_name=_RECALL_TOOL_NAME,
-        component="supervisor_recall_chat_history",
-    )
-    return json.dumps(failure, ensure_ascii=True, default=str)
 
 
 def _recall_cursor(cursor: str | int | None, *, total: int) -> int:
@@ -329,43 +257,6 @@ def _echo(value: Any) -> str:
     return _preview_text(value, limit=_TEXT_PREVIEW_LIMIT)
 
 
-def _withheld_message(payload: dict[str, Any]) -> dict[str, Any]:
-    """Identity and exact detail pointers for a message too large for one page."""
-
-    withheld = {
-        key: payload[key]
-        for key in ("ordinal", "message_id", "turn_id", "role", "message_type", "created_at")
-    }
-    withheld["withheld"] = True
-    present = []
-    for field in _RECALL_MESSAGE_FIELDS:
-        value = payload.get(field)
-        if isinstance(value, str):
-            withheld[f"{field}_chars"] = len(value)
-            withheld[f"{field}_sha256"] = content_sha256(value)
-            present.append((len(value), field))
-    # One exact read per text field, longest first: a flow row keeps its long
-    # text in flow_assistant_message, not in content.
-    withheld["detail_calls"] = [
-        {
-            "detail": "message",
-            "message_id": payload["message_id"],
-            "message_field": field,
-            "content_cursor": 0,
-        }
-        for _length, field in sorted(present, reverse=True)
-    ]
-    return withheld
-
-
-def _withheld_note(page: list[dict[str, Any]]) -> str:
-    count = sum(1 for item in page if item.get("withheld"))
-    if not count:
-        return ""
-    return (
-        f" {count} message(s) on this page were too long to include and are withheld;"
-        " read each exactly with its detail_calls."
-    )
 
 
 def _fit_recall_messages(
@@ -380,18 +271,10 @@ def _fit_recall_messages(
         start=start,
         limit=limit,
         render=render,
-        budget=tool_result_budget(),
-        oversized=lambda payload, _index: _withheld_message(payload),
+
+
     )
     return response
-
-
-def _page_note(ended_by: str) -> str:
-    if ended_by == "size_budget":
-        return (
-            " The page ended at the tool result size budget; continue with next_cursor."
-        )
-    return ""
 
 
 async def _recall_message_detail(
@@ -475,7 +358,7 @@ async def _recall_message_detail(
 
     try:
         return json.dumps(
-            fit_text_window(text, cursor=start, render=render, budget=tool_result_budget()),
+            fit_text_window(text, cursor=start, render=render, ),
             ensure_ascii=True,
             default=str,
         )
@@ -486,8 +369,6 @@ async def _recall_message_detail(
             detail="message",
             message_id=str(parsed_id),
         )
-    except ToolResultBudgetError as exc:
-        return _recall_budget_failure(exc, detail="message")
 
 
 async def recall_chat_history(
@@ -503,10 +384,9 @@ async def recall_chat_history(
 ) -> str:
     """Recall exact transcript text for the active standard chat session.
 
-    Every response fits TOOL_RESULT_MAX_BYTES. Pages end at the message limit
-    or the size budget and carry ``next_cursor``; a message too large for any
-    page is withheld with ``detail_calls`` that read it exactly in chunks
-    (``detail="message"``). All reads are scoped to the curator's own session.
+    Pages carry complete message content and a continuation cursor. Exact field
+    reads are available with ``detail="message"``. All reads are scoped to the
+    curator's own session.
     """
 
     session_id = get_current_session_id()
@@ -549,15 +429,11 @@ async def recall_chat_history(
         def render_recent(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
             remaining = end - returned
             truncated = remaining > 0
-            ended_by = "end" if not truncated else (
-                "limit" if returned >= bounded_limit else "size_budget"
-            )
+            ended_by = "limit" if truncated else "end"
             return {
                 "status": "ok",
                 "message": (
                     f"Returned {returned} exact transcript message(s) from this chat."
-                    + _page_note(ended_by)
-                    + _withheld_note(page)
                 ),
                 "detail": "recent",
                 "session_id": session_id,
@@ -568,15 +444,12 @@ async def recall_chat_history(
                 "page_ended_by": ended_by,
             }
 
-        try:
-            response = _fit_recall_messages(
-                newest_first,
-                start=0,
-                limit=len(newest_first),
-                render=render_recent,
-            )
-        except ToolResultBudgetError as exc:
-            return _recall_budget_failure(exc, detail="recent")
+        response = _fit_recall_messages(
+            newest_first,
+            start=0,
+            limit=len(newest_first),
+            render=render_recent,
+        )
         return json.dumps(response, ensure_ascii=True, default=str)
 
     if normalized_detail == "turn":
@@ -683,10 +556,10 @@ def _forward_recall_page(
     def render(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
         next_offset = start + returned
         truncated = next_offset < total
-        ended_by = "size_budget" if truncated else "end"
+        ended_by = "limit" if truncated else "end"
         response = {
             "status": "ok",
-            "message": message + _page_note(ended_by) + _withheld_note(page),
+            "message": message,
             "detail": detail,
             **extra,
             "messages": page,
@@ -700,10 +573,7 @@ def _forward_recall_page(
             )
         return response
 
-    try:
-        response = _fit_recall_messages(payloads, start=start, limit=total - start, render=render)
-    except ToolResultBudgetError as exc:
-        return _recall_budget_failure(exc, detail=detail)
+    response = _fit_recall_messages(payloads, start=start, limit=total - start, render=render)
     return json.dumps(response, ensure_ascii=True, default=str)
 
 

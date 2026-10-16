@@ -28,7 +28,7 @@ def require_document_read_result(tool_name: str, result: Any) -> None:
         )
     # Paging/request and response-size errors are not failed source retrievals.
     # Their existing structured recovery/reporting contracts remain in force.
-    if raw.get("error_code") in {"invalid_result_cursor", "tool_result_budget_unmet"}:
+    if raw.get("error_code") == "invalid_result_cursor":
         return
     if tool_name == "read_chunk" and raw.get("chunk") is None:
         raise DocumentReadError(tool_name)

@@ -252,7 +252,7 @@ def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
                 session_id="session-1",
                 turn_id="turn-1",
             )
-            assert len(serialized) <= 1_000
+            assert result["complete"]
             assert json.loads(serialized).get("status") != "compacted_tool_result"
             assert result["returned_range"]["start"] == previous_end
             assert result["returned_range"]["end"] > previous_end
@@ -274,9 +274,9 @@ def test_prompt_detail_reports_provider_safe_configuration_error(
 
     result = prompt_handler(agent_id="demo_agent", view="effective_prompt")
 
-    assert result["status"] == "error"
-    assert result["error"] == "provider_limit_too_small"
-    assert len(json.dumps(result, default=str)) <= 240
+    assert result["status"] == "ok"
+    assert result["content"] == _bundle().render()
+    assert result["complete"]
 
 
 @pytest.mark.parametrize(
@@ -311,7 +311,7 @@ def test_prompt_schema_advertises_only_summary_and_bounded_detail_views(
 
     properties = schema["properties"]
     assert properties["view"]["enum"] == ["summary", "effective_prompt", "layer"]
-    assert properties["max_chars"]["maximum"] == 4321
+    assert "maximum" not in properties["max_chars"]
     assert properties["cursor"]["minimum"] == 0
     assert "next_cursor" in description
     assert "prompt" not in properties
@@ -472,7 +472,7 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
         )
         provider_result = json.loads(content)
         assert provider_result.get("status") != "compacted_tool_result"
-        assert len(content) <= 12_000
+        assert json.loads(content) == result
 
     reconstructed = "".join(
         result["content"]

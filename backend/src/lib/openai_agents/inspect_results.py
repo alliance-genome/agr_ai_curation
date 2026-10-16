@@ -1,7 +1,6 @@
 """Read-only supervisor inspection for persisted extraction results.
 
-Every response fits the shared tool result budget (TOOL_RESULT_MAX_BYTES,
-ALL-1287). The supervisor starts from a counts-only ``summary``, then filters
+The supervisor starts from a counts-only ``summary``, then filters
 object, finding and validator-result pages, and reads any value too large for
 a page exactly in chunks. Pages and chunks carry ``next_call`` arguments and a
 ``result_sha256``, so a result that changes between calls is reported instead
@@ -54,21 +53,7 @@ from src.lib.openai_agents.extraction_manifest import (
     supervisor_manifest_objects,
     validator_result_entries,
 )
-from src.lib.openai_agents.tool_result_bounds import (
-    INVALID_RESULT_CURSOR,
-    STALE_RESULT_CURSOR,
-    ToolResultBudgetError,
-    budget_failure,
-    canonical_json,
-    clamp_page_limit,
-    content_sha256,
-    fit_page,
-    fit_text_window,
-    report_budget_failure_result,
-    resolve_path,
-    serialized_size,
-    tool_result_budget,
-)
+from src.lib.openai_agents.tool_result_bounds import INVALID_RESULT_CURSOR, STALE_RESULT_CURSOR, canonical_json, clamp_page_limit, content_sha256, fit_page, fit_text_window, resolve_path
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -113,7 +98,7 @@ _OBJECT_VALIDATION_STATES = ("open", "resolved", "none", "any")
 # Finding filter: open, or closed (resolved or waived).
 _FINDING_VALIDATION_STATES = ("open", "resolved")
 # Env-configurable; see config.py getters and .env.example. Page sizes are row
-# ceilings: every page also ends at TOOL_RESULT_MAX_BYTES.
+# selections; complete selected records reach the shared model boundary.
 _MAX_LIST_LIMIT = get_supervisor_max_list_limit()
 _EVIDENCE_PAGE_SIZE = get_inspect_results_evidence_page_size()
 _SNIPPET_LIMIT = get_inspect_results_evidence_text_limit()
@@ -255,8 +240,7 @@ async def inspect_results(
 ) -> str:
     """Inspect persisted canonical extraction results through bounded actions.
 
-    Every response fits TOOL_RESULT_MAX_BYTES; an unmeetable budget returns a
-    compact ``tool_result_budget_unmet`` failure that is reported once.
+    Exact reads return complete selected values; shared context policy owns capacity.
     """
 
     normalized_action = _normalize_action(action)
@@ -284,15 +268,6 @@ async def inspect_results(
         )
     except _RequestError as exc:
         response = exc.response
-    except ToolResultBudgetError as exc:
-        return _budget_failure(exc, action=normalized_action)
-    budget = tool_result_budget()
-    measured = serialized_size(response)
-    if measured > budget:
-        return _budget_failure(
-            ToolResultBudgetError(measured=measured, limit=budget),
-            action=normalized_action,
-        )
     return json.dumps(response, ensure_ascii=True, default=str)
 
 
@@ -766,15 +741,6 @@ def _help_response() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _budget_failure(exc: ToolResultBudgetError, *, action: str) -> str:
-    failure = budget_failure(
-        tool_name=_TOOL_NAME,
-        measured=exc.measured,
-        limit=exc.limit,
-        field=action,
-    )
-    report_budget_failure_result(failure, tool_name=_TOOL_NAME, component=_COMPONENT)
-    return json.dumps(failure, ensure_ascii=True, default=str)
 
 
 def _check_sha(expected: str | None, actual: str) -> None:
@@ -826,7 +792,6 @@ def _page(
     default_limit: int,
     max_limit: int,
     message: str,
-    oversized: Callable[[Any, int], Any] | None = None,
     overrides: Callable[[list[Any]], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One forward page of ``items`` fitted to the byte budget.
@@ -893,10 +858,8 @@ def _page(
         start=0,
         limit=len(window),
         render=render,
-        budget=tool_result_budget(),
-        oversized=(
-            (lambda row, offset: oversized(row, start + offset)) if oversized else None
-        ),
+
+
     )
     return response
 
@@ -922,7 +885,6 @@ def _exact_value(
     text = value if is_text else canonical_json(value)
     start = _parse_cursor(cursor, total=len(text), unit="characters")
     digest = content_sha256(value)
-    budget = tool_result_budget()
     if start == 0:
         whole = {
             "status": "ok",
@@ -934,8 +896,7 @@ def _exact_value(
             "value_sha256": digest,
             "result_sha256": sha,
         }
-        if serialized_size(whole) <= budget:
-            return whole
+        return whole
 
     def render(content: str, end: int) -> dict[str, Any]:
         complete = end >= len(text)
@@ -960,7 +921,7 @@ def _exact_value(
             ),
         }
 
-    return fit_text_window(text, cursor=start, render=render, budget=budget)
+    return fit_text_window(text, cursor=start, render=render, )
 
 
 def _fit_record(
@@ -972,24 +933,7 @@ def _fit_record(
 ) -> dict[str, Any]:
     """Render ``record`` whole, withholding its largest values only as needed."""
 
-    budget = tool_result_budget()
-    shown = dict(record)
-    candidates = sorted(
-        (key for key in record if key not in protected),
-        key=lambda key: serialized_size(record[key]),
-        reverse=True,
-    )
-    for key in candidates:
-        if serialized_size(render(shown)) <= budget:
-            break
-        if _is_descriptor(record[key]):
-            continue
-        shown[key] = _descriptor(record[key], read=read_for(key))
-    response = render(shown)
-    measured = serialized_size(response)
-    if measured > budget:
-        raise ToolResultBudgetError(measured=measured, limit=budget)
-    return response
+    return render(dict(record))
 
 
 def _is_descriptor(value: Any) -> bool:
@@ -1593,15 +1537,6 @@ def _objects_response(
             result, obj, metadata=metadata, policy=policy, findings=findings, selected=selected_paths(policy)
         )
 
-    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
-        return {
-            "object_ref": row["object_ref"],
-            "object_type": row["object_type"],
-            "status": row["status"],
-            "withheld": True,
-            "total_chars": len(canonical_json(row)),
-            "read": result.call("object", object_ref=row["object_ref"]),
-        }
 
     args = filters.as_args()
     return _page(
@@ -1626,7 +1561,6 @@ def _objects_response(
             f"{len(matched)} of {len(visible)} supervisor-visible object(s) matched. "
             "Values shown withheld are read exactly with their read call."
         ),
-        oversized=oversized,
     )
 
 
@@ -1931,25 +1865,6 @@ def _evidence_response(
     def view(record: dict[str, Any], index: int) -> dict[str, Any]:
         return {"index": index, **record}
 
-    def oversized(row: dict[str, Any], index: int) -> dict[str, Any]:
-        record = evidence[index]
-        identity = ("evidence_record_id", "id")
-        # Every withheld key gets an exact read, largest first.
-        withheld_keys = sorted(
-            (key for key in record if key not in identity),
-            key=lambda key: len(_value_text(record[key])),
-            reverse=True,
-        )
-        return {
-            "index": index,
-            **{key: record[key] for key in identity if key in record},
-            "withheld": True,
-            "total_chars": len(canonical_json(record)),
-            "reads": [
-                result.call("evidence", object_ref=object_ref, detail_path=f"{index}.{key}")
-                for key in withheld_keys
-            ] or [result.call("evidence", object_ref=object_ref, detail_path=str(index))],
-        }
 
     def overrides(page: list[Any]) -> dict[str, Any]:
         missing = [
@@ -1982,7 +1897,6 @@ def _evidence_response(
         default_limit=_EVIDENCE_PAGE_SIZE,
         max_limit=_MAX_LIST_LIMIT,
         message="Evidence text is ready.",
-        oversized=oversized,
         overrides=overrides,
     )
     if response.get("error_code") == "evidence_unavailable":
@@ -2155,13 +2069,6 @@ def _validation_response(
             )
         return full
 
-    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
-        return {
-            **{key: row[key] for key in _FINDING_IDENTITY_KEYS if key in row},
-            "withheld": True,
-            "total_chars": len(canonical_json(row)),
-            "read": result.call("validation", finding_ref=row["finding_ref"]),
-        }
 
     args = {
         key: value
@@ -2188,7 +2095,6 @@ def _validation_response(
         default_limit=_VALIDATION_PAGE_SIZE,
         max_limit=_MAX_LIST_LIMIT,
         message="Validation findings are ready. Read one finding with its finding_ref.",
-        oversized=oversized,
     )
 
 
@@ -2351,19 +2257,6 @@ def _validator_results_response(
             },
         }
 
-    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
-        return {
-            **{
-                name: row[name]
-                for name in ("validator_result_key", "status", "open_finding", "writeback_rejected")
-                if name in row
-            },
-            "withheld": True,
-            "total_chars": len(canonical_json(row)),
-            "read": result.call(
-                "validator_results", validator_result_key=row["validator_result_key"]
-            ),
-        }
 
     args = {
         name: value
@@ -2393,7 +2286,6 @@ def _validator_results_response(
             "not proof of accepted writeback or export readiness; writeback_rejected "
             "results are not accepted identities and open findings stay open."
         ),
-        oversized=oversized,
     )
 
 

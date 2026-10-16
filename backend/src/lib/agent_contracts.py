@@ -40,8 +40,6 @@ from src.lib.observability.payload_contracts import (
 )
 from src.lib.openai_agents.bounded_list import bounded_envelope, normalize_page_limit
 from src.lib.openai_agents.config import (
-    get_agent_contract_max_item_chars,
-    get_agent_contract_max_response_chars,
     get_tool_page_default_limit,
     get_tool_page_max_limit,
 )
@@ -197,9 +195,8 @@ def get_agent_contract(
     ``domain_pack_id``, ``object_type`` and ``field_path`` narrow the topic
     before anything is built; a selector a topic does not support, or one that
     matches nothing, is an explicit error. ``limit`` (TOOL_PAGE_DEFAULT_LIMIT /
-    TOOL_PAGE_MAX_LIMIT) and the serialized budgets
-    (AGENT_CONTRACT_MAX_RESPONSE_CHARS / AGENT_CONTRACT_MAX_ITEM_CHARS) bound
-    each page; pass ``page.next_cursor`` back as ``cursor`` to continue. Pass an
+    TOOL_PAGE_MAX_LIMIT) select
+    each complete page; pass ``page.next_cursor`` back as ``cursor`` to continue. Pass an
     item's ``ref`` as ``item_ref`` (with ``detail_pointer``) to read one item or
     one of its omitted values exactly.
 
@@ -372,7 +369,14 @@ def get_agent_contract(
                 fingerprint=fingerprint,
                 repeat_arguments={"topic": normalized_topic, "detail_level": normalized_detail_level, **scope},
             )
-        return _within_response_budget(response)
+        try:
+            json.dumps(response, ensure_ascii=True)
+        except (TypeError, ValueError) as exc:
+            raise PayloadContractViolation(
+                category="contract_serialization_failure", component="agent_contracts",
+                message=f"Contract metadata is not JSON-serializable: {exc}",
+            ) from exc
+        return response
     except _ContractRequestError as exc:
         return _error(exc.message, **echo, **({"scope": scope} if scope else {}), **exc.details)
     except PayloadContractViolation as violation:
@@ -1259,26 +1263,15 @@ def _page_response(
     fingerprint: str,
     repeat_arguments: Mapping[str, Any],
 ) -> dict[str, Any]:
-    item_budget = get_agent_contract_max_item_chars()
     page, envelope = _bounded_page(
         response,
         items,
         limit=limit,
         cursor=cursor,
         fingerprint=fingerprint,
-        present=lambda item: _bounded_item(item, item_budget),
+        present=lambda item: item,
     )
     result = {**response, "items": page, "page": envelope}
-    if any(item.get("detail_complete") is False for item in page):
-        result["drilldown"] = {
-            "message": (
-                "Items with detail_complete=false omit values larger than "
-                "AGENT_CONTRACT_MAX_ITEM_CHARS. Repeat these arguments with "
-                "item_ref=<item ref> and detail_pointer=<omitted_values[].detail_pointer> "
-                "to read one exactly."
-            ),
-            "repeat_arguments": dict(repeat_arguments),
-        }
     return result
 
 
@@ -1301,59 +1294,14 @@ def _item_detail_response(
             item_ref=item_ref,
         )
     value = _resolve_pointer(item, detail_pointer)
-    item_budget = get_agent_contract_max_item_chars()
     result = {
         **response,
         "item_ref": item_ref,
         "detail_pointer": detail_pointer,
         "value_type": _value_type(value),
     }
-    value_chars = _serialized_chars(value)
-    if value_chars <= item_budget:
-        _cursor_offset(cursor, fingerprint=fingerprint, total=1)
-        return {**result, "value": value, "detail_complete": True}
-
-    if isinstance(value, Mapping):
-        entry_key, children = "key", list(value.items())
-    elif isinstance(value, list):
-        entry_key, children = "index", list(enumerate(value))
-    else:
-        raise PayloadContractViolation(
-            category="tool_result_budget_escape",
-            component="agent_contracts.drilldown",
-            message=(
-                "A single contract value exceeds AGENT_CONTRACT_MAX_ITEM_CHARS and "
-                "cannot be split without slicing it."
-            ),
-            measured=value_chars,
-            limit=item_budget,
-            setting="AGENT_CONTRACT_MAX_ITEM_CHARS",
-            field=f"{item_ref}{detail_pointer}",
-        )
-    entries: list[dict[str, Any]] = []
-    for key, child in children:
-        child_chars = _serialized_chars(child)
-        if child_chars <= item_budget:
-            entries.append({entry_key: key, "value": child})
-        else:
-            entries.append(
-                {
-                    entry_key: key,
-                    "detail_complete": False,
-                    "detail_pointer": _pointer_child(detail_pointer, key),
-                    "value_type": _value_type(child),
-                    "serialized_chars": child_chars,
-                }
-            )
-    page, envelope = _bounded_page(
-        result,
-        entries,
-        limit=limit,
-        cursor=cursor,
-        fingerprint=fingerprint,
-        present=lambda entry: entry,
-    )
-    return {**result, "detail_complete": False, "entries": page, "page": envelope}
+    _cursor_offset(cursor, fingerprint=fingerprint, total=1)
+    return {**result, "value": value, "detail_complete": True}
 
 
 def _bounded_page(
@@ -1371,20 +1319,7 @@ def _bounded_page(
         maximum=get_tool_page_max_limit(),
     )
     offset = _cursor_offset(cursor, fingerprint=fingerprint, total=len(items))
-    page_budget = (
-        get_agent_contract_max_response_chars()
-        - _serialized_chars(response)
-        - _PAGE_ENVELOPE_RESERVE_CHARS
-    )
-    page: list[dict[str, Any]] = []
-    used = 0
-    for item in items[offset : offset + bounded_limit]:
-        presented = present(item)
-        size = _serialized_chars(presented) + 2
-        if page and used + size > page_budget:
-            break
-        page.append(presented)
-        used += size
+    page = [present(item) for item in items[offset : offset + bounded_limit]]
     next_offset = offset + len(page)
     has_more = next_offset < len(items)
     envelope = bounded_envelope(
@@ -1398,71 +1333,9 @@ def _bounded_page(
     envelope["limit"] = bounded_limit
     if not has_more:
         envelope["stopped_by"] = "end"
-    elif len(page) == bounded_limit:
-        envelope["stopped_by"] = "limit"
     else:
-        envelope["stopped_by"] = "response_budget"
+        envelope["stopped_by"] = "limit"
     return page, envelope
-
-
-def _bounded_item(item: dict[str, Any], item_budget: int) -> dict[str, Any]:
-    size = _serialized_chars(item)
-    if size <= item_budget:
-        return item
-    identity = {
-        "ref": item["ref"],
-        "kind": item["kind"],
-        "detail_complete": False,
-        "serialized_chars": size,
-    }
-    outline = dict(identity)
-    omitted: list[dict[str, Any]] = []
-    for key, value in item.items():
-        if key in identity:
-            continue
-        value_chars = _serialized_chars(value)
-        projected = (
-            _serialized_chars(outline)
-            + len(key)
-            + value_chars
-            + _OUTLINE_STUB_RESERVE_CHARS * (len(omitted) + 1)
-        )
-        if projected <= item_budget:
-            outline[key] = value
-        else:
-            omitted.append(
-                {
-                    "key": key,
-                    "detail_pointer": _pointer_child("", key),
-                    "value_type": _value_type(value),
-                    "serialized_chars": value_chars,
-                }
-            )
-    outline["omitted_values"] = omitted
-    if _serialized_chars(outline) <= item_budget:
-        return outline
-    return {
-        **identity,
-        "omitted_values": [
-            {"key": None, "detail_pointer": "", "value_type": "object", "serialized_chars": size}
-        ],
-    }
-
-
-def _within_response_budget(response: dict[str, Any]) -> dict[str, Any]:
-    budget = get_agent_contract_max_response_chars()
-    measured = _serialized_chars(response)
-    if measured > budget:
-        raise PayloadContractViolation(
-            category="tool_result_budget_escape",
-            component="agent_contracts",
-            message="get_agent_contract response exceeded its serialized budget.",
-            measured=measured,
-            limit=budget,
-            setting="AGENT_CONTRACT_MAX_RESPONSE_CHARS",
-            field=str(response.get("topic")),
-        )
-    return response
 
 
 def _cursor_offset(cursor: Any, *, fingerprint: str, total: int) -> int:
@@ -1534,20 +1407,8 @@ def _request_fingerprint(
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
 
-def _serialized_chars(value: Any) -> int:
-    try:
-        return len(json.dumps(value, ensure_ascii=True))
-    except (TypeError, ValueError) as exc:
-        raise PayloadContractViolation(
-            category="contract_serialization_failure",
-            component="agent_contracts",
-            message=f"Contract metadata is not JSON-serializable: {exc}",
-        ) from exc
 
 
-def _pointer_child(pointer: str, key: Any) -> str:
-    token = str(key).replace("~", "~0").replace("/", "~1")
-    return f"{pointer}/{token}"
 
 
 def _resolve_pointer(document: Any, pointer: str) -> Any:

@@ -27,15 +27,12 @@ from src.lib.chat_history_repository import (
 )
 from src.lib.openai_agents.config import (
     get_agent_studio_chat_history_page_size,
-    get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_recent_flow_run_window_days,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_max_lines,
     get_agent_studio_service_log_max_lookback_minutes,
     get_agent_studio_trace_review_aggregate_page_size,
-    get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
     get_agent_studio_trace_search_default_limit,
@@ -62,13 +59,11 @@ _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT = min(
 )
 _TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 _TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
-_TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
 _TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
 _TRACE_SEARCH_DEFAULT_LIMIT = get_agent_studio_trace_search_default_limit()
 _TRACE_SEARCH_MAX_LIMIT = get_agent_studio_trace_search_max_limit()
 _TRACE_SEARCH_FILTER_MAX_CHARS = get_agent_studio_trace_search_filter_max_chars()
 _CHAT_RECALL_PAGE_SIZE = get_agent_studio_chat_recall_page_size()
-_CHAT_RECALL_CHUNK_MAX_CHARS = get_agent_studio_chat_recall_chunk_max_chars()
 _CHAT_HISTORY_PAGE_SIZE = get_agent_studio_chat_history_page_size()
 _SERVICE_LOG_DEFAULT_LINES = get_agent_studio_service_log_default_lines()
 _SERVICE_LOG_MAX_LINES = get_agent_studio_service_log_max_lines()
@@ -229,7 +224,6 @@ GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": get_agent_studio_provider_tool_result_inline_max_chars(),
             },
         },
         "required": ["kind", "resource_id", "catalog_fingerprint"],
@@ -557,9 +551,7 @@ GET_CHAT_TURN_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "description": "Maximum requested exact characters; runtime may shorten to fit provider JSON.",
-                "default": _CHAT_RECALL_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _CHAT_RECALL_CHUNK_MAX_CHARS,
             },
         },
         "required": ["session_id", "turn_id"],
@@ -684,9 +676,7 @@ GET_TOOL_CALL_DETAIL_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "description": "Maximum exact characters in this chunk.",
-                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
             },
         },
         "required": ["trace_id", "call_id", "field"],
@@ -715,9 +705,7 @@ GET_TRACE_CONVERSATION_TOOL = {
             },
             "max_chars": {
                 "type": "integer",
-                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
             },
         },
         "required": ["trace_id", "field"],
@@ -952,9 +940,7 @@ GET_TRACE_PAYLOAD_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "description": "Maximum exact characters in this chunk.",
-                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
             },
         },
         "required": ["trace_id"],

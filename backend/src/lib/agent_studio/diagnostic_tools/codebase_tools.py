@@ -11,11 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from src.lib.openai_agents.config import (
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_codebase_file_list_max_results,
-    get_codebase_long_line_chunk_max_chars,
-    get_codebase_read_max_lines,
-    get_codebase_result_max_chars,
     get_codebase_search_max_results,
     get_codebase_search_timeout_seconds,
 )
@@ -23,18 +19,11 @@ from src.lib.openai_agents.config import (
 
 _DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[5]
 # Env-configurable (defaults unchanged); see config.py getters and .env.example:
-#   CODEBASE_READ_MAX_LINES, CODEBASE_SEARCH_MAX_RESULTS,
+#   CODEBASE_SEARCH_MAX_RESULTS,
 #   CODEBASE_FILE_LIST_MAX_RESULTS, CODEBASE_SEARCH_TIMEOUT_SECONDS.
-_MAX_READ_LINES = get_codebase_read_max_lines()
 _MAX_SEARCH_RESULTS = get_codebase_search_max_results()
 _MAX_FILE_LIST_RESULTS = get_codebase_file_list_max_results()
 _RG_SUBPROCESS_TIMEOUT_SECONDS = get_codebase_search_timeout_seconds()
-_RESULT_MAX_CHARS = min(
-    get_codebase_result_max_chars(),
-    get_agent_studio_provider_tool_result_inline_max_chars(),
-)
-_LONG_LINE_CHUNK_MAX_CHARS = get_codebase_long_line_chunk_max_chars()
-
 # Inspect application source, not the deployment filesystem. In particular,
 # config/connections.yaml, .env, uploads and execution artifacts are not source.
 _SOURCE_PREFIXES = (
@@ -59,9 +48,6 @@ def _is_source_path(path: str) -> bool:
     )
 
 
-def _serialized_chars(value: Dict[str, Any]) -> int:
-    """Measure the exact JSON representation used for provider continuation."""
-    return len(json.dumps(value, default=str))
 
 
 def _parse_search_cursor(cursor: Optional[str]) -> tuple[int, int]:
@@ -310,13 +296,6 @@ def search_codebase(
         match = matches[current_index]
         if search_mode == "files":
             results.append(dict(match))
-            next_cursor = str(current_index + 1) if current_index + 1 < len(matches) else None
-            if _serialized_chars(response(next_cursor)) > _RESULT_MAX_CHARS:
-                results.pop()
-                if results:
-                    return response(str(current_index))
-                return {"status": "error", "error": "metadata_too_large",
-                        "message": "One code-search path plus continuation metadata exceeds CODEBASE_RESULT_MAX_CHARS."}
             current_index += 1
             continue
 
@@ -325,31 +304,8 @@ def search_codebase(
         if start > len(text):
             raise ValueError("cursor line character offset is beyond the matched line")
         results.append(_line_record(match, start, len(text)))
-        next_cursor = str(current_index + 1) if current_index + 1 < len(matches) else None
-        if _serialized_chars(response(next_cursor)) <= _RESULT_MAX_CHARS:
-            current_index += 1
-            line_char_start = 0
-            continue
-        results.pop()
-        low, high, fitting_end = start + 1, min(len(text), start + _LONG_LINE_CHUNK_MAX_CHARS), None
-        while low <= high:
-            end = (low + high) // 2
-            results.append(_line_record(match, start, end))
-            candidate_cursor = f"{current_index}:{end}" if end < len(text) else next_cursor
-            fits = _serialized_chars(response(candidate_cursor)) <= _RESULT_MAX_CHARS
-            results.pop()
-            if fits:
-                fitting_end, low = end, end + 1
-            else:
-                high = end - 1
-        if fitting_end is None:
-            if results:
-                return response(str(current_index))
-            return {"status": "error", "error": "metadata_too_large",
-                    "message": "Code-search provenance metadata exceeds CODEBASE_RESULT_MAX_CHARS before one source character can be returned."}
-        results.append(_line_record(match, start, fitting_end))
-        continuation = f"{current_index}:{fitting_end}" if fitting_end < len(text) else next_cursor
-        return response(continuation)
+        current_index += 1
+        line_char_start = 0
     return response(str(current_index) if current_index < len(matches) else None)
 
 
@@ -382,7 +338,7 @@ def read_source_file(
     if start_line > len(lines) + 1:
         raise ValueError("start_line is beyond the end of the file")
     requested_end = min(end_line or len(lines), len(lines))
-    page_end = min(requested_end, start_line + _MAX_READ_LINES - 1)
+    page_end = requested_end
     numbered_lines: List[Dict[str, Any]] = []
     relative_path = _relative_repo_path(target)
 
@@ -411,32 +367,5 @@ def read_source_file(
                        "line_total_chars": len(text), "line_char_start": start,
                        "line_char_end": len(text), "line_truncated": False}
         numbered_lines.append(full_record)
-        next_line = line_number + 1 if line_number < requested_end else None
-        if _serialized_chars(response(next_line)) <= _RESULT_MAX_CHARS:
-            line_number += 1
-            continue
-        numbered_lines.pop()
-        low, high, fitting_end = start + 1, min(len(text), start + _LONG_LINE_CHUNK_MAX_CHARS), None
-        while low <= high:
-            chunk_end = (low + high) // 2
-            numbered_lines.append({**full_record, "text": text[start:chunk_end],
-                                   "line_char_end": chunk_end, "line_truncated": chunk_end < len(text)})
-            continuation_line = line_number if chunk_end < len(text) else next_line
-            continuation_char = chunk_end if chunk_end < len(text) else 0
-            fits = _serialized_chars(response(continuation_line, continuation_char)) <= _RESULT_MAX_CHARS
-            numbered_lines.pop()
-            if fits:
-                fitting_end, low = chunk_end, chunk_end + 1
-            else:
-                high = chunk_end - 1
-        if fitting_end is None:
-            if numbered_lines:
-                return response(line_number, start)
-            return {"status": "error", "error": "metadata_too_large",
-                    "message": "Source provenance metadata exceeds CODEBASE_RESULT_MAX_CHARS before one source character can be returned."}
-        numbered_lines.append({**full_record, "text": text[start:fitting_end],
-                               "line_char_end": fitting_end, "line_truncated": fitting_end < len(text)})
-        if fitting_end < len(text):
-            return response(line_number, fitting_end)
-        return response(next_line)
+        line_number += 1
     return response(page_end + 1 if page_end < requested_end else None)

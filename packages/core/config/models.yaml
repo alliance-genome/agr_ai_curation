@@ -2,6 +2,9 @@ models:
   - model_id: gpt-6-astra
     name: GPT-6 Astra
     provider: openai
+    context_window_tokens: 1050000
+    max_input_tokens: 922000
+    max_output_tokens: 128000
     description: Reasoning model for routing, output, and explicitly selected document extraction.
     guidance: Default for routing and output agents, with low reasoning. Available for extraction agents by explicit selection; new extraction agents use GPT-6.1 Sol with medium reasoning. Agent Studio AI Chat uses medium reasoning separately.
     default: false
@@ -25,6 +28,9 @@ models:
   - model_id: gpt-6.1-sol
     name: GPT-6.1 Sol
     provider: openai
+    context_window_tokens: 1050000
+    max_input_tokens: 922000
+    max_output_tokens: 128000
     description: Default reasoning model for document extraction, validation, and curation.
     guidance: Default for new extraction agents and for validation and utility agents. Start with medium reasoning; increase it when difficult evidence needs more analysis. GPT-6 Astra is available by explicit selection.
     default: true

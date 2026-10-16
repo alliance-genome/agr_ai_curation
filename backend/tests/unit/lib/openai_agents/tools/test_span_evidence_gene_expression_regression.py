@@ -32,6 +32,9 @@ def identity_function_tool(monkeypatch):
             return fn
         return lambda wrapped: wrapped
 
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_function_tool)
     monkeypatch.setattr(record_evidence, "function_tool", _identity_function_tool)
     monkeypatch.setattr(evidence_workspace, "function_tool", _identity_function_tool)
@@ -102,7 +105,9 @@ def _install_chunk_tools(
             "next_chunk_id": next_chunk_id,
         }
 
-    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
+    async def by_index(**kwargs):
+        return copy.deepcopy(next((chunk for chunk in chunks.values() if chunk["chunk_index"] == kwargs["chunk_index"]), None))
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", by_index)
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
     monkeypatch.setattr(
         weaviate_search,
@@ -128,9 +133,9 @@ def _record_summary(
 
 async def _record_pat_unc_tln_expression_evidence(document_id: str) -> dict[str, Any]:
     read_tool = weaviate_search.create_read_chunk_tool(document_id, "user-1")
-    record_tool = record_evidence.create_record_evidence_tool(document_id, "user-1")
+    record_tool = record_evidence._create_canonical_evidence_recorder(document_id, "user-1")
 
-    expression_read = await read_tool(_PAT_UNC_TLN_CHUNK_ID)
+    expression_read = await read_tool(next(chunk["chunk_index"] for chunk in json.loads((Path(__file__).resolve().parents[4] / "fixtures/evidence/span_gene_expression_sandbox_cases.json").read_text())["chunks"] if chunk["chunk_id"] == _PAT_UNC_TLN_CHUNK_ID))
     assert expression_read.chunk is not None
     expression_span = next(
         span
@@ -211,10 +216,10 @@ async def test_pat_unc_tln_expression_records_backend_span_text_not_model_quote(
     monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _fake_hybrid_search)
     search_tool = weaviate_search.create_search_tool(document_id, "user-1")
     read_tool = weaviate_search.create_read_chunk_tool(document_id, "user-1")
-    record_tool = record_evidence.create_record_evidence_tool(document_id, "user-1")
+    record_tool = record_evidence._create_canonical_evidence_recorder(document_id, "user-1")
 
     search_result = await search_tool("PAT-3 UNC-112 TLN-1 expression")
-    read_result = await read_tool(search_result.hits[0].chunk_id)
+    read_result = await read_tool(search_result.hits[0].chunk_index)
     assert read_result.chunk is not None
 
     expression_span = next(
@@ -288,9 +293,9 @@ async def test_tln_rpm_colocalization_records_figure_title_and_result_summary_sp
     colocalization_case = _case(sandbox_fixture, "tln_rpm_colocalization")
     _install_chunk_tools(monkeypatch, sandbox_chunks)
     read_tool = weaviate_search.create_read_chunk_tool(document_id, "user-1")
-    record_tool = record_evidence.create_record_evidence_tool(document_id, "user-1")
+    record_tool = record_evidence._create_canonical_evidence_recorder(document_id, "user-1")
 
-    read_result = await read_tool(colocalization_case["chunk_id"])
+    read_result = await read_tool(colocalization_case["chunk_index"])
     assert read_result.chunk is not None
     title_span = next(
         span
@@ -331,7 +336,7 @@ async def test_span_evidence_workspace_lists_discards_replaces_and_finalizes_act
     document_id = sandbox_fixture["document_id"]
     _install_chunk_tools(monkeypatch, sandbox_chunks)
     read_tool = weaviate_search.create_read_chunk_tool(document_id, "user-1")
-    record_tool = record_evidence.create_record_evidence_tool(document_id, "user-1")
+    record_tool = record_evidence._create_canonical_evidence_recorder(document_id, "user-1")
 
     workspace_records: list[dict[str, Any]] = []
     token = evidence_workspace.set_active_evidence_records(workspace_records)
@@ -349,7 +354,7 @@ async def test_span_evidence_workspace_lists_discards_replaces_and_finalizes_act
             "user-1",
         )
 
-        weak_read = await read_tool(_WEAK_MARKER_CHUNK_ID)
+        weak_read = await read_tool(sandbox_chunks[_WEAK_MARKER_CHUNK_ID]["chunk_index"])
         assert weak_read.chunk is not None
         weak_span = weak_read.chunk.evidence_spans[0]
         weak_result = await record_tool(

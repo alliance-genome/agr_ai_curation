@@ -17,7 +17,7 @@ import hashlib
 import logging
 import math
 from datetime import datetime
-from typing import Annotated, Callable, Dict, Any, Optional, List, Mapping, Literal
+from typing import Annotated, Dict, Any, Optional, List, Mapping, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, Path
 
 from ..observability import report_failure
@@ -38,9 +38,7 @@ from ..services.langfuse_run_reconstruction import (
 )
 from ..config import (
     get_transient_cache_ttl_seconds,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_trace_review_aggregate_page_size,
-    get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
     get_agent_studio_trace_search_default_limit,
@@ -183,10 +181,6 @@ LOGGER = logging.getLogger(__name__)
 TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
 TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
-TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
-TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS = (
-    get_agent_studio_provider_tool_result_inline_max_chars()
-)
 TRACE_SEARCH_DEFAULT_LIMIT = get_agent_studio_trace_search_default_limit()
 TRACE_SEARCH_MAX_LIMIT = get_agent_studio_trace_search_max_limit()
 TRACE_SEARCH_FILTER_MAX_CHARS = get_agent_studio_trace_search_filter_max_chars()
@@ -308,14 +302,13 @@ def _exact_text_chunk(
     field: str,
     value: Any,
     start: int,
-    max_chars: int,
+    max_chars: int | None,
     next_call: Mapping[str, Any],
-    provider_result_builder: Callable[[Dict[str, Any]], Mapping[str, Any]],
 ) -> Dict[str, Any]:
-    """Build the largest exact chunk whose complete provider result fits."""
+    """Return the full selected exact text or an explicit caller-selected range."""
     serialized = serialize_payload(value)
     safe_start = min(max(0, start), len(serialized))
-    safe_max_chars = min(max(1, max_chars), TRACE_REVIEW_CHUNK_MAX_CHARS)
+    safe_max_chars = len(serialized) if max_chars is None else max_chars
     metadata = _exact_text_metadata(field_id=field_id, field=field, value=value)
 
     def build_chunk(end: int) -> Dict[str, Any]:
@@ -335,38 +328,7 @@ def _exact_text_chunk(
             "serialized": serialized[safe_start:end],
         }
 
-    def fits_provider_result(chunk: Dict[str, Any]) -> bool:
-        return len(json.dumps(provider_result_builder(chunk), default=str)) <= (
-            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-        )
-
-    requested_end = min(safe_start + safe_max_chars, len(serialized))
-    requested_chunk = build_chunk(requested_end)
-    if fits_provider_result(requested_chunk):
-        return requested_chunk
-
-    fitting_chunk: Dict[str, Any] | None = None
-    low = safe_start + 1
-    high = requested_end - 1
-    while low <= high:
-        candidate_end = (low + high) // 2
-        candidate = build_chunk(candidate_end)
-        if fits_provider_result(candidate):
-            fitting_chunk = candidate
-            low = candidate_end + 1
-        else:
-            high = candidate_end - 1
-
-    if fitting_chunk is not None:
-        return fitting_chunk
-
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "The provider inline tool-result limit is too small to return even one "
-            "exact TraceReview character with its required identity metadata."
-        ),
-    )
+    return build_chunk(min(safe_start + safe_max_chars, len(serialized)))
 
 
 def _bounded_summary(value: Any) -> str:
@@ -439,7 +401,6 @@ def _domain_envelope_projection(
                         "call_id": call_id,
                         "field": "domain_envelope",
                         "start": 0,
-                        "max_chars": TRACE_REVIEW_CHUNK_MAX_CHARS,
                     }
                     if call_id is not None
                     else {
@@ -527,168 +488,10 @@ def _aggregate_items(value: Any) -> List[Any]:
 
 
 def _aggregate_token_info(data: Mapping[str, Any]) -> Dict[str, Any]:
-    """Measure the complete provider-visible aggregate result to a fixed point."""
-    token_info = create_token_info_dict(data)
-    for _ in range(3):
-        provider_result = {
-            "status": "success",
-            "data": data,
-            "token_info": token_info,
-            "error": None,
-        }
-        serialized_chars = len(json.dumps(provider_result, default=str))
-        within_budget = serialized_chars <= TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-        token_info = {
-            **token_info,
-            "serialized_chars": serialized_chars,
-            "max_serialized_chars": TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS,
-            "within_budget": within_budget,
-            "warning": (
-                None
-                if within_budget
-                else (
-                    "Response exceeds the Agent Studio serialized-character boundary "
-                    f"({serialized_chars:,} chars > "
-                    f"{TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS:,})."
-                )
-            ),
-        }
-    return token_info
+    """Observational size metadata; shared model runtime owns context capacity."""
+    return create_token_info_dict(data)
 
 
-def _aggregate_provider_result(data: Mapping[str, Any]) -> Dict[str, Any]:
-    """Build the complete provider-visible wrapper emitted by Agent Studio."""
-    return {
-        "status": "success",
-        "data": data,
-        "token_info": _aggregate_token_info(data),
-        "error": None,
-    }
-
-
-def _complete_provider_token_info(
-    payload: Any,
-    provider_result_builder: Callable[[Mapping[str, Any]], Mapping[str, Any]],
-) -> Dict[str, Any]:
-    """Measure a non-aggregate provider wrapper, including its token metadata."""
-    token_info = create_token_info_dict(payload)
-    for _ in range(4):
-        serialized_chars = len(
-            json.dumps(provider_result_builder(token_info), default=str)
-        )
-        within_budget = serialized_chars <= TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-        token_info = {
-            **token_info,
-            "estimated_tokens": _estimate_tokens_from_chars(serialized_chars),
-            "serialized_chars": serialized_chars,
-            "max_serialized_chars": TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS,
-            "within_budget": within_budget,
-            "warning": (
-                None
-                if within_budget
-                else (
-                    "Response exceeds the Agent Studio serialized-character boundary "
-                    f"({serialized_chars:,} chars > "
-                    f"{TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS:,})."
-                )
-            ),
-        }
-    return token_info
-
-
-def _overview_fits(data: Mapping[str, Any]) -> bool:
-    return len(json.dumps(_aggregate_provider_result(data), default=str)) <= (
-        TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-    )
-
-
-_COMPACTED_NOTE = (
-    "This overview was reduced to fit the tool-result limit. Nothing was lost: "
-    "fetch each section with its next_call handle. Do not retry this same call."
-)
-
-
-def _compacted_overview(base: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the largest overview that fits, never an error.
-
-    KANBAN-1772. This used to raise HTTP 400 when the complete overview did not
-    fit, so the tool that exists to explain a failed run was unavailable for
-    exactly the large runs that need explaining. The data is always reachable
-    through the per-section next_call handles, so the overview degrades in a
-    fixed order instead of refusing:
-
-    1. The complete overview.
-    2. Drop the filters echo.
-    3. Trim the summary to its small scalar keys.
-    4. Drop the summary entirely.
-    5. Keep only section names, item counts and next_call handles.
-    6. Keep only section names and counts, without handles.
-
-    The trace identity and the section inventory survive to the end, because a
-    reader who knows the sections can still ask for them one at a time.
-    """
-    if _overview_fits(base):
-        return base
-
-    def compacted(data: Dict[str, Any]) -> Dict[str, Any]:
-        return {**data, "status": "compacted_overview", "note": _COMPACTED_NOTE}
-
-    candidate = dict(base)
-    candidate.pop("filters", None)
-    if _overview_fits(compacted(candidate)):
-        return compacted(candidate)
-
-    summary = candidate.get("summary")
-    if isinstance(summary, Mapping):
-        trimmed = {
-            key: value
-            for key, value in summary.items()
-            if isinstance(value, (int, float, bool)) or (
-                isinstance(value, str) and len(value) <= 200
-            )
-        }
-        candidate["summary"] = trimmed
-        if _overview_fits(compacted(candidate)):
-            return compacted(candidate)
-
-    candidate.pop("summary", None)
-    if _overview_fits(compacted(candidate)):
-        return compacted(candidate)
-
-    collections = candidate.get("collections") or []
-    candidate["collections"] = [
-        {
-            "section": row.get("section"),
-            "total_items": row.get("total_items"),
-            "next_call": row.get("next_call"),
-        }
-        for row in collections
-    ]
-    if _overview_fits(compacted(candidate)):
-        return compacted(candidate)
-
-    names_only = [
-        {"section": row.get("section"), "total_items": row.get("total_items")}
-        for row in collections
-    ]
-    candidate["collections"] = names_only
-    if _overview_fits(compacted(candidate)):
-        return compacted(candidate)
-
-    # Last resort: a run with hundreds of sections cannot list them all, so page
-    # the inventory itself and say how many are missing. The reader can still
-    # ask for a named section, which beats an error that says nothing at all.
-    kept = len(names_only)
-    while kept > 1:
-        kept //= 2
-        candidate["collections"] = names_only[:kept]
-        candidate["sections_omitted"] = len(names_only) - kept
-        if _overview_fits(compacted(candidate)):
-            return compacted(candidate)
-
-    candidate["collections"] = names_only[:1]
-    candidate["sections_omitted"] = max(0, len(names_only) - 1)
-    return compacted(candidate)
 
 
 def _aggregate_response_data(
@@ -705,7 +508,7 @@ def _aggregate_response_data(
     next_call_base: Mapping[str, Any],
     item_start: int = 0,
 ) -> Dict[str, Any]:
-    """Return a summary-first aggregate page that fits the provider envelope."""
+    """Return the complete aggregate inventory or selected page."""
     inventory_limit = min(max(1, limit), TRACE_REVIEW_AGGREGATE_PAGE_SIZE)
     inventory = []
     for name, value in collections.items():
@@ -737,7 +540,7 @@ def _aggregate_response_data(
     }
     if section is None:
         base["page"] = None
-        return _compacted_overview(base)
+        return base
     if section not in collections:
         raise HTTPException(
             status_code=400,
@@ -783,11 +586,6 @@ def _aggregate_response_data(
 
     for item in items[safe_offset:safe_offset + safe_limit]:
         if safe_item_start:
-            break
-        candidate = build_page([*selected, item])
-        if len(json.dumps(_aggregate_provider_result(candidate), default=str)) > (
-            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-        ):
             break
         selected.append(item)
 
@@ -842,30 +640,7 @@ def _aggregate_response_data(
                 },
             }
 
-        low, high = safe_item_start, item_total_chars
-        fitting_chunk = None
-        while low <= high:
-            candidate_end = (low + high) // 2
-            candidate = build_item_chunk(candidate_end)
-            if len(json.dumps(_aggregate_provider_result(candidate), default=str)) <= (
-                TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-            ):
-                fitting_chunk = candidate
-                low = candidate_end + 1
-            else:
-                high = candidate_end - 1
-        if (
-            fitting_chunk is None
-            or fitting_chunk["page"]["item_chunk"]["end"] <= safe_item_start
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "The provider inline tool-result limit is too small to return "
-                    "one aggregate item character with its identity metadata"
-                ),
-            )
-        return fitting_chunk
+        return build_item_chunk(item_total_chars)
     return page_data
 
 
@@ -1163,11 +938,6 @@ def _search_response_data(
     for reference in references:
         if safe_item_start:
             break
-        candidate = build_page([*selected, reference])
-        if len(json.dumps(_aggregate_provider_result(candidate), default=str)) > (
-            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-        ):
-            break
         selected.append(reference)
 
     if selected or not references:
@@ -1215,24 +985,7 @@ def _search_response_data(
             },
         }
 
-    low, high = safe_item_start + 1, len(serialized)
-    fitting_chunk = None
-    while low <= high:
-        candidate_end = (low + high) // 2
-        candidate = build_chunk(candidate_end)
-        if len(json.dumps(_aggregate_provider_result(candidate), default=str)) <= (
-            TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-        ):
-            fitting_chunk = candidate
-            low = candidate_end + 1
-        else:
-            high = candidate_end - 1
-    if fitting_chunk is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Provider boundary is too small for one TraceReview search character",
-        )
-    return fitting_chunk
+    return build_chunk(len(serialized))
 
 
 def _parse_optional_datetime(value: Optional[str], param_name: str) -> Optional[datetime]:
@@ -1290,33 +1043,6 @@ def _ensure_search_scope(
         )
 
 
-def _ensure_search_provider_headroom(
-    *,
-    source: str,
-    query: Mapping[str, Any],
-    limit: int,
-) -> None:
-    """Reject filters whose exact continuation leaves no trace-chunk progress."""
-    try:
-        _search_response_data(
-            source=source,
-            traces=[{"id": "provider-headroom-probe", "name": "x" * TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS}],
-            query=query,
-            offset=0,
-            limit=limit,
-            total_items=1,
-            source_exhausted=True,
-            local_result_count=1,
-            item_start=0,
-        )
-    except HTTPException as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "TraceReview search filters leave no provider-envelope room for "
-                "deterministic result progress"
-            ),
-        ) from exc
 
 
 def _cache_schema_is_current(cache_data: Dict[str, Any]) -> bool:
@@ -1566,19 +1292,6 @@ async def search_traces(
         extraction_id=extraction_id,
         from_timestamp=from_timestamp,
         to_timestamp=to_timestamp,
-    )
-    _ensure_search_provider_headroom(
-        source=source,
-        query={
-            "session_id": session_id,
-            "name": name,
-            "document_id": document_id,
-            "run_id": run_id,
-            "extraction_id": extraction_id,
-            "from_timestamp": from_timestamp,
-            "to_timestamp": to_timestamp,
-        },
-        limit=limit,
     )
 
     try:
@@ -1831,9 +1544,9 @@ async def get_langfuse_payload(
     field: Optional[str] = Query(default=None, description="Payload field: input, output, metadata.agent_config, or metadata.event_payload"),
     start: int = Query(default=0, ge=0, description="Start character for chunked retrieval"),
     max_chars: Annotated[
-        int,
-        Query(ge=1, le=TRACE_REVIEW_CHUNK_MAX_CHARS, description="Maximum exact characters"),
-    ] = TRACE_REVIEW_CHUNK_MAX_CHARS,
+        int | None,
+        Query(ge=1, description="Optional exact character count; omit for the complete field"),
+    ] = None,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:
     if not payload_id:
@@ -1869,19 +1582,6 @@ async def get_langfuse_payload(
         }
     }
 
-    def build_payload_provider_result(chunk: Dict[str, Any]) -> Mapping[str, Any]:
-        provider_payload = {**payload_metadata, **chunk, "truncated": not chunk["complete"]}
-        provider_data = {
-            "source": source,
-            "trace_id": trace_id,
-            "payload": provider_payload,
-        }
-        return {
-            "status": "success",
-            "data": provider_data,
-            "token_info": create_token_info_dict(provider_data),
-            "error": None,
-        }
 
     chunk = _exact_text_chunk(
         field_id=f"payload:{payload['payload_id']}",
@@ -1890,7 +1590,6 @@ async def get_langfuse_payload(
         start=start,
         max_chars=max_chars,
         next_call={"trace_id": trace_id, "payload_id": payload["payload_id"]},
-        provider_result_builder=build_payload_provider_result,
     )
     payload = {**payload_metadata, **chunk, "truncated": not chunk["complete"]}
 
@@ -2233,39 +1932,11 @@ async def get_tool_calls_summary(
             duplicate_count=duplicates.get("total_duplicate_groups", 0),
         )
 
-    summaries: List[ToolCallSummaryItem] = []
-    for summary in candidate_summaries:
-        candidate_data = build_response_data([*summaries, summary])
-        candidate_payload = candidate_data.model_dump()
-        candidate_token_info = _complete_provider_token_info(
-            candidate_payload,
-            lambda info: {
-                "status": "success",
-                "data": candidate_payload,
-                "token_info": dict(info),
-                "error": None,
-            },
-        )
-        if not candidate_token_info["within_budget"]:
-            break
-        summaries.append(summary)
-    if candidate_summaries and not summaries:
-        raise HTTPException(
-            status_code=400,
-            detail="Provider boundary is too small for one bounded tool-call summary",
-        )
+    summaries = candidate_summaries
 
     response_data = build_response_data(summaries)
     response_payload = response_data.model_dump()
-    token_info = _complete_provider_token_info(
-        response_payload,
-        lambda info: {
-            "status": "success",
-            "data": response_payload,
-            "token_info": dict(info),
-            "error": None,
-        },
-    )
+    token_info = create_token_info_dict(response_payload)
 
     return ToolCallsSummaryResponse(
         status="success",
@@ -2378,7 +2049,6 @@ async def get_tool_calls_paginated(
                     "call_id": selector,
                     "field": field,
                     "start": 0,
-                    "max_chars": TRACE_REVIEW_CHUNK_MAX_CHARS,
                 },
             })
         candidate_tool_calls.append({
@@ -2424,27 +2094,10 @@ async def get_tool_calls_paginated(
             "filter_applied": tool_name,
         }
 
-    page_tool_calls: List[Dict[str, Any]] = []
-    for tool_call in candidate_tool_calls:
-        candidate_result = build_page_result([*page_tool_calls, tool_call])
-        candidate_token_info = _complete_provider_token_info(
-            candidate_result,
-            lambda info: {**candidate_result, "token_info": dict(info), "error": None},
-        )
-        if not candidate_token_info["within_budget"]:
-            break
-        page_tool_calls.append(tool_call)
-    if candidate_tool_calls and not page_tool_calls:
-        raise HTTPException(
-            status_code=400,
-            detail="Provider boundary is too small for one bounded tool-call record",
-        )
+    page_tool_calls = candidate_tool_calls
 
     page_result = build_page_result(page_tool_calls)
-    token_info = _complete_provider_token_info(
-        page_result,
-        lambda info: {**page_result, "token_info": dict(info), "error": None},
-    )
+    token_info = create_token_info_dict(page_result)
     pagination = PaginationInfo(**page_result["pagination"])
 
     return PaginatedToolCallsResponse(
@@ -2488,9 +2141,9 @@ async def get_tool_call_detail(
     ],
     start: Annotated[int, Query(ge=0, description="Start character")] = 0,
     max_chars: Annotated[
-        int,
-        Query(ge=1, le=TRACE_REVIEW_CHUNK_MAX_CHARS, description="Maximum exact characters"),
-    ] = TRACE_REVIEW_CHUNK_MAX_CHARS,
+        int | None,
+        Query(ge=1, description="Optional exact character count; omit for the complete field"),
+    ] = None,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> SingleToolCallResponse:
@@ -2525,15 +2178,6 @@ async def get_tool_call_detail(
         trace_id=trace_id,
     )
 
-    def build_tool_call_provider_result(chunk: Dict[str, Any]) -> Mapping[str, Any]:
-        token_info = create_token_info_dict({"tool_call": tool_call_metadata, "chunk": chunk})
-        return {
-            "status": "success",
-            "tool_call": tool_call_metadata,
-            "chunk": chunk,
-            "token_info": token_info,
-            "error": None,
-        }
 
     chunk = _exact_text_chunk(
         field_id=f"tool_call:{selector}:{field}",
@@ -2542,7 +2186,6 @@ async def get_tool_call_detail(
         start=start,
         max_chars=max_chars,
         next_call={"trace_id": trace_id, "call_id": selector, "field": field},
-        provider_result_builder=build_tool_call_provider_result,
     )
 
     token_info = create_token_info_dict({"tool_call": tool_call_metadata, "chunk": chunk})
@@ -2577,9 +2220,9 @@ async def get_trace_conversation(
     ],
     start: Annotated[int, Query(ge=0, description="Start character")] = 0,
     max_chars: Annotated[
-        int,
-        Query(ge=1, le=TRACE_REVIEW_CHUNK_MAX_CHARS, description="Maximum exact characters"),
-    ] = TRACE_REVIEW_CHUNK_MAX_CHARS,
+        int | None,
+        Query(ge=1, description="Optional exact character count; omit for the complete field"),
+    ] = None,
     source: str = Query(default=DEFAULT_SOURCE, description="Trace source"),
     user: Dict[str, Any] = get_auth_dependency()
 ) -> ConversationResponse:
@@ -2592,18 +2235,6 @@ async def get_trace_conversation(
     analyzer_field = "user_input" if field == "user_query" else "assistant_response"
     domain_envelope = conversation.get("domain_envelope")
 
-    def build_conversation_provider_result(chunk: Dict[str, Any]) -> Mapping[str, Any]:
-        provider_data = {
-            "field": field,
-            "chunk": chunk,
-            "domain_envelope": domain_envelope,
-        }
-        return {
-            "status": "success",
-            "data": provider_data,
-            "token_info": create_token_info_dict(provider_data),
-            "error": None,
-        }
 
     chunk = _exact_text_chunk(
         field_id=f"conversation:{field}",
@@ -2612,7 +2243,6 @@ async def get_trace_conversation(
         start=start,
         max_chars=max_chars,
         next_call={"trace_id": trace_id, "field": field},
-        provider_result_builder=build_conversation_provider_result,
     )
     response_data = ConversationData(
         field=field,

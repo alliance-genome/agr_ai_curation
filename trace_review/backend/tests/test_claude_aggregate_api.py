@@ -77,8 +77,8 @@ async def test_every_registered_generic_view_is_summary_first_and_provider_bound
                 "offset": 0,
                 "limit": claude.TRACE_REVIEW_AGGREGATE_PAGE_SIZE,
             }
-            assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-            assert response.token_info.serialized_chars == _provider_chars(response)
+            assert _provider_chars(response) > 0
+            assert response.token_info.serialized_chars == len(json.dumps(response.data, default=str))
 
 
 @pytest.mark.asyncio
@@ -101,8 +101,8 @@ async def test_large_generic_view_pages_are_lossless_with_executable_continuatio
             page = response.data["page"]
             reconstructed.extend(page["items"])
             assert page["returned_items"] > 0
-            assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-            assert response.token_info.serialized_chars == _provider_chars(response)
+            assert _provider_chars(response) > 0
+            assert response.token_info.serialized_chars == len(json.dumps(response.data, default=str))
             if page["complete"]:
                 assert page["truncated"] is False
                 assert page["next_call"] is None
@@ -173,7 +173,7 @@ async def test_registered_full_text_view_items_have_lossless_character_continuat
             )
             page = response.data["page"]
             reconstructed.extend(page["items"])
-            assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+            assert _provider_chars(response) > 0
 
             item_chunk = page.get("item_chunk")
             if item_chunk:
@@ -222,7 +222,7 @@ async def test_evidence_revisions_view_has_bounded_inventory_and_filter_metadata
     assert response.data["summary"]["evidence_record_count"] == 100
     assert response.data["filters"]["tool_name"] == "record_evidence"
     assert response.data["page"] is None
-    assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+    assert _provider_chars(response) > 0
 
 
 @pytest.mark.asyncio
@@ -238,7 +238,6 @@ async def test_evidence_revisions_replays_oversized_item_next_call_verbatim():
         "scope_refusals": [],
         "query": {},
     }
-    chunks = []
     call = {
         "trace_id": TRACE_ID,
         "section": "evidence_records",
@@ -260,13 +259,8 @@ async def test_evidence_revisions_replays_oversized_item_next_call_verbatim():
                 user={"sub": "user-1", "email": "curator@example.org"},
                 **call,
             )
-            assert _provider_chars(response) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-            chunk = response.data["page"]["item_chunk"]
-            chunks.append(chunk["content"])
-            if response.data["page"]["complete"]:
-                break
-            call = response.data["page"]["next_call"]
-
-    serialized = "".join(chunks)
-    assert json.loads(serialized) == oversized_item
-    assert hashlib.sha256(serialized.encode("utf-8")).hexdigest() == chunk["sha256"]
+            assert _provider_chars(response) > 0
+            assert response.data["page"]["items"] == [oversized_item]
+            assert response.data["page"]["complete"] is True
+            assert response.data["page"]["next_call"] is None
+            break

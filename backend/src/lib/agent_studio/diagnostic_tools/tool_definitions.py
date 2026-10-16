@@ -12,6 +12,8 @@ Tool Categories:
 - codebase: Read-only runtime repository inspection tools
 """
 
+from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
+
 import logging
 import inspect
 import hashlib
@@ -28,13 +30,8 @@ from src.lib.openai_agents.bounded_list import (
     substring_match,
 )
 from src.lib.openai_agents.config import (
-    get_agent_studio_prompt_inspection_chunk_max_chars,
-    get_agent_studio_provider_tool_result_inline_max_chars,
-    get_agent_studio_tool_details_chunk_max_chars,
-    get_agent_studio_tool_details_result_max_chars,
     get_agent_studio_tool_inventory_default_items,
     get_agent_studio_tool_inventory_max_items,
-    get_agent_studio_tool_inventory_result_max_chars,
     get_agent_studio_tool_inventory_summary_max_chars,
 )
 
@@ -50,26 +47,13 @@ logger = logging.getLogger(__name__)
 
 _TOOL_INVENTORY_DEFAULT_ITEMS = get_agent_studio_tool_inventory_default_items()
 _TOOL_INVENTORY_MAX_ITEMS = get_agent_studio_tool_inventory_max_items()
-_PROVIDER_RESULT_INLINE_MAX_CHARS = get_agent_studio_provider_tool_result_inline_max_chars()
-_TOOL_INVENTORY_RESULT_MAX_CHARS = min(
-    get_agent_studio_tool_inventory_result_max_chars(),
-    _PROVIDER_RESULT_INLINE_MAX_CHARS,
-)
 _TOOL_INVENTORY_SUMMARY_MAX_CHARS = get_agent_studio_tool_inventory_summary_max_chars()
-_TOOL_DETAILS_RESULT_MAX_CHARS = min(
-    get_agent_studio_tool_details_result_max_chars(),
-    _PROVIDER_RESULT_INLINE_MAX_CHARS,
-)
-_TOOL_DETAILS_CHUNK_MAX_CHARS = get_agent_studio_tool_details_chunk_max_chars()
 
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _serialized_chars(value: Dict[str, Any]) -> int:
-    """Measure the exact JSON representation used for provider continuation."""
-    return len(json.dumps(value, default=str))
 
 
 def _unwrap_function_tool(tool: FunctionTool) -> Callable:
@@ -536,8 +520,7 @@ def _create_get_prompt_handler():
                     f"cursor {cursor} exceeds target length {total_length}"
                 ),
             }
-        chunk_cap = get_agent_studio_prompt_inspection_chunk_max_chars()
-        chunk_size = min(max_chars or chunk_cap, chunk_cap)
+        chunk_size = requested_text_length(max_chars, total_length)
         requested_end = min(cursor + chunk_size, total_length)
 
         def render(end: int) -> Dict[str, Any]:
@@ -576,33 +559,7 @@ def _create_get_prompt_handler():
                 result["layer"] = selected_layer
             return result
 
-        provider_limit = get_agent_studio_provider_tool_result_inline_max_chars()
-        fitting_end: int | None = None
-        if _serialized_chars(render(requested_end)) <= provider_limit:
-            fitting_end = requested_end
-        low = cursor + 1
-        high = requested_end - 1
-        if fitting_end is None:
-            while low <= high:
-                candidate_end = (low + high) // 2
-                if _serialized_chars(render(candidate_end)) <= provider_limit:
-                    fitting_end = candidate_end
-                    low = candidate_end + 1
-                else:
-                    high = candidate_end - 1
-        if fitting_end is None and requested_end == cursor:
-            if _serialized_chars(render(cursor)) <= provider_limit:
-                fitting_end = cursor
-        if fitting_end is None:
-            return {
-                "status": "error",
-                "error": "provider_limit_too_small",
-                "message": (
-                    "The configured provider result envelope cannot hold prompt "
-                    "detail metadata plus one exact character."
-                ),
-            }
-        return render(fitting_end)
+        return render(requested_end)
 
     return handler
 
@@ -612,7 +569,6 @@ def _get_prompt_diagnostic_contract() -> tuple[str, Dict[str, Any]]:
     from src.lib.agent_studio.catalog_service import get_prompt_catalog
     from src.lib.prompts.cache import is_initialized
 
-    chunk_cap = get_agent_studio_prompt_inspection_chunk_max_chars()
     description = """Inspect an installed specialist or validator prompt from the shared prompt assembler.
 
 Omit view for a compact content-free summary with the effective prompt hash,
@@ -665,11 +621,9 @@ redirect guidance, not installed-prompt version selection."""
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": chunk_cap,
-                "default": chunk_cap,
                 "description": (
                     "Maximum exact characters to return; capped at the configured "
-                    f"limit of {chunk_cap}."
+                    "Omit for the complete target."
                 ),
             },
         },
@@ -913,12 +867,6 @@ def _create_get_tool_inventory_handler():
             }
 
             response = build_agent_response()
-            while page and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
-                page.pop()
-                response = build_agent_response()
-            if not page and offset < len(tool_items):
-                return {"success": False, "error": "metadata_too_large",
-                        "message": "One focused tool summary plus catalog continuation metadata exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
             return response
 
         all_tools = (
@@ -977,12 +925,6 @@ def _create_get_tool_inventory_handler():
         }
 
         response = build_global_response()
-        while page and _serialized_chars(response) > _TOOL_INVENTORY_RESULT_MAX_CHARS:
-            page.pop()
-            response = build_global_response()
-        if not page and offset < len(tool_items):
-            return {"success": False, "error": "metadata_too_large",
-                    "message": "One tool summary plus catalog continuation metadata exceeds AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS."}
         return response
 
     return handler
@@ -1037,7 +979,7 @@ def _create_get_tool_details_handler():
                 "input, and immutable evidence provenance behavior."
             ),
         }
-        if section is None and _serialized_chars(inline_result) <= _TOOL_DETAILS_RESULT_MAX_CHARS:
+        if section is None:
             return inline_result
 
         metadata_json = _canonical_json(metadata)
@@ -1055,10 +997,6 @@ def _create_get_tool_details_handler():
                           "tool_id": normalized_tool_id,
                           **({"agent_id": normalized_agent_id} if normalized_agent_id else {}),
                           "section": sections[0]["section"]}} if sections else None)}
-            if _serialized_chars(result) > _TOOL_DETAILS_RESULT_MAX_CHARS:
-                return {"success": False, "error": "metadata_too_large",
-                        "message": "Tool metadata section index exceeds AGENT_STUDIO_TOOL_DETAILS_RESULT_MAX_CHARS.",
-                        "tool_id": normalized_tool_id, "tool_sha256": metadata_hash}
             return result
         if section not in metadata:
             return {"success": False, "error": f"Unknown section {section}.",
@@ -1068,8 +1006,7 @@ def _create_get_tool_details_handler():
         start = parse_offset_cursor(cursor)
         if start > len(section_text):
             return {"success": False, "error": "cursor is beyond the selected metadata section."}
-        requested_chars = normalize_page_limit(max_chars, default=_TOOL_DETAILS_CHUNK_MAX_CHARS,
-                                               maximum=_TOOL_DETAILS_CHUNK_MAX_CHARS)
+        requested_chars = requested_text_length(max_chars, len(section_text))
 
         def build_chunk(end: int) -> Dict[str, Any]:
             complete = end >= len(section_text)
@@ -1082,19 +1019,7 @@ def _create_get_tool_details_handler():
                         "tool_id": normalized_tool_id,
                         **({"agent_id": normalized_agent_id} if normalized_agent_id else {}),
                         "section": section, "cursor": end, "max_chars": requested_chars}})}
-        low, high = start + 1, min(len(section_text), start + requested_chars)
-        fitting_end: Optional[int] = start if start == len(section_text) else None
-        while low <= high:
-            end = (low + high) // 2
-            if _serialized_chars(build_chunk(end)) <= _TOOL_DETAILS_RESULT_MAX_CHARS:
-                fitting_end, low = end, end + 1
-            else:
-                high = end - 1
-        if fitting_end is None:
-            return {"success": False, "error": "metadata_too_large",
-                    "message": "Metadata section identity exceeds AGENT_STUDIO_TOOL_DETAILS_RESULT_MAX_CHARS before one exact character can be returned.",
-                    "tool_id": normalized_tool_id, "section": section, "sha256": section_hash}
-        return build_chunk(fitting_end)
+        return build_chunk(min(len(section_text), start + requested_chars))
 
     return handler
 
@@ -1204,7 +1129,7 @@ continuation chunks; small method/PDF details remain a single call.""",
                 },
                 "section": {"type": "string", "description": "Optional top-level metadata section returned by an oversized first call."},
                 "cursor": {"type": "integer", "minimum": 0, "description": "Exact character offset returned by a section next_call."},
-                "max_chars": {"type": "integer", "minimum": 1, "maximum": _TOOL_DETAILS_CHUNK_MAX_CHARS,
+                "max_chars": {"type": "integer", "minimum": 1,
                               "description": "Requested exact section characters; JSON escaping may reduce the range."},
             },
             "required": ["tool_id"],

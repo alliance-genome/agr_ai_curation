@@ -62,7 +62,7 @@ def test_shipped_supporting_evidence_contract(pack_id, binding, name, selector, 
         assert result.request is not None
         # Both conflicting quotes survive, each paired with its own provenance;
         # selection itself neither chooses one nor resolves a biological identity.
-        assert result.selected_inputs.get(name, []) == records
+        assert result.selected_inputs.get(name, []) == [{k: v for k, v in record.items() if k != "chunk_id"} for record in records]
 
 
 def test_all_shipped_supporting_evidence_datatypes_are_audited():

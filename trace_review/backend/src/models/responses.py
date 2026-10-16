@@ -10,7 +10,7 @@ from typing import Any, Optional, List, Dict, Literal
 
 
 class TokenInfo(BaseModel):
-    """Token budget information included in all Claude API responses."""
+    """Advisory response-size information; no per-tool context quota."""
     estimated_tokens: int = Field(
         ...,
         description="Estimated token count for this response (4 chars ≈ 1 token)"
@@ -18,18 +18,6 @@ class TokenInfo(BaseModel):
     serialized_chars: int = Field(
         ...,
         description="Serialized JSON characters in the response data",
-    )
-    max_serialized_chars: int = Field(
-        ...,
-        description="Agent Studio provider inline-result character boundary",
-    )
-    within_budget: bool = Field(
-        ...,
-        description="Whether response data is within the serialized-character boundary"
-    )
-    warning: Optional[str] = Field(
-        default=None,
-        description="Warning message if budget exceeded or data truncated"
     )
 
 

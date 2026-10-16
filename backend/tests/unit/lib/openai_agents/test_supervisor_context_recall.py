@@ -353,3 +353,14 @@ def test_inspect_chat_traces_inventory_default_limit_uses_env(monkeypatch):
     ]
     assert env_payload["truncated"] is True
     assert env_payload["next_cursor"] == "2"
+
+
+def test_trace_detail_response_preserves_full_content_range_and_nested_arrays():
+    import hashlib
+    from src.lib.openai_agents.supervisor_context_tools import _tool_response
+    content = "NOT observed α😀 " * 1000
+    chunk = {"serialized": content, "complete": True, "start": 0, "end": len(content),
+             "sha256": hashlib.sha256(content.encode()).hexdigest()}
+    source = {"chunk": chunk, "records": [{"text": content} for _ in range(25)]}
+    result = json.loads(_tool_response("success", "Exact trace", data=source))
+    assert result["data"] == source

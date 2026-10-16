@@ -46,7 +46,6 @@ from src.lib.openai_agents.config import (
     get_agent_studio_service_log_page_max_chars,
     get_agent_studio_service_log_timeout_seconds,
     get_agent_studio_trace_review_aggregate_page_size,
-    get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_search_default_limit,
     get_agent_studio_trace_search_max_limit,
@@ -678,10 +677,7 @@ async def get_tool_call_detail(
                     "source": get_trace_source(),
                     "field": field,
                     "start": max(0, start),
-                    "max_chars": max(1, min(
-                        max_chars or get_agent_studio_trace_review_chunk_max_chars(),
-                        get_agent_studio_trace_review_chunk_max_chars(),
-                    )),
+                    **({"max_chars": max_chars} if max_chars is not None else {}),
                 },
                 headers=_trace_review_request_headers(),
             )
@@ -788,10 +784,7 @@ async def get_trace_conversation(
                     "source": get_trace_source(),
                     "field": field,
                     "start": max(0, start),
-                    "max_chars": max(1, min(
-                        max_chars or get_agent_studio_trace_review_chunk_max_chars(),
-                        get_agent_studio_trace_review_chunk_max_chars(),
-                    )),
+                    **({"max_chars": max_chars} if max_chars is not None else {}),
                 },
                 headers=_trace_review_request_headers(),
             )
@@ -1315,10 +1308,7 @@ async def get_trace_payload(
             "observation_id": observation_id,
             "field": field,
             "start": max(0, start),
-            "max_chars": max(1, min(
-                max_chars or get_agent_studio_trace_review_chunk_max_chars(),
-                get_agent_studio_trace_review_chunk_max_chars(),
-            )),
+            **({"max_chars": max_chars} if max_chars is not None else {}),
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),

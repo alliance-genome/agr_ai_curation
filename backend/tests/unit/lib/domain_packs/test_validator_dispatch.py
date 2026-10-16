@@ -3757,7 +3757,7 @@ def test_package_scoped_validator_agent_sets_max_turns_when_max_tool_calls_unset
 
     # max_tool_calls unset must still pin max_turns rather than fall to the
     # Agents SDK default of 10: default tool-call budget (8) + finalization (2).
-    assert captured["kwargs"]["max_turns"] == 10
+    assert captured["kwargs"]["max_turns"] == 66
 
 
 def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls_unset(
@@ -3819,7 +3819,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
     # Single-job batch with max_tool_calls unset: default budget (8) + 2 still
     # wins over the len(jobs)-derived floor, so max_turns is pinned at 10 rather
     # than silently inheriting the SDK default.
-    assert captured["kwargs"]["max_turns"] == 10
+    assert captured["kwargs"]["max_turns"] == 66
 
 
 @pytest.mark.parametrize(
@@ -3829,7 +3829,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
         # (2) == 26. A composite validator (experimental_condition) makes several
         # per-component lookups per job, so the budget must scale with the number
         # of jobs in the batch rather than a flat per-run cap.
-        (None, 3 * 8 + 2),
+        (None, 3 * 64 + 2),
         # 3 jobs * configured per-job budget (4) + finalization (2) == 14.
         (4, 3 * 4 + 2),
     ],

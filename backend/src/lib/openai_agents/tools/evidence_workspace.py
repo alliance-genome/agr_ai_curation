@@ -11,18 +11,7 @@ from agents import function_tool
 
 from ..config import get_evidence_list_max_limit, get_list_recorded_evidence_limit
 from ..evidence_summary import evidence_record_status
-from ..tool_result_bounds import (
-    ToolResultBudgetError,
-    bounded_json_result,
-    budget_failure,
-    clamp_page_limit,
-    fit_page,
-    invalid_cursor,
-    parse_offset,
-    report_budget_failure_result,
-    serialized_size,
-    tool_result_budget,
-)
+from ..tool_result_bounds import bounded_json_result, clamp_page_limit, fit_page, invalid_cursor, parse_offset
 
 if TYPE_CHECKING:
     from ..guardrails import ToolCallTracker
@@ -375,31 +364,9 @@ def _record_list_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _oversized_list_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    """Identity-only stand-in for a summary too large for one page."""
-
-    return {
-        "evidence_record_id": summary.get("evidence_record_id"),
-        "status": summary.get("status"),
-        "withheld": True,
-        "summary_bytes": serialized_size(summary),
-        "detail_tool": "get_recorded_evidence",
-    }
-
-
 def _record_ack(response: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
-    """Attach the changed record's compact summary, or only its identity.
-
-    A summary can outgrow one response only through agent-authored metadata;
-    the change itself already happened, so acknowledge it with identity and
-    point at get_recorded_evidence rather than failing the mutation.
-    """
-
-    summary = _record_list_summary(record)
-    full = {**response, "record": summary}
-    if serialized_size(full) <= tool_result_budget():
-        return full
-    return {**response, "record": _oversized_list_summary(summary)}
+    """Acknowledge the mutation with its complete structural summary."""
+    return {**response, "record": _record_list_summary(record)}
 
 
 def _success(record: dict[str, Any], *, action: str) -> dict[str, Any]:
@@ -508,7 +475,6 @@ def create_list_recorded_evidence_tool(
             start = parse_offset(offset, total=total)
         except ValueError as exc:
             return invalid_cursor(str(exc), document_id=document_id, count=total)
-        budget = tool_result_budget()
 
         def render(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
             next_offset = start + returned
@@ -530,32 +496,18 @@ def create_list_recorded_evidence_tool(
                 "truncated": has_more,
                 "page_ended_by": ended_by,
                 **limit_metadata,
-                "budget_bytes": budget,
+
                 "evidence_records": page,
             }
 
-        try:
-            response, _ = fit_page(
-                records,
-                start=start,
-                limit=cap,
-                render=render,
-                budget=budget,
-                oversized=lambda summary, _index: _oversized_list_summary(summary),
-            )
-        except ToolResultBudgetError as exc:
-            failure = budget_failure(
-                tool_name="list_recorded_evidence",
-                measured=exc.measured,
-                limit=exc.limit,
-            )
-            report_budget_failure_result(
-                failure,
-                tool_name="list_recorded_evidence",
-                component="evidence_workspace",
-                correlation={"document_id": document_id},
-            )
-            return failure
+        response, _ = fit_page(
+            records,
+            start=start,
+            limit=cap,
+            render=render,
+
+
+        )
         return response
 
     return list_recorded_evidence
@@ -617,11 +569,10 @@ def create_get_recorded_evidence_tool(
             "evidence_record_id": _optional_string(evidence_record_id),
             "record": record_payload,
         }
-        budget = tool_result_budget()
         try:
             bounded = bounded_json_result(
                 response,
-                budget=budget,
+
                 offset=result_offset,
                 expected_sha256=result_sha256,
                 detail_path=detail_path,
@@ -634,20 +585,6 @@ def create_get_recorded_evidence_tool(
                 str(exc),
                 evidence_record_id=_optional_string(evidence_record_id),
             )
-        except ToolResultBudgetError as exc:
-            failure = budget_failure(
-                tool_name="get_recorded_evidence",
-                measured=exc.measured,
-                limit=exc.limit,
-                field=detail_path,
-            )
-            report_budget_failure_result(
-                failure,
-                tool_name="get_recorded_evidence",
-                component="evidence_workspace",
-                correlation={"document_id": document_id},
-            )
-            return failure
         return response if bounded is None else bounded
 
     return get_recorded_evidence

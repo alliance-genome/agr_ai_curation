@@ -96,7 +96,7 @@ def test_no_search_matches_is_a_valid_result():
     ("read_chunk", "chunk"), ("search_document", "hits"),
     ("read_section", "section"), ("read_subsection", "subsection"),
 ])
-@pytest.mark.parametrize("code", ["invalid_result_cursor", "tool_result_budget_unmet"])
+@pytest.mark.parametrize("code", ["invalid_result_cursor"])
 def test_catalog_keeps_paging_and_size_errors_distinct_from_pdf_failure(tool, key, code):
     from agr_ai_curation_runtime.tool_result_bounds import full_tool_results_requested
     from src.lib.agent_studio import catalog_service

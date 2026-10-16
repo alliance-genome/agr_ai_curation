@@ -467,6 +467,7 @@ async def stream_agent_studio_run(
     model_settings: ModelSettings,
     cancel_event: asyncio.Event | None = None,
     surface: ChatSurface = "agent_studio",
+    current_turn_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run the SDK-owned authoring loop and emit provider-neutral Studio events."""
 
@@ -474,6 +475,12 @@ async def stream_agent_studio_run(
         return
     _, agent_name, workflow = _surface_identity(surface)
     cancellation_task: asyncio.Task | None = None
+    sdk_session = None
+    result = None
+    if current_turn_id is not None:
+        from src.lib.openai_agents.chat_compaction_session import DurableChatHistorySession
+        sdk_session = DurableChatHistorySession(session_id=session_id, user_id=user_id,
+            current_turn_id=current_turn_id, chat_kind=surface)
     resources = build_owned_openai_responses_resources()
     try:
         run_config = _run_config(
@@ -519,11 +526,14 @@ async def stream_agent_studio_run(
                 agent.tool_surface_runtime = surface
                 run_config = prepare_history_run(agent, run_config)
                 state.tool_surface = getattr(agent, "tool_surface", state.tool_surface)
+                if sdk_session is not None:
+                    await sdk_session.acquire_run()
                 result = Runner.run_streamed(
                     agent,
                     input=input_items,
                     max_turns=max_turns,
                     run_config=run_config,
+                    session=sdk_session,
                 )
                 if cancel_event is not None:
                     async def stop_when_requested():
@@ -593,15 +603,19 @@ async def stream_agent_studio_run(
                         yield {"type": "TEXT_DELTA", "delta": final_output}
                 _capture_terminal_metadata(result, state)
     finally:
-        if cancellation_task is not None:
-            cancellation_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await cancellation_task
-        await close_owned_openai_resources(
-            resources,
-            trace_id=state.trace_id,
-            user_id=user_id,
-        )
+        try:
+            if sdk_session is not None:
+                await sdk_session.release_run(result)
+        finally:
+            try:
+                if cancellation_task is not None:
+                    cancellation_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await cancellation_task
+            finally:
+                await close_owned_openai_resources(
+                    resources, trace_id=state.trace_id, user_id=user_id,
+                )
 
 
 async def run_forced_agent_studio_tool(
@@ -652,7 +666,7 @@ async def run_forced_agent_studio_tool(
                 ),
             ),
             tools=tools,
-            tool_use_behavior="stop_on_first_tool",
+            tool_use_behavior={"stop_at_tool_names": [tool_name]},
         )
         agent.tool_surface = state.tool_surface
         attach_agent_cost_identity(agent, {

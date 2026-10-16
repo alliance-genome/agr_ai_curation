@@ -1938,7 +1938,7 @@ metadata:
             validator_agent:
               package_id: agr.alliance
               agent_id: allele_validation
-            max_tool_calls: ${SUBJECT_ALLELE_VALIDATOR_MAX_TOOL_CALLS:-16}
+            max_tool_calls: ${SUBJECT_ALLELE_VALIDATOR_MAX_TOOL_CALLS:-64}
             input_fields:
               mention:
                 source: payload

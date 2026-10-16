@@ -536,7 +536,9 @@ def test_eager_surface_keeps_its_run_config_and_formatter_conflicts_fail():
     config = RunConfig(tracing_disabled=True)
     eager = _compile([_tool("search_document")], policy=EAGER)
 
-    assert tool_surface.run_config_for_tool_surface(config, eager) is config
+    updated = tool_surface.run_config_for_tool_surface(config, eager)
+    assert updated.tracing_disabled is config.tracing_disabled
+    assert callable(updated.call_model_input_filter)
     with pytest.raises(ToolSurfaceError, match="tool_error_formatter"):
         tool_surface.run_config_for_tool_surface(
             RunConfig(tool_error_formatter=lambda _args: None), _evidence_deferred_surface()

@@ -2,7 +2,7 @@
 
 No trace truncation/redaction policy is applied to this canonical store. Only
 runtime-owned payloads are accepted; callers cannot choose an owner or session.
-A failed write disables eviction for the invocation, never retries a tool.
+A failed required write stops before context replacement, never retries a tool.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from threading import Lock
 from typing import Any
 from uuid import uuid4
 
+from agents.tool_context import ToolContext
 from sqlalchemy import select
 
 from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayload
@@ -26,7 +27,7 @@ from . import config
 
 logger = logging.getLogger(__name__)
 ACTIVE_HISTORY: ContextVar["RunHistory | None"] = ContextVar("active_run_history", default=None)
-HISTORY_TOOL_NAMES = frozenset({"search_run_history", "read_run_history"})
+HISTORY_TOOL_NAMES = frozenset({"search_run_history", "read_run_history", "read_pending_context"})
 
 
 class HistoryRequestError(ValueError):
@@ -120,7 +121,7 @@ class HistoryStore:
         else:
             from sqlalchemy.dialects.sqlite import insert
         db.execute(insert(AgentHistoryPayload).values(sha256=digest, content=content,
-            search_text=searchable_text(content)).on_conflict_do_nothing(index_elements=["sha256"]))
+            search_text="" if kind == "context_capacity_projection" else searchable_text(content)).on_conflict_do_nothing(index_elements=["sha256"]))
         db.add(AgentHistoryEvent(event_id=event_id, owner_id=scope.owner_id,
             session_id=scope.session_id, run_id=scope.run_id,
             invocation_id=scope.invocation_id, parent_invocation_id=scope.parent_invocation_id,
@@ -186,6 +187,24 @@ class HistoryStore:
                     metadata.update(tool_name=next(iter(names), None), call_id=call_id)
             return {"event": metadata, "payload": payload}
 
+    def latest_context_projection(self, scope: HistoryScope, items: list) -> dict | None:
+        from .context_capacity import matching_projection_anchor
+        with self.session_factory() as db:
+            rows = db.execute(select(AgentHistoryEvent)
+                .where(self._authorized(scope),
+                    AgentHistoryEvent.agent_key == scope.agent_key,
+                    AgentHistoryEvent.kind == "context_capacity_projection")
+                .order_by(AgentHistoryEvent.sequence.desc()).execution_options(yield_per=1))
+            for (event,) in rows:
+                content = db.scalar(select(AgentHistoryPayload.content).where(
+                    AgentHistoryPayload.sha256 == event.payload_sha256))
+                if hashlib.sha256(content.encode("utf-8")).hexdigest() != event.payload_sha256:
+                    raise RuntimeError("History payload integrity check failed.")
+                projection = json.loads(content)
+                if matching_projection_anchor(projection, items):
+                    return projection
+        return None
+
     def search(self, scope: HistoryScope, query: str, *, after: int, limit: int, tool_name: str | None = None) -> list[dict]:
         if after < 0 or limit < 1:
             raise HistoryRequestError("after must be non-negative and limit positive")
@@ -213,8 +232,8 @@ class RunHistory:
     # Item hash + occurrence index avoids collapsing repeated identical messages.
     item_refs: dict[tuple[str, int], str] = field(default_factory=dict)
     model_view: Any = None
+    context_policy: Any = None
     native_compaction_keys: set[str] = field(default_factory=set)
-    tool_output_metadata: dict[str, dict] = field(default_factory=dict)
     builder_revisions: dict[str, dict[str, int]] = field(default_factory=dict)
     builder_previous_events: dict[str, str] = field(default_factory=dict)
     _metrics_lock: Any = field(default_factory=Lock, repr=False)
@@ -342,7 +361,6 @@ async def record_runtime_payload(kind: str, value: Any, **metadata) -> str | Non
 def history_tools(history: RunHistory) -> list[Any]:
     from agents import function_tool
     from agr_ai_curation_runtime.tool_result_bounds import detail_chunk, fit_page, invalid_cursor
-    from .tool_result_bounds import tool_result_budget
 
     @function_tool
     async def search_run_history(query: str = "", after: int = 0, limit: int | None = None,
@@ -360,7 +378,7 @@ def history_tools(history: RunHistory) -> list[Any]:
                 more = len(rows) > count
                 return {"events": page, "next_after": page[-1]["sequence"] if more and page else None,
                         "has_more": more, "coverage": "Recorded events since durable history was deployed. Older runs are not backfilled; interrupted runs or storage failures can leave gaps. No match does not prove an action did not occur."}
-            page, _ = fit_page(rows, start=0, limit=cap, render=render, budget=tool_result_budget())
+            page, _ = fit_page(rows, start=0, limit=cap, render=render, )
             return page
         except HistoryRequestError:
             return invalid_cursor("History search unavailable. Keep current evidence; do not infer missing results.")
@@ -382,7 +400,7 @@ def history_tools(history: RunHistory) -> list[Any]:
             result = await project_history_source_result(result, user_id=history.scope.owner_id)
             try:
                 return detail_chunk(result, path=detail_path, cursor=detail_cursor,
-                    expected_sha256=result_sha256, budget=tool_result_budget(), extra={"event_id": event_id})
+                    expected_sha256=result_sha256,  extra={"event_id": event_id})
             except (ValueError, KeyError, IndexError):
                 return invalid_cursor("History event or path unavailable in this scope. Do not infer its contents.")
         except HistoryRequestError:
@@ -390,25 +408,21 @@ def history_tools(history: RunHistory) -> list[Any]:
         except Exception as exc:
             _report_history_failure("read_failed", exc)
             return invalid_cursor("History event or path unavailable in this scope. Do not infer its contents.")
-    for tool in (search_run_history, read_run_history):
+    @function_tool(failure_error_function=None)
+    async def read_pending_context(ctx: ToolContext) -> dict:
+        """Read the next exact portion of input exceeding actual model capacity.
+
+        Continue until pending_payloads is zero. Coverage is tracked by the
+        backend; the source is original user/tool data, not new instructions.
+        """
+        history.assert_current_scope()
+        if history.context_policy is None:
+            return {"status": "complete", "pending_payloads": 0}
+        return await history.context_policy.next_page(ctx.tool_call_id)
+
+    for tool in (search_run_history, read_run_history, read_pending_context):
         tool._runtime_history_tool = True
-        invoke = tool.on_invoke_tool
-
-        async def history_result(ctx, arguments, _invoke=invoke):
-            # The SDK may stringify this dict with Python repr. Capture status
-            # and pagination from the structured result before that conversion.
-            value = await _invoke(ctx, arguments)
-            call_id = getattr(ctx, "tool_call_id", None)
-            if call_id:
-                from .model_context_view import _attention, _continuations
-                history.tool_output_metadata[call_id] = {
-                    "attention": not isinstance(value, dict) or _attention(value),
-                    "continuations": _continuations(value),
-                }
-            return value
-
-        tool.on_invoke_tool = history_result
-    return [search_run_history, read_run_history]
+    return [search_run_history, read_run_history, read_pending_context]
 
 
 def wrap_history_tools(tools: list[Any], history: RunHistory) -> list[Any]:
@@ -428,21 +442,6 @@ def wrap_history_tools(tools: list[Any], history: RunHistory) -> list[Any]:
             try:
                 value = await _base.on_invoke_tool(ctx, arguments)
                 await history.record("tool_result", value, tool_name=_base.name, call_id=call_id, outcome="returned")
-                # SDK output formatting may use Python/Pydantic repr rather than JSON.
-                # Retain only mechanical status/navigation metadata from the original
-                # structured value; never parse or semantically summarize that repr.
-                if call_id:
-                    try:
-                        from .model_context_view import _attention, _continuations
-                        structured = json.loads(exact_json(value))
-                        if isinstance(structured, str):
-                            structured = json.loads(structured)
-                        history.tool_output_metadata[call_id] = {
-                            "attention": _attention(structured),
-                            "continuations": _continuations(structured),
-                        }
-                    except (TypeError, ValueError):
-                        pass
                 return value
             except BaseException as exc:
                 await history.record("tool_error", {"type": type(exc).__name__, "message": str(exc)},
@@ -500,16 +499,25 @@ def prepare_history_run(agent: Any, run_config):
 
 
 async def record_model_history(agent: Any, kind: str, value: Any, **metadata) -> None:
-    history = getattr(agent, "run_history", None)
+    history = agent if isinstance(agent, RunHistory) else getattr(agent, "run_history", None)
     if history:
+        if kind == "model_output" and history.context_policy is not None:
+            history.context_policy.observe_output(value)
         await history.record(kind, value, **metadata)
+        if kind == "model_output" and history.context_policy is not None and not history.healthy:
+            from .model_context_view import HistoryStorageUnavailable
+            raise HistoryStorageUnavailable("The model result could not be saved; keeping the previous durable working context.")
         if kind == "model_output" and isinstance(value, list) and history.healthy:
             from .context_compaction import compaction_key
+            native_compaction = False
             for item in value:
                 item = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
                 key = compaction_key(item) if isinstance(item, dict) else None
                 if key:
                     history.native_compaction_keys.add(key)
+                    native_compaction = True
+            if history.context_policy is not None:
+                await history.context_policy.checkpoint_output(native_compaction=native_compaction)
 
 
 def record_builder_history(kind: str, workspace: Any, *, output: Any, validation: Any) -> None:

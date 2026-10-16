@@ -363,6 +363,12 @@ async def test_run_agent_with_tracing_attaches_durable_session_without_separate_
     order = []
 
     class _FakeCompactionSession:
+        async def acquire_run(self):
+            order.append("acquire")
+
+        async def release_run(self, result=None):
+            order.append("release")
+
         async def run_compaction(self, args):
             order.append("compact")
             captured["compaction_args"] = args
@@ -413,7 +419,7 @@ async def test_run_agent_with_tracing_attaches_durable_session_without_separate_
         )
     )
 
-    assert order == ["run"]
+    assert order == ["acquire", "run", "release"]
     assert "compaction_args" not in captured
     assert captured["session_kwargs"]["session_id"] == "session-1"
     assert captured["session_kwargs"]["current_turn_id"] == "turn-1"
@@ -1004,6 +1010,7 @@ async def test_flow_owned_dependency_outage_reaches_single_runtime_capture(monke
         raise outage
 
     monkeypatch.setattr(weaviate_search, "hybrid_search_chunks", _weaviate_outage)
+    monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
     weaviate_tool = weaviate_search.create_search_tool("doc-12345678", "user-flow")
     tool_payload = {"query": "gene expression"}
 
@@ -1046,13 +1053,14 @@ async def test_flow_owned_dependency_outage_reaches_single_runtime_capture(monke
             )
             raise
 
-    with pytest.raises(RuntimeError, match="Weaviate unavailable") as exc_info:
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    with pytest.raises(DocumentReadError) as exc_info:
         await _runtime_sentry_boundary()
 
-    assert exc_info.value is outage
+    assert exc_info.value.__cause__ is outage
     assert runtime_captures == [
         (
-            outage,
+            exc_info.value,
             {
                 "component": "execute_flow_stream",
                 "operation": "event_generator_failed",

@@ -231,7 +231,8 @@ def test_guide_reads_are_bounded_and_hash_pinned(monkeypatch):
     first = studio_guide.read_studio_guide(
         template=template, render_diagnostic_tools=str, topic="trace_investigation"
     )
-    assert len(first["content"]) == 1000
+    assert first["content"] == text
+    assert first["complete"]
     stale = studio_guide.read_studio_guide(
         template=template,
         render_diagnostic_tools=str,
@@ -339,17 +340,6 @@ def test_guide_requests_with_invalid_arguments_fail_explicitly():
     assert _read(topic="flow_design", start="10")["code"] == "guide_start_invalid"
     assert _read(topic="flow_design", start=10**9)["code"] == "guide_start_out_of_range"
     assert _read(topic="flow_design", query="projection")["code"] == "guide_query_with_topic"
-
-
-def test_guide_chunk_must_stay_below_provider_inline_boundary(monkeypatch):
-    from src.lib.openai_agents.config import get_agent_studio_guide_chunk_max_chars
-
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    monkeypatch.setenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", "12000")
-    with pytest.raises(ValueError, match="AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS"):
-        get_agent_studio_guide_chunk_max_chars()
-    monkeypatch.delenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS")
-    assert get_agent_studio_guide_chunk_max_chars() == 8_000
 
 
 def test_verification_pass_gate_and_credential_rule_survive_off_the_flows_tab(build_prompt):

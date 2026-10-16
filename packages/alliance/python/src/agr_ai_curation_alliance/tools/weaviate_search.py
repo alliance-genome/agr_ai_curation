@@ -22,16 +22,7 @@ from agr_ai_curation_runtime.evidence_spans import (
     build_evidence_spans,
 )
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
-from agr_ai_curation_runtime.tool_result_bounds import (
-    TOOL_RESULT_BUDGET_UNMET,
-    ToolResultBudgetError,
-    clamp_page_limit,
-    env_positive_int,
-    fit_page,
-    parse_offset,
-    serialized_size,
-    tool_result_max_bytes,
-)
+from agr_ai_curation_runtime.tool_result_bounds import fit_page, parse_offset
 from agr_ai_curation_runtime.weaviate_chunks import (
     hybrid_search_chunks,
     get_chunk_by_index,
@@ -107,25 +98,6 @@ def _env_unit_float(key: str, default: float) -> float:
     return value
 
 
-# Default cap on how many section/subsection chunks one read returns. Section reads
-# previously returned every chunk unbounded (~50 chunks, the full section text twice),
-# which could reach hundreds of thousands of characters in a single tool result. The
-# default is surpassable via max_chunks, and the result reports total_chunk_count plus
-# next_offset so the model can page through the rest.
-# Env-configurable via SECTION_READ_MAX_CHUNKS (default 30).
-_DEFAULT_SECTION_MAX_CHUNKS = _env_int("SECTION_READ_MAX_CHUNKS", 30, minimum=1)
-
-
-def _section_read_page_max_chunks() -> int:
-    """Largest section/subsection page (SECTION_READ_PAGE_MAX_CHUNKS, default 100).
-
-    Same variable and default as the backend getter
-    ``get_section_read_page_max_chunks``. Larger requests clamp and report the
-    requested and effective values; the TOOL_RESULT_MAX_BYTES budget can end a
-    page earlier.
-    """
-    return env_positive_int("SECTION_READ_PAGE_MAX_CHUNKS", 100)
-
 # How much surrounding text to return around a text_contains match. Bounded so a
 # matched passage gives the model enough context to decide whether to read the full
 # chunk without pulling the entire section back.
@@ -168,9 +140,6 @@ class ChunkHit(BaseModel):
     score: Optional[float]
     content: str
     doc_items: Optional[List[dict]] = None  # Bounding box data for PDF highlighting
-    # Set when the hit's text did not fit the result budget; read it with read_chunk.
-    content_withheld: Optional[bool] = None
-    content_chars: Optional[int] = None
 
 
 class ChunkSearchResult(BaseModel):
@@ -287,9 +256,8 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
         section_keywords to scope the search to named sections (e.g. Results or
         figure legends) before retrieval runs.
 
-        Hits are returned in rank order with their full text while the response
-        fits its size budget; any hit whose text does not fit is still listed, with
-        content_withheld and content_chars, so read it with read_chunk.
+        All selected hits are returned in rank order with full text. The shared
+        model-context boundary handles compaction when context grows.
 
         Args:
             query: Search terms or natural-language retrieval query.
@@ -362,7 +330,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
             )
 
         logger.debug("Returning %s structured chunks", len(hits))
-        return _bounded_search_result(hits)
+        return _search_result(hits)
 
 
     return scoped_document_tool(search_document, document_id=document_id, user_id=user_id)
@@ -370,51 +338,12 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
 
 
 def _search_summary(hits: List[ChunkHit]) -> str:
-    withheld = [hit.chunk_index for hit in hits if hit.content_withheld]
-    summary = f"Found {len(hits)} chunks"
-    if withheld:
-        summary += (
-            f"; {len(withheld)} too long to include in full here "
-            f"(content_withheld): {', '.join(map(str, withheld))}. Read them with read_chunk"
-        )
-    return summary
+    return f"Found {len(hits)} chunks"
 
 
-def _bounded_search_result(hits: List[ChunkHit]) -> ChunkSearchResult:
-    """Keep every hit, with full text in rank order while the budget allows.
-
-    Hits whose text does not fit stay listed as pointers (content withheld,
-    char count kept), so no ranked result disappears from the model's view.
-    """
-    budget = tool_result_max_bytes()
-    shown = [
-        hit.model_copy(
-            update={"content": "", "content_withheld": True, "content_chars": len(hit.content)}
-        )
-        for hit in hits
-    ]
-
-    def result() -> ChunkSearchResult:
-        return ChunkSearchResult(summary=_search_summary(shown), hits=shown)
-
-    measured = serialized_size(result())
-    if measured > budget:
-        return ChunkSearchResult(
-            summary="The search results could not fit the tool result budget.",
-            hits=[],
-            error_code=TOOL_RESULT_BUDGET_UNMET,
-            result_bounds={
-                "measured_bytes": measured,
-                "limit_bytes": budget,
-                "setting": "TOOL_RESULT_MAX_BYTES",
-            },
-        )
-    for index, hit in enumerate(hits):
-        pointer = shown[index]
-        shown[index] = hit
-        if serialized_size(result()) > budget:
-            shown[index] = pointer
-    return result()
+def _search_result(hits: List[ChunkHit]) -> ChunkSearchResult:
+    """Return all selected ranked hits; shared context policy owns capacity."""
+    return ChunkSearchResult(summary=_search_summary(hits), hits=hits)
 
 
 def _chunk_window(
@@ -423,7 +352,6 @@ def _chunk_window(
     spans: List[EvidenceSpanResult],
     span_offset: int,
     render: Any,
-    budget: int,
 ) -> Any:
     """Exact slice of an oversized chunk covering whole evidence spans.
 
@@ -435,7 +363,7 @@ def _chunk_window(
     total = len(spans)
     if total == 0:
         # Windows are span-aligned; text without spans cannot be windowed.
-        raise ToolResultBudgetError(measured=len(content), limit=budget)
+        return render(content, {"start": 0, "end": len(content), "total_chars": len(content)}, [], {"span_offset": 0, "returned_spans": 0, "total_spans": 0, "next_span_offset": None, "complete": True})
     start_char = 0 if span_offset == 0 else spans[span_offset].char_start
 
     def build(page: List[EvidenceSpanResult], returned: int) -> Any:
@@ -462,10 +390,8 @@ def _chunk_window(
         start=span_offset,
         limit=total - span_offset,
         render=build,
-        budget=budget,
+
     )
-    if returned == 0 and span_offset < total:
-        raise ToolResultBudgetError(measured=serialized_size(result), limit=budget)
     return result
 
 
@@ -588,12 +514,10 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
                 ),
             )
 
-        budget = tool_result_max_bytes()
         if span_offset in (0, None):
             whole = render(content, None, spans, None)
-            if serialized_size(whole) <= budget:
-                await retain_issued_spans(chunk, [span.model_dump() for span in spans], [span.span_index for span in spans])
-                return whole
+            await retain_issued_spans(chunk, [span.model_dump() for span in spans], [span.span_index for span in spans])
+            return whole
         try:
             window_start = parse_offset(span_offset, total=max(0, len(spans) - 1), name="span_offset")
             window_result = _chunk_window(
@@ -601,20 +525,13 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
                 spans=spans,
                 span_offset=window_start,
                 render=render,
-                budget=budget,
+
             )
         except ValueError as exc:
             return ChunkReadResult(
                 summary=f"Invalid read_chunk request: {exc}",
                 chunk=None,
                 error_code="invalid_result_cursor",
-            )
-        except ToolResultBudgetError as exc:
-            return ChunkReadResult(
-                summary="The chunk could not fit the tool result budget, even one span at a time.",
-                chunk=None,
-                error_code=TOOL_RESULT_BUDGET_UNMET,
-                result_bounds=_budget_unmet_bounds(exc),
             )
 
         await retain_issued_spans(chunk, [span.model_dump() for span in spans],
@@ -639,7 +556,6 @@ class SectionChunkSource(BaseModel):
     snippet: Optional[str] = None  # Only populated when text_contains matched this chunk
     # Set when this passage alone exceeds the result budget; its text is not in
     # ``content``. Read it with read_chunk.
-    content_withheld: Optional[bool] = None
 
 
 class SectionContent(BaseModel):
@@ -657,8 +573,6 @@ class SectionContent(BaseModel):
     page_ended_by: Optional[str] = None
     requested_max_chunks: Optional[int] = None
     effective_max_chunks: Optional[int] = None
-    max_chunks_clamped: Optional[bool] = None
-    budget_bytes: Optional[int] = None
 
 
 class SectionReadResult(BaseModel):
@@ -768,15 +682,6 @@ def _section_entries(
     return entries
 
 
-def _withhold_section_entry(entry: dict, _index: int) -> dict:
-    """Stand-in for one passage too large for a page: pointer only, no text."""
-    if "source" not in entry:
-        return entry
-    return {
-        **entry,
-        "part": None,
-        "source": entry["source"].model_copy(update={"content_withheld": True}),
-    }
 
 
 def _assemble_section_entries(entries: List[dict]) -> dict:
@@ -790,29 +695,11 @@ def _assemble_section_entries(entries: List[dict]) -> dict:
         ),
         "source_chunks": sources,
         "doc_items": [item for entry in entries for item in entry.get("doc_items") or []],
-        "withheld": [source.chunk_index for source in sources if source.content_withheld],
     }
 
 
-def _section_page_note(
-    *,
-    returned: int,
-    total: int,
-    start: int,
-    ended_by: str,
-    withheld: List[str],
-) -> str:
-    notes = []
-    if ended_by != "end":
-        reason = " (the response reached its size budget)" if ended_by == "size_budget" else ""
-        notes.append(f" More remain{reason}; call again with offset={start + returned}.")
-    if withheld:
-        notes.append(
-            " Passages too long to include here were withheld (content_withheld): "
-            + ", ".join(withheld)
-            + "; read each with read_chunk."
-        )
-    return "".join(notes)
+def _section_page_note(*, returned: int, total: int, start: int, ended_by: str) -> str:
+    return f" More remain; call again with offset={start + returned}." if ended_by != "end" else ""
 
 
 def _bounded_section_read(
@@ -825,22 +712,13 @@ def _bounded_section_read(
     subsection_fallback: Optional[str],
     render_result: Any,
 ) -> Any:
-    """Serve one count- and size-bounded page of section passages.
-
-    ``render_result(assembled, meta)`` builds the tool's result model for the
-    passages on the page; the whole model is measured against the budget.
-    Raises ValueError for malformed max_chunks/offset and ToolResultBudgetError
-    when not even a pointer page fits.
-    """
+    """Return the complete section or explicit caller-selected chunk range."""
     total = len(selected)
-    cap, limit_metadata = clamp_page_limit(
-        max_chunks,
-        default=_DEFAULT_SECTION_MAX_CHUNKS,
-        maximum=_section_read_page_max_chunks(),
-        name="max_chunks",
-    )
+    if max_chunks is not None and (isinstance(max_chunks, bool) or not isinstance(max_chunks, int) or max_chunks < 1):
+        raise ValueError("max_chunks must be a positive integer or null for the whole section")
+    cap = total if max_chunks is None else max_chunks
+    limit_metadata = {"requested_max_chunks": max_chunks, "effective_max_chunks": cap}
     start = parse_offset(offset, total=total)
-    budget = tool_result_max_bytes()
     entries = _section_entries(
         selected[start : start + cap],
         needle=needle,
@@ -854,10 +732,8 @@ def _bounded_section_read(
         has_more = total > next_offset
         if not has_more:
             ended_by = "end"
-        elif returned >= cap:
-            ended_by = "limit"
         else:
-            ended_by = "size_budget"
+            ended_by = "limit"
         return render_result(
             _assemble_section_entries(page),
             {
@@ -867,7 +743,7 @@ def _bounded_section_read(
                 "next_offset": next_offset if has_more else None,
                 "has_more": has_more,
                 "ended_by": ended_by,
-                "budget": budget,
+
                 **limit_metadata,
             },
         )
@@ -877,18 +753,10 @@ def _bounded_section_read(
         start=start,
         limit=cap,
         render=render,
-        budget=budget,
-        oversized=_withhold_section_entry,
+
+
     )
     return result
-
-
-def _budget_unmet_bounds(exc: ToolResultBudgetError) -> dict:
-    return {
-        "measured_bytes": exc.measured,
-        "limit_bytes": exc.limit,
-        "setting": "TOOL_RESULT_MAX_BYTES",
-    }
 
 
 def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -906,7 +774,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
     @function_tool(failure_error_function=_raise_document_read_error)
     async def read_section(
         section_name: str,
-        max_chunks: int = _DEFAULT_SECTION_MAX_CHUNKS,
+        max_chunks: Optional[int] = None,
         offset: int = 0,
         text_contains: Optional[str] = None,
     ) -> SectionReadResult:
@@ -920,15 +788,9 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         - Reading complete methodology details
         - Any case where you need comprehensive section content
 
-        A long section is returned one page of chunks at a time. The result reports
-        total_chunk_count and, when more remain, next_offset; pass that next_offset back
-        in to continue. A page also ends early when the response reaches its size
-        budget, and max_chunks above the configured maximum is clamped (the section
-        reports requested and effective values). A single passage too long for one
-        response is listed with content_withheld; read it with read_chunk. If you only
-        need the part of a long section that mentions a specific term, set text_contains
-        to return just the matching passages and a short excerpt around each match
-        instead of the whole section.
+        The entire selected section is returned by default. For an explicit range,
+        pass max_chunks and offset; next_offset continues that range. text_contains
+        is an explicit search selection returning matching excerpts.
 
         section.source_chunks lists the passages on this page as lightweight pointers
         (chunk_index, location, size) without repeating their text. Read one passage in full
@@ -995,7 +857,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                 total=meta["total"],
                 start=meta["start"],
                 ended_by=meta["ended_by"],
-                withheld=assembled["withheld"],
+
             )
             return SectionReadResult(
                 summary=(
@@ -1019,8 +881,8 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                     page_ended_by=meta["ended_by"],
                     requested_max_chunks=meta["requested_max_chunks"],
                     effective_max_chunks=meta["effective_max_chunks"],
-                    max_chunks_clamped=meta["max_chunks_clamped"],
-                    budget_bytes=meta["budget"],
+
+
                 ),
             )
 
@@ -1039,13 +901,6 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                 summary=f"Invalid read_section request: {exc}",
                 section=None,
                 error_code="invalid_result_cursor",
-            )
-        except ToolResultBudgetError as exc:
-            return SectionReadResult(
-                summary="The section page could not fit the tool result budget.",
-                section=None,
-                error_code=TOOL_RESULT_BUDGET_UNMET,
-                result_bounds=_budget_unmet_bounds(exc),
             )
         logger.info(
             "Read %s/%s chunks from section '%s', pages %s",
@@ -1080,8 +935,6 @@ class SubsectionContent(BaseModel):
     page_ended_by: Optional[str] = None
     requested_max_chunks: Optional[int] = None
     effective_max_chunks: Optional[int] = None
-    max_chunks_clamped: Optional[bool] = None
-    budget_bytes: Optional[int] = None
 
 
 class SubsectionReadResult(BaseModel):
@@ -1102,7 +955,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
     async def read_subsection(
         parent_section: str,
         subsection: str,
-        max_chunks: int = _DEFAULT_SECTION_MAX_CHUNKS,
+        max_chunks: Optional[int] = None,
         offset: int = 0,
         text_contains: Optional[str] = None,
     ) -> SubsectionReadResult:
@@ -1113,13 +966,8 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         passages. Use it for precise reads of a named subsection (figure legends are a
         rich source of expression evidence).
 
-        A long subsection is returned one page of chunks at a time. The result reports
-        total_chunk_count and, when more remain, next_offset; pass that next_offset back
-        in to continue. A page also ends early when the response reaches its size
-        budget, and max_chunks above the configured maximum is clamped. A single passage
-        too long for one response is listed with content_withheld; read it with
-        read_chunk. Set text_contains to return only passages that mention a specific
-        term, each with a short excerpt around the match, instead of the whole subsection.
+        The entire selected subsection is returned by default. For an explicit
+        range, pass max_chunks and offset. text_contains selects matching excerpts.
 
         subsection.source_chunks lists the passages on this page as lightweight pointers
         (chunk_index, location, size) without repeating their text. For retained evidence,
@@ -1183,7 +1031,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                 total=meta["total"],
                 start=meta["start"],
                 ended_by=meta["ended_by"],
-                withheld=assembled["withheld"],
+
             )
             return SubsectionReadResult(
                 summary=(
@@ -1207,8 +1055,8 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                     page_ended_by=meta["ended_by"],
                     requested_max_chunks=meta["requested_max_chunks"],
                     effective_max_chunks=meta["effective_max_chunks"],
-                    max_chunks_clamped=meta["max_chunks_clamped"],
-                    budget_bytes=meta["budget"],
+
+
                 ),
             )
 
@@ -1227,13 +1075,6 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                 summary=f"Invalid read_subsection request: {exc}",
                 subsection=None,
                 error_code="invalid_result_cursor",
-            )
-        except ToolResultBudgetError as exc:
-            return SubsectionReadResult(
-                summary="The subsection page could not fit the tool result budget.",
-                subsection=None,
-                error_code=TOOL_RESULT_BUDGET_UNMET,
-                result_bounds=_budget_unmet_bounds(exc),
             )
         logger.info(
             "Read %s/%s chunks from subsection '%s', pages %s",

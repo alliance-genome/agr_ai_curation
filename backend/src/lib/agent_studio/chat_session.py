@@ -1,5 +1,7 @@
 """Durable chat-session helpers for Agent Studio."""
 
+from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
+
 import hashlib
 import json
 import uuid
@@ -140,38 +142,9 @@ def _cursor_for_message(message: ChatMessageRecord) -> ChatMessageCursor:
     )
 
 
-def _provider_result_chars(value: Dict[str, Any]) -> int:
-    return len(json.dumps(value, default=str))
-
-
-def _bounded_page_result(
-    *,
-    items: list[ChatMessageRecord],
-    repository_next_cursor: ChatMessageCursor | None,
-    provider_inline_max_chars: int,
-    build_result: Callable[[list[ChatMessageRecord], ChatMessageCursor | None], Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Fit a metadata page to the actual provider-visible JSON envelope."""
-
-    for item_count in range(len(items), -1, -1):
-        page_items = items[:item_count]
-        if item_count < len(items) and page_items:
-            next_cursor = _cursor_for_message(page_items[-1])
-        else:
-            next_cursor = repository_next_cursor
-        candidate = build_result(page_items, next_cursor)
-        if _provider_result_chars(candidate) <= provider_inline_max_chars:
-            if item_count == 0 and items:
-                break
-            return candidate
-    return {
-        "success": False,
-        "error": (
-            "The provider inline tool-result limit is too small to return one "
-            "chat row with its required stable identity metadata."
-        ),
-        "provider_inline_max_chars": provider_inline_max_chars,
-    }
+def _selected_page_result(*, items, repository_next_cursor, build_result):
+    """Return the complete caller-selected repository page."""
+    return build_result(items, repository_next_cursor)
 
 
 def require_tool_string(tool_input: dict[str, Any], field_name: str) -> str:
@@ -214,7 +187,6 @@ def get_chat_session_page_payload(
     chat_kind: str,
     cursor: str | None,
     limit: int,
-    provider_inline_max_chars: int,
     query: str | None = None,
     serialize_session: Callable[[ChatSessionRecord], Dict[str, Any]] = (
         serialize_chat_history_session_summary
@@ -313,21 +285,7 @@ def get_chat_session_page_payload(
             ),
         }
 
-    for item_count in range(len(page.items), -1, -1):
-        if item_count == 0 and page.items:
-            break
-        candidate = build_result(page.items[:item_count], cursor_after(item_count))
-        if _provider_result_chars(candidate) <= provider_inline_max_chars:
-            return candidate
-
-    return {
-        "success": False,
-        "error": (
-            "The provider inline tool-result limit is too small to return one "
-            "chat session with its stable identity and effective title."
-        ),
-        "provider_inline_max_chars": provider_inline_max_chars,
-    }
+    return build_result(page.items, cursor_after(len(page.items)))
 
 
 def get_chat_conversation_payload(
@@ -337,7 +295,6 @@ def get_chat_conversation_payload(
     user_auth_sub: str,
     cursor: str | None,
     limit: int,
-    provider_inline_max_chars: int,
     serialize_session: Callable[[ChatSessionRecord], Dict[str, Any]] = serialize_chat_history_session,
 ) -> Dict[str, Any]:
     message_cursor = decode_chat_message_cursor(cursor)
@@ -412,10 +369,9 @@ def get_chat_conversation_payload(
             ),
         }
 
-    return _bounded_page_result(
+    return _selected_page_result(
         items=list(detail.messages),
         repository_next_cursor=detail.next_message_cursor,
-        provider_inline_max_chars=provider_inline_max_chars,
         build_result=build_result,
     )
 
@@ -433,8 +389,6 @@ def get_chat_turn_payload(
     start: int | None,
     max_chars: int | None,
     field_hash: str | None,
-    chunk_max_chars: int,
-    provider_inline_max_chars: int,
     serialize_session: Callable[[ChatSessionRecord], Dict[str, Any]] = serialize_chat_history_session,
 ) -> Dict[str, Any]:
     session = repository.get_session(
@@ -469,14 +423,6 @@ def get_chat_turn_payload(
         chunk_start = 0 if start is None else start
         if isinstance(chunk_start, bool) or not isinstance(chunk_start, int) or chunk_start < 0:
             raise ValueError("start must be a non-negative integer")
-        requested_max_chars = chunk_max_chars if max_chars is None else max_chars
-        if (
-            isinstance(requested_max_chars, bool)
-            or not isinstance(requested_max_chars, int)
-            or requested_max_chars < 1
-        ):
-            raise ValueError("max_chars must be a positive integer")
-        chunk_size = min(requested_max_chars, chunk_max_chars)
         try:
             durable_message_id = UUID(message_id)
         except ValueError as exc:
@@ -507,6 +453,7 @@ def get_chat_turn_payload(
                 "turn_id": turn_id,
                 "message_id": message_id,
             }
+        chunk_size = requested_text_length(max_chars, len(serialized_value))
         current_hash = _sha256_text(serialized_value)
         if field_hash != current_hash:
             return {
@@ -559,30 +506,7 @@ def get_chat_turn_payload(
             }
 
         requested_end = min(chunk_start + chunk_size, len(serialized_value))
-        candidate = build_chunk_result(requested_end)
-        if _provider_result_chars(candidate) <= provider_inline_max_chars:
-            return candidate
-        low = chunk_start + 1
-        high = requested_end - 1
-        fitting_result = None
-        while low <= high:
-            candidate_end = (low + high) // 2
-            candidate = build_chunk_result(candidate_end)
-            if _provider_result_chars(candidate) <= provider_inline_max_chars:
-                fitting_result = candidate
-                low = candidate_end + 1
-            else:
-                high = candidate_end - 1
-        if fitting_result is not None:
-            return fitting_result
-        return {
-            "success": False,
-            "error": (
-                "The provider inline tool-result limit is too small to return even one "
-                "exact chat field character with its required identity metadata."
-            ),
-            "provider_inline_max_chars": provider_inline_max_chars,
-        }
+        return build_chunk_result(requested_end)
 
     message_cursor = decode_chat_message_cursor(cursor)
     excluded_types = set(AGENT_STUDIO_HIDDEN_MESSAGE_TYPES)
@@ -642,7 +566,6 @@ def get_chat_turn_payload(
                             "field": field_name,
                             "field_hash": metadata["sha256"],
                             "start": 0,
-                            "max_chars": chunk_max_chars,
                         },
                     }
             row_summaries.append(summary)
@@ -681,10 +604,9 @@ def get_chat_turn_payload(
             ),
         }
 
-    return _bounded_page_result(
+    return _selected_page_result(
         items=list(page.items),
         repository_next_cursor=page.next_cursor,
-        provider_inline_max_chars=provider_inline_max_chars,
         build_result=build_result,
     )
 

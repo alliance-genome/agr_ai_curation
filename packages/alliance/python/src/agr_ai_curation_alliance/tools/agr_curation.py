@@ -58,21 +58,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (
 from agr_ai_curation_alliance.domain_packs.gene_expression.resolvable import (
     staged_value as staged_gene_expression_value,
 )
-from agr_ai_curation_runtime.tool_result_bounds import (
-    ToolResultBudgetError,
-    bounded_json_result,
-    budget_failure,
-    clamp_page_limit,
-    content_sha256,
-    detail_chunk,
-    env_positive_int,
-    fit_page,
-    full_tool_results_are_requested,
-    invalid_cursor,
-    parse_offset,
-    serialized_size,
-    tool_result_max_bytes,
-)
+from agr_ai_curation_runtime.tool_result_bounds import bounded_json_result, clamp_page_limit, content_sha256, detail_chunk, env_positive_int, fit_page, full_tool_results_are_requested, invalid_cursor, parse_offset
 from .builder_finalization import finalize_builder_extraction
 from .builder_rationale import document_rationale_arg, normalize_rationale
 from .search_helpers import (
@@ -3829,10 +3815,6 @@ def _builder_candidate_index(candidate: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _oversized_builder_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]:
-    # A label itself can be arbitrarily large. Keep its exact read address.
-    return {key: value for key, value in candidate.items()
-            if key not in {"label", "class_key", "semantic_class", "attribute_keys", "attribute_key_notices"}} | {"withheld": True}
 
 
 def _builder_page(
@@ -3845,10 +3827,10 @@ def _builder_page(
     total_key: str,
     decorate: Optional[Any] = None,
 ) -> Dict[str, Any]:
-    """Render one size- and count-bounded page of candidate indexes.
+    """Render one caller-selected page of complete candidate indexes.
 
     Requested limits above BUILDER_LIST_MAX_LIMIT clamp (reported, not an
-    error); the page also ends before TOOL_RESULT_MAX_BYTES. A malformed or
+    error). A malformed or
     out-of-range offset is an explicit ``invalid_request``.
     """
     base = _builder_summary(workspace, include_discarded=include_discarded)
@@ -3867,14 +3849,6 @@ def _builder_page(
             total_key: total,
             "candidates": [],
         }
-    # The list/find tools return this page inside the AgrQueryResult envelope,
-    # so reserve the envelope's bytes; the whole tool result must fit. List
-    # tools report count=candidate_count and find tools the matched count, so
-    # size the reserve for the wider of the two.
-    envelope_count = max(total, base["candidate_count"])
-    budget = tool_result_max_bytes() - serialized_size(
-        _ok(data={}, count=envelope_count, lookup_status=LOOKUP_STATUS_SUCCESS)
-    )
     items = list(candidates[:start]) + [
         _builder_candidate_index(candidate if decorate is None else decorate(candidate))
         for candidate in candidates[start : start + cap]
@@ -3902,29 +3876,17 @@ def _builder_page(
             "truncated": has_more,
             "page_ended_by": ended_by,
             **limit_metadata,
-            "budget_bytes": budget,
+
         }
 
-    try:
-        page, _ = fit_page(
-            items,
-            start=start,
-            limit=cap,
-            render=render,
-            budget=budget,
-            oversized=lambda candidate, _index: _oversized_builder_candidate(candidate),
-        )
-    except ToolResultBudgetError as exc:
-        return {
-            **base,
-            **budget_failure(
-                tool_name="builder_candidate_page",
-                measured=exc.measured,
-                limit=exc.limit,
-            ),
-            total_key: total,
-            "candidates": [],
-        }
+    page, _ = fit_page(
+        items,
+        start=start,
+        limit=cap,
+        render=render,
+
+
+    )
     return page
 
 
@@ -3959,9 +3921,8 @@ def _builder_candidate_list(
     indexes, with ``truncated`` / ``total_listed_candidate_count`` so the
     model knows more exist. Pass ``offset`` to step past earlier candidates and
     read ``next_offset`` to continue. Pages are bounded by
-    BUILDER_LIST_MAX_LIMIT and by the serialized TOOL_RESULT_MAX_BYTES budget,
-    including any per-candidate ``decorate`` additions, so hundreds of staged
-    observations never produce an oversized result.
+    BUILDER_LIST_MAX_LIMIT; selected records and their per-candidate ``decorate``
+    additions are returned completely.
     """
     revision_error = _builder_revision_error(workspace, workspace_revision, offset)
     if revision_error:
@@ -4052,25 +4013,19 @@ def _search_builder_candidates(
             return {**invalid_cursor("Continue detail reads with the returned detail.sha256."),
                     "matched_candidate_count": 1}
         candidate = matched[0] if decorate is None else decorate(matched[0])
-        wrapper_bytes = serialized_size(_ok(data={}, count=1, lookup_status=LOOKUP_STATUS_SUCCESS))
         try:
             detail = detail_chunk(
                 {"candidate": candidate},
                 path=detail_path,
                 cursor=detail_cursor,
                 expected_sha256=result_sha256,
-                budget=tool_result_max_bytes() - wrapper_bytes,
+
                 extra={"matched_candidate_count": 1, "candidate_revision": candidate.get("revision"),
                        "workspace_revision": workspace.revision},
             )
             return {**detail, "matched_candidate_count": 1}
         except ValueError as exc:
             return {**invalid_cursor(str(exc)), "matched_candidate_count": 1}
-        except ToolResultBudgetError as exc:
-            return {
-                **budget_failure(tool_name="builder_candidate_detail", measured=exc.measured, limit=exc.limit),
-                "matched_candidate_count": 1,
-            }
 
     return _builder_page(
         workspace,
@@ -4766,7 +4721,7 @@ def create_groq_agr_curation_query_tool():
         body = result.model_dump(mode="json")
         try:
             bounded = bounded_json_result(
-                body, budget=tool_result_max_bytes(),
+                body,
                 offset=payload.get("result_offset"),
                 expected_sha256=payload.get("result_sha256"),
                 detail_path=payload.get("detail_path"),
@@ -4774,8 +4729,6 @@ def create_groq_agr_curation_query_tool():
             )
         except ValueError as exc:
             return invalid_cursor(str(exc))
-        except ToolResultBudgetError as exc:
-            return budget_failure(tool_name="agr_curation_query", measured=exc.measured, limit=exc.limit)
         return result if bounded is None else bounded
 
     return agr_curation_query_groq

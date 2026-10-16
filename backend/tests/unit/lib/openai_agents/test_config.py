@@ -17,12 +17,10 @@ from src.lib.openai_agents.config import (
     build_model_settings,
     get_abstract_extraction_input_max_chars,
     get_agent_config,
-    get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
     get_agent_studio_capability_catalog_max_records,
     get_agent_studio_flow_custom_instructions_max_chars,
     get_agent_studio_flow_description_max_chars,
-    get_agent_studio_flow_inspection_chunk_max_chars,
     get_agent_studio_flow_inspection_page_limit,
     get_agent_studio_flow_max_steps,
     get_agent_studio_flow_name_max_chars,
@@ -30,7 +28,6 @@ from src.lib.openai_agents.config import (
     get_agent_studio_flow_step_goal_max_chars,
     get_agent_studio_openai_max_output_tokens,
     get_agent_studio_openai_max_turns,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_default_lookback_minutes,
     get_agent_studio_service_log_max_lines,
@@ -41,15 +38,11 @@ from src.lib.openai_agents.config import (
     get_agent_studio_suggestion_max_turns,
     get_agent_studio_tool_search_max_candidates,
     get_agent_studio_trace_review_aggregate_page_size,
-    get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
     get_agent_studio_trace_search_default_limit,
     get_agent_studio_trace_search_filter_max_chars,
     get_agent_studio_trace_search_max_limit,
-    get_agent_studio_workshop_context_group_prompt_max_chars,
-    get_agent_studio_workshop_context_metadata_max_chars,
-    get_agent_studio_workshop_context_prompt_max_chars,
     get_api_key,
     get_base_url,
     get_background_task_observability_value_max_chars,
@@ -124,13 +117,13 @@ def test_sentry_log_event_level_is_bounded_and_environment_configurable(
 @pytest.mark.parametrize(
     ("env_name", "getter", "default"),
     [
-        ("AGENT_STUDIO_OPENAI_MAX_TURNS", get_agent_studio_openai_max_turns, 24),
+        ("AGENT_STUDIO_OPENAI_MAX_TURNS", get_agent_studio_openai_max_turns, 256),
         (
             "AGENT_STUDIO_OPENAI_MAX_OUTPUT_TOKENS",
             get_agent_studio_openai_max_output_tokens,
             16_384,
         ),
-        ("AGENT_STUDIO_SUGGESTION_MAX_TURNS", get_agent_studio_suggestion_max_turns, 2),
+        ("AGENT_STUDIO_SUGGESTION_MAX_TURNS", get_agent_studio_suggestion_max_turns, 64),
         (
             "AGENT_STUDIO_SUGGESTION_MAX_OUTPUT_TOKENS",
             get_agent_studio_suggestion_max_output_tokens,
@@ -164,7 +157,7 @@ def test_agent_studio_openai_limits_are_env_backed_and_positive(
 
 def test_supervisor_specialist_deadline_is_env_configured_and_positive(monkeypatch):
     monkeypatch.delenv("SUPERVISOR_SPECIALIST_DEADLINE_SECONDS", raising=False)
-    assert get_supervisor_specialist_deadline_seconds() == 900.0
+    assert get_supervisor_specialist_deadline_seconds() == 3600.0
 
     monkeypatch.setenv("SUPERVISOR_SPECIALIST_DEADLINE_SECONDS", "12.5")
     assert get_supervisor_specialist_deadline_seconds() == 12.5
@@ -176,7 +169,7 @@ def test_supervisor_specialist_deadline_is_env_configured_and_positive(monkeypat
     if not (workspace_root / ".env.example").exists():
         workspace_root = Path(__file__).resolve().parents[5]
     env_example = (workspace_root / ".env.example").read_text(encoding="utf-8")
-    assert "SUPERVISOR_SPECIALIST_DEADLINE_SECONDS=900" in env_example
+    assert "SUPERVISOR_SPECIALIST_DEADLINE_SECONDS=3600" in env_example
     assert "complete nested specialist invocation" in env_example
     assert "Preferred Agent and\n# Flow runs are not covered" in env_example
 
@@ -274,11 +267,6 @@ def test_weaviate_query_timeout_defaults_to_client_default(monkeypatch, raw, exp
             get_agent_studio_trace_review_summary_max_chars,
             200,
         ),
-        (
-            "AGENT_STUDIO_TRACE_REVIEW_CHUNK_MAX_CHARS",
-            get_agent_studio_trace_review_chunk_max_chars,
-            8_000,
-        ),
     ],
 )
 def test_character_and_page_limits_use_env_with_invalid_fallback(
@@ -329,15 +317,6 @@ def test_service_log_maxima_are_configurable_and_not_below_defaults(monkeypatch)
     monkeypatch.setenv("AGENT_STUDIO_SERVICE_LOG_MAX_LOOKBACK_MINUTES", "2880")
     assert get_agent_studio_service_log_max_lines() == 75
     assert get_agent_studio_service_log_max_lookback_minutes() == 2880
-
-
-def test_workshop_context_metadata_limit_is_configurable_and_positive(monkeypatch):
-    monkeypatch.delenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", raising=False)
-    assert get_agent_studio_workshop_context_metadata_max_chars() == 2_000
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "125")
-    assert get_agent_studio_workshop_context_metadata_max_chars() == 125
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS", "0")
-    assert get_agent_studio_workshop_context_metadata_max_chars() == 1
 
 
 def test_service_log_timeout_is_configurable_and_positive(monkeypatch):
@@ -401,13 +380,6 @@ def test_service_log_timeout_is_configurable_and_positive(monkeypatch):
             7,
             None,
         ),
-        (
-            "AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS",
-            get_agent_studio_flow_inspection_chunk_max_chars,
-            4_000,
-            800,
-            None,
-        ),
     ],
 )
 def test_agent_studio_flow_admission_limits(
@@ -453,64 +425,16 @@ def test_agent_studio_chat_recall_limits_are_environment_configurable(monkeypatc
     monkeypatch.delenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", raising=False)
     monkeypatch.delenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", raising=False)
     assert get_agent_studio_chat_recall_page_size() == 10
-    assert get_agent_studio_chat_recall_chunk_max_chars() == 8_000
 
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", "4")
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "900")
     assert get_agent_studio_chat_recall_page_size() == 4
-    assert get_agent_studio_chat_recall_chunk_max_chars() == 900
 
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE", "0")
     monkeypatch.setenv("AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS", "0")
     assert get_agent_studio_chat_recall_page_size() == 1
-    assert get_agent_studio_chat_recall_chunk_max_chars() == 1
 
 
-def test_agent_studio_provider_tool_result_cap_rejects_unsupported_values(monkeypatch):
-    monkeypatch.delenv(
-        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
-        raising=False,
-    )
-    assert get_agent_studio_provider_tool_result_inline_max_chars() == 12_000
-
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "24")
-    assert get_agent_studio_provider_tool_result_inline_max_chars() == 24
-
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "23")
-    with pytest.raises(ValueError, match="must be at least 24"):
-        get_agent_studio_provider_tool_result_inline_max_chars()
-
-
-def test_agent_studio_workshop_context_prompt_limits_are_environment_configurable(
-    monkeypatch,
-):
-    monkeypatch.delenv("AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS", raising=False)
-    monkeypatch.delenv(
-        "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
-        raising=False,
-    )
-    assert get_agent_studio_workshop_context_prompt_max_chars() == 12_000
-    assert get_agent_studio_workshop_context_group_prompt_max_chars() == 6_000
-
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS", "12")
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS", "8")
-    assert get_agent_studio_workshop_context_prompt_max_chars() == 12
-    assert get_agent_studio_workshop_context_group_prompt_max_chars() == 8
-
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS", "0")
-    monkeypatch.setenv("AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS", "0")
-    assert get_agent_studio_workshop_context_prompt_max_chars() == 1
-    assert get_agent_studio_workshop_context_group_prompt_max_chars() == 1
-
-    workspace_root = Path("/workspace")
-    if not (workspace_root / ".env.example").exists():
-        workspace_root = Path(__file__).resolve().parents[5]
-    env_example = (workspace_root / ".env.example").read_text(encoding="utf-8")
-    assert "AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS=12000" in env_example
-    assert (
-        "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS=6000" in env_example
-    )
-    assert "Exact text remains available via\n# `refresh_workshop_prompt`" in env_example
 
 
 def test_agent_studio_flow_limit_clamps_are_reported(monkeypatch, caplog):

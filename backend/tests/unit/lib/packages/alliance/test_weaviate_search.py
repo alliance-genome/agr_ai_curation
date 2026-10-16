@@ -687,7 +687,7 @@ async def test_read_section_bounds_chunk_count_and_pages_with_offset(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_read_section_default_cap_truncates_large_section(monkeypatch):
+async def test_read_section_default_returns_entire_large_section(monkeypatch):
     async def _chunks(**_kwargs):
         return _numbered_chunks(45)
 
@@ -696,10 +696,10 @@ async def test_read_section_default_cap_truncates_large_section(monkeypatch):
 
     result = await tool("Results")
     assert result.section is not None
-    assert result.section.returned_chunk_count == weaviate_search._DEFAULT_SECTION_MAX_CHUNKS
+    assert result.section.returned_chunk_count == 45
     assert result.section.total_chunk_count == 45
-    assert result.section.truncated is True
-    assert result.section.next_offset == weaviate_search._DEFAULT_SECTION_MAX_CHUNKS
+    assert result.section.truncated is False
+    assert result.section.next_offset is None
 
 
 @pytest.mark.asyncio

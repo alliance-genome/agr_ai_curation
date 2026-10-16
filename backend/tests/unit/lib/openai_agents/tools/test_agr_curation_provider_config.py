@@ -625,8 +625,6 @@ def test_search_genes_uses_batched_detail_lookup(monkeypatch):
 
 
 def test_groq_wrapper_pages_unicode_and_preserves_full_capture(monkeypatch):
-    import json
-    from agr_ai_curation_runtime.tool_result_bounds import serialized_size
     from src.lib.openai_agents.tool_result_bounds import full_tool_results_requested
 
     monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
@@ -635,16 +633,8 @@ def test_groq_wrapper_pages_unicode_and_preserves_full_capture(monkeypatch):
     monkeypatch.setattr(agr_curation, "_AGR_QUERY_CALLABLE", lambda **kwargs: complete)
     tool = agr_curation.create_groq_agr_curation_query_tool()
     invoke = agr_curation._unwrap_function_tool_callable(tool, "agr_curation_query_groq")
-    view = {}
-    rows = []
-    while True:
-        result = invoke(method="search_genes", payload_json=json.dumps(view))
-        assert serialized_size(result) <= 2048
-        rows.extend(result["data"])
-        page = result["result_page"]
-        if page["next_call"] is None:
-            break
-        view = page["next_call"]
+    result = invoke(method="search_genes", payload_json="{}")
+    rows = result.data
     assert rows == data
     with full_tool_results_requested():
         assert invoke(method="search_genes", payload_json="{}") is complete
@@ -654,7 +644,8 @@ def test_groq_wrapper_pages_unicode_and_preserves_full_capture(monkeypatch):
 
 def test_groq_wrapper_reads_oversized_record_exactly_and_checks_hash(monkeypatch):
     import json
-    from agr_ai_curation_runtime.tool_result_bounds import canonical_json, serialized_size
+    import hashlib
+    from agr_ai_curation_runtime.tool_result_bounds import canonical_json
 
     monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
     data = [{"id": "gene", "text": "β😀表达" * 1000}]
@@ -664,11 +655,11 @@ def test_groq_wrapper_reads_oversized_record_exactly_and_checks_hash(monkeypatch
         agr_curation.create_groq_agr_curation_query_tool(), "agr_curation_query_groq",
     )
     first = invoke(method="search_genes", payload_json="{}")
-    view = {**first["result_page"]["detail_call"], "detail_path": "data.0"}
+    assert first is complete
+    view = {"detail_path": "data.0", "result_sha256": hashlib.sha256(canonical_json(complete).encode()).hexdigest()}
     parts = []
     while True:
         result = invoke(method="search_genes", payload_json=json.dumps(view))
-        assert serialized_size(result) <= 2048
         detail = result["detail"]
         parts.append(detail["content"])
         if detail["complete"]:

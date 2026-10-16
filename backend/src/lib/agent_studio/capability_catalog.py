@@ -40,7 +40,6 @@ from src.lib.openai_agents.bounded_list import (
 )
 from src.lib.openai_agents.config import (
     get_agent_studio_capability_catalog_max_records,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_tool_page_default_limit,
     get_tool_page_max_limit,
 )
@@ -720,8 +719,6 @@ def _normalized_kinds(kinds: Sequence[str] | None) -> set[str]:
     return normalized
 
 
-def _provider_chars(value: Any) -> int:
-    return len(json.dumps(value, default=str))
 
 
 def search_capabilities(
@@ -810,28 +807,7 @@ def search_capabilities(
             summary["detail_call"]["arguments"]["catalog_fingerprint"] = fingerprint
         return response
 
-    response = build_response()
-    maximum_chars = get_agent_studio_provider_tool_result_inline_max_chars()
-    while _provider_chars(response) > maximum_chars and summaries:
-        summaries.pop()
-        response = build_response()
-    if not summaries and offset < len(matched):
-        raise CapabilityCatalogUnavailable(
-            "No capability summary fits the provider result bound",
-            phase="result_bound",
-            candidate_count=len(matched),
-            bound=maximum_chars,
-            catalog_fingerprint=fingerprint,
-        )
-    if _provider_chars(response) > maximum_chars:
-        raise CapabilityCatalogUnavailable(
-            "Capability catalog page metadata cannot fit the provider result bound",
-            phase="result_bound",
-            candidate_count=len(matched),
-            bound=maximum_chars,
-            catalog_fingerprint=fingerprint,
-        )
-    return response
+    return build_response()
 
 
 def get_capability_detail(
@@ -882,17 +858,15 @@ def get_capability_detail(
         "detail_length": len(serialized),
         "authorization": "reauthorized",
     }
-    requested_cap = normalize_page_limit(
-        max_chars,
-        default=get_agent_studio_provider_tool_result_inline_max_chars(),
-        maximum=get_agent_studio_provider_tool_result_inline_max_chars(),
-    )
+    if max_chars is not None and (isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1):
+        raise CapabilityCatalogRequestError("max_chars must be a positive integer")
+    requested_cap = len(serialized) if max_chars is None else max_chars
     if start is None:
         inline = {
             **common, "view": "complete", "detail": record.exact_detail(),
             "complete": True, "next_call": None,
         }
-        if len(serialized) <= requested_cap and _provider_chars(inline) <= get_agent_studio_provider_tool_result_inline_max_chars():
+        if len(serialized) <= requested_cap:
             return inline
         return {
             **common,
@@ -942,30 +916,7 @@ def get_capability_detail(
         }
 
     requested_end = min(start + requested_cap, len(serialized))
-    result = chunk(requested_end)
-    provider_cap = get_agent_studio_provider_tool_result_inline_max_chars()
-    if _provider_chars(result) <= provider_cap:
-        return result
-    low = start + 1
-    high = requested_end - 1
-    fitting: dict[str, Any] | None = None
-    while low <= high:
-        candidate_end = (low + high) // 2
-        candidate = chunk(candidate_end)
-        if _provider_chars(candidate) <= provider_cap:
-            fitting = candidate
-            low = candidate_end + 1
-        else:
-            high = candidate_end - 1
-    if fitting is None:
-        raise CapabilityCatalogUnavailable(
-            "Capability detail metadata cannot fit the provider result bound",
-            phase="detail_bound",
-            candidate_count=1,
-            bound=provider_cap,
-            catalog_fingerprint=current_fingerprint,
-        )
-    return fitting
+    return chunk(requested_end)
 
 
 __all__ = [

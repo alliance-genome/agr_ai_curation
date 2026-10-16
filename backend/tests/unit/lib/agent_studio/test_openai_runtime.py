@@ -13,6 +13,15 @@ from src.lib.openai_agents.config import PromptCacheIdentity, build_prompt_cache
 
 _STUDIO_CACHE = PromptCacheIdentity(agent_key="agent_studio_authoring", static_prompt="Studio template")
 
+@pytest.fixture(autouse=True)
+def _capacity_fixture(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", '{"gpt-test":{"context_window_tokens":1050000,"max_input_tokens":922000,"max_output_tokens":128000}}')
+    monkeypatch.setattr("src.lib.openai_agents.context_capacity.NativeCapacityRequest.count", AsyncMock(return_value=1000))
+
+
+
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface", ["agent_studio", "benchmark_assistant"])
@@ -346,7 +355,7 @@ def test_stream_translates_sdk_events_and_records_response_usage(monkeypatch, su
             for event in events:
                 yield event
 
-    def _run_streamed(agent, *, input, max_turns, run_config):
+    def _run_streamed(agent, *, input, max_turns, run_config, session=None):
         captured.update(
             agent=agent,
             input=input,
@@ -518,7 +527,7 @@ def test_forced_tool_run_uses_sdk_runner_and_stops_after_submission(monkeypatch)
 
     assert execution is not None
     assert execution.output == {"success": True, "suggestion_id": "suggestion-1"}
-    assert captured["agent"].tool_use_behavior == "stop_on_first_tool"
+    assert captured["agent"].tool_use_behavior == {"stop_at_tool_names": ["submit_prompt_suggestion"]}
     assert captured["agent"].model_settings.tool_choice == "submit_prompt_suggestion"
     assert captured["agent"].model_settings.parallel_tool_calls is False
     # ALL-1284: every suggestion run shares one stable key, not the per-run session id.
@@ -813,7 +822,7 @@ def test_studio_trace_scope_binds_and_restores_history_identity(monkeypatch):
         assert (get_current_user_id(), get_current_session_id(), get_current_trace_id()) == ("outer", "outer-chat", "outer-run")
 
 
-def test_preparing_studio_history_preserves_deferred_namespaces_and_adds_only_two_read_tools(monkeypatch):
+def test_preparing_studio_history_preserves_deferred_namespaces_and_adds_runtime_read_tools(monkeypatch):
     from agents import Agent, RunConfig
     from src.lib.context import agent_request_scope
     from src.lib.openai_agents.run_history import prepare_history_run
@@ -832,13 +841,13 @@ def test_preparing_studio_history_preserves_deferred_namespaces_and_adds_only_tw
     after = agent.tool_surface
     assert after.deferred_names == before.deferred_names
     assert after.namespace_names == before.namespace_names
-    assert set(after.eager_names) == {*before.eager_names, "read_run_history", "search_run_history"}
-    assert after.counts["candidate_count"] == before.counts["candidate_count"] + 2
+    assert set(after.eager_names) == {*before.eager_names, "read_run_history", "search_run_history", "read_pending_context"}
+    assert after.counts["candidate_count"] == before.counts["candidate_count"] + 3
     assert config.call_model_input_filter is not None
 
     monkeypatch.setenv("AGENT_HISTORY_ENABLED", "false")
     with agent_request_scope(user_id="another-owner", session_id="other-chat", trace_id="other-run"):
         disabled = prepare_history_run(agent, config)
-    assert disabled.call_model_input_filter is None
-    assert not {"read_run_history", "search_run_history"}.intersection(t.name for t in agent.tools if isinstance(t, FunctionTool))
+    assert callable(disabled.call_model_input_filter)
+    assert not {"read_run_history", "search_run_history", "read_pending_context"}.intersection(t.name for t in agent.tools if isinstance(t, FunctionTool))
     assert agent.tool_surface.deferred_names == before.deferred_names

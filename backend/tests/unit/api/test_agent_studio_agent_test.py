@@ -679,24 +679,9 @@ class TestAgentWorkshopSystemPrompt:
         assert "gpt-5.6-luna" not in system_prompt
         assert "<workshop_prompt_draft>" in system_prompt
         assert "<workshop_selected_group_prompt group=\"WB\">" in system_prompt
-        assert "A" * 12 in system_prompt
-        assert "A" * 13 not in system_prompt
-        assert "WB GROUP" in system_prompt
-        assert group_draft not in system_prompt
-        assert "Incomplete preview: retained 12 of 15 characters" in system_prompt
-        assert (
-            "`refresh_workshop_prompt` with `target_prompt=\"main\"`" in system_prompt
-        )
-        assert (
-            f"Incomplete preview: retained 8 of {len(group_draft)} characters"
-            in system_prompt
-        )
-        assert (
-            "`refresh_workshop_prompt` with `target_prompt=\"group\"`" in system_prompt
-        )
-        assert system_prompt.count("content-free summary") >= 2
-        assert system_prompt.count("follow each `next_call`") >= 2
-        assert system_prompt.count("until `complete=true`") >= 2
+        assert "A" * 15 in system_prompt
+        assert group_draft in system_prompt
+        assert "Incomplete preview:" not in system_prompt
         assert "Prompt injection note:" in system_prompt
 
     def test_build_opus_system_prompt_bounds_workshop_metadata_preview(
@@ -724,9 +709,8 @@ class TestAgentWorkshopSystemPrompt:
 
         system_prompt = api_module._build_opus_system_prompt(context)
 
-        assert description not in system_prompt
-        assert "Incomplete metadata preview: retained 80 of" in system_prompt
-        assert '`target_prompt="metadata"`' in system_prompt
+        assert description in system_prompt
+        assert "Incomplete metadata preview:" not in system_prompt
 
     def test_load_system_prompt_template_uses_package_selection(self, monkeypatch):
         from src.api import agent_studio as api_module
@@ -878,7 +862,7 @@ class TestAgentWorkshopSystemPrompt:
 
         assert "use `refresh_workshop_prompt` before judging" in system_prompt
         assert "inspect runtime tool schemas only when the requested change depends on their arguments" in system_prompt
-        assert "`record_evidence(span_ids=[...])` creates backend-copied evidence" in system_prompt
+        assert "`record_evidence(selections=[{chunk_index, span_index}, ...])` creates backend-copied evidence" in system_prompt
         assert "Do not propose instructions that ask agents to generate quote strings" in system_prompt
 
     def test_get_all_opus_tools_includes_workshop_prompt_update_tool(self):
