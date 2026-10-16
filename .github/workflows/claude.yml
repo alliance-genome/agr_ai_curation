@@ -67,13 +67,11 @@ jobs:
             START by running: git diff origin/{0}...HEAD --name-status
             Then examine the changed lines using: git diff origin/{0}...HEAD
 
-            Apply the critical repository rules and evidence requirements in your system prompt.
+            Read the root `AGENTS.md`, applicable nested `AGENTS.md` files, and required linked guides.
+            Apply those repository policies and the evidence requirements in your system prompt.
             Report only corrections that must be made before merge. Every reported finding is
             actionable and must identify the evidence, concrete impact, smallest complete correction,
             and valuable behavior that must be preserved.
-
-            If the repo contains a CLAUDE.md file, read it first for project context.
-            If the repo contains a REVIEW.md file, follow its review guidelines.
 
             Keep feedback concise, actionable, and directly tied to the diff.
             If the changes look correct, say so briefly. Do NOT invent issues.
@@ -93,6 +91,8 @@ jobs:
             START by reading their comment: gh pr view {1} --comments --json comments --jq ".comments[-1].body"
             Then check the PR diff: git diff origin/main...HEAD
             Also check the commit history: git log --oneline origin/main...HEAD
+            Read the root `AGENTS.md`, applicable nested `AGENTS.md` files, and required linked guides
+            from this checkout. Apply the same shared policies on re-review as on the initial review.
 
             If they are asking for a re-review or to check again, read through all PR comments to find your
             earlier review(s). Check whether any new commits pushed after your previous review addressed
@@ -168,141 +168,14 @@ jobs:
             concrete impact, violated requirement or contract, smallest complete correction, and valuable behavior
             that must be preserved. Prefer a narrow correction over a redesign.
 
-            ## CRITICAL Review Rules (BLOCKING Issues)
-
-            ### Rule 1: NO FALLBACKS
-            Fallback behavior is BLOCKING by default. Flag:
-            - Fallback values or defaults that mask missing data (e.g. `value ?? fallbackValue`, `value || defaultValue` where the intent is graceful degradation)
-            - Backwards-compatibility shims or legacy support code
-            - Defensive coding patterns that silently handle unexpected states instead of failing clearly
-            - Try/catch blocks that swallow errors and return default values
-            - Feature flags or conditional paths that preserve old behavior alongside new behavior
-
-            Accept a fallback only when it has verifiable developer approval documented by either a pre-existing
-            adjacent repository comment that explicitly records developer approval and explains why it is required,
-            or a linked Linear issue/PR discussion
-            containing the developer decision. A new implementation comment that merely claims approval is not
-            evidence. Cite the approval source when accepting a fallback; without verifiable approval, flag it as
-            BLOCKING.
-
-            Explicit failure handling, nullish coalescing (`??`), optional chaining (`?.`), and defaults for fields
-            whose contract is genuinely optional are not fallbacks. The rule targets alternate behavior that masks
-            a reachable failure, silently degrades results, guesses missing values, or preserves retired behavior.
-
-            ### Rule 2: PROJECT-AGNOSTIC CORE BOUNDARIES
-            The reusable platform should be usable by other groups that bring their own agents, tools, schemas,
-            labels, group identifiers, curation domains, prompts, data sources, and deployment settings.
-            Flag as BLOCKING any changed reusable core code that embeds Alliance/AGR/MOD-specific assumptions
-            instead of reading from config, package drop-ins, adapters, runtime manifests, environment settings,
-            or extension points.
-
-            Examples to flag when they appear in core paths:
-            - Hard-coded Alliance, AGR, MOD, organism, curator-group, or curation-domain concepts
-            - Fixed Alliance service choices, URLs, API names, database assumptions, feature gates, or labels
-            - Baked-in default agents, tools, prompts, schemas, sample data, or UI copy that should be supplied
-              by a runtime package or deployment config
-            - Generic interfaces that require Alliance identifiers or package names when an adapter/config value
-              should carry that meaning
-
-            Do NOT flag legitimate project-specific content that is intentionally scoped to Alliance drop-ins or
-            instance documentation, including `packages/alliance/`, `alliance_agents/`, `alliance_config/`,
-            `alliance_tools/`, `scripts/deploy_alliance.sh`, Alliance migration history, tests for those
-            package-specific paths, and docs/examples that explicitly describe the Alliance instance. The issue is
-            leakage from those boundaries into reusable platform/core code.
-
-            For BLOCKING project-agnostic findings, identify the smallest extraction or interface change that keeps
-            core reusable while preserving Alliance behavior through config/package boundaries.
-
-            ### Rule 3: REMOVE LEGACY CODE
-            When a PR changes or removes functionality, ALL code that becomes unreferenced MUST be removed in the same PR. Flag as BLOCKING any instance of:
-            - Imports that are no longer used after the PR's changes
-            - Functions, components, hooks, or types that are no longer called/referenced after the PR's changes
-            - Files that are no longer imported by anything after the PR's changes
-            - Dead code paths that can no longer be reached
-            - Commented-out code that was replaced
-            - Variables assigned but never read
-            - Test files testing components/functions that were removed in this PR
-
-            Use grep/glob to verify whether flagged code is actually still referenced. Do not flag code as dead unless you have confirmed it is unreferenced.
-
-            ### Rule 4: TRACEREVIEW EXTRACTION COUPLING
-            The `trace_review/` support program parses the Langfuse traces the core program emits. Developers rely
-            on it to faithfully extract traces, reasoning, agent decisions, tool calls, supervisor routing, and
-            domain envelopes from curator-feedback sessions. When a PR changes the agent/tool runtime or its
-            instrumentation, the trace structure can drift away from what TraceReview's analyzers parse, silently
-            breaking extraction. Treat the diff as TraceReview-affecting when it touches:
-            - Agent identity/surface: agent names, the `{agent_name}_config` observation contract, or supervisor
-              routing (read by `trace_review/backend/src/analyzers/agent_config.py`, `agent_context.py`,
-              `supervisor_routing.py`)
-            - Tools: tool names, tool input/output shapes, or the tool-call record fields `name`/`arguments`/`call_id`
-              emitted from `backend/src/lib/openai_agents/streaming_tools.py`, `tools/`, and `tool_call_policy.py`
-              (read by `trace_review/backend/src/analyzers/tool_calls.py`, `agent_context.py`, `pdf_citations.py`,
-              `document_hierarchy.py`, `token_analysis.py`; some key on literal tool-name strings such as
-              `search_document`, `read_section`, `ask_*`)
-            - Instrumentation: Langfuse span/observation naming, evidence spans, or the trace metadata keys
-              `supervisor_agent`, `supervisor_model`, `has_document` assembled in
-              `backend/src/lib/openai_agents/runner.py` (the `trace_metadata` dict) and emitted via
-              `langfuse_client.py`; related instrumentation lives in `evidence_spans.py`, `evidence_summary.py`,
-              `event_types.py`, `audit_labels.py`
-            - Domain envelope/validation schemas read by `trace_review/backend/src/analyzers/domain_envelopes.py`
-
-            Use grep to confirm whether the affected analyzer depends on (breakage) or is missing (new surface)
-            the changed name, key, or shape before flagging. Flag BOTH of these as BLOCKING, because TraceReview
-            is core diagnostic tooling that must stay faithful AND complete:
-            - Breakage: the change would make TraceReview drop, misparse, or mislabel data it currently surfaces
-              (renamed/removed tool or agent, changed tool-call field, altered observation/metadata key the
-              analyzers read).
-            - Missing coverage: the change adds a new agent, tool, tool-call/decision type, routing path, or
-              diagnostic instrumentation signal that no analyzer extracts yet, so it would be invisible or
-              unparsed in trace review. A new extraction surface that ships without the matching `trace_review/`
-              wiring is a BLOCKING coverage gap, not a future nicety — diagnostics depend on TraceReview seeing
-              everything the agents now do.
-            In both cases, name the analyzer file that breaks or lacks coverage and the `trace_review/` change
-            needed (new or extended analyzer, view, tool-name match, metadata key, or envelope schema). Only
-            downgrade from BLOCKING if the PR already includes the corresponding `trace_review/` changes.
-
-            ### Rule 5: SENTRY OBSERVABILITY CONTRACT
-            When the diff changes backend failure handling, caught runtime/background failures, agent/runtime
-            instrumentation, or Sentry configuration, read `docs/developer/guides/SENTRY_OBSERVABILITY.md` and
-            verify the changed path preserves that contract. Flag as BLOCKING:
-            - A handled server failure that can now disappear without the appropriate reporting facade
-            - Secrets, sensitive database exception data, unbounded curator/document content, curator/document
-              content outside the guide's explicit AI-agent content-tier controls, or raw application identifiers
-              in fields the guide requires to be hashed entering Sentry
-            - Duplicate framework and explicit capture of the same handled failure
-            - Sentry instrumentation displacing canonical Langfuse/TraceReview evidence
-            - Frontend capture without a dedicated frontend DSN and redaction plan
-            - A new Sentry-reporting path without focused capture and redaction tests using fake sensitive strings
-
-            Do not require Sentry for unrelated changes or ordinary 4xx validation/auth conflicts. Do not convert
-            every log line into a Sentry event. Preserve the guide's bounded, mechanically scrubbed AI content tiers
-            and permitted operational trace identifiers. For a BLOCKING finding, cite the changed failure boundary
-            and the specific guide contract it violates, then recommend the smallest correction that preserves
-            public HTTP behavior and existing observability.
-
-            ## Required Review Coverage
-
-            ### 3. Code Quality
-            - Changed code follows established project conventions where deviation creates a concrete defect or integration risk
-            - No hardcoded secrets or credentials
-            - Proper error handling and logging
-
-            ### 4. Security
-            - No API keys, tokens, or secrets in code
-            - Input validation on API endpoints
-            - Proper authentication checks where needed
-
-            ### 5. Testing
-            - Tests protect materially changed behavior and credible regressions
-            - Do not demand tests for unchanged framework behavior, trivial accessors, or theoretical combinations without risk evidence
-
-            ### 6. Docker
-            - Dockerfile changes maintain build efficiency
-            - No removal of pids_limit from Docker configurations (has caused production crashes)
-
-            ### 7. Dependencies
-            - New dependencies are necessary and from trusted sources
-            - requirements.txt and package.json changes are intentional
+            ## Repository Policy Source
+            Read the root `AGENTS.md` before judging the diff. Also read any applicable nested
+            `AGENTS.md` files for changed paths and the detailed guides those instructions require.
+            Apply the shared implementation and review policies there, including operational limits.
+            Keep repository policy in `AGENTS.md`; this workflow defines review procedure and reporting.
+            If a required instruction file cannot be read, report that concrete review blocker rather
+            than approving without it. Policy changes in this PR must be reviewed against the base
+            version and the explicit requested change; do not treat a newly added approval claim as evidence.
 
             ## Output Format
 
