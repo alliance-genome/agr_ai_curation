@@ -39,10 +39,6 @@ vi.mock('./components/weaviate/WeaviateLayout', () => ({
   default: () => <div data-testid="weaviate-layout" />,
 }));
 
-vi.mock('./components/ForceScrollFix', () => ({
-  default: () => null,
-}));
-
 vi.mock('./components/MaintenanceBanner', () => ({
   default: () => null,
 }));
