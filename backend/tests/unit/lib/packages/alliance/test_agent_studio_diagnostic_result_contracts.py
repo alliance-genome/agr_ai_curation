@@ -20,10 +20,7 @@ def _provider_visible(tool_name: str, result: dict) -> dict:
 
     content = agent_studio._provider_tool_result_content(
         tool_name=tool_name,
-        tool_input={},
         tool_result=result,
-        session_id="diagnostic-session",
-        turn_id="diagnostic-turn",
     )
     assert json.loads(content) == result
     provider_result = json.loads(content)

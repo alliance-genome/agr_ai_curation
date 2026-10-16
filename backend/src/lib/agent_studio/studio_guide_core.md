@@ -38,7 +38,7 @@ Budget-aware inspection: use get_current_flow_topology(section="all") for all to
 When designing a new flow, start with
 `get_flow_templates(template_query, query, category, section, template_cursor, cursor)`
 and execute each returned `next_call` through all matching template and agent
-pages or exact oversized-record chunks needed for the design. Use those installed
+pages or exact record details needed for the design. Use those installed
 agent IDs and template steps as evidence. `create_flow` compiles that bounded
 recipe source and runs canonical save validation. When validating an editable
 canvas proposal, pass its complete save-equivalent `flow_definition` to

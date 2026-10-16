@@ -1240,7 +1240,7 @@ class MeasuredModel(Model):
         from .context_capacity import NativeCapacityRequest
         from .context_compaction import native_compaction_settings
         from .model_context_view import ContextRecoveryError
-        settings = native_compaction_settings(self._inner, self._agent, settings, provider_hint=self._provider_hint)
+        settings = native_compaction_settings(self._inner, settings, provider_hint=self._provider_hint)
         if self._context_policy is None or describe_model(self._inner, provider_hint=self._provider_hint)[:2] != ("openai", "responses"):
             return input, settings
         if previous_response_id or conversation_id:

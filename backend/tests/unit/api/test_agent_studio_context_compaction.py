@@ -75,12 +75,6 @@ def test_large_tool_result_reaches_shared_context_boundary_complete(monkeypatch)
     large_value = "payload chunk " * 500
     content = api_module._provider_tool_result_content(
         tool_name="get_trace_payload",
-        tool_input={
-            "trace_id": "trace-1",
-            "payload_id": "observation:abc:output",
-            "start": 0,
-            "max_chars": 0,
-        },
         tool_result={
             "status": "success",
             "trace_id": "trace-1",
@@ -90,8 +84,6 @@ def test_large_tool_result_reaches_shared_context_boundary_complete(monkeypatch)
                 "next_start": None,
             },
         },
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-4-abc123",
     )
 
     result = json.loads(content)
@@ -105,10 +97,7 @@ def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
 
     content = api_module._provider_tool_result_content(
         tool_name="refresh_workshop_prompt",
-        tool_input={"target_prompt": "main"},
         tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-1",
     )
 
     assert json.loads(content) == tool_result
@@ -146,10 +135,7 @@ def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypat
 
     content = api_module._provider_tool_result_content(
         tool_name=f"propose_{artifact}_draft_update",
-        tool_input={"operations": [{"operation": "add_agent_step"}]},
         tool_result={**tool_result, "valid": valid, "success": valid},
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-1",
     )
     provider_result = json.loads(content)
 
@@ -198,15 +184,7 @@ def test_default_exact_trace_chunk_stays_inline_with_metadata_headroom(monkeypat
 
     content = api_module._provider_tool_result_content(
         tool_name="get_trace_payload",
-        tool_input={
-            "trace_id": "856df16f1752cb53ee43dcb2f5ecfd16",
-            "payload_id": "observation:observation-123:output",
-            "start": 0,
-            "max_chars": 8000,
-        },
         tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-4-abc123",
     )
 
     assert len(content) < 12000
@@ -252,13 +230,7 @@ def test_json_escape_aware_exact_trace_chunks_stay_inline(monkeypatch, serialize
 
     content = api_module._provider_tool_result_content(
         tool_name="get_trace_conversation",
-        tool_input={
-            "trace_id": "856df16f1752cb53ee43dcb2f5ecfd16",
-            "field": "assistant_response",
-        },
         tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-escape-aware",
     )
 
     assert len(content) < 12000
@@ -377,10 +349,7 @@ def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monke
     for tool_name, tool_input, result in results:
         content = api_module._provider_tool_result_content(
             tool_name=tool_name,
-            tool_input=tool_input,
             tool_result=result,
-            session_id="agent-studio-session-flow",
-            turn_id="flow-turn",
         )
         assert len(content) < 12000
         assert json.loads(content).get("status") != "compacted_tool_result"
@@ -684,11 +653,6 @@ def test_exact_results_and_authorized_history_recall_agree(
     compact = json.loads(
         api_module._provider_tool_result_content(
             tool_name="get_trace_payload",
-            tool_input={
-                "trace_id": "trace-1",
-                "payload_id": "observation:abc:output",
-                "max_chars": 0,
-            },
             tool_result={
                 "status": "success",
                 "trace_id": "trace-1",
@@ -697,8 +661,6 @@ def test_exact_results_and_authorized_history_recall_agree(
                     "value": exact_payload_value,
                 },
             },
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-early-abc123",
         )
     )
     durable_turn_messages = [

@@ -138,25 +138,22 @@ async def test_multiple_native_compactions_preserve_exact_retrieval_and_do_not_r
     await model.close()
 
 
-def test_native_settings_are_provider_gated_and_do_not_mutate_settings(history, monkeypatch):
+def test_native_settings_are_provider_gated_and_do_not_mutate_settings(monkeypatch):
     client = AsyncOpenAI(api_key="fixture")
     settings = ModelSettings(max_tokens=1234)
-    agent = SimpleNamespace(run_history=history)
     native = OpenAIResponsesModel(model="gpt-test", openai_client=client)
     monkeypatch.setenv("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", "12345")
-    changed = native_compaction_settings(native, agent, settings)
+    changed = native_compaction_settings(native, settings)
     assert changed.context_management == [{"type": "compaction", "compact_threshold": 12345}]
     assert changed.max_tokens == 1234 and settings.context_management is None
     kwargs = native._build_response_create_kwargs(system_instructions="rules", input=[{"role":"user","content":"task"}],
         model_settings=changed, tools=[], output_schema=None, handoffs=[])
     assert kwargs["context_management"] == changed.context_management
     compatible = OpenAIChatCompletionsModel(model="other", openai_client=client)
-    assert native_compaction_settings(compatible, agent, settings) is settings
-    history.healthy = False
-    assert native_compaction_settings(native, agent, settings).context_management == changed.context_management
-    history.healthy = True
+    assert native_compaction_settings(compatible, settings) is settings
+    assert native_compaction_settings(native, settings).context_management == changed.context_management
     monkeypatch.setenv("AGENT_CONTEXT_COMPACTION_ENABLED", "false")
-    assert native_compaction_settings(native, agent, settings) is settings
+    assert native_compaction_settings(native, settings) is settings
 
 
 def test_compaction_preserves_unpaired_calls_and_standalone_canonical_window():

@@ -856,7 +856,7 @@ async def get_trace_view(
         trace_id: Langfuse trace ID
         view_name: One of: token_analysis, agent_context, pdf_citations,
                    document_hierarchy, agent_configs, group_context, trace_summary
-        item_start: Exact JSON character cursor for one oversized aggregate item
+        item_start: Optional JSON character offset for an exact aggregate-item suffix
 
     Returns:
         {

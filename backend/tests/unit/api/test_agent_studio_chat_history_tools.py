@@ -341,10 +341,7 @@ def test_chat_session_tools_bound_maximum_titles_and_replay_all_pages(
         assert result["success"] is True
         provider_content = api_module._provider_tool_result_content(
             tool_name=current_call["tool"],
-            tool_input=current_call["arguments"],
             tool_result=result,
-            session_id="agent-studio-session",
-            turn_id="turn-max-title",
         )
         assert api_module.json.loads(provider_content) == result
         assert "compacted_tool_result" not in provider_content

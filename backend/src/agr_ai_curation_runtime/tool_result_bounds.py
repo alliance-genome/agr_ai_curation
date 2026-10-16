@@ -255,13 +255,11 @@ def detail_chunk(
     expected_sha256: str | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return one exact chunk of the value at ``path``.
+    """Return the complete exact value suffix at ``path`` and ``cursor``.
 
-    Strings are chunked as text; anything else as canonical JSON. Chunks are
-    contiguous and lossless: concatenating every chunk up to ``complete`` gives
-    back exactly the value whose ``sha256`` is reported. When the caller passes
-    the hash from an earlier chunk and the value has since changed, a
-    ``stale_result_cursor`` error is returned instead of mixing versions.
+    Strings use text; anything else uses canonical JSON. The reported hash
+    identifies the whole source value. A supplied hash from a previous read
+    must still match or the result is ``stale_result_cursor``.
     """
 
     value = resolve_path(root, path)
@@ -283,7 +281,6 @@ def detail_chunk(
     base = dict(extra or {})
 
     def render(content: str, end: int) -> dict[str, Any]:
-        complete = end >= len(text)
         return {
             **base,
             "status": "ok",
@@ -294,8 +291,8 @@ def detail_chunk(
                 "sha256": digest,
                 "total_chars": len(text),
                 "returned_range": {"start": start, "end": end},
-                "next_cursor": None if complete else end,
-                "complete": complete,
+                "next_cursor": None,
+                "complete": True,
             },
         }
 
@@ -468,7 +465,7 @@ def bounded_json_result(
             "instructions": (
                 "This is the complete requested result suffix. "
                 "Fields listed in omitted_fields are read exactly with "
-                "detail_call using their detail_path; follow each chunk's next_cursor."
+                "detail_call using their detail_path."
             ),
         }
         if stateless:

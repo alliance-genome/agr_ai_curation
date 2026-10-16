@@ -1257,7 +1257,6 @@ def _page_response(
     fingerprint: str,
 ) -> dict[str, Any]:
     page, envelope = _bounded_page(
-        response,
         items,
         limit=limit,
         cursor=cursor,
@@ -1296,7 +1295,6 @@ def _item_detail_response(
 
 
 def _bounded_page(
-    response: Mapping[str, Any],
     items: Sequence[dict[str, Any]],
     *,
     limit: int | None,

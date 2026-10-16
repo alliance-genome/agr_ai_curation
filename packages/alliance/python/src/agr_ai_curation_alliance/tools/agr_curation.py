@@ -3873,8 +3873,6 @@ def _builder_page(
         start=start,
         limit=cap,
         render=render,
-
-
     )
     return page
 

@@ -1,8 +1,8 @@
 """Read-only supervisor inspection for persisted extraction results.
 
 The supervisor starts from a counts-only ``summary``, then filters
-object, finding and validator-result pages, and reads any value too large for
-a page exactly in chunks. Pages and chunks carry ``next_call`` arguments and a
+object, finding and validator-result pages, and reads selected details whole.
+Explicit row pages carry ``next_call`` arguments and a
 ``result_sha256``, so a result that changes between calls is reported instead
 of mixed. Values are never shortened: a value too long to show inline is
 replaced by a descriptor (size, hash, a short prefix preview) whose ``read``
@@ -173,7 +173,7 @@ _CHUNK_ARGUMENTS = frozenset({"cursor", "result_sha256"})
 
 
 class _RequestError(Exception):
-    """An explicit caller-facing error; never a budget escape."""
+    """An explicit caller-facing request error."""
 
     def __init__(self, error_code: str, message: str, **extra: Any) -> None:
         super().__init__(message)
@@ -369,7 +369,7 @@ def _inspect(
         )
 
     # Model-supplied text is echoed into filters, next_call or head: an over-long
-    # value is a caller error, never a tool result budget escape.
+    # value is rejected as an invalid caller argument.
     _check_argument_lengths(
         action,
         {
@@ -516,7 +516,7 @@ def _inspect(
     if action == "explanation":
         return _exact_value(
             result.envelope.specialist_explanation,
-            head=result.head("explanation"), call=result.call("explanation"),
+            head=result.head("explanation"),
             sha=result.sha(action="explanation"), expected_sha=result_sha256, cursor=cursor,
             message="Complete specialist-authored explanation; saved objects and findings determine persisted state.",
         )
@@ -844,7 +844,6 @@ def _exact_value(
     value: Any,
     *,
     head: Mapping[str, Any],
-    call: Mapping[str, Any],
     sha: str,
     expected_sha: str | None,
     cursor: Any,
@@ -875,12 +874,9 @@ def _exact_value(
         return whole
 
     def render(content: str, end: int) -> dict[str, Any]:
-        complete = end >= len(text)
         return {
             "status": "ok",
-            "message": message + (
-                "" if complete else " This is an exact chunk; continue with next_call."
-            ),
+            "message": message,
             **head,
             "detail": {
                 "encoding": "text" if is_text else "canonical_json",
@@ -888,13 +884,11 @@ def _exact_value(
                 "returned_range": {"start": start, "end": end},
                 "total_chars": len(text),
                 "value_sha256": digest,
-                "complete": complete,
+                "complete": True,
             },
-            "complete": complete,
+            "complete": True,
             "result_sha256": sha,
-            "next_call": (
-                None if complete else {**call, "cursor": str(end), "result_sha256": sha}
-            ),
+            "next_call": None,
         }
 
     return fit_text_window(text, cursor=start, render=render)
@@ -1679,7 +1673,6 @@ def _field_response(
     return _exact_value(
         value,
         head={**result.head("field"), "object_ref": object_ref, "field_path": field_path},
-        call=result.call("field", object_ref=object_ref, field_path=field_path),
         sha=result.sha(action="field", object_ref=object_ref, field_path=field_path),
         expected_sha=expected_sha,
         cursor=cursor,
@@ -1737,7 +1730,6 @@ def _details_response(
         return _exact_value(
             value,
             head=head,
-            call=call,
             sha=sha,
             expected_sha=expected_sha,
             cursor=cursor,
@@ -1825,7 +1817,6 @@ def _evidence_response(
         return _exact_value(
             _resolve_detail(evidence, detail_path),
             head={**head, "detail_path": detail_path},
-            call=result.call("evidence", object_ref=object_ref, detail_path=detail_path),
             sha=result.sha(action="evidence", object_ref=object_ref, detail_path=detail_path),
             expected_sha=expected_sha,
             cursor=cursor,
@@ -1978,7 +1969,6 @@ def _validation_response(
             return _exact_value(
                 _resolve_detail(full, detail_path),
                 head={**head, "detail_path": detail_path},
-                call=result.call("validation", finding_ref=finding_ref, detail_path=detail_path),
                 sha=sha,
                 expected_sha=expected_sha,
                 cursor=cursor,
@@ -2093,7 +2083,7 @@ def _standalone_validator_response(
     if detail_path:
         return _exact_value(
             _resolve_detail(full, detail_path), head={**head, "detail_path": detail_path},
-            call={**carry, "detail_path": detail_path}, sha=sha, expected_sha=expected_sha,
+            sha=sha, expected_sha=expected_sha,
             cursor=cursor, message="Exact saved validator value; completeness applies to this value only.",
         )
     if action == "summary":
@@ -2145,9 +2135,6 @@ def _validator_results_response(
             return _exact_value(
                 _resolve_detail(full, detail_path),
                 head={**head, "detail_path": detail_path},
-                call=result.call(
-                    "validator_results", validator_result_key=key, detail_path=detail_path
-                ),
                 sha=sha,
                 expected_sha=expected_sha,
                 cursor=cursor,

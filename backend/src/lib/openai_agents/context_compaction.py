@@ -18,7 +18,7 @@ def compaction_key(item: dict[str, Any]) -> str | None:
     return None
 
 
-def native_compaction_settings(model: Any, agent: Any, settings: Any, *, provider_hint=None) -> Any:
+def native_compaction_settings(model: Any, settings: Any, *, provider_hint=None) -> Any:
     """Apply the native policy at the actual provider boundary, not Agent metadata."""
     from .model_request_measurement import describe_model
 

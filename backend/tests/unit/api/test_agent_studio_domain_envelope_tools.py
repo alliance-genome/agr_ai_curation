@@ -156,13 +156,7 @@ def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
     for result in results:
         content = api_module._provider_tool_result_content(
             tool_name="get_domain_pack_validation_plan",
-            tool_input={
-                "domain_pack_id": result["domain_pack_id"],
-                "section": result["section"],
-            },
             tool_result=result,
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-domain-plan",
         )
         assert json.loads(content) == result
         assert len(content) <= 12000
@@ -269,10 +263,7 @@ def test_realistic_multi_record_runtime_pages_remain_provider_visible(monkeypatc
     for tool_name, tool_input, result in fixtures:
         content = api_module._provider_tool_result_content(
             tool_name=tool_name,
-            tool_input=tool_input,
             tool_result=result,
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-domain-runtime",
         )
         assert json.loads(content) == result
         assert len(content) <= 12000
@@ -500,10 +491,7 @@ def test_every_pack_plan_page_remains_provider_visible(monkeypatch, domain_pack_
             assert page["success"], page
             content = api_module._provider_tool_result_content(
                 tool_name="get_domain_pack_validation_plan",
-                tool_input={"domain_pack_id": domain_pack_id, "section": section},
                 tool_result=page,
-                session_id="agent-studio-session-1",
-                turn_id="opus-turn-domain-plan",
             )
             assert json.loads(content) == page
             assert len(content) <= 12000, (section, len(content))

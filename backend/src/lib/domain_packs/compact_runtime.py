@@ -132,7 +132,7 @@ class CompactValidatorRuntime:
                 stored = self._lookup_views.get(view.pop("lookup_ref"))
                 if stored is None:
                     raise ValueError("Unknown lookup_ref for this validator run")
-                return json.dumps(self._bounded_lookup_view(tool.name, stored, view))
+                return json.dumps(self._bounded_lookup_view(stored, view))
             if view:
                 raise ValueError("Continue a paged lookup with the lookup_ref from its result")
             with full_tool_results_requested():
@@ -180,18 +180,18 @@ class CompactValidatorRuntime:
                                 for request_id in request_ids],
             }
             self._lookup_views[call_id] = stored
-            return json.dumps(self._bounded_lookup_view(tool.name, stored, {}))
+            return json.dumps(self._bounded_lookup_view(stored, {}))
 
         wrapped.on_invoke_tool = invoke
         return wrapped
 
-    def _bounded_lookup_view(self, tool_name: str, stored: Mapping[str, Any],
+    def _bounded_lookup_view(self, stored: Mapping[str, Any],
                              view: Mapping[str, Any]) -> dict[str, Any]:
-        """Serve a captured lookup's model view whole when it fits, else as bounded pages.
+        """Serve a captured lookup's model view whole for the requested selection.
 
         Capture already holds the complete provider response application-side;
-        the model sees each page's rows with exactly the record refs for those
-        rows, and reads withheld values through exact detail chunks.
+        the model sees all selected rows with exactly their record references.
+        Explicit offsets and detail paths select exact subsets.
         """
         model_view, catalog = stored["view"], stored["catalog"]
         complete = {**model_view, **_record_refs_view(catalog),

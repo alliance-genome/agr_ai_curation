@@ -1078,7 +1078,7 @@ guidance only; it does not select an installed-agent version.""",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": f"Maximum tools in this page (default: {_TOOL_INVENTORY_DEFAULT_ITEMS}, max: {_TOOL_INVENTORY_MAX_ITEMS}); the character budget may return fewer.",
+                    "description": f"Maximum tools in this page (default: {_TOOL_INVENTORY_DEFAULT_ITEMS}, max: {_TOOL_INVENTORY_MAX_ITEMS}).",
                     "default": _TOOL_INVENTORY_DEFAULT_ITEMS,
                     "minimum": 1,
                     "maximum": _TOOL_INVENTORY_MAX_ITEMS,
@@ -1103,8 +1103,8 @@ guidance only; it does not select an installed-agent version.""",
 Use this after get_tool_inventory when you need parameters, source file,
 documentation, available methods, or agent-specific method allowlists. Pass
 agent_id to show relevant_methods and agent_context for multi-method package
-tools. Oversized parent metadata returns hash-addressed sections and exact
-continuation chunks; small method/PDF details remain a single call.""",
+tools. The default call returns complete metadata; explicit section and character
+selections return exact content with a source hash.""",
         input_schema={
             "type": "object",
             "properties": {
@@ -1116,10 +1116,10 @@ continuation chunks; small method/PDF details remain a single call.""",
                     "type": "string",
                     "description": "Optional installed agent ID used to include agent-specific method context.",
                 },
-                "section": {"type": "string", "description": "Optional top-level metadata section returned by an oversized first call."},
-                "cursor": {"type": "integer", "minimum": 0, "description": "Exact character offset returned by a section next_call."},
+                "section": {"type": "string", "description": "Optional top-level metadata section to inspect exactly."},
+                "cursor": {"type": "integer", "minimum": 0, "description": "Optional starting character offset within the selected section."},
                 "max_chars": {"type": "integer", "minimum": 1,
-                              "description": "Requested exact section characters; JSON escaping may reduce the range."},
+                              "description": "Optional exact section character count; omitted means the complete remainder."},
             },
             "required": ["tool_id"],
         },
@@ -1153,8 +1153,8 @@ Typical workflow:
 2. search_codebase(query="tool policy", search_mode="content", path_glob="backend/src/**/*.py")
 3. read_source_file(path="backend/src/api/agent_studio.py", start_line=1400, end_line=1505)
 
-Every page bounds the complete serialized result. Follow next_call for more
-matches or exact chunks of one oversized/minified matching line. When
+Each page returns the complete requested matches. Follow next_call for more
+matching rows. Explicit character offsets select exact line suffixes. When
 result_set_truncated is true, narrow query or path_glob because the bounded
 search catalog contains additional matches. The tool only reads files from the
 current repository checkout and never executes code.""",
@@ -1216,8 +1216,8 @@ Use this after search_codebase identifies the relevant file. The response is
 line-numbered so you can cite the implementation precisely when explaining a
 feature, behavior, or limitation to a curator.
 
-The complete serialized result is character-bounded. Oversized lines use exact
-hash-addressed chunks and executable next_call continuation. This tool is
+The complete requested line range is returned, with source hashes and optional
+exact character offsets. This tool is
 read-only and restricted to files inside the current repository checkout.""",
         input_schema={
             "type": "object",
@@ -1238,7 +1238,7 @@ read-only and restricted to files inside the current repository checkout.""",
                     "minimum": 1,
                 },
                 "line_char_start": {"type": "integer", "minimum": 0, "default": 0,
-                                    "description": "Exact character offset from an oversized-line next_call."},
+                                    "description": "Optional starting character offset within the first selected line."},
             },
             "required": ["path"],
         },

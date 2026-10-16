@@ -4309,8 +4309,8 @@ def create_flow_supervisor(
                 "supervisor instructions. This tool cannot browse or authorize any "
                 "other result. Start with action=\"summary\" (counts), then filter "
                 "action=\"objects\", \"validation\" or \"validator_results\"; "
-                "responses are size-bounded, so pass next_call exactly to continue "
-                "and use each withheld value's read call for its exact content."
+                "use next_call to continue requested row pages and each previewed "
+                "value's read call for its complete exact content."
             ),
         )
         async def inspect_bound_preferred_flow_result(

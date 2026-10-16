@@ -396,10 +396,7 @@ async def test_refresh_workshop_prompt_chunks_reconstruct_long_dirty_draft(
         )
         provider_content = api_module._provider_tool_result_content(
             tool_name="refresh_workshop_prompt",
-            tool_input=next_call["arguments"],
             tool_result=result,
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-1",
         )
         provider_chunk = json.loads(provider_content)
         assert provider_chunk["view"] == "chunk"
@@ -520,10 +517,7 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
         }
         captured["provider_output"] = api_module._provider_tool_result_content(
             tool_name="refresh_workshop_prompt",
-            tool_input=tool_input,
             tool_result=tool_result,
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-1",
         )
         yield {
             "type": "TOOL_USE",

@@ -173,8 +173,8 @@ def test_installed_catalog_pages_stay_bounded_and_have_executable_continuations(
     while True:
         result = handler(**arguments)
         content = api_module._provider_tool_result_content(
-            tool_name="get_tool_inventory", tool_input=arguments, tool_result=result,
-            session_id="session-1", turn_id="turn-1")
+            tool_name="get_tool_inventory",  tool_result=result,
+             )
         assert json.loads(content).get("status") != "compacted_tool_result"
         assert result["returned_count"] <= 20
         seen.extend(item["tool_id"] for item in result["tools"])
@@ -189,8 +189,8 @@ def test_runtime_installed_catalog_default_page_stays_provider_visible():
     assert result["total_count"] == len(catalog_service.get_tool_registry())
     assert result["returned_count"] <= 20
     content = api_module._provider_tool_result_content(
-        tool_name="get_tool_inventory", tool_input={}, tool_result=result,
-        session_id="session-1", turn_id="turn-1")
+        tool_name="get_tool_inventory",  tool_result=result,
+         )
     assert json.loads(content).get("status") != "compacted_tool_result"
 
 
@@ -209,8 +209,8 @@ def test_large_parent_tool_metadata_is_exactly_section_addressable(monkeypatch):
     while True:
         result = handler(**arguments)
         content = api_module._provider_tool_result_content(
-            tool_name="get_tool_details", tool_input=arguments, tool_result=result,
-            session_id="session-1", turn_id="turn-1")
+            tool_name="get_tool_details",  tool_result=result,
+             )
         assert json.loads(content).get("status") != "compacted_tool_result"
         chunks.append(result["content"])
         assert result["sha256"] == documentation["sha256"]

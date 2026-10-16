@@ -1954,10 +1954,7 @@ def _tool_call_audit_entry(
 def _provider_tool_result_content(
     *,
     tool_name: str,
-    tool_input: Any,
     tool_result: Any,
-    session_id: str,
-    turn_id: str,
 ) -> str:
     """Serialize complete tool data; request capacity is handled centrally."""
 
@@ -4077,10 +4074,7 @@ async def chat_with_opus(
                 full_output=safe_result,
                 provider_output=_provider_tool_result_content(
                     tool_name=tool_name,
-                    tool_input=tool_input,
                     tool_result=safe_result,
-                    session_id=prepared_turn.session_id,
-                    turn_id=prepared_turn.turn_id,
                 ),
             )
 

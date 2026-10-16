@@ -229,10 +229,7 @@ def test_search_codebase_recovers_one_minified_match_in_bounded_exact_chunks(tmp
         result = codebase_tools.search_codebase(query="payload", limit=1, cursor=cursor)
         content = api_module._provider_tool_result_content(
             tool_name="search_codebase",
-            tool_input={"query": "payload", "limit": 1, "cursor": cursor},
             tool_result=result,
-            session_id="session-1",
-            turn_id="turn-1",
         )
         assert json.loads(content).get("status") != "compacted_tool_result"
         chunks.append(result["results"][0]["line_text"])
@@ -256,10 +253,7 @@ def test_read_source_file_recovers_minified_line_with_executable_continuations(t
         result = codebase_tools.read_source_file(**arguments)
         content = api_module._provider_tool_result_content(
             tool_name="read_source_file",
-            tool_input=arguments,
             tool_result=result,
-            session_id="session-1",
-            turn_id="turn-1",
         )
         assert json.loads(content).get("status") != "compacted_tool_result"
         chunks.extend(line["text"] for line in result["lines"])

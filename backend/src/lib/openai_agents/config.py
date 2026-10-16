@@ -2421,7 +2421,7 @@ def get_agent_studio_capability_catalog_max_records() -> int:
 def get_agent_studio_chat_history_page_size() -> int:
     """Maximum sessions requested by one Agent Studio list/search call.
 
-    Provider-envelope fitting may return fewer rows with a continuation. Default 25.
+    Controls selected rows and database work per explicit page. Default 25.
     """
     return max(
         1,

@@ -174,9 +174,8 @@ class ChunkReadContent(BaseModel):
     content: str
     evidence_spans: List[EvidenceSpanResult]
     doc_items: Optional[List[dict]] = None
-    # Present only when the chunk is too large for one result: ``content`` is
-    # then the exact slice covering the returned spans, and next_span_offset
-    # continues the chunk.
+    # Present for an explicit span offset: ``content`` is the complete suffix
+    # covering all remaining spans.
     content_range: Optional[dict] = None
     span_page: Optional[dict] = None
 
@@ -487,7 +486,6 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
                 spans=spans,
                 span_offset=window_start,
                 render=render,
-
             )
         except ValueError as exc:
             return ChunkReadResult(
@@ -710,8 +708,6 @@ def _bounded_section_read(
         start=start,
         limit=cap,
         render=render,
-
-
     )
     return result
 
@@ -814,7 +810,6 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                 total=meta["total"],
                 start=meta["start"],
                 ended_by=meta["ended_by"],
-
             )
             return SectionReadResult(
                 summary=(
@@ -838,8 +833,6 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                     page_ended_by=meta["ended_by"],
                     requested_max_chunks=meta["requested_max_chunks"],
                     effective_max_chunks=meta["effective_max_chunks"],
-
-
                 ),
             )
 
@@ -988,7 +981,6 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                 total=meta["total"],
                 start=meta["start"],
                 ended_by=meta["ended_by"],
-
             )
             return SubsectionReadResult(
                 summary=(
@@ -1012,8 +1004,6 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                     page_ended_by=meta["ended_by"],
                     requested_max_chunks=meta["requested_max_chunks"],
                     effective_max_chunks=meta["effective_max_chunks"],
-
-
                 ),
             )
 

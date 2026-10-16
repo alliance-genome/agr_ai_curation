@@ -207,8 +207,8 @@ async def test_inspection_dispatcher_requires_active_authenticated_workshop(monk
 def test_profile_inspection_uses_existing_bounded_provider_result_and_recall(monkeypatch):
     import src.api.agent_studio as api
     result = {"success": True, "output": {"profileContract": {"description": "private draft " * 1000}}}
-    content = api._provider_tool_result_content(tool_name="inspect_workshop_profile", tool_input={"action": "current"},
-                                               tool_result=result, session_id="session", turn_id="turn")
+    content = api._provider_tool_result_content(tool_name="inspect_workshop_profile",
+                                               tool_result=result,  )
     payload = json.loads(content)
     assert payload == result
 

@@ -416,9 +416,10 @@ not the current unsaved editor; reading them never selects or restores them.
 For custom ca_ agents, use this saved-revision reader rather than built-in-only
 get_prompt/get_tool_inventory. Select prompt_manifest for complete frozen core/base
 prompt layers; instructions is only the editable text. Select tools, group_prompts (with
-the applicable group_id), output_profile or settings. Follow next_call until
-complete=true and concatenate JSON content pages to recover exact large sections.
-Do not repeat an oversized all-section read or substitute template defaults.
+the applicable group_id), output_profile or settings. Selected sections are
+returned whole; optional start/max_chars select an exact section range with
+content_hash verification. Follow next_call for explicit ranges or row listings.
+Do not substitute template defaults for saved curator instructions.
 When a curator reports a flow error or a flow that could not start, first call
 inspect_saved_studio_resource(action="recent_flow_runs") for the open flow (pass
 flow_id when no saved flow is open) and match the curator's run by time and

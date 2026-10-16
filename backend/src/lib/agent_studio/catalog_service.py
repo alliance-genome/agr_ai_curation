@@ -952,11 +952,11 @@ def _document_model_result(tool_id: str, result: Any) -> Any:
 
 
 def _with_result_view_arguments(tool: Any) -> Dict[str, Any]:
-    """Add the bounded page/detail arguments to a subprocess package tool schema.
+    """Add explicit result selection arguments to a subprocess package tool schema.
 
     Subprocess package tools return complete results to the backend; the
-    backend serves the model budget-bounded pages and exact detail chunks, so
-    the continuation arguments belong to this adapter, not to package code.
+    backend exposes optional exact collection/field selections and source hashes.
+    These adapter controls do not impose per-tool model-context quotas.
     """
     schema = json.loads(json.dumps(getattr(tool, "params_json_schema", None) or {}))
     schema.setdefault("type", "object")

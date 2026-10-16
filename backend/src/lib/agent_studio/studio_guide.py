@@ -243,7 +243,6 @@ def read_studio_guide(
             "current_content_hash": current_hash,
         }
     end = len(content)
-    complete = end >= len(content)
     return {
         "success": True,
         "topic": selected.topic_id,
@@ -253,15 +252,6 @@ def read_studio_guide(
         "end": end,
         "total_chars": len(content),
         "content_hash": current_hash,
-        "complete": complete,
-        "next_call": None
-        if complete
-        else {
-            "tool": READ_STUDIO_GUIDE_TOOL_NAME,
-            "arguments": {
-                "topic": selected.topic_id,
-                "start": end,
-                "content_hash": current_hash,
-            },
-        },
+        "complete": True,
+        "next_call": None,
     }

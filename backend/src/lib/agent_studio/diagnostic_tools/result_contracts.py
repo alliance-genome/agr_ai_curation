@@ -244,7 +244,6 @@ def _page(
     cursor: int,
     limit: int,
     page_paths: set[str],
-    path_index_offset: int = 0,
 ) -> dict[str, Any]:
     if path not in page_paths:
         raise ValueError(f"result_path must be one of: {', '.join(sorted(page_paths))}")
@@ -443,7 +442,7 @@ def create_sql_query_handler(
                         },
                     },
                     "available_page_paths": ["rows"],
-                    "continuation": "Use result_view='page' with result_path='rows'; oversized cells expose exact detail paths.",
+                    "continuation": "Use result_view='page' with result_path='rows' for complete selected rows, or an explicit detail path for one exact value.",
                 }
 
             path = (
@@ -501,7 +500,6 @@ def create_sql_query_handler(
                 cursor=0,
                 limit=limit,
                 page_paths={"rows"},
-                path_index_offset=cursor,
             )
             returned = page["returned_count"]
             count_query = sa.text(

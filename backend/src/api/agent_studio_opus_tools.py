@@ -89,7 +89,7 @@ _AGGREGATE_PAGE_PROPERTIES = {
     },
     "item_start": {
         "type": "integer",
-        "description": "Exact JSON character cursor from page.next_call for one oversized item.",
+        "description": "Optional JSON character offset selecting an exact suffix of one item.",
         "default": 0,
         "minimum": 0,
     },
@@ -761,7 +761,7 @@ SEARCH_TRACES_TOOL = {
             },
             "item_start": {
                 "type": "integer",
-                "description": "Exact JSON character cursor from pagination.next_call for one oversized trace reference.",
+                "description": "Optional JSON character offset selecting an exact trace-reference suffix.",
                 "default": 0,
                 "minimum": 0,
             },

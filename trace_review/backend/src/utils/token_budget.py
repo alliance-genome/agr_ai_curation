@@ -1,8 +1,8 @@
 """
-Provider Budget Utilities for Claude-Specific Endpoints
+Advisory Size Metadata for Claude-Specific Endpoints
 
-Measures serialized response characters against Agent Studio's provider boundary
-and retains token estimates as advisory metadata.
+Reports character counts and heuristic token estimates for diagnostics.
+Model capacity is governed by the shared context policy, not these estimates.
 """
 
 import json
@@ -19,7 +19,7 @@ def estimate_tokens(text: str) -> int:
     """
     Estimate token count using character heuristic.
 
-    Uses 4 chars ≈ 1 token, which is accurate enough for budget management.
+    Uses 4 chars ≈ 1 token, as advisory size metadata, not as a capacity decision.
     This avoids API calls to tokenizers while providing reasonable estimates.
 
     Args:

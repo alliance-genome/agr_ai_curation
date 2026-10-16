@@ -1309,10 +1309,7 @@ def test_escape_heavy_flow_details_fit_provider_envelope_and_reconstruct(monkeyp
             result = handler(**arguments)
             serialized = api_module._provider_tool_result_content(
                 tool_name=tool_name,
-                tool_input=arguments,
                 tool_result=result,
-                session_id="session-1",
-                turn_id="turn-1",
             )
             assert json.loads(serialized) == result
             assert json.loads(serialized).get("status") != "compacted_tool_result"
@@ -2009,10 +2006,7 @@ def test_get_available_agents_recovers_oversized_escape_heavy_record(monkeypatch
     page = handler(limit=2)
     page_serialized = api_module._provider_tool_result_content(
         tool_name="get_available_agents",
-        tool_input={"limit": 2},
         tool_result=page,
-        session_id="session-1",
-        turn_id="turn-1",
     )
     assert json.loads(page_serialized) == page
     rows = [agent for agents in page["categories"].values() for agent in agents]
@@ -2079,8 +2073,7 @@ def test_get_flow_templates_pages_templates_independently_without_agent_repetiti
     first = handler(limit=1, template_limit=2, template_query="gene")
     content = api_module._provider_tool_result_content(
         tool_name="get_flow_templates",
-        tool_input={"limit": 1, "template_limit": 2, "template_query": "gene"},
-        tool_result=first, session_id="session-1", turn_id="turn-1")
+        tool_result=first,  )
     assert json.loads(content).get("status") != "compacted_tool_result"
     assert first["returned_count"] == 1
     assert first["template_returned_count"] == 2

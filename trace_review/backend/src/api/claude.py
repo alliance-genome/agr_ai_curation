@@ -600,9 +600,8 @@ def _aggregate_response_data(
         item_sha256 = hashlib.sha256(serialized_item.encode("utf-8")).hexdigest()
 
         def build_item_chunk(end: int) -> Dict[str, Any]:
-            item_complete = end >= item_total_chars
-            aggregate_complete = item_complete and safe_offset + 1 >= len(items)
-            next_offset = safe_offset + (1 if item_complete else 0)
+            aggregate_complete = safe_offset + 1 >= len(items)
+            next_offset = safe_offset + 1
             next_call = None
             if not aggregate_complete:
                 next_call = {
@@ -610,7 +609,7 @@ def _aggregate_response_data(
                     "section": section,
                     "offset": next_offset,
                     "limit": safe_limit,
-                    "item_start": 0 if item_complete else end,
+                    "item_start": 0,
                 }
             return {
                 **base,
@@ -632,7 +631,7 @@ def _aggregate_response_data(
                         "start": safe_item_start,
                         "end": end,
                         "total_chars": item_total_chars,
-                        "complete": item_complete,
+                        "complete": True,
                         "content": serialized_item[safe_item_start:end],
                     },
                 },
@@ -877,7 +876,7 @@ def _search_response_data(
     item_start: int,
     provider_scan: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Fit a stable search page, including exact chunks for one oversized record."""
+    """Return complete selected search rows or an explicit exact JSON suffix."""
     references = [_listed_trace_reference(trace) for trace in traces]
     filters = {
         key: value
@@ -891,12 +890,11 @@ def _search_response_data(
         max(0, local_result_count) if local_result_count is not None else None
     )
 
-    def next_arguments(next_offset: int, next_item_start: int = 0) -> Dict[str, Any]:
+    def next_arguments(next_offset: int) -> Dict[str, Any]:
         return {
             **filters,
             "offset": next_offset,
             "limit": limit,
-            **({"item_start": next_item_start} if next_item_start else {}),
         }
 
     def is_complete(next_offset: int) -> bool:
@@ -951,9 +949,8 @@ def _search_response_data(
     item_sha256 = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def build_chunk(end: int) -> Dict[str, Any]:
-        item_complete = end >= len(serialized)
-        next_offset = safe_offset + (1 if item_complete else 0)
-        complete = item_complete and is_complete(next_offset)
+        next_offset = safe_offset + 1
+        complete = is_complete(next_offset)
         return {
             **base,
             "trace_count": 0,
@@ -968,7 +965,7 @@ def _search_response_data(
                 "next_call": (
                     None
                     if complete
-                    else next_arguments(next_offset, 0 if item_complete else end)
+                    else next_arguments(next_offset)
                 ),
             },
             "trace_chunk": {
@@ -978,7 +975,7 @@ def _search_response_data(
                 "start": safe_item_start,
                 "end": end,
                 "total_chars": len(serialized),
-                "complete": item_complete,
+                "complete": True,
                 "content": serialized[safe_item_start:end],
             },
         }
@@ -1275,7 +1272,7 @@ async def search_traces(
     ),
     item_start: Annotated[
         int,
-        Query(ge=0, description="Exact JSON cursor for an oversized record"),
+        Query(ge=0, description="Optional JSON character offset for an exact record suffix"),
     ] = 0,
     user: Dict[str, Any] = get_auth_dependency(),
 ) -> ClaudeTraceResponse:

@@ -338,26 +338,11 @@ def read_source_file(
     if start_line > len(lines) + 1:
         raise ValueError("start_line is beyond the end of the file")
     requested_end = min(end_line or len(lines), len(lines))
-    page_end = requested_end
     numbered_lines: List[Dict[str, Any]] = []
     relative_path = _relative_repo_path(target)
 
-    def response(next_line: Optional[int], next_char: int = 0) -> Dict[str, Any]:
-        next_call = None
-        if next_line is not None:
-            next_call = {"tool": "read_source_file", "arguments": {
-                "path": relative_path, "start_line": next_line,
-                **({"end_line": end_line} if end_line is not None else {}),
-                **({"line_char_start": next_char} if next_char else {}),
-            }}
-        return {"status": "ok", "path": relative_path, "repo_root": str(get_codebase_root()),
-                "start_line": start_line,
-                "end_line": numbered_lines[-1]["line_number"] if numbered_lines else start_line - 1,
-                "total_lines": len(lines), "lines": numbered_lines,
-                "truncated": next_line is not None, "next_call": next_call}
-
     line_number = start_line
-    while line_number <= page_end:
+    while line_number <= requested_end:
         text = lines[line_number - 1]
         start = line_char_start if line_number == start_line else 0
         if start > len(text):
@@ -368,4 +353,10 @@ def read_source_file(
                        "line_char_end": len(text), "line_truncated": False}
         numbered_lines.append(full_record)
         line_number += 1
-    return response(page_end + 1 if page_end < requested_end else None)
+    return {
+        "status": "ok", "path": relative_path, "repo_root": str(get_codebase_root()),
+        "start_line": start_line,
+        "end_line": numbered_lines[-1]["line_number"] if numbered_lines else start_line - 1,
+        "total_lines": len(lines), "lines": numbered_lines,
+        "truncated": False, "next_call": None,
+    }

@@ -267,8 +267,6 @@ def _fit_recall_messages(
         start=start,
         limit=limit,
         render=render,
-
-
     )
     return response
 
@@ -333,10 +331,9 @@ async def _recall_message_detail(
     digest = content_sha256(text)
 
     def render(chunk: str, end: int) -> dict[str, Any]:
-        complete = end >= len(text)
         return {
             "status": "ok",
-            "message": "Returned an exact chunk of one transcript message.",
+            "message": "Returned the complete selected suffix of one transcript message.",
             "detail": "message",
             "session_id": session_id,
             "message_id": str(message.message_id),
@@ -348,13 +345,13 @@ async def _recall_message_detail(
             "content": chunk,
             "content_range": {"start": start, "end": end, "total_chars": len(text)},
             "content_sha256": digest,
-            "next_content_cursor": None if complete else end,
-            "complete": complete,
+            "next_content_cursor": None,
+            "complete": True,
         }
 
     try:
         return json.dumps(
-            fit_text_window(text, cursor=start, render=render, ),
+            fit_text_window(text, cursor=start, render=render),
             ensure_ascii=True,
             default=str,
         )

@@ -499,8 +499,6 @@ def create_list_recorded_evidence_tool(
             start=start,
             limit=cap,
             render=render,
-
-
         )
         return response
 
@@ -536,9 +534,9 @@ def create_get_recorded_evidence_tool(
         Args:
             evidence_record_id: Evidence record ID returned by record_evidence or list_recorded_evidence.
             detail_path: Optional exact field path within the record.
-            detail_cursor: Character cursor for detail_path; use the previous chunk's next_cursor.
+            detail_cursor: Optional character offset within the selected detail value.
             result_offset: Optional starting position within the primary collection.
-            result_sha256: Only when continuing: result_page.result_sha256, so a changed record is reported.
+            result_sha256: Optional source hash from result_page.result_sha256; a changed record is reported.
         """
 
         _track(tracker, "get_recorded_evidence")

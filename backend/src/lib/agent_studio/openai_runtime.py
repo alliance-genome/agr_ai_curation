@@ -87,7 +87,7 @@ AGENT_STUDIO_OPENAI_MODEL, AGENT_STUDIO_REASONING_EFFORT = resolve_agent_studio_
 
 @dataclass(frozen=True)
 class ToolExecutionResult:
-    """Application tool result in UI-complete and provider-bounded forms."""
+    """Application tool result in UI and model-facing representations."""
 
     full_output: Any
     provider_output: str

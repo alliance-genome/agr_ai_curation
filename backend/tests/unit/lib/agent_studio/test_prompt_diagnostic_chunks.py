@@ -244,10 +244,7 @@ def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
             result = handler(**arguments)
             serialized = api_module._provider_tool_result_content(
                 tool_name="get_prompt",
-                tool_input=arguments,
                 tool_result=result,
-                session_id="session-1",
-                turn_id="turn-1",
             )
             assert result["complete"]
             assert json.loads(serialized).get("status") != "compacted_tool_result"
@@ -458,10 +455,7 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
     for tool_name, result in boundary_results:
         content = api_module._provider_tool_result_content(
             tool_name=tool_name,
-            tool_input={"agent_id": "disease_extractor"},
             tool_result=result,
-            session_id="session-1",
-            turn_id="turn-1",
         )
         provider_result = json.loads(content)
         assert provider_result.get("status") != "compacted_tool_result"
