@@ -157,7 +157,7 @@ def test_moved_reference_material_is_reachable_through_the_guide():
     always_sent, _topics = studio_guide.prepare_studio_prompt_template(template)
     moved_phrases = {
         "trace_investigation": "execute this workflow AUTOMATICALLY",
-        "token_budget": "You have a 200K token context window.",
+        "token_budget": "The runtime measures the actual model request",
         "domain_envelopes": "PDF evidence is span-backed:",
         "inspection_tools": "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         "model_selection": "Agent Workshop Model Recommendation Playbook",
@@ -176,6 +176,13 @@ def test_moved_reference_material_is_reachable_through_the_guide():
             assert DIAGNOSTIC_TOOLS_TEXT in text
         else:
             assert phrase in text
+
+    context_guide = _read_topic(template, "token_budget")
+    assert "read_pending_context" in context_guide
+    assert "Do not rerun a completed write" in context_guide
+    assert "200K" not in context_guide
+    assert "within_budget" not in context_guide
+    assert "max_serialized_chars" not in context_guide
 
 
 def test_static_instructions_precede_per_user_and_per_run_context(build_prompt):
