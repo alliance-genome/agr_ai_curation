@@ -1367,8 +1367,8 @@ def _build_runtime_tool_availability_note(
         "about why a previous answer behaved a certain way or what tools ran. "
         "Use recall_chat_history for exact prior user/assistant transcript text "
         "when earlier chat turns may have been compacted out of live context; "
-        "continue truncated pages with next_cursor and read a withheld long "
-        "message exactly with detail=\"message\"."
+        "continue requested row pages with next_cursor or select one exact "
+        "message with detail=\"message\"."
     )
 
     return "\n\n".join(notes)
@@ -1713,8 +1713,8 @@ def create_supervisor_agent(
             "object_ref for evidence text; action=\"details\" with object_ref for saved "
             "generic/custom attributes; action=\"list\" and action=\"search\" with "
             "query/target to choose among results. Values shown withheld are read "
-            "exactly with their read call (detail_path/cursor); pass cursor, limit and "
-            "result_sha256 only from a next_call. Address a specific "
+            "exactly with their read call. Continue row pages with next_call; optional "
+            "detail cursors select exact suffixes and result_sha256 verifies the source. Address a specific "
             "result with result_ref in extraction-result:<uuid> form. Direct validators use "
             "validator-result:<uuid>; action=\"validator_runs\" lists this chat's runs. "
             "For either kind, validator_results plus validator_result_key and "
@@ -1858,14 +1858,14 @@ def create_supervisor_agent(
         """Recall exact transcript text for the active main chat.
 
         Args:
-            detail: recent, turn, search, or message (one exact message in chunks).
+            detail: recent, turn, search, or message (one complete exact message or selected suffix).
             turn_ref: For detail="turn": latest, a turn id, message id, or 1-based turn ordinal.
             query: For detail="search": text to find in this conversation.
             limit: Most messages on one page.
             cursor: The next_cursor from the previous page of the same request.
             message_id: For detail="message": the message to read exactly.
             message_field: For detail="message": content or flow_assistant_message.
-            content_cursor: For detail="message": the next_content_cursor from the previous chunk.
+            content_cursor: For detail="message": optional character offset selecting the complete remaining text.
         """
 
         return await recall_chat_history(

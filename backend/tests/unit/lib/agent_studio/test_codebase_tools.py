@@ -247,20 +247,16 @@ def test_read_source_file_recovers_minified_line_with_executable_continuations(t
     (repo_root / "backend/src").mkdir(parents=True)
     (repo_root / "backend/src/minified.json").write_text(long_line + "\nnext\n", encoding="utf-8")
     monkeypatch.setenv("AGENT_STUDIO_CODEBASE_ROOT", str(repo_root))
-    chunks = []
-    arguments = {"path": "backend/src/minified.json", "start_line": 1, "end_line": 1}
-    while True:
-        result = codebase_tools.read_source_file(**arguments)
-        content = api_module._provider_tool_result_content(
-            tool_name="read_source_file",
-            tool_result=result,
-        )
-        assert json.loads(content).get("status") != "compacted_tool_result"
-        chunks.extend(line["text"] for line in result["lines"])
-        if not result["truncated"]:
-            break
-        arguments = result["next_call"]["arguments"]
-    assert "".join(chunks) == long_line
+    result = codebase_tools.read_source_file(
+        path="backend/src/minified.json", start_line=1, end_line=1
+    )
+    content = api_module._provider_tool_result_content(
+        tool_name="read_source_file", tool_result=result,
+    )
+    assert json.loads(content).get("status") != "compacted_tool_result"
+    assert result["truncated"] is False and result["next_call"] is None
+    assert "".join(line["text"] for line in result["lines"]) == long_line
+
 
 
 @pytest.mark.parametrize("path", [".env", "config/connections.yaml", "backend/src/.env", "file_outputs/result.json", "packages/demo/credentials.json", ".git/config"])

@@ -639,7 +639,7 @@ async def get_tool_call_detail(
                  Prefer call_id when available (from tool_calls_summary).
         field: Exact field to retrieve: input, tool_result, thought, or metadata.
         start: Start character in the serialized exact field.
-        max_chars: Requested exact characters, capped by configuration.
+        max_chars: Optional exact character count; omitted means the complete remainder.
 
     Returns:
         {
@@ -749,7 +749,7 @@ async def get_trace_conversation(
         trace_id: Langfuse trace ID
         field: Exact field to retrieve: user_query or assistant_response.
         start: Start character in the selected field.
-        max_chars: Requested exact characters, capped by configuration.
+        max_chars: Optional exact character count; omitted means the complete remainder.
 
     Returns:
         {

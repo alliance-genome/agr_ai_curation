@@ -322,7 +322,6 @@ def get_domain_envelope_state(
             return _reference_chunk_result(
                 envelope_id=normalized_envelope_id,
                 revision=row.revision,
-                locator=locator_text,
                 expected_sha256=_required_text(reference_sha256, "reference_sha256"),
                 value=value,
                 char_cursor=char_cursor,
@@ -1850,7 +1849,6 @@ def _reference_chunk_result(
     *,
     envelope_id: str,
     revision: int,
-    locator: str,
     expected_sha256: str,
     value: Any,
     char_cursor: int | None,
@@ -1866,7 +1864,6 @@ def _reference_chunk_result(
         raise ValueError(f"char_cursor {start} exceeds reference length {len(serialized)}")
 
     def build(end: int) -> dict[str, Any]:
-        complete = end >= len(serialized)
         return {
             "success": True,
             "envelope_id": envelope_id,
@@ -1877,20 +1874,9 @@ def _reference_chunk_result(
             "total_chars": len(serialized),
             "returned_range": {"start": start, "end": end},
             "content": serialized[start:end],
-            "complete": complete,
-            "next_request": (
-                None
-                if complete
-                else {
-                    "envelope_id": envelope_id,
-                    "revision": revision,
-                    "section": "reference",
-                    "reference_locator": locator,
-                    "reference_sha256": digest,
-                    "char_cursor": end,
-                }
-            ),
-            "instruction": "Concatenate content in returned_range order and verify sha256.",
+            "complete": True,
+            "next_request": None,
+            "instruction": "Content is the exact selected suffix; sha256 identifies the whole source value.",
         }
 
     return build(len(serialized))

@@ -139,8 +139,8 @@ READ_STUDIO_GUIDE_TOOL = {
     "description": (
         "Read the application-owned Agent Studio reference guide named in the "
         "Studio Guide topic index of your instructions. Omit topic to list topics "
-        "(optionally filtered by query); pass topic to read its exact text and "
-        "follow next_call with start and content_hash until complete=true."
+        "(optionally filtered by query); pass topic to read its complete exact text. "
+        "Optional start selects a suffix and requires the topic content_hash."
     ),
     "input_schema": {
         "type": "object",
@@ -153,11 +153,11 @@ READ_STUDIO_GUIDE_TOOL = {
             "start": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Character offset from next_call; omit for the first chunk.",
+                "description": "Optional character offset selecting the complete topic suffix; omit for the whole topic.",
             },
             "content_hash": {
                 "type": "string",
-                "description": "content_hash from the previous chunk; required with a nonzero start.",
+                "description": "Source content_hash from a previous read; required with a nonzero start.",
             },
         },
         "required": [],
@@ -173,8 +173,9 @@ INSPECT_SAVED_STUDIO_RESOURCE_TOOL = {
         "the exact saved prompt, model, tools, output and access settings for a revision. "
         "For custom agents use sections instructions (editable text), prompt_manifest (all frozen base/core layers), tools, group_prompts (optionally group_id), "
         "output_profile and settings instead of built-in-only prompt/inventory lookups. "
-        "Large sections return JSON text pages: concatenate content ranges and follow next_call "
-        "until complete=true. Each page reauthorizes access and verifies content_hash. "
+        "Selected sections return whole by default. Optional start/max_chars select exact "
+        "ranges; follow next_call for these requested ranges. Each read reauthorizes "
+        "access and verifies any supplied content_hash. "
         "Use a Flow step's exact revision pin when explaining its behavior, never today's head. "
         "Use get_current_flow or refresh_workshop_prompt for unsaved edits. Follow next_call. "
         "When a curator reports that a flow failed or could not start, first call recent_flow_runs "
@@ -330,7 +331,7 @@ document/evidence tool instructions.
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Requested chunk size, bounded by backend configuration. Valid only with start.",
+                "description": "Optional exact character count; omit for the complete remainder. Valid only with start.",
             },
         },
         "required": [],

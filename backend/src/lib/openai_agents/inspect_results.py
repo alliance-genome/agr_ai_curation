@@ -344,8 +344,8 @@ def _inspect(
             "invalid_request",
             f"This action=\"{action}\" view does not use: {', '.join(unused)}. "
             "Single records (summary, object, finding_ref, validator_result_key) take "
-            "no continuation arguments and exact chunk reads take no limit; pass "
-            "cursor, limit and result_sha256 only from a next_call.",
+            "no selection arguments; exact value reads accept an optional cursor "
+            "and source hash but no row limit. Use next_call for row pages.",
             action=action,
             supported_continuation_arguments=sorted(continuation),
         )
@@ -405,7 +405,7 @@ def _inspect(
 
     if isinstance(result_ref, str) and result_ref.startswith("validator-result:"):
         if adapter_keys or flow_run_id or limit is not None or (not detail_path and (cursor is not None or result_sha256 is not None)):
-            raise _RequestError("invalid_request", "Direct validator reads do not accept extraction filters or page arguments; follow exact-value next_call arguments.")
+            raise _RequestError("invalid_request", "Direct validator reads do not accept extraction filters or row limits; detail_path reads accept an optional character cursor and result_sha256.")
         return _standalone_validator_response(
             result_ref=result_ref, action=action, target=target, key=validator_result_key,
             detail_path=detail_path, cursor=cursor, expected_sha=result_sha256,
@@ -610,8 +610,8 @@ def _continuation_arguments(
 ) -> frozenset[str]:
     """Continuation arguments the requested view uses; others are rejected.
 
-    Pages take cursor, limit and result_sha256; exact chunk reads take cursor
-    and result_sha256; single-record views take none.
+    Pages take cursor, limit and result_sha256; exact value reads take an optional
+    character cursor and result_sha256; single-record views take none.
     """
 
     if action in {"summary", "object"}:
@@ -702,10 +702,10 @@ def _help_response() -> dict[str, Any]:
             "(<index>.<key>, with object_ref) reads one exact evidence value",
         },
         "boundaries": [
-            "Explicit selection controls determine each result view. Continue pages and chunks by "
+            "Explicit selection controls determine each result view. Continue row pages by "
             "passing next_call exactly; a changed result returns stale_result_cursor.",
-            "cursor, limit and result_sha256 come from next_call: pages take all three, "
-            "exact detail_path/field chunks take cursor and result_sha256, and single "
+            "Pages accept cursor, limit and result_sha256. Exact detail_path/field reads "
+            "accept an optional character cursor and result_sha256, and single "
             "records (summary, object, finding_ref, validator_result_key) take none.",
             "Values too long to show are withheld with total_chars, value_sha256 and a "
             "read call that returns them exactly; nothing is shortened silently.",
@@ -759,7 +759,7 @@ def _parse_cursor(cursor: Any, *, total: int, unit: str = "items") -> int:
     except ValueError:
         raise _RequestError(
             INVALID_RESULT_CURSOR,
-            "cursor must be the next_cursor (or next_call cursor) from a previous response.",
+            "cursor must be a non-negative integer offset for the selected view.",
             cursor=_echo(cursor),
         ) from None
     if value > total:
@@ -1726,7 +1726,7 @@ def _details_response(
     call = result.call("details", object_ref=object_ref, field_path=path)
     sha = result.sha(action="details", object_ref=object_ref, field_path=path)
     if not isinstance(value, (Mapping, list)):
-        # Text can be long: exact chunks keep the saved value retrievable.
+        # Return the complete saved scalar value or explicitly selected suffix.
         return _exact_value(
             value,
             head=head,

@@ -363,7 +363,7 @@ def _create_get_prompt_handler():
             layer_id: Stable layer identifier for the layer view
             layer_index: Ordered zero-based layer index for the layer view
             cursor: Zero-based character offset for exact-text views
-            max_chars: Requested chunk size, capped by environment configuration
+            max_chars: Optional exact character count; omitted means the complete remainder
 
         Returns:
             Compact prompt manifest or bounded exact-text chunk
@@ -622,7 +622,7 @@ redirect guidance, not installed-prompt version selection."""
                 "type": "integer",
                 "minimum": 1,
                 "description": (
-                    "Maximum exact characters to return; capped at the configured "
+                    "Optional exact character count. "
                     "Omit for the complete target."
                 ),
             },

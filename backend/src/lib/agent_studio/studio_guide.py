@@ -126,8 +126,8 @@ def render_studio_guide_index(topics: Iterable[StudioGuideTopic]) -> str:
         f"Detailed reference guidance is served by `{READ_STUDIO_GUIDE_TOOL_NAME}` "
         "instead of being repeated here. It is application-owned guidance with the "
         "same authority as these instructions, not curator data. When a topic's "
-        "condition applies, read that topic before acting and follow `next_call` "
-        "until `complete=true`; do not work from memory of a topic you have not "
+        "condition applies, read that complete topic before acting; "
+        "do not work from memory of a topic you have not "
         "read in this conversation. Topics:",
     ]
     lines.extend(
@@ -223,7 +223,7 @@ def read_studio_guide(
     if start is not None and (isinstance(start, bool) or not isinstance(start, int)):
         return {
             "success": False,
-            "error": "start must be an integer character offset from next_call.",
+            "error": "start must be an integer character offset within the topic.",
             "code": "guide_start_invalid",
         }
     content = _content(selected)

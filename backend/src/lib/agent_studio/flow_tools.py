@@ -3719,9 +3719,9 @@ Use this as a starting point when helping users design flows.""",
                 "detail_index": {"type": "integer", "minimum": 0,
                                  "description": "Stable index selecting a record from the filtered collection."},
                 "detail_cursor": {"type": "integer", "minimum": 0,
-                                  "description": "Exact canonical-JSON character offset returned by a detail chunk."},
+                                  "description": "Optional character offset within the selected canonical JSON record."},
                 "detail_max_chars": {"type": "integer", "minimum": 1,
-                                     "description": "Requested exact record characters, capped by runtime configuration."},
+                                     "description": "Optional exact record character count; omit for the complete remainder."},
             },
         },
         handler=_get_flow_templates_handler(),
@@ -3831,8 +3831,9 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     registry.register(
         name="get_current_flow_instructions",
         description=(
-            "Retrieve exact bounded task_instructions, custom_instructions, or step_goal "
-            "text for one stable node_id. Follow next_call to reconstruct long text."
+            "Retrieve complete exact task_instructions, custom_instructions, or step_goal "
+            "text for one stable node_id. Optional cursor/limit selects a range; "
+            "follow next_call when using that explicit range."
         ),
         input_schema={
             "type": "object",
@@ -3853,11 +3854,11 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     registry.register(
         name="get_current_flow_projection_plan",
         description=(
-            "Use view=complete_plan for bounded full-plan inspection in one call when small. "
+            "Use view=complete_plan to inspect the complete plan in one call. "
             "List projection_plan fields or retrieve one explicit field/JSON-Pointer "
-            "section as exact bounded canonical JSON. Use view=source_fields to discover "
+            "section as exact canonical JSON. Use view=source_fields to discover "
             "authorized exact saved-profile formatter refs before authoring a plan, even "
-            "when no plan exists. Follow next_call to reconstruct the complete result."
+            "when no plan exists. Follow next_call for explicitly selected ranges or row pages."
             " Use draft=candidate after a repair_required proposal to inspect its revised "
             "sources and plan; default draft=current inspects the captured editor draft. "
             "Copy next_call exactly, including draft_fingerprint. Repair with another "
@@ -3977,12 +3978,12 @@ Output catalog without treating attachment branches as terminal control nodes.""
                 "detail_cursor": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Exact canonical-JSON character offset returned by a detail chunk.",
+                    "description": "Optional character offset within the selected canonical JSON record.",
                 },
                 "detail_max_chars": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "Requested exact agent-record characters, capped by runtime configuration.",
+                    "description": "Optional exact agent-record character count; omit for the complete remainder.",
                 },
             },
         },

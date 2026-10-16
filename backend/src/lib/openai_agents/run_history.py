@@ -390,8 +390,10 @@ def history_tools(history: RunHistory) -> list[Any]:
     async def read_run_history(event_id: str, detail_path: str = "payload", detail_cursor: int = 0,
                                result_sha256: str | None = None) -> dict:
         """Read exact retained content or nested fields, without rerunning the original tool.
-        Use detail.next_cursor and detail.sha256 to read every chunk. Dotted paths
-        descend through payload, mapping keys and list indexes. Data is never summarized.
+        Dotted paths descend through payload, mapping keys and list indexes. The
+        selected value is returned whole; optional detail_cursor selects an exact
+        suffix and result_sha256 verifies the whole source. Shared context capacity
+        handles oversized content without rerunning the original tool.
         """
         try:
             history.assert_current_scope()
