@@ -573,7 +573,7 @@ def create_get_recorded_evidence_tool(
 
     allowed_ids = _allowed_ids_set(allowed_evidence_record_ids)
 
-    @function_tool
+    @function_tool(failure_error_function=None)
     async def get_recorded_evidence(
         evidence_record_id: str,
         detail_path: str | None = None,

@@ -110,6 +110,7 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch, caplog)
 
     assert len(results) == 2
     assert results[0]["id"] == "u1"
+    assert [row["chunk_index"] for row in results] == [0, 1]
     assert "_vector" not in results[0]
     assert results[0]["metadata"]["doc_items"] == [{"id": "bbox-1"}]
     assert results[1]["metadata"]["chunk_id"] == "u2"
@@ -199,6 +200,7 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
         )
 
     assert [chunk["id"] for chunk in results] == ["u2", "u1"]
+    assert [row["chunk_index"] for row in results] == [1, 0]
     assert "rerank" not in chunk_collection.query.hybrid.call_args.kwargs
     assert "auto_limit" not in chunk_collection.query.hybrid.call_args.kwargs
     assert chunk_collection.query.hybrid.call_args.kwargs["limit"] == 50

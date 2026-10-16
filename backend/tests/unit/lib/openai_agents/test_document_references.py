@@ -362,3 +362,17 @@ async def test_old_document_history_refreshes_only_backend_guidance(monkeypatch)
     assert "span_id" not in payload["chunk"]["span_text_access"]
     assert payload["chunk"]["content"] == "Scientific span_id text is unchanged."
     assert "Select evidence_spans[].span_id." in original["payload"]["output"]
+
+
+@pytest.mark.asyncio
+async def test_workspace_failures_keep_their_actual_cause_and_classification():
+    from src.lib.openai_agents.tools.evidence_workspace import create_get_recorded_evidence_tool
+    from types import SimpleNamespace
+    tool = create_get_recorded_evidence_tool("doc-a", "alice")
+    with pytest.raises(RuntimeError, match="workspace"):
+        await tool.on_invoke_tool(SimpleNamespace(tool_name="get_recorded_evidence", tool_call_id="read", run_config=None),
+            json.dumps({"evidence_record_id": "missing"}))
+    # Other workspace SDK tools retain their existing recoverable error contract.
+    items = [{"type": "function_call", "name": "attach_evidence_to_object", "call_id": "attach", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "attach", "output": "An error occurred while running the tool: missing workspace"}]
+    assert await refs.project_model_source_items(items, user_id="alice", cache={}) == items

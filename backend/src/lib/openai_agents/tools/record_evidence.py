@@ -818,10 +818,10 @@ def _create_canonical_evidence_recorder(
         object_type: str | None = None,
         validation_finding_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create or replace verified evidence from document-local chunk/span selections.
+        """Internal recorder for already resolved canonical source spans.
 
-        The backend resolves issued selections, copies exact source text into
-        verified_quote, and preserves span provenance. Multiple selections in one
+        The public adapter resolves issued selections first. This recorder copies exact source text into
+        verified_quote, and preserves span provenance. Multiple canonical spans in one
         call form one evidence unit and one evidence record; use separate calls
         for truly disjoint support. Supplying evidence_record_id replaces the
         source quote/provenance on that active-run record while preserving its
@@ -829,7 +829,7 @@ def _create_canonical_evidence_recorder(
 
         Args:
             entity: Entity or object label this evidence supports.
-            selections: Non-empty list of chunk_index/span_index pairs from read_chunk evidence_spans.
+            span_ids: Canonical span IDs resolved by the public local-selection adapter.
             evidence_record_id: Existing active-run evidence record ID to update in place.
             object_id: Optional stable curatable object ID to attach this evidence to.
             pending_ref_id: Optional pending object/reference ID to attach this evidence to.

@@ -100,10 +100,10 @@ Extractor and validator responsibilities are deliberately separate:
 PDF evidence is span-backed:
 
 - Do not tell curators or prompt authors that extraction agents should invent, retype, or submit evidence quote strings from memory.
-- Use `get_tool_inventory` and `get_tool_details` before giving authoritative advice about PDF document tools or evidence schemas. The current workflow is `search_document` for candidate chunks, `read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_id` values, and `record_evidence(span_ids=[...])` to persist backend-copied `verified_quote`, `source_span_ids`, `source_fragments`, page, section, and chunk provenance.
+- Use `get_tool_inventory` and `get_tool_details` before giving authoritative advice about PDF document tools or evidence schemas. The current workflow is `search_document` for candidate chunks, `read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_index` values with a document-local `chunk_index`, and `record_evidence(selections=[{"chunk_index": 0, "span_index": 0}])` to persist backend-copied `verified_quote`, `source_span_ids`, `source_fragments`, page, section, and chunk provenance.
 - `search_document.search_mode` supports `auto`, `hybrid`, `lexical`, and `hybrid_lexical_first`. Prefer lexical-heavy modes for exact biomedical symbols, identifiers, strains, alleles, probes, reagents, genotype handles, PMIDs/DOIs, and other controlled tokens; use broad hybrid/default search for conceptual retrieval.
 - `read_section` and `read_subsection` are survey tools. Use their source chunk IDs with `read_chunk` before selecting retained evidence.
-- Multiple `span_ids` in one `record_evidence` call form one evidence unit. Use separate records for truly disjoint support unless the live tool schema explicitly says otherwise.
+- Multiple `selections` in one `record_evidence` call form one evidence unit. Use separate records for truly disjoint support unless the live tool schema explicitly says otherwise.
 - Active-run evidence workspace tools such as `list_recorded_evidence`, `get_recorded_evidence`, `attach_evidence_to_object`, `detach_evidence_from_object`, `discard_recorded_evidence`, and `update_recorded_evidence_metadata` manage recorded evidence attachments and metadata while preserving immutable source quote and provenance.
 - Do not recommend fuzzy quote repair, generated quote evidence, or claim-coverage LLM confirmation as the primary evidence path when the current span workflow applies.
 

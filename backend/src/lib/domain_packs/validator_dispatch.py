@@ -2565,7 +2565,9 @@ def _append_validator_source_context_instructions(
     paper_tool_text = (
         "If supplied quotes are missing, irrelevant, or incomplete, use "
         "`search_document` or `read_chunk` "
-        "to inspect the same paper. Search results are discovery only; exact "
+        "to inspect the same paper. If a quote has no chunk_index, search for "
+        "its exact wording to discover the current document-local index first. "
+        "Search results are discovery only; exact "
         "source support must come from `read_chunk` spans or supplied verified quotes."
         if paper_tools_available
         else (

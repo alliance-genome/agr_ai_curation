@@ -11,7 +11,7 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
-    monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn: fn)
+    monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else (lambda wrapped: wrapped))
 
 
 @pytest.fixture

@@ -839,6 +839,7 @@ async def hybrid_search_chunks(
 
                     chunk = {
                         "id": chunk_uuid,
+                        "chunk_index": obj.properties.get("chunkIndex"),
                         # ✅ CRITICAL: Use 'text' to match chat.py
                         "text": full_content,
                         "content_preview": content_preview,

@@ -408,7 +408,7 @@ async def project_history_source_result(result: dict, *, user_id: str) -> dict:
     payload = _refresh_document_guidance(payload, tool)
     if event.get("kind") == "canonical_tool_result" and tool in DOCUMENT_READ_TOOLS:
         payload, _ = document_result_view(tool, payload)
-    if sdk_field:
+    if sdk_field and isinstance(outer, dict):
         payload = {**outer, sdk_field: exact_json(payload)}
     return {**result, "payload": payload}
 
@@ -434,7 +434,11 @@ async def project_model_source_items(items: list, *, user_id: str | None, cache:
             continue
         payload = _source_mapping(raw)
         if payload is None:
-            raise DocumentReadError(name) from TypeError("Source tool output is not a structured mapping")
+            if name in DOCUMENT_READ_TOOLS or name == "record_evidence":
+                raise DocumentReadError(name) from TypeError("Source tool output is not a structured mapping")
+            # Workspace operations retain their existing non-PDF error contract.
+            # They have no structured source fields to project in SDK error prose.
+            continue
         # Exact output identity scopes the cached projection. Retained outputs
         # describe historical reads; current writes always reverify the binding.
         key = (name, hashlib.sha256(exact_json(payload).encode("utf-8")).hexdigest())
