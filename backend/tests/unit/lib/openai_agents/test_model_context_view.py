@@ -1,6 +1,7 @@
 """No paid model calls: exercise SDK filters with exact recoverability."""
 from copy import deepcopy
 from dataclasses import replace
+from unittest.mock import AsyncMock
 import json
 
 import pytest
@@ -317,3 +318,28 @@ async def test_thirteen_results_then_two_six_read_bursts_keep_original_event_ide
     assert view.last_metrics["retrieval_call_count"] == 12
     assert view.last_metrics["externalized_output_count"] >= 13
     assert history.store.rows[ref] == original
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+@pytest.mark.parametrize("failure", ["prior", "capture", "checkpoint"])
+@pytest.mark.asyncio
+async def test_archive_failure_preserves_numeric_source_view(setup, monkeypatch, enabled, failure):
+    history, agent = setup
+    monkeypatch.setenv("AGENT_CONTEXT_VIEW_ENABLED", enabled)
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(
+        return_value={"id": "12345678-1234-1234-1234-123456789abc", "document_id": "doc", "chunk_index": 7}))
+    if failure == "prior":
+        history.healthy = False
+    else:
+        append = history.store.append
+        def fail(scope, kind, content, **kwargs):
+            if failure == "capture" or kind == "context_view":
+                raise OSError("archive offline")
+            return append(scope, kind, content, **kwargs)
+        history.store.append = fail
+    items = exchange(1, {"chunk_id": "12345678-1234-1234-1234-123456789abc", "content": "Not expressed."})
+    original = deepcopy(items)
+    result = await ModelContextView(history).filter(call(agent, items))
+    assert json.loads(result.input[1]["output"]) == {"chunk_index": 7, "document_id": "doc", "content": "Not expressed."}
+    assert items == original
+    assert not history.healthy

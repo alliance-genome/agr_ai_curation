@@ -153,7 +153,38 @@ class HistoryStore:
             event, content = row
             if hashlib.sha256(content.encode("utf-8")).hexdigest() != event.payload_sha256:
                 raise RuntimeError("History payload integrity check failed.")
-            return {"event": self.metadata(event), "payload": json.loads(content)}
+            payload = json.loads(content)
+            metadata = self.metadata(event)
+            if (not metadata["tool_name"] and event.kind in {"input_item", "context_item"}
+                    and isinstance(payload, dict)):
+                # Older archives did not index SDK tool names. Recover only from
+                # the same authorized invocation; never infer a tool from content.
+                call_id = payload.get("call_id")
+                if payload.get("type") == "function_call":
+                    metadata.update(tool_name=payload.get("name"), call_id=call_id)
+                elif payload.get("type") == "function_call_output" and call_id:
+                    names = set(db.scalars(select(AgentHistoryEvent.tool_name).where(
+                        self._authorized(scope), AgentHistoryEvent.run_id == event.run_id,
+                        AgentHistoryEvent.invocation_id == event.invocation_id,
+                        AgentHistoryEvent.call_id == call_id,
+                        AgentHistoryEvent.tool_name.is_not(None))))
+                    if not names:
+                        rows = db.execute(select(AgentHistoryEvent, AgentHistoryPayload.content)
+                            .join(AgentHistoryPayload).where(self._authorized(scope),
+                                AgentHistoryEvent.run_id == event.run_id,
+                                AgentHistoryEvent.invocation_id == event.invocation_id,
+                                AgentHistoryEvent.kind.in_(["input_item", "context_item"])))
+                        for candidate, body in rows:
+                            if hashlib.sha256(body.encode("utf-8")).hexdigest() != candidate.payload_sha256:
+                                raise RuntimeError("History payload integrity check failed.")
+                            item = json.loads(body)
+                            if (isinstance(item, dict) and item.get("type") == "function_call"
+                                    and item.get("call_id") == call_id and item.get("name")):
+                                names.add(item["name"])
+                    if len(names) > 1:
+                        raise HistoryRequestError("History tool association is ambiguous.")
+                    metadata.update(tool_name=next(iter(names), None), call_id=call_id)
+            return {"event": metadata, "payload": payload}
 
     def search(self, scope: HistoryScope, query: str, *, after: int, limit: int, tool_name: str | None = None) -> list[dict]:
         if after < 0 or limit < 1:
@@ -229,6 +260,8 @@ class RunHistory:
     async def capture_input(self, items: list[Any], instructions: str | None) -> dict[int, str]:
         occurrences: dict[str, int] = {}
         refs = {}
+        tools = {item.get("call_id"): item.get("name") for item in items
+                 if isinstance(item, dict) and item.get("type") == "function_call"}
         for index, item in enumerate(items):
             try:
                 digest = hashlib.sha256(exact_json(item).encode("utf-8")).hexdigest()
@@ -239,7 +272,9 @@ class RunHistory:
             occurrences[digest] = occurrence + 1
             key = (digest, occurrence)
             if key not in self.item_refs:
-                ref = await self.record("input_item", item)
+                ref = await self.record("input_item", item,
+                    tool_name=tools.get(item.get("call_id")) if isinstance(item, dict) else None,
+                    call_id=item.get("call_id") if isinstance(item, dict) else None)
                 if ref:
                     self.item_refs[key] = ref
             if key in self.item_refs:

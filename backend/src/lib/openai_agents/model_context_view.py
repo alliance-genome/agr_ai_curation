@@ -7,6 +7,7 @@ projection target is never a reason to reject an otherwise valid request.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 import inspect
 import json
@@ -104,6 +105,8 @@ class ModelContextView:
         from .document_references import project_model_source_items
         items = await project_model_source_items(original.input,
             user_id=self.history.scope.owner_id, cache=self.source_reference_views)
+        # Source projection is mandatory independently of optional archiving.
+        full_projected = ModelInputData(input=deepcopy(items), instructions=original.instructions)
         enabled = config.get_agent_context_view_enabled()
         offset = 0
         reset_compactions = 0
@@ -217,7 +220,7 @@ class ModelContextView:
         if not self.history.healthy and enabled and before["estimated_total_tokens"] > trigger:
             raise HistoryStorageUnavailable("Working history could not be saved while preparing this request. "
                                        "Completed actions have not been repeated. Please try again later.")
-        return current if self.history.healthy else original
+        return current if self.history.healthy else full_projected
 
 
 def run_config_with_history(run_config, history: RunHistory | None, *, allow_projection: bool = True):

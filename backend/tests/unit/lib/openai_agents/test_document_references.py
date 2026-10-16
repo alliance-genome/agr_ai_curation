@@ -1,5 +1,7 @@
 """Local ordinals retain exact source meaning across restart, paging and scopes."""
 from dataclasses import replace
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,6 +15,13 @@ from agr_ai_curation_runtime.evidence_spans import build_evidence_spans
 from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayload
 from src.lib.openai_agents import document_references as refs
 from src.lib.openai_agents.run_history import HistoryScope, HistoryStore
+
+
+@pytest.fixture(autouse=True)
+def alliance_package_path(monkeypatch):
+    # These tests exercise the isolated package even when collected on their own.
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5] /
+        "packages/alliance/python/src"))
 
 
 @pytest.fixture
@@ -335,3 +344,21 @@ async def test_existing_evidence_update_waits_for_final_source_generation_check(
     else:
         await update()
         assert existing["verified_quote"] == "Replacement source"
+
+
+@pytest.mark.asyncio
+async def test_old_document_history_refreshes_only_backend_guidance(monkeypatch):
+    chunk, spans = source()
+    chunk["document_id"] = "doc-a"
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(return_value=chunk))
+    original = {"event": {"tool_name": "read_chunk", "kind": "input_item"}, "payload": {
+        "type": "function_call_output", "call_id": "old", "output": json.dumps({
+            "summary": "Select evidence_spans[].span_id.", "chunk": {"chunk_id": chunk["id"],
+                "content": "Scientific span_id text is unchanged.", "span_text_access": "Use span_id."}})}}
+    projected = await refs.project_history_source_result(original, user_id="alice")
+    payload = json.loads(projected["payload"]["output"])
+    assert "span_id" not in payload["summary"]
+    assert "span_index" in payload["summary"]
+    assert "span_id" not in payload["chunk"]["span_text_access"]
+    assert payload["chunk"]["content"] == "Scientific span_id text is unchanged."
+    assert "Select evidence_spans[].span_id." in original["payload"]["output"]

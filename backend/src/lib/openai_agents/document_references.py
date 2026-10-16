@@ -346,35 +346,70 @@ async def project_source_references(value, *, user_id: str, document_id: str | N
     return await walk(value, document_id)
 
 
+def _source_mapping(raw):
+    from .evidence_summary import coerce_tool_event_dict
+    payload = coerce_tool_event_dict(raw)
+    if payload is None and isinstance(raw, str):
+        # The SDK serializes Python dictionary tool outputs using repr.
+        import ast
+        try:
+            decoded = ast.literal_eval(raw)
+            payload = decoded if isinstance(decoded, dict) else None
+        except (ValueError, SyntaxError):
+            pass
+    return payload
+
+
+def _refresh_document_guidance(payload, tool):
+    """Replace backend-authored guidance only, never scientific text fields."""
+    from .document_result_view import DOCUMENT_READ_TOOLS
+    if tool not in DOCUMENT_READ_TOOLS or not isinstance(payload, dict):
+        return payload
+    payload = deepcopy(payload)
+    if "summary" in payload and isinstance(payload["summary"], str) and any(name in payload["summary"] for name in ("span_id", "chunk_id")):
+        payload["summary"] = "Use chunk_index and span_index selections with record_evidence. Read source in the current conversation before recording."
+    records = payload.get("hits", []) if tool == "search_document" else [payload.get(
+        {"read_chunk": "chunk", "read_section": "section", "read_subsection": "subsection"}[tool])]
+    for record in records or []:
+        if isinstance(record, dict) and "span_text_access" in record:
+            record["span_text_access"] = (
+                "Span text is content[char_start-content_start:char_end-content_start]. "
+                "Offsets count Unicode characters, end exclusive. Use chunk_index and span_index with record_evidence.")
+    return payload
+
+
 async def project_history_source_result(result: dict, *, user_id: str) -> dict:
-    """Keep archives exact while projecting known source results for the model."""
+    """Keep archives exact while projecting known source results before paging."""
     from .document_result_view import DOCUMENT_READ_TOOLS, document_result_view
     event = result["event"]
     tool = canonical_tool_name(event.get("tool_name"))
     if tool not in DOCUMENT_READ_TOOLS | REFERENCE_RESULT_TOOLS and event.get("kind") != _SPAN_KIND:
         return result
     payload = result["payload"]
+    sdk_item = event.get("kind") in {"input_item", "context_item"} and isinstance(payload, dict)
+    sdk_field = ("output" if payload.get("type") == "function_call_output" else
+                 "arguments" if payload.get("type") == "function_call" else None) if sdk_item else None
+    outer = payload if sdk_field else None
+    if sdk_field:
+        payload = payload.get(sdk_field)
     if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except ValueError:
-            return {**result, "payload": {"history_projection_status": "old_unstructured_source_result",
-                "message": "This old source result has no safe local-reference projection. Read the document again using current tools."}}
+        payload = _source_mapping(payload)
+        if payload is None:
+            payload = {"history_projection_status": "old_unstructured_source_result",
+                "message": "This old source result has no safe local-reference projection. Read the document again using current tools."}
     if event.get("kind") == "tool_start" and isinstance(payload, dict):
-        arguments = payload.get("arguments")
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except ValueError:
-                arguments = None
-        if isinstance(arguments, dict):
+        arguments = _source_mapping(payload.get("arguments"))
+        if arguments is not None:
             payload = {**payload, "arguments": await project_source_references(arguments, user_id=user_id),
                 "replay_instructions": "Historical arguments are audit data. Read source with current tools before making a new evidence selection."}
         else:
             payload = {"history_projection_status": "old_unstructured_source_arguments"}
     payload = await project_source_references(payload, user_id=user_id)
+    payload = _refresh_document_guidance(payload, tool)
     if event.get("kind") == "canonical_tool_result" and tool in DOCUMENT_READ_TOOLS:
         payload, _ = document_result_view(tool, payload)
+    if sdk_field:
+        payload = {**outer, sdk_field: exact_json(payload)}
     return {**result, "payload": payload}
 
 
@@ -382,7 +417,6 @@ async def project_model_source_items(items: list, *, user_id: str | None, cache:
     """Model-only view. SDK run items and evidence/UI consumers keep originals."""
     from copy import deepcopy
     from .document_result_view import DOCUMENT_READ_TOOLS
-    from .evidence_summary import coerce_tool_event_dict
     if not user_id:
         return items
     tools = {item.get("call_id"): canonical_tool_name(item.get("name")) for item in items
@@ -398,22 +432,14 @@ async def project_model_source_items(items: list, *, user_id: str | None, cache:
         if isinstance(raw, list):
             # Native multimodal output blocks are opaque to this identity view.
             continue
-        payload = coerce_tool_event_dict(raw)
-        if payload is None and isinstance(raw, str):
-            # The SDK's dict tool-output codec uses Python repr. Decode only a
-            # complete literal mapping; never parse SDK error prose as success.
-            import ast
-            try:
-                decoded = ast.literal_eval(raw)
-                payload = decoded if isinstance(decoded, dict) else None
-            except (ValueError, SyntaxError):
-                pass
+        payload = _source_mapping(raw)
         if payload is None:
             raise DocumentReadError(name) from TypeError("Source tool output is not a structured mapping")
         # Exact output identity scopes the cached projection. Retained outputs
         # describe historical reads; current writes always reverify the binding.
         key = (name, hashlib.sha256(exact_json(payload).encode("utf-8")).hexdigest())
         if key not in cache:
-            cache[key] = exact_json(await project_source_references(payload, user_id=user_id))
+            cache[key] = exact_json(_refresh_document_guidance(
+                await project_source_references(payload, user_id=user_id), name))
         item["output"] = cache[key]
     return result

@@ -121,7 +121,7 @@ content: |
   Apply that shape consistently:
   - `stage_gene_expression_observation.evidence_record_ids`: verified evidence supporting the retained extraction item.
   - active-run evidence workspace: the deduplicated union of all verified evidence records you relied on.
-  - Multiple `selections` in one `record_evidence` call produce one evidence record; use separate `record_evidence` calls for truly disjoint evidence units. If span resolution fails, call `read_chunk` again for current chunk_index/span_index selections or drop that evidence. Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
+  - Multiple `selections` in one `record_evidence` call produce one evidence record; use separate `record_evidence` calls for truly disjoint evidence units. If source span resolution fails, stop the extraction with the PDF reading error; do not drop the evidence or continue. Do not invent quotes or merge disconnected fragments into one implied contiguous passage.
 
   For retained staged observations, cite verified evidence with evidence IDs only. Backend materialization stores source quotes, page numbers, figure references, `metadata.evidence_records[]`, `curatable_objects[].evidence_record_ids`, and `curatable_objects[].metadata_refs`. These details must come from a verified `record_evidence` result, not from a paraphrase or reconstructed summary. Source quote and provenance fields are backend-owned; never edit or type them directly; replace them only by calling `record_evidence` with the existing `evidence_record_id` and current chunk_index/span_index selections. Use the active-run workspace only to attach concrete field targets, detach wrong targets, discard weak records, or update editable agent metadata.
 
