@@ -20,7 +20,7 @@ Do not hand-author `curatable_objects[]`; the backend builds the DiseaseExtracti
 preserve the disease mention as written (and a DOID only when the paper prints one), the SUBJECT biological entity
 
 # DE-06 evidence is backend-verified span source text
-backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values
+backend-verified source text, selected from `read_chunk.evidence_spans[].span_index` values
 
 # DE-28/DE-05 validator owns final ontology/subject/relation/ECO/provider (goal lowercase contract token)
 active validator bindings own final disease ontology, subject identity, relation, evidence-code, and data-provider decisions.
@@ -32,10 +32,10 @@ You must call document retrieval tools before answering.
 Composite mentions (e.g. "breast and ovarian cancer") are split into individual disease assertions, so they are separate stage calls.
 
 # DE-08 evidence from backend-generated span ids
-Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_index` values.
 
 # DE-09 stage once per retained disease assertion (distinct subjects = distinct stage calls)
-Each retained disease assertion is staged once with `stage_disease_observation`, after `record_evidence(span_ids=[...])` creates its supporting source text.
+Each retained disease assertion is staged once with `stage_disease_observation`, after `record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])` creates its supporting source text.
 One disease the paper asserts twice with distinct subjects is two assertions, so it is two stage calls.
 
 # DE-29 uncertain-identity disease is still staged with selectors left for the validator
@@ -141,8 +141,8 @@ Do NOT stage a reference; pending reference resolution is the intended posture f
 Do NOT extract or stage the annotation_type / curation method; the backend fixes it to manually_curated.
 
 # DE-19/DE-21 read_chunk -> select spans -> record_evidence one evidence unit
-call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
-Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units.
+call `read_chunk(chunk_index)` on the relevant chunk, select the backend-generated `evidence_spans[].span_index` values that directly support one evidence unit, and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`.
+Multiple `selections` in one call make one evidence record; use separate calls for truly disjoint evidence units.
 Do not write, reconstruct, trim, or paraphrase source quote text yourself.
 
 # DE-24 review then finalize once with returned candidate ids
@@ -195,7 +195,7 @@ Your final response is the small finalization acknowledgment only -- do not add 
 When disease identity or subject attribution is unresolved after using the available paper context, do not guess: stage the supported, evidence-backed disease with its paper wording, leave identifiers the paper does not print unset for the validators
 
 # DE-47 span resolution failure recovery; unverifiable evidence not staged
-If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+A required source-read or stale-selection failure stops the extraction; do not continue without the required source.
 If span-backed evidence cannot be verified with `record_evidence`, do not stage that source text as supporting evidence.
 
 # DE-48 never invent; leave unresolved to validator result fields + envelope validation findings

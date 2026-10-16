@@ -531,7 +531,10 @@ def test_builder_gene_envelope_carries_evidence_quotes_into_validator_requests()
         for quote in quotes:
             original = records[quote["evidence_record_id"]]
             assert quote["verified_quote"] == original["verified_quote"]
-            assert quote["chunk_id"] == original["chunk_id"]
+            # Canonical provenance remains stored; validator model inputs use local references.
+            assert original["chunk_id"]
+            assert "chunk_id" not in quote
+            assert "span_ids" not in quote
 
 
 def test_gene_extractor_schema_synthesizes_missing_raw_mentions_for_retained_objects():

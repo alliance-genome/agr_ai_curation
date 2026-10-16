@@ -17,13 +17,12 @@ def test_workshop_cannot_expand_a_benchmark_conversation_or_turn():
     repository.get_session.return_value = session
     conversation = get_chat_conversation_payload(
         repository=repository, session_id="benchmark-session", user_auth_sub="same-owner",
-        cursor=None, limit=10, provider_inline_max_chars=10000,
+        cursor=None, limit=10,
     )
     turn = get_chat_turn_payload(
         repository=repository, session_id="benchmark-session", turn_id="turn-1",
         user_auth_sub="same-owner", cursor=None, limit=10, message_id=None,
         field=None, start=None, max_chars=None, field_hash=None,
-        chunk_max_chars=1000, provider_inline_max_chars=10000,
     )
     assert conversation == turn == {"success": False, "error": "Chat session not found."}
     repository.count_messages.assert_not_called()

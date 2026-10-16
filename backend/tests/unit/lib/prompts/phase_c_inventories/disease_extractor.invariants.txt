@@ -17,7 +17,7 @@
 Search/read the document for candidate disease mentions and experimental context.
 
 # Step 2 -- read the chunk, pick backend span ids, record one evidence unit.
-select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit
+select the backend-generated `evidence_spans[].span_index` values that directly support one evidence unit
 
 # Step 3 -- stage each retained disease with its verified evidence and hints.
 Stage each retained disease with `stage_disease_observation`, passing a stable `pending_ref_id`

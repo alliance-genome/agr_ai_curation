@@ -396,7 +396,11 @@ class BenchmarkWorker:
         stages = _DurableStageObserver(
             cell=cell, lease_owner=self.worker_id, session_factory=self.session_factory,
         )
-        with observe_provider_invocations(observer), observe_stages(stages):
+        from src.lib.context import agent_request_scope
+
+        with agent_request_scope(
+            user_id=curator.subject, session_id=run_id, trace_id=run_id,
+        ), observe_provider_invocations(observer), observe_stages(stages):
             outcome = await executor(resolved, runtime_input, run_id)
             stages.raise_if_failed()
             return outcome

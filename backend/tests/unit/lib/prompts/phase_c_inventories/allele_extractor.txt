@@ -20,7 +20,7 @@ Do not hand-author `curatable_objects[]`; the backend builds the AlleleExtractio
 Final allele identity is resolved at validation time by the active allele validator, not by you.
 
 # AE-08/AE-04 evidence is backend-verified span source text; selector handed to validator
-backend-verified evidence selected from `read_chunk.evidence_spans[].span_id` values
+backend-verified evidence selected from `read_chunk.evidence_spans[].span_index` values
 
 # AE-05 retrieval before staging
 You retrieved from the document before staging anything.
@@ -33,10 +33,10 @@ Active group-specific rules are authoritative for organism nomenclature and may 
 Every retained allele is supported by direct experimental data in this paper (phenotype, genetic cross, complementation, molecular characterization, rescue, or another result-producing assay) or by an explicit organism-specific group rule that defines additional curatable experimental-genotype context.
 
 # AE-08 evidence from backend-generated span ids; lookup hits are hints only
-Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values; lookup hits are non-authoritative hints only.
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_index` values; lookup hits are non-authoritative hints only.
 
 # AE-09 stage once per retained allele/evidence pairing (two quotes = two stage calls)
-Each retained allele is staged once with `stage_allele_observation` after `record_evidence(span_ids=[...])` creates its supporting source text.
+Each retained allele is staged once with `stage_allele_observation` after `record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])` creates its supporting source text.
 One allele with two distinct retained quotes is two pairings, so it is two stage calls; a sentence naming several alleles is one stage call per allele.
 
 # AE-10 preserve notation EXACTLY; never normalize before lookup; never comma-join
@@ -58,7 +58,7 @@ An allele that is experimentally supported but whose identity stays uncertain is
 Your final reply is only the small ExtractionToolFinalizationAck; you never author the envelope, including `metadata.*`
 
 # AE-54 no invention
-No invented allele symbols, identifiers, gene associations, taxa, `chunk_id` values, or evidence text.
+No invented allele symbols, identifiers, gene associations, taxa, `chunk_index` values, or evidence text.
 
 # AE-30 experimental-support gate
 An allele is "experimentally supported" when this paper uses it in an experiment, such as phenotype analysis, genetic cross, complementation test, molecular characterization, rescue, or another result-producing assay.
@@ -137,8 +137,8 @@ Do NOT stage a reference; the source paper is resolved downstream from the curat
 For comprehensive allele harvesting, `read_section('Methods')` is often more reliable than search alone because strain lists and genotype tables may not rank highly in semantic search.
 
 # AE-42 read_chunk -> select spans -> record_evidence one evidence unit
-call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
-Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units.
+call `read_chunk(chunk_index)` on the relevant chunk, select the backend-generated `evidence_spans[].span_index` values that directly support one evidence unit, and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`.
+Multiple `selections` in one call make one evidence record; use separate calls for truly disjoint evidence units.
 Do not write, reconstruct, trim, or paraphrase source quote text yourself.
 
 # AE-23 review then finalize once with returned candidate ids
@@ -181,7 +181,7 @@ If no allele finding has direct experimental support in this paper, stage nothin
 When allele identity stays uncertain after using the available paper context, do not guess: stage the supported, evidence-backed allele with its exact notation and paper-backed selector hints, leave `normalized_hint`/identity for the validator.
 
 # AE-52 span resolution failure recovery
-If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+If source span resolution fails, stop the extraction with the PDF reading error; do not drop the evidence or continue.
 
 # AE-54 never invent; leave unresolved to validator result fields + envelope validation findings
-Never invent allele symbols, identifiers, gene associations, taxa, `chunk_id` values, or evidence text. Leave unresolved validator-bound values to the validator's result fields and envelope validation findings.
+Never invent allele symbols, identifiers, gene associations, taxa, `chunk_index` values, or evidence text. Leave unresolved validator-bound values to the validator's result fields and envelope validation findings.

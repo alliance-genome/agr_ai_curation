@@ -205,6 +205,10 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
         monkeypatch.setattr(benchmark_runtime, "get_agent_by_id", build_agent)
 
         async def stream_target(**runtime_input):
+            from src.lib.context import get_current_user_id, get_current_session_id, get_current_trace_id
+            assert get_current_user_id() == curator.subject
+            assert get_current_session_id() == runtime_input["session_id"]
+            assert get_current_trace_id()
             assert runtime_input["user_id"] == curator.subject
             assert runtime_input["active_groups"] == list(curator.active_groups)
             assert runtime_input["document_id"] == create.call_args.args[1].id
@@ -224,7 +228,7 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
                 chunk_id, runtime_input["user_id"], document_id=str(uuid4()),
             ) is None
             tool = create_read_chunk_tool(runtime_input)
-            payload = {"chunk_id": chunk_id}
+            payload = {"chunk_index": chunk["chunk_index"]}
             read = await tool.on_invoke_tool(
                 _build_tool_context(tool.name, payload), json.dumps(payload),
             )
@@ -249,7 +253,12 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
         worker = BenchmarkWorker(
             worker_id=lease_owner, agent_executor=benchmark_runtime.execute_resolved_agent_cell,
         )
-        await worker._execute_cell(cell_id)
+        from src.lib.context import agent_request_scope, get_current_user_id, get_current_session_id, get_current_trace_id
+        with agent_request_scope(user_id="outer-owner", session_id="outer-session", trace_id="outer-trace"):
+            await worker._execute_cell(cell_id)
+            assert get_current_user_id() == "outer-owner"
+            assert get_current_session_id() == "outer-session"
+            assert get_current_trace_id() == "outer-trace"
         with SessionLocal() as session:
             executed = session.get(BenchmarkCell, cell_id)
             assert executed is not None and executed.status == BenchmarkCellStatus.SUCCEEDED
