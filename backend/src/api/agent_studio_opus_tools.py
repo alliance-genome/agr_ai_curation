@@ -1453,18 +1453,6 @@ _BUILTIN_OPUS_TOOLS = (
 )
 
 
-def get_builtin_tool_required_inputs(tool_name: str) -> tuple[str, ...] | None:
-    """Return canonical required inputs, or None for a registry-provided tool."""
-
-    for tool in _BUILTIN_OPUS_TOOLS:
-        if tool.get("name") != tool_name:
-            continue
-        input_schema = tool.get("input_schema")
-        if not isinstance(input_schema, dict):
-            return ()
-        required = input_schema.get("required", [])
-        return tuple(str(field) for field in required)
-    return None
 
 
 @lru_cache(maxsize=1)

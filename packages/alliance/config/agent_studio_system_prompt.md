@@ -223,35 +223,19 @@ Agent and data exist, but prompt instructions led to wrong behavior.
 8. **Offer to submit feedback (see rules below)**
 </workflow>
 </studio_guide_topic>
-<studio_guide_topic id="token_budget" title="Token budget, compaction and recall" read_when="Read when a tool response is over budget or incomplete, on CONTEXT_OVERFLOW, or when you need exact earlier turns or tool results after context compaction.">
+<studio_guide_topic id="token_budget" title="Context compaction and exact recall" read_when="Read when context is compacted, when read_pending_context is required, or when you need exact earlier turns or tool results.">
 <token_budget>
-## Token Budget Awareness
+## Context compaction and exact recall
 
-You have a 200K token context window. Large traces can exceed this.
+The runtime measures the actual model request against the selected model's configured context capacity and output reserve. A shared native Responses compaction threshold applies to curator messages, tool results, validation results, and subsequent model turns. Tools return their full selected content; there is no separate per-tool text quota.
 
-**Strategy:**
-- TraceReview responses include `token_info.serialized_chars`, `max_serialized_chars`, and advisory `estimated_tokens`; `within_budget` is governed by Agent Studio's serialized-character provider boundary.
-- If `within_budget` is false, request a narrower named section or follow the bounded continuation contract.
-- On CONTEXT_OVERFLOW error, use lighter-weight tool calls
-- Agent Studio may compact stale tool results and earlier turns out of your live provider context. This is expected, not evidence that the conversation was lost.
-- When you need a completed prior turn after compaction, call `get_chat_turn(session_id, turn_id)`, page its row metadata, and follow a selected field's deterministic `next_call` for exact chunks. If you only know the topic or session, use `search_chat_history(chat_kind="agent_studio", query=...)` and page `get_chat_conversation(session_id=...)` summaries first.
-- During an in-flight current turn, raw tool results exist only in the current provider tool continuation. They are not durable chat recall until the assistant turn completes; rerun or narrow the original lookup when exact current-turn details are no longer live.
-- Compact tool-result summaries include recall hints. Use exact lookup tools such as `get_trace_payloads` and `get_trace_payload` for raw TraceReview payload chunks instead of relying on omitted inline blobs.
-
-**Tool Token Costs (approximate):**
-- `get_trace_summary`: ~500 tokens (ALWAYS safe, start here)
-- `get_extraction_diagnostic_report`: compact authoritative summary/inventory, then bounded named sections
-- `get_trace_reconstruction`: compact summary, then bounded `events` pages with payload references only
-- `get_trace_payloads`: compact summary, then bounded `payloads` inventory pages; use largest sort for prompt/context bloat
-- `get_trace_payload`: exact payload chunks bounded below the provider result envelope
-- `get_trace_costs`: compact totals, then bounded named collection pages
-- `get_trace_duplicates`: compact counts, then bounded group or payload-reference pages
-- `get_tool_calls_summary`: one bounded page of compact summaries (~100 tokens per call)
-- `get_trace_conversation`: one exact `user_query` or `assistant_response` chunk
-- `get_tool_calls_page`: bounded metadata and exact-field references
-- `get_tool_call_detail`: one exact `input` or `tool_result` chunk
-
-**If you hit limits:** Start from the authoritative summary/inventory, request one named section, and follow `next_call`; fetch exact payload chunks with `start`/`max_chars`; preserve `tool_name`, `event_type`, `candidate_id`, level, and time filters while paging.
+- Native compaction can replace earlier live context while the exact authorized archive remains available. Main chat and Studio maintain separate sessions.
+- If a single new payload cannot fit after compaction, the runtime retains its complete text and supplies an exact-read descriptor. Use `read_pending_context` as instructed to consume contiguous ranges and resume the task. Do not rerun a completed write or invent missing source text.
+- TraceReview `token_info.serialized_chars` and `estimated_tokens` describe returned content. The estimate is advisory; request admission uses the provider's token count.
+- Use summaries and inventories to locate relevant evidence. Explicit filters and row pages select which records to inspect; follow their `next_call` when more selected records remain.
+- For completed chat turns, use `get_chat_turn(session_id, turn_id)` and exact field reads. Use `search_chat_history` and `get_chat_conversation` when locating a prior session.
+- For exact trace material, use `get_trace_payloads` / `get_trace_payload`, `get_tool_calls_page` / `get_tool_call_detail`, or `get_trace_conversation`. Preserve owner/session scope, hashes and filters while following any explicit continuation.
+- Compaction is not a PDF read failure. A required source read or stale selection failure stops extraction with the PDF reading error; do not continue with partial evidence.
 </token_budget>
 </studio_guide_topic>
 

@@ -994,16 +994,12 @@ def _bounded_package_result(
     *,
     result_ref: str | None = None,
 ) -> Any:
-    """Serve one subprocess package result within the model-facing budget.
+    """Present a complete subprocess result or an explicitly selected exact view.
 
-    Results that fit are returned unchanged. Larger ones become a first page
-    with explicit continuation; repeating the call with ``result_offset`` /
-    ``result_sha256`` or ``detail_path`` / ``detail_cursor`` pages the same
-    (recomputed and hash-checked) result. Application-side captures that need
-    the complete result (validator lookup capture) request it explicitly.
-
-    Writes are captured by the caller before presentation. A result_ref reads
-    that capture without executing the request again.
+    Shared model-context policy owns capacity. Query view arguments select rows
+    or fields without a per-result quota. Write results are captured before
+    presentation and wrapped with result_ref, including small results, so later
+    reads use that exact capture without executing the write again.
     """
     view_arguments = {
         key: value for key, value in view_arguments.items() if value is not None

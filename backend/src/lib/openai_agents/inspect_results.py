@@ -170,10 +170,6 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 }
 _PAGE_ARGUMENTS = frozenset({"cursor", "limit", "result_sha256"})
 _CHUNK_ARGUMENTS = frozenset({"cursor", "result_sha256"})
-_FINDING_IDENTITY_KEYS = frozenset(
-    {"finding_ref", "finding_id", "severity", "status", "code", "object_ref",
-     "object_type", "field_path"}
-)
 
 
 class _RequestError(Exception):
@@ -793,12 +789,7 @@ def _page(
     message: str,
     overrides: Callable[[list[Any]], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """One forward page of ``items`` fitted to the byte budget.
-
-    Only the requested window is rendered. The page ends at the row limit or
-    where the next row would overflow; a first row too large alone is replaced
-    by ``oversized(row_view, index)`` (identity plus a read call).
-    """
+    """Render the complete requested row window with a continuation cursor."""
 
     _check_sha(expected_sha, sha)
     try:
@@ -817,16 +808,10 @@ def _page(
     def render(page: list[Any], returned: int) -> dict[str, Any]:
         next_offset = start + returned
         more = next_offset < total
-        ended_by = "end" if not more else ("limit" if returned >= effective else "size_budget")
-        withheld = sum(1 for row in page if isinstance(row, Mapping) and row.get("withheld"))
-        note = ""
-        if ended_by == "size_budget":
-            note += " The page ended at the tool result size budget; continue with next_call."
-        if withheld:
-            note += f" {withheld} row(s) were too large to show and are withheld; read each with its read call."
+        ended_by = "limit" if more else "end"
         body = {
             "status": "ok",
-            "message": message + note,
+            "message": message,
             **head,
             rows_key: page,
             "total_count": total,
@@ -845,10 +830,6 @@ def _page(
         }
         if overrides is not None:
             extra = dict(overrides(page))
-            if "message" in extra:
-                # An override replaces the lead message, never the continuation
-                # and withheld-row notes.
-                extra["message"] += note
             body.update(extra)
         return body
 
@@ -857,8 +838,6 @@ def _page(
         start=0,
         limit=len(window),
         render=render,
-
-
     )
     return response
 
@@ -920,23 +899,19 @@ def _exact_value(
             ),
         }
 
-    return fit_text_window(text, cursor=start, render=render, )
+    return fit_text_window(text, cursor=start, render=render)
 
 
-def _fit_record(
+def _render_record(
     record: Mapping[str, Any],
     *,
     render: Callable[[dict[str, Any]], dict[str, Any]],
-    read_for: Callable[[str], dict[str, Any]],
-    protected: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Render ``record`` whole, withholding its largest values only as needed."""
+    """Render the complete selected record."""
 
     return render(dict(record))
 
 
-def _is_descriptor(value: Any) -> bool:
-    return isinstance(value, Mapping) and value.get("withheld") is True
 
 
 def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:
@@ -1625,7 +1600,7 @@ def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, An
             ],
         }
 
-    return _fit_record(values, render=render, read_for=read)
+    return _render_record(values, render=render)
 
 
 def _field_response(
@@ -2013,19 +1988,15 @@ def _validation_response(
                 cursor=cursor,
                 message="Exact validation finding value is ready.",
             )
-        return _fit_record(
+        return _render_record(
             full,
             render=lambda shown: {
                 "status": "ok",
-                "message": "Validation finding is ready. Withheld values are read with their read call.",
+                "message": "Complete validation finding is ready.",
                 **head,
                 "finding": shown,
                 "result_sha256": sha,
             },
-            read_for=lambda key: result.call(
-                "validation", finding_ref=finding_ref, detail_path=key
-            ),
-            protected=_FINDING_IDENTITY_KEYS,
         )
 
     object_keys: set[tuple[str, str]] | None = None
@@ -2133,10 +2104,8 @@ def _standalone_validator_response(
         return {"status": "ok", **head, "original_available": True,
                 "decision_status": full["decision_status"], "output_complete": full["output_complete"],
                 "read": {**carry, "detail_path": "original.result"}}
-    return _fit_record(
+    return _render_record(
         full, render=lambda shown: {"status": "ok", **head, "validator_result": shown, "result_sha256": sha},
-        read_for=lambda name: {**carry, "detail_path": name},
-        protected=frozenset({"result_ref", "validator_result_key", "decision_status", "original_available", "output_complete"}),
     )
 
 
@@ -2188,19 +2157,15 @@ def _validator_results_response(
                 cursor=cursor,
                 message="Exact validator result value is ready.",
             )
-        return _fit_record(
+        return _render_record(
             full,
             render=lambda shown: {
                 "status": "ok",
-                "message": "Validator result is ready. Withheld values are read with their read call.",
+                "message": "Complete validator result is ready.",
                 **head,
                 "validator_result": shown,
                 "result_sha256": sha,
             },
-            read_for=lambda name: result.call(
-                "validator_results", validator_result_key=key, detail_path=name
-            ),
-            protected=frozenset({"validator_result_key", "status", "open_finding", "writeback_rejected"}),
         )
 
     def target_value(entry: Mapping[str, Any], name: str) -> Any:

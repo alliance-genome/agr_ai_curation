@@ -3213,43 +3213,10 @@ def _looks_like_domain_validator_result_payload(payload: Dict[str, Any]) -> bool
     }.issubset(payload)
 
 
-def _compact_supervisor_mapping_fields(
-    value: Any,
-    *,
-    limit: int,
-    skip_keys: set[str] | None = None,
-) -> str:
-    if not isinstance(value, dict):
-        return ""
-    skip_keys = skip_keys or set()
-    selected: list[str] = []
-    for key in sorted(value):
-        if len(selected) >= limit:
-            break
-        if key in skip_keys:
-            continue
-        item = value.get(key)
-        if not _is_supervisor_summary_scalar(item):
-            continue
-        selected.append(
-            f"{key}={_truncate_for_supervisor_summary(str(item), limit=120)}"
-        )
-    return "; ".join(selected)
 
 
-def _is_supervisor_summary_scalar(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    return isinstance(value, (int, float, bool))
 
 
-def _truncate_for_supervisor_summary(value: str, *, limit: int = 120) -> str:
-    text = " ".join(value.split())
-    if len(text) <= limit:
-        return text
-    return f"{text[: limit - 1].rstrip()}..."
 
 
 def _agent_key_from_specialist_tool_name(tool_name: Optional[str]) -> Optional[str]:

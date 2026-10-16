@@ -469,11 +469,7 @@ LinkML-aligned or submission-ready.
             workshop_draft_tools = workshop.draft_tool_ids or []
             draft_prompt = workshop.prompt_draft or ""
             selected_group_prompt = workshop.selected_group_prompt_draft or ""
-            truncated = ""
-            group_truncated = ""
             metadata_document = workshop_authoring_metadata_json(workshop)
-            metadata_preview = metadata_document
-            metadata_truncated = ""
 
             selected_group_prompt_block = ""
             if workshop.selected_group_id and selected_group_prompt:
@@ -481,7 +477,7 @@ LinkML-aligned or submission-ready.
 
 <workshop_selected_group_prompt group="{workshop.selected_group_id}">
 {selected_group_prompt}
-</workshop_selected_group_prompt>{group_truncated}"""
+</workshop_selected_group_prompt>"""
 
             model_catalog_lines: List[str] = []
             try:
@@ -584,8 +580,8 @@ Prompt injection note:
             runtime_additions.append(f"""
 <agent_workshop_current_draft>
 <workshop_authoring_metadata_preview>
-{metadata_preview}
-</workshop_authoring_metadata_preview>{metadata_truncated}
+{metadata_document}
+</workshop_authoring_metadata_preview>
 
 Configured model options (authoritative recommendation source):
 {model_catalog_text}
@@ -595,7 +591,7 @@ recommended uses, and default reasoning rather than relying on historical model 
 
 <workshop_prompt_draft>
 {draft_prompt}
-</workshop_prompt_draft>{truncated}
+</workshop_prompt_draft>
 {selected_group_prompt_block}
 </agent_workshop_current_draft>""")
 

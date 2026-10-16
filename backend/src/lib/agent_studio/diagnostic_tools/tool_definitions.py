@@ -1234,7 +1234,7 @@ read-only and restricted to files inside the current repository checkout.""",
                 },
                 "end_line": {
                     "type": "integer",
-                    "description": "Optional inclusive ending line number. Configured line and character bounds still apply.",
+                    "description": "Optional inclusive ending line number. Omit to read through the end of the file.",
                     "minimum": 1,
                 },
                 "line_char_start": {"type": "integer", "minimum": 0, "default": 0,

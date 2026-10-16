@@ -1370,21 +1370,11 @@ def build_output_formatter_tools(
             raise ValueError("The curator selected fixed output fields. Use build_default_projection_plan and keep that exact plan; edit the flow to change it.")
         return plan
 
-    def respond(
-        tool_name: str,
-        payload: Mapping[str, Any],
-        *,
-        committed_keys: Sequence[str] = (),
-    ) -> str:
-        return _tool_json(payload)
-
-
     def plan_response(
-        tool_name: str,
         plan: FlowOutputProjectionPlan,
         cursor: str = "",
     ) -> str:
-        """Validated plan echo; wide plans page their columns within the budget."""
+        """Complete validated plan echo, or an explicitly requested column view."""
 
         errors, warnings, columns = validate_projection_plan(bundle, plan)
         if not errors:
@@ -1402,7 +1392,7 @@ def build_output_formatter_tools(
                 "columns": _compact_columns(columns),
                 "plan": plan.model_dump(mode="json", exclude_defaults=True),
             }
-            return respond(tool_name, full)
+            return _tool_json(full)
         if offset > len(columns):
             raise ValueError(f"cursor {offset} is beyond the plan's {len(columns)} columns.")
         column_specs = [column.model_dump(mode="json", exclude_defaults=True) for column in columns]
@@ -1428,9 +1418,8 @@ def build_output_formatter_tools(
             column_specs,
             start=offset,
             max_count=max(1, len(column_specs)),
-
         )
-        return respond(tool_name, build(page, next_cursor))
+        return _tool_json(build(page, next_cursor))
 
     def resolve_final_plan(plan_json: str) -> FlowOutputProjectionPlan:
         if str(plan_json or "").strip():
@@ -1550,8 +1539,7 @@ def build_output_formatter_tools(
         strict_mode=False,
     )
     async def _explain_formatter_capabilities() -> str:
-        return respond(
-            "explain_formatter_capabilities",
+        return _tool_json(
             _capabilities_payload(
                 output_format=resolved_output_format,
                 formatter_agent_id=formatter_agent_id,
@@ -1666,9 +1654,9 @@ def build_output_formatter_tools(
 
                 render=lambda field: _catalog_entry(field, example_limit=examples, bundle=bundle),
             )
-            return respond("inspect_output_artifacts", build(page, next_cursor))
+            return _tool_json(build(page, next_cursor))
         except Exception as exc:
-            return respond("inspect_output_artifacts", {"status": "invalid", "errors": [str(exc)]})
+            return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="inspect_output_rows",
@@ -1772,9 +1760,9 @@ def build_output_formatter_tools(
                 render=render_row,
             )
             next_cursor = _next_row_cursor(offset, len(page), available)
-            return respond("inspect_output_rows", build(page, next_cursor))
+            return _tool_json(build(page, next_cursor))
         except Exception as exc:
-            return respond("inspect_output_rows", {"status": "invalid", "errors": [str(exc)]})
+            return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="inspect_field_values",
@@ -1865,9 +1853,9 @@ def build_output_formatter_tools(
                     "count": item[1],
                 },
             )
-            return respond("inspect_field_values", build(page, next_cursor))
+            return _tool_json(build(page, next_cursor))
         except Exception as exc:
-            return respond("inspect_field_values", {"status": "invalid", "errors": [str(exc)]})
+            return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="read_output_value",
@@ -1923,9 +1911,9 @@ def build_output_formatter_tools(
             chunk = text[start : start + chunk_size]
             end = start + len(chunk)
             payload = build(chunk, end if end < len(text) else None)
-            return respond("read_output_value", payload)
+            return _tool_json(payload)
         except Exception as exc:
-            return respond("read_output_value", {"status": "invalid", "errors": [str(exc)]})
+            return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="build_default_projection_plan",
@@ -1946,7 +1934,7 @@ def build_output_formatter_tools(
     ) -> str:
         try:
             if locked_plan is not None:
-                return plan_response("build_default_projection_plan", locked_plan, cursor)
+                return plan_response(locked_plan, cursor)
             selected_row_source = _coerce_row_source(row_source, bundle.default_row_source)
             selected_row_strategy = _coerce_row_strategy(row_strategy)
             plan = _default_projection_plan_for_formatter(
@@ -1956,9 +1944,9 @@ def build_output_formatter_tools(
                 row_strategy=selected_row_strategy,
                 source_ref=source_ref,
             )
-            return plan_response("build_default_projection_plan", plan, cursor)
+            return plan_response(plan, cursor)
         except Exception as exc:
-            return respond("build_default_projection_plan", {"status": "invalid", "errors": [str(exc)]})
+            return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="validate_output_projection",
@@ -1976,11 +1964,11 @@ def build_output_formatter_tools(
                 if plan_json.strip() or cursor:
                     raise ValueError("Use report_json alone for complete report validation; preview individual section plans separately.")
                 _, summary = render_chat_report(report_json)
-                return respond("validate_output_projection", {"status": "ok", "report_summary": summary})
+                return _tool_json({"status": "ok", "report_summary": summary})
             plan = resolve_final_plan(plan_json)
-            return plan_response("validate_output_projection", plan, cursor)
+            return plan_response(plan, cursor)
         except Exception as exc:
-            return respond("validate_output_projection", {"status": "invalid", "errors": [str(exc)]})
+            return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="preview_output_projection",
@@ -2003,8 +1991,7 @@ def build_output_formatter_tools(
             if not errors:
                 errors.extend(_formatter_plan_constraint_errors(plan, columns))
             if errors:
-                return respond(
-                    "preview_output_projection",
+                return _tool_json(
                     {
                         "status": "invalid",
                         "preview": {
@@ -2072,9 +2059,9 @@ def build_output_formatter_tools(
                 },
             )
             next_cursor = _next_row_cursor(offset, len(page), available)
-            return respond("preview_output_projection", build(page, next_cursor))
+            return _tool_json(build(page, next_cursor))
         except Exception as exc:
-            return respond("preview_output_projection", {"status": "invalid", "errors": [str(exc)]})
+            return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
     @function_tool(
         name_override="finalize_and_save",
@@ -2090,8 +2077,7 @@ def build_output_formatter_tools(
         async with finalization_lock:
             if finalized_file_info is not None:
                 # The duplicate request is invalid; the original finalized file is echoed for model recovery.
-                return respond(
-                    "finalize_and_save",
+                return _tool_json(
                     {
                         "status": "invalid",
                         "code": "already_finalized",
@@ -2113,8 +2099,7 @@ def build_output_formatter_tools(
                 plan = resolve_final_plan(plan_json)
                 errors, warnings = final_plan_errors(plan)
                 if errors:
-                    return respond(
-                        "finalize_and_save",
+                    return _tool_json(
                         {
                             "status": "invalid",
                             "errors": [_bounded_text(error) for error in errors[:_MAX_LIST_ITEMS]],
@@ -2126,8 +2111,7 @@ def build_output_formatter_tools(
                     )
                 projection = finalize_output_projection(bundle, plan)
                 if projection.total_count < 1 and locked_plan is None:
-                    return respond(
-                        "finalize_and_save",
+                    return _tool_json(
                         {
                             "status": "invalid",
                             "errors": [
@@ -2149,8 +2133,7 @@ def build_output_formatter_tools(
                     setting=exc.setting,
                     unit=exc.unit,
                 )
-                return respond(
-                    "finalize_and_save",
+                return _tool_json(
                     {
                         "status": "failed",
                         "code": "operational_ceiling_exceeded",
@@ -2160,7 +2143,7 @@ def build_output_formatter_tools(
                     },
                 )
             except Exception as exc:
-                return respond("finalize_and_save", {"status": "invalid", "errors": [str(exc)]})
+                return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
             descriptor = (
                 str(filename_hint or "").strip()
@@ -2185,8 +2168,7 @@ def build_output_formatter_tools(
                     measured=projection.total_count,
                     unit="rows",
                 )
-                return respond(
-                    "finalize_and_save",
+                return _tool_json(
                     {
                         "status": "failed",
                         "code": "save_failed",
@@ -2210,13 +2192,8 @@ def build_output_formatter_tools(
                     "projection_summary",
                 }
             }
-            return respond(
-                "finalize_and_save",
+            return _tool_json(
                 _jsonable(file_info),
-                committed_keys=(
-                    "status", "file_id", "filename", "format", "download_url",
-                    "size_bytes", "saved_file",
-                ),
             )
 
     @function_tool(
@@ -2236,12 +2213,11 @@ def build_output_formatter_tools(
         def chat_failure(payload: dict[str, Any]) -> str:
             # Reported once here; the flow step reports the outcome, not again.
             record_chat_output_failure(payload)
-            return respond("finalize_chat_output", payload)
+            return _tool_json(payload)
 
         async with finalization_lock:
             if finalized_chat_receipt is not None:
-                return respond(
-                    "finalize_chat_output",
+                return _tool_json(
                     {
                         "status": "invalid",
                         "code": "already_finalized",
@@ -2267,7 +2243,7 @@ def build_output_formatter_tools(
                     "notes cannot contain table rows; table content comes only from the projection."
                 )
             if note_errors:
-                return respond("finalize_chat_output", {"status": "invalid", "errors": note_errors})
+                return _tool_json({"status": "invalid", "errors": note_errors})
             try:
                 if report_json.strip():
                     if plan_json.strip():
@@ -2279,8 +2255,7 @@ def build_output_formatter_tools(
                     plan = resolve_final_plan(plan_json)
                     errors, warnings = final_plan_errors(plan)
                     if errors:
-                        return respond(
-                            "finalize_chat_output",
+                        return _tool_json(
                             {
                                 "status": "invalid",
                                 "errors": [_bounded_text(error) for error in errors[:_MAX_LIST_ITEMS]],
@@ -2292,8 +2267,7 @@ def build_output_formatter_tools(
                         )
                     projection = finalize_output_projection(bundle, plan)
                     if projection.total_count < 1 and locked_plan is None:
-                        return respond(
-                            "finalize_chat_output",
+                        return _tool_json(
                             {
                                 "status": "invalid",
                                 "errors": [
@@ -2328,7 +2302,7 @@ def build_output_formatter_tools(
                     },
                 )
             except Exception as exc:
-                return respond("finalize_chat_output", {"status": "invalid", "errors": [str(exc)]})
+                return _tool_json({"status": "invalid", "errors": [str(exc)]})
 
             if note_text:
                 content = f"{content}\n\n{note_text}"
@@ -2393,10 +2367,8 @@ def build_output_formatter_tools(
             finalized_chat_receipt = {
                 key: _jsonable(value) for key, value in delivered.items()
             }
-            return respond(
-                "finalize_chat_output",
+            return _tool_json(
                 finalized_chat_receipt,
-                committed_keys=("status", "delivered", "chat_output_id", "format", "output_chars"),
             )
 
     @function_tool(
@@ -2424,7 +2396,7 @@ def build_output_formatter_tools(
         if is_chat:
             payload["delivered"] = False
             record_chat_output_cannot_complete(payload)
-        return respond("formatter_cannot_complete", payload)
+        return _tool_json(payload)
 
     finalizer = _finalize_chat_output if is_chat else _finalize_and_save
     return [

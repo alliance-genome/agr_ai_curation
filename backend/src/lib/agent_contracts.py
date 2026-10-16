@@ -74,8 +74,6 @@ _CUSTOM_AGENT_NOT_VISIBLE_HINT = (
 )
 _CURSOR_PATTERN = re.compile(r"^(0|[1-9][0-9]*):([0-9a-f]{12})$")
 _LIST_INDEX_PATTERN = re.compile(r"0|[1-9][0-9]*")
-# Room kept for the page envelope, continuation cursor and drilldown hint.
-# Room kept per omitted-value stub when an oversized item is outlined.
 _MAX_SUGGESTIONS = 5
 _MAX_LISTED_NAMES = 50
 _BINDING_SUMMARY_KEYS = (
@@ -365,7 +363,6 @@ def get_agent_contract(
                 limit=limit,
                 cursor=cursor,
                 fingerprint=fingerprint,
-                repeat_arguments={"topic": normalized_topic, "detail_level": normalized_detail_level, **scope},
             )
         try:
             json.dumps(response, ensure_ascii=True)
@@ -1259,7 +1256,6 @@ def _page_response(
     limit: int | None,
     cursor: str | None,
     fingerprint: str,
-    repeat_arguments: Mapping[str, Any],
 ) -> dict[str, Any]:
     page, envelope = _bounded_page(
         response,

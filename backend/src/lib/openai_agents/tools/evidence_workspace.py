@@ -426,8 +426,7 @@ def create_list_recorded_evidence_tool(
         Discarded records are excluded by default. Use this to confirm the active
         evidence set matches final curatable objects before returning structured output.
         Results come back one page at a time: pass ``offset`` to step past evidence
-        you have already seen and read ``next_offset`` to continue. A page can end
-        before ``limit`` when the response reaches its size budget, and limits above
+        you have already seen and read ``next_offset`` to continue. Limits above
         the configured maximum are clamped; ``requested_limit`` and ``effective_limit``
         report what was applied. Quotes are omitted from the list; read one record
         exactly with get_recorded_evidence.
@@ -479,12 +478,7 @@ def create_list_recorded_evidence_tool(
         def render(page: list[dict[str, Any]], returned: int) -> dict[str, Any]:
             next_offset = start + returned
             has_more = total > next_offset
-            if not has_more:
-                ended_by = "end"
-            elif returned >= cap:
-                ended_by = "limit"
-            else:
-                ended_by = "size_budget"
+            ended_by = "limit" if has_more else "end"
             return {
                 "status": "ok",
                 "document_id": document_id,

@@ -304,8 +304,7 @@ async def get_trace_summary(trace_id: str) -> Dict[str, Any]:
             },
             "token_info": {
                 "estimated_tokens": int,
-                "within_budget": bool,
-                "warning": str | None
+                "serialized_chars": int
             },
             "error": str | None
         }
