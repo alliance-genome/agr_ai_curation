@@ -63,7 +63,7 @@ def test_get_cached_metadata_removes_expired_entry(monkeypatch):
     monkeypatch.setattr(
         document_cache.time,
         "time",
-        lambda: 1000.0 + document_cache._TTL_SECONDS + 1,
+        lambda: 1000.0 + 600 + 1,
     )
 
     cached = document_cache.get_cached_metadata("user-1", "doc-1")

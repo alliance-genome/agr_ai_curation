@@ -1,114 +1,174 @@
-"""Unit tests for DocumentContext provider."""
+"""Async preparation, cache lifecycle and optional-context contracts."""
 
-from types import SimpleNamespace
+import asyncio
+from contextvars import ContextVar
+from unittest.mock import AsyncMock, Mock
 
+import pytest
+
+from src.lib import document_cache
 from src.lib.document_context import DocumentContext
 
 
-def test_fetch_uses_cached_metadata(monkeypatch):
-    import src.lib.document_cache as document_cache
-    import src.lib.openai_agents.agents.supervisor_agent as supervisor_agent
-    import src.lib.openai_agents.prompt_utils as prompt_utils
-
-    cached = SimpleNamespace(
-        hierarchy={"sections": [{"name": "Introduction"}, {"name": None}]},
-        abstract="Cached abstract",
-    )
-    calls = {"set_cache": 0}
-
-    monkeypatch.setattr(document_cache, "get_cached_metadata", lambda *_args: cached)
-    monkeypatch.setattr(
-        document_cache, "set_cached_metadata", lambda *_args: calls.__setitem__("set_cache", calls["set_cache"] + 1)
-    )
-
-    def _unexpected(*_args, **_kwargs):
-        raise AssertionError("fetch should not run on cache hit")
-
-    monkeypatch.setattr(supervisor_agent, "fetch_document_hierarchy_sync", _unexpected)
-    monkeypatch.setattr(prompt_utils, "fetch_document_abstract_sync", _unexpected)
-
-    ctx = DocumentContext.fetch("doc-1", "user-1", "paper.pdf")
-
-    assert ctx.hierarchy == cached.hierarchy
-    assert ctx.abstract == "Cached abstract"
-    assert ctx.sections == ["Introduction"]
-    assert ctx.document_name == "paper.pdf"
-    assert calls["set_cache"] == 0
+@pytest.fixture(autouse=True)
+def cache():
+    document_cache._cache.clear()
+    document_cache._pending_fills.clear()
+    yield
+    assert not document_cache._pending_fills
+    document_cache._cache.clear()
 
 
-def test_fetch_cache_miss_fetches_and_caches(monkeypatch):
-    import src.lib.document_cache as document_cache
-    import src.lib.openai_agents.agents.supervisor_agent as supervisor_agent
-    import src.lib.openai_agents.prompt_utils as prompt_utils
-
-    calls = {}
-    hierarchy = {"sections": [{"name": "Methods"}, {"name": "Results"}, {}]}
-
-    monkeypatch.setattr(document_cache, "get_cached_metadata", lambda *_args: None)
-    monkeypatch.setattr(
-        supervisor_agent,
-        "fetch_document_hierarchy_sync",
-        lambda doc_id, user_id: hierarchy if (doc_id, user_id) == ("doc-1", "user-1") else None,
-    )
-
-    def _fetch_abstract(doc_id, user_id, hierarchy_arg):
-        calls["abstract_args"] = (doc_id, user_id, hierarchy_arg)
-        return "Fresh abstract"
-
-    def _cache(user_id, doc_id, hierarchy_arg, abstract_arg):
-        calls["cache_args"] = (user_id, doc_id, hierarchy_arg, abstract_arg)
-
-    monkeypatch.setattr(prompt_utils, "fetch_document_abstract_sync", _fetch_abstract)
-    monkeypatch.setattr(document_cache, "set_cached_metadata", _cache)
-
-    ctx = DocumentContext.fetch("doc-1", "user-1")
-
-    assert calls["abstract_args"] == ("doc-1", "user-1", hierarchy)
-    assert calls["cache_args"] == ("user-1", "doc-1", hierarchy, "Fresh abstract")
-    assert ctx.hierarchy == hierarchy
-    assert ctx.abstract == "Fresh abstract"
-    assert ctx.sections == ["Methods", "Results"]
+@pytest.fixture
+def retrieval(monkeypatch):
+    hierarchy = AsyncMock(return_value={"sections": [{"name": "Methods"}, {}], "abstract_section_title": "Synopsis"})
+    abstract = AsyncMock(return_value="Abstract")
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_document_sections_hierarchical", hierarchy)
+    monkeypatch.setattr("src.lib.openai_agents.prompt_utils.fetch_document_abstract", abstract)
+    return hierarchy, abstract
 
 
-def test_fetch_without_hierarchy_returns_empty_structure(monkeypatch):
-    import src.lib.document_cache as document_cache
-    import src.lib.openai_agents.agents.supervisor_agent as supervisor_agent
-    import src.lib.openai_agents.prompt_utils as prompt_utils
-
-    monkeypatch.setattr(document_cache, "get_cached_metadata", lambda *_args: None)
-    monkeypatch.setattr(supervisor_agent, "fetch_document_hierarchy_sync", lambda *_args: None)
-    monkeypatch.setattr(prompt_utils, "fetch_document_abstract_sync", lambda *_args: None)
-    monkeypatch.setattr(document_cache, "set_cached_metadata", lambda *_args: None)
-
-    ctx = DocumentContext.fetch("doc-1", "user-1")
-
-    assert ctx.hierarchy is None
-    assert ctx.abstract is None
-    assert ctx.sections is None
-    assert ctx.section_count() == 0
-    assert ctx.has_structure() is False
+@pytest.mark.asyncio
+async def test_cold_warm_expired_and_tenant_cache(retrieval, monkeypatch):
+    hierarchy, abstract = retrieval
+    first = await DocumentContext.fetch("doc", "user", "paper.pdf")
+    assert first.document_name == "paper.pdf" and first.sections == ["Methods"]
+    abstract.assert_awaited_once_with("doc", "user", first.hierarchy)
+    warm = await DocumentContext.fetch("doc", "user", "new.pdf")
+    assert warm.document_name == "new.pdf" and warm.abstract == first.abstract
+    hierarchy.assert_awaited_once()
+    await DocumentContext.fetch("doc", "other")
+    assert hierarchy.await_count == 2
+    monkeypatch.setenv("DOCUMENT_CONTEXT_CACHE_TTL_SECONDS", "1")
+    document_cache._cache[("user", "doc")].fetched_at -= 2
+    await DocumentContext.fetch("doc", "user")
+    assert hierarchy.await_count == 3
 
 
-def test_fetch_passes_user_and_document_to_cache_lookup(monkeypatch):
-    import src.lib.document_cache as document_cache
-    import src.lib.openai_agents.agents.supervisor_agent as supervisor_agent
-    import src.lib.openai_agents.prompt_utils as prompt_utils
+@pytest.mark.asyncio
+async def test_negative_cache(retrieval):
+    hierarchy, abstract = retrieval
+    hierarchy.return_value = abstract.return_value = None
+    result = await DocumentContext.fetch("doc", "user")
+    assert result.sections is None and not result.has_structure()
+    await DocumentContext.fetch("doc", "user")
+    hierarchy.assert_awaited_once()
+    abstract.assert_awaited_once_with("doc", "user", None)
 
-    calls = {}
 
-    def _cache_lookup(user_id, document_id):
-        calls.setdefault("lookups", []).append((user_id, document_id))
-        return None
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", [0, 1])
+async def test_delayed_stage_yields_and_cancellation_never_publishes(retrieval, stage):
+    entered, release = asyncio.Event(), asyncio.Event()
 
-    monkeypatch.setattr(document_cache, "get_cached_metadata", _cache_lookup)
-    monkeypatch.setattr(supervisor_agent, "fetch_document_hierarchy_sync", lambda *_args: None)
-    monkeypatch.setattr(prompt_utils, "fetch_document_abstract_sync", lambda *_args: None)
-    monkeypatch.setattr(document_cache, "set_cached_metadata", lambda *_args: None)
+    async def delayed(*args):
+        entered.set()
+        await release.wait()
 
-    DocumentContext.fetch("doc-1", "user-a")
-    DocumentContext.fetch("doc-1", "user-b")
+    retrieval[stage].side_effect = delayed
+    task = asyncio.create_task(DocumentContext.fetch("doc", "user"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        # The observer can run while retrieval remains blocked on its barrier.
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
+        assert document_cache.get_cached_metadata("user", "doc") is None
+        if stage == 0:
+            retrieval[1].assert_not_awaited()
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
-    assert calls["lookups"] == [("user-a", "doc-1"), ("user-b", "doc-1")]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", [0, 1])
+@pytest.mark.parametrize("timeout", [False, True])
+@pytest.mark.parametrize("capture_fails", [False, True])
+async def test_partial_failure_timeout_and_sanitized_reporting(retrieval, monkeypatch, caplog, stage, timeout, capture_fails):
+    report = Mock(side_effect=RuntimeError("SECRET telemetry") if capture_fails else None)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    monkeypatch.setenv("DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS", "0.02")
+
+    async def failure(*args):
+        if timeout:
+            await asyncio.Event().wait()
+        raise RuntimeError("SECRET query")
+
+    retrieval[stage].side_effect = failure
+    result = await asyncio.wait_for(DocumentContext.fetch("doc", "user"), 5)
+    if stage == 0:
+        assert result.hierarchy is None and result.abstract == "Abstract"
+        retrieval[1].assert_awaited_once_with("doc", "user", None)
+    else:
+        assert result.hierarchy and result.abstract is None
+    report.assert_called_once()
+    assert "SECRET" not in caplog.text + str(report.call_args)
+    exc = report.call_args.args[0]
+    assert exc.__cause__ is None and exc.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_invalidation_revokes_old_fill_but_allows_new_fill(retrieval):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def old(*args):
+        entered.set()
+        await release.wait()
+        return "obsolete"
+
+    retrieval[1].side_effect = old
+    task = asyncio.create_task(DocumentContext.fetch("doc", "user"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        document_cache.invalidate_cache("user", "doc")
+        retrieval[1].side_effect = None
+        retrieval[1].return_value = "fresh"
+        await DocumentContext.fetch("doc", "user")
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 5)
+    cached = document_cache.get_cached_metadata("user", "doc")
+    assert cached is not None and cached.abstract == "fresh"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_misses_are_independent_and_keep_context(retrieval):
+    run = ContextVar("run")
+    arrived, release = asyncio.Event(), asyncio.Event()
+    seen = []
+
+    async def abstract(doc, user, hierarchy):
+        seen.append((user, run.get()))
+        if len(seen) == 3:
+            arrived.set()
+        await release.wait()
+        return run.get()
+
+    retrieval[1].side_effect = abstract
+    async def prepare(user, value):
+        token = run.set(value)
+        try:
+            return await DocumentContext.fetch("doc", user)
+        finally:
+            run.reset(token)
+
+    tasks = [asyncio.create_task(prepare(user, value)) for user, value in [("one", "a"), ("one", "b"), ("two", "c")]]
+    try:
+        await asyncio.wait_for(arrived.wait(), 5)
+        tasks[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await tasks[0]
+        assert not tasks[1].done()
+    finally:
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
+    assert all(isinstance(r, DocumentContext) for r in results[1:])
+    assert [r.abstract for r in results[1:] if isinstance(r, DocumentContext)] == ["b", "c"]
+    assert seen == [("one", "a"), ("one", "b"), ("two", "c")]
 
 
 def test_document_context_helper_methods():
@@ -140,3 +200,17 @@ def test_document_context_helper_methods():
     )
     assert ctx_only_hierarchy.has_structure() is True
     assert ctx_only_hierarchy.section_count() == 1
+
+
+@pytest.mark.parametrize("name, getter, default", [
+    ("DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS", "get_document_context_stage_timeout_seconds", 10),
+    ("DOCUMENT_CONTEXT_CACHE_TTL_SECONDS", "get_document_context_cache_ttl_seconds", 600),
+])
+@pytest.mark.parametrize("value", [None, "nan", "inf", "-1", "0", "invalid", "25.5"])
+def test_preparation_limits(monkeypatch, name, getter, default, value):
+    from src.lib.openai_agents import config
+    if value is None:
+        monkeypatch.delenv(name, raising=False)
+    else:
+        monkeypatch.setenv(name, value)
+    assert getattr(config, getter)() == (25.5 if value == "25.5" else default)

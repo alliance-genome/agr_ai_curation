@@ -1792,6 +1792,18 @@ def get_document_source_import_timeout_seconds() -> float:
 # --- Document retrieval ---
 
 
+def get_document_context_stage_timeout_seconds() -> float:
+    """Await deadline for each optional hierarchy/abstract stage (default 10s)."""
+    value = _get_env_float_with_fallback("DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS", 10.0)
+    return value if math.isfinite(value) and value > 0 else 10.0
+
+
+def get_document_context_cache_ttl_seconds() -> float:
+    """Metadata TTL, including negative results (default 600s)."""
+    value = _get_env_float_with_fallback("DOCUMENT_CONTEXT_CACHE_TTL_SECONDS", 600.0)
+    return value if math.isfinite(value) and value > 0 else 600.0
+
+
 def get_weaviate_query_timeout_seconds() -> float:
     """weaviate-client query timeout in seconds (default 30, the library default).
 

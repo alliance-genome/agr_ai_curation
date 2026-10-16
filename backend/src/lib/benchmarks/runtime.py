@@ -74,7 +74,7 @@ async def execute_resolved_agent_cell(
     document_id = case_input.get("document_id")
     document_name = case_input.get("document_name")
     doc_context = (
-        DocumentContext.fetch(document_id, user_id, document_name)
+        await DocumentContext.fetch(document_id, user_id, document_name)
         if document_id
         else None
     )

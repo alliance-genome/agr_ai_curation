@@ -7,6 +7,7 @@ from contextvars import Context
 import json
 from types import SimpleNamespace
 
+from unittest.mock import AsyncMock
 import pytest
 from agents import Agent
 from agents.tool_context import ToolContext
@@ -360,7 +361,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
                  "start_extraction_trace_run", "clear_extraction_trace_run"):
         monkeypatch.setattr(runner, name, lambda *a, **k: None)
     doc_context = SimpleNamespace(hierarchy={}, abstract="", section_count=lambda: 0, to_agent_kwargs=lambda: {})
-    monkeypatch.setattr(adapter.DocumentContext, "fetch", lambda *a, **k: doc_context)
+    monkeypatch.setattr(adapter.DocumentContext, "fetch", AsyncMock(return_value=doc_context))
 
     monkeypatch.setattr(runner.Runner, "run_streamed", lambda active, **k: Result(active))
     monkeypatch.setattr(runner, "_dispatch_domain_envelope_validators_for_chat", dispatch)

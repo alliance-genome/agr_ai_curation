@@ -14,6 +14,8 @@ from unittest.mock import MagicMock
 import pytest
 from agents import Agent
 
+from src.lib.document_context import DocumentContext
+
 
 PRIVATE_EXCEPTION_TEXT = "connect failed: PRIVATE-CONFIG-SENTINEL-7f3a at internal-host"
 DOCUMENT_REASON = "agent requires a document, but no document is loaded"
@@ -91,9 +93,14 @@ def registry(monkeypatch):
                         lambda **_kwargs: MagicMock())
 
 
-def _unavailable(flow, **kwargs):
+def _unavailable(flow, *, document_id):
+    doc_context = (
+        DocumentContext(document_id=document_id, user_id="u1")
+        if document_id else None
+    )
     _tools, _names, unavailable_steps, _state = _executor().get_all_agent_tools(
-        flow, include_unavailable=True, **kwargs,
+        flow, include_unavailable=True, document_id=document_id,
+        user_id="u1", doc_context=doc_context,
     )
     return unavailable_steps
 

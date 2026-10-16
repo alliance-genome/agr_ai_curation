@@ -36,6 +36,7 @@ Avoid:
 
 ## Source-Of-Truth Layers
 
-- `AGENTS.md` is the fast startup map and should summarize this doctrine briefly.
-- This document is the fuller human-readable explanation of the policy and examples.
-- CI workflows are the executable contracts for public pull-request validation.
+- `AGENTS.md` is the shared instruction and policy source for implementation and PR review.
+- This document expands its forward-only development policy with examples.
+- CI workflows are the executable contracts for public pull-request validation; review prompts load
+  `AGENTS.md` instead of maintaining a separate copy of repository policy.

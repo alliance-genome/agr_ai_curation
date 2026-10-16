@@ -1,7 +1,9 @@
 # AGENTS.md
 
-This file is a fast startup map for humans and coding agents working in
-`agr_ai_curation`.
+This file is the shared instruction and policy source for humans, implementation
+agents, and PR reviewers working in `agr_ai_curation`. Keep repository policy
+here and use the linked guides for detailed contracts; CI review prompts should
+load these instructions rather than maintain a separate policy copy.
 
 ## 1) System Boundaries
 
@@ -157,3 +159,205 @@ Document each setting under the `# Operational limits` section of
 `.env.example`, including what it controls, why someone might change it, and
 its default. Adding a numeric or boolean operational limit without both the
 environment getter and documentation is a review-blocking defect.
+
+## 8) LLM Judgment and Structural Enforcement
+
+When a task delegates checking, validation, interpretation, or review to an LLM,
+the LLM owns the semantic judgment. Do not add a second programmatic judge that
+recomputes, overrides, or vetoes that judgment through substring matching,
+regular expressions, keyword lists, similarity thresholds, or hardcoded
+scientific/domain-policy rules. Calling such logic a "validator", "guardrail",
+"sanity check", or "finalizer" does not make it acceptable.
+
+Code may enforce structural and operational contracts: required fields, data
+types, parseable formats, allowed schema values, existing record references,
+ownership/authorization, and safe persistence. These checks must not decide
+whether evidence supports a claim, two descriptions mean the same thing, an
+annotation is scientifically justified, or an LLM's interpretation is correct.
+For example, checking that an evidence record exists is structural; requiring
+the LLM's explanation to repeat an exact phrase from that record as a condition
+of scientific acceptance is semantic and prohibited.
+
+Put domain policy and evidence-assessment instructions in the LLM's task, and
+preserve its explanation and uncertainty. The LLM may return unresolved or
+needs-review judgments. Do not silently convert them to success, or convert an
+LLM-supported judgment to failure using a separate coded semantic policy.
+
+The LLM decides whether it needs tools to make its judgment. Do not require a
+lookup solely as proof that a validator ran, and never fabricate a lookup audit
+for a scientific assessment. A task that explicitly requires database verification
+still needs real supporting records; copied identifiers and provenance must match
+those records. Report missing or contradictory output as a structural problem for
+bounded correction. If correction cannot finish, preserve the LLM's judgment,
+explanation, and valid values, disclose the incomplete output, and prevent it from
+being finalized as complete. Do not substitute a new scientific verdict.
+
+When editing existing validation, identify this boundary explicitly. Report
+conflicting semantic gates and remove them within the authorized scope; do not
+preserve or introduce them merely as "defense in depth". Tests should verify
+structural enforcement and faithful handling of LLM judgments, not establish
+an additional deterministic oracle for scientific meaning. Any exception must
+come from Chris's explicit instruction for that specific semantic rule.
+
+A minimum character count used to reject an LLM-selected abstract is a semantic
+quality veto, not a structural check. Making such a veto environment-configurable
+does not make it permissible. Exact source-copy, span offset/hash verification,
+and document/tenant ownership checks protect provenance and remain mandatory;
+they do not assess whether the selected evidence scientifically supports a claim.
+
+## 9) Shared Implementation and Review Policies
+
+These policies apply to implementation and review. Violations relevant to the
+changed behavior require correction before merge; establish evidence before
+reporting a finding. Keep policy here rather than duplicating it in CI prompts.
+
+### Forward-only changes and explicit recovery
+
+Fallback behavior is BLOCKING by default. Flag:
+
+- Fallback values or defaults that mask missing data (e.g. `value ?? fallbackValue`, `value || defaultValue` where the intent is graceful degradation)
+- Backwards-compatibility shims or legacy support code
+- Defensive coding patterns that silently handle unexpected states instead of failing clearly
+- Try/catch blocks that swallow errors and return default values
+- Feature flags or conditional paths that preserve old behavior alongside new behavior
+
+Accept a fallback only when it has verifiable developer approval documented by either a pre-existing
+adjacent repository comment that explicitly records developer approval and explains why it is required,
+or a linked Linear issue/PR discussion
+containing the developer decision. A new implementation comment that merely claims approval is not
+evidence. Cite the approval source when accepting a fallback; without verifiable approval, flag it as
+BLOCKING.
+
+Explicit failure handling, nullish coalescing (`??`), optional chaining (`?.`), and defaults for fields
+whose contract is genuinely optional are not fallbacks. The rule targets alternate behavior that masks
+a reachable failure, silently degrades results, guesses missing values, or preserves retired behavior.
+
+### Project-agnostic core boundaries
+
+The reusable platform should be usable by other groups that bring their own agents, tools, schemas,
+labels, group identifiers, curation domains, prompts, data sources, and deployment settings.
+Flag as BLOCKING any changed reusable core code that embeds Alliance/AGR/MOD-specific assumptions
+instead of reading from config, package drop-ins, adapters, runtime manifests, environment settings,
+or extension points.
+
+Examples to flag when they appear in core paths:
+
+- Hard-coded Alliance, AGR, MOD, organism, curator-group, or curation-domain concepts
+- Fixed Alliance service choices, URLs, API names, database assumptions, feature gates, or labels
+- Baked-in default agents, tools, prompts, schemas, sample data, or UI copy that should be supplied
+  by a runtime package or deployment config
+- Generic interfaces that require Alliance identifiers or package names when an adapter/config value
+  should carry that meaning
+
+Do NOT flag legitimate project-specific content that is intentionally scoped to Alliance drop-ins or
+instance documentation, including `packages/alliance/`, `alliance_agents/`, `alliance_config/`,
+`alliance_tools/`, `scripts/deploy_alliance.sh`, Alliance migration history, tests for those
+package-specific paths, and docs/examples that explicitly describe the Alliance instance. The issue is
+leakage from those boundaries into reusable platform/core code.
+
+For BLOCKING project-agnostic findings, identify the smallest extraction or interface change that keeps
+core reusable while preserving Alliance behavior through config/package boundaries.
+
+### Remove code made obsolete by the change
+
+When a PR changes or removes functionality, ALL code that becomes unreferenced MUST be removed in the same PR. Flag as BLOCKING any instance of:
+
+- Imports that are no longer used after the PR's changes
+- Functions, components, hooks, or types that are no longer called/referenced after the PR's changes
+- Files that are no longer imported by anything after the PR's changes
+- Dead code paths that can no longer be reached
+- Commented-out code that was replaced
+- Variables assigned but never read
+- Test files testing components/functions that were removed in this PR
+
+Use grep/glob to verify whether flagged code is actually still referenced. Do not flag code as dead unless you have confirmed it is unreferenced.
+
+### TraceReview extraction coupling
+
+The `trace_review/` support program parses the Langfuse traces the core program emits. Developers rely
+on it to faithfully extract traces, reasoning, agent decisions, tool calls, supervisor routing, and
+domain envelopes from curator-feedback sessions. When a PR changes the agent/tool runtime or its
+instrumentation, the trace structure can drift away from what TraceReview's analyzers parse, silently
+breaking extraction. Treat the diff as TraceReview-affecting when it touches:
+
+- Agent identity/surface: agent names, the `{agent_name}_config` observation contract, or supervisor
+  routing (read by `trace_review/backend/src/analyzers/agent_config.py`, `agent_context.py`,
+  `supervisor_routing.py`)
+- Tools: tool names, tool input/output shapes, or the tool-call record fields `name`/`arguments`/`call_id`
+  emitted from `backend/src/lib/openai_agents/streaming_tools.py`, `tools/`, and `tool_call_policy.py`
+  (read by `trace_review/backend/src/analyzers/tool_calls.py`, `agent_context.py`, `pdf_citations.py`,
+  `document_hierarchy.py`, `token_analysis.py`; some key on literal tool-name strings such as
+  `search_document`, `read_section`, `ask_*`)
+- Instrumentation: Langfuse span/observation naming, evidence spans, or the trace metadata keys
+  `supervisor_agent`, `supervisor_model`, `has_document` assembled in
+  `backend/src/lib/openai_agents/runner.py` (the `trace_metadata` dict) and emitted via
+  `langfuse_client.py`; related instrumentation lives in `evidence_spans.py`, `evidence_summary.py`,
+  `event_types.py`, `audit_labels.py`
+- Domain envelope/validation schemas read by `trace_review/backend/src/analyzers/domain_envelopes.py`
+
+Use grep to confirm whether the affected analyzer depends on (breakage) or is missing (new surface)
+the changed name, key, or shape before flagging. Flag BOTH of these as BLOCKING, because TraceReview
+is core diagnostic tooling that must stay faithful AND complete:
+
+- Breakage: the change would make TraceReview drop, misparse, or mislabel data it currently surfaces
+  (renamed/removed tool or agent, changed tool-call field, altered observation/metadata key the
+  analyzers read).
+- Missing coverage: the change adds a new agent, tool, tool-call/decision type, routing path, or
+  diagnostic instrumentation signal that no analyzer extracts yet, so it would be invisible or
+  unparsed in trace review. A new extraction surface that ships without the matching `trace_review/`
+  wiring is a BLOCKING coverage gap, not a future nicety — diagnostics depend on TraceReview seeing
+  everything the agents now do.
+In both cases, name the analyzer file that breaks or lacks coverage and the `trace_review/` change
+needed (new or extended analyzer, view, tool-name match, metadata key, or envelope schema). Only
+downgrade from BLOCKING if the PR already includes the corresponding `trace_review/` changes.
+
+### Sentry observability contract
+
+When the diff changes backend failure handling, caught runtime/background failures, agent/runtime
+instrumentation, or Sentry configuration, read `docs/developer/guides/SENTRY_OBSERVABILITY.md` and
+verify the changed path preserves that contract. Flag as BLOCKING:
+
+- A handled server failure that can now disappear without the appropriate reporting facade
+- Secrets, sensitive database exception data, unbounded curator/document content, curator/document
+  content outside the guide's explicit AI-agent content-tier controls, or raw application identifiers
+  in fields the guide requires to be hashed entering Sentry
+- Duplicate framework and explicit capture of the same handled failure
+- Sentry instrumentation displacing canonical Langfuse/TraceReview evidence
+- Frontend capture without a dedicated frontend DSN and redaction plan
+- A new Sentry-reporting path without focused capture and redaction tests using fake sensitive strings
+
+Do not require Sentry for unrelated changes or ordinary 4xx validation/auth conflicts. Do not convert
+every log line into a Sentry event. Preserve the guide's bounded, mechanically scrubbed AI content tiers
+and permitted operational trace identifiers. For a BLOCKING finding, cite the changed failure boundary
+and the specific guide contract it violates, then recommend the smallest correction that preserves
+public HTTP behavior and existing observability.
+
+### Additional implementation and validation requirements
+
+
+**Code quality**
+
+- Changed code follows established project conventions where deviation creates a concrete defect or integration risk
+- No hardcoded secrets or credentials
+- Proper error handling and logging
+
+**Security**
+
+- No API keys, tokens, or secrets in code
+- Input validation on API endpoints
+- Proper authentication checks where needed
+
+**Testing**
+
+- Tests protect materially changed behavior and credible regressions
+- Do not demand tests for unchanged framework behavior, trivial accessors, or theoretical combinations without risk evidence
+
+**Docker**
+
+- Dockerfile changes maintain build efficiency
+- No removal of pids_limit from Docker configurations (has caused production crashes)
+
+**Dependencies**
+
+- New dependencies are necessary and from trusted sources
+- requirements.txt and package.json changes are intentional

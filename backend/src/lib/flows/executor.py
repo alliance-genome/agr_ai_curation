@@ -2999,9 +2999,9 @@ def get_all_agent_tools(
     tool calls via run_specialist_with_events() and emits events for the audit
     panel and PDF highlighting. This is the same pattern used by normal chat.
 
-    Document context (hierarchy, abstract, sections) can be passed in to avoid
-    redundant fetches, or will be fetched automatically using DocumentContext
-    which leverages the same cache as normal chat.
+    Document-aware construction requires a prepared DocumentContext. Await
+    DocumentContext.fetch at the async execution boundary before calling this
+    synchronous builder; construction never retrieves document metadata.
 
     Args:
         flow: The curation flow defining which agents are active
@@ -3013,7 +3013,7 @@ def get_all_agent_tools(
         db_user_id: Database user ID for private/project agent visibility checks
         document_name: Optional filename for prompt context
         active_groups: Active group IDs for database agents
-        doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
+        doc_context: Prepared DocumentContext, required when document_id is supplied
 
     Returns:
         By default returns (tools, created_tool_names).
@@ -3021,6 +3021,9 @@ def get_all_agent_tools(
         (tools, created_tool_names, unavailable_steps, execution_state) where
         unavailable_steps contains skipped steps with reasons for UI warnings.
     """
+    if document_id and doc_context is None:
+        raise ValueError("Document-aware flow construction requires prepared doc_context")
+
     custom_entries = _runtime_custom_entries(flow, db_user_id=db_user_id, active_groups=active_groups)
     if any(
         (entry or {}).get("execution_receipt", {}).get("output_contract", {}).get("generic_profile_ref")
@@ -3050,15 +3053,7 @@ def get_all_agent_tools(
     created_tool_names: Set[str] = set()
     unavailable_steps: List[Dict[str, Any]] = []
 
-    # Use pre-fetched document context if provided, otherwise fetch
-    # This optimization matches how chat pre-fetches and passes through
-    if doc_context is None and document_id and user_id:
-        doc_context = DocumentContext.fetch(document_id, user_id, document_name)
-        logger.info(
-            f"[Flow Executor] Fetched document context: {doc_context.section_count()} sections, "
-            f"abstract={'yes' if doc_context.abstract else 'no'}"
-        )
-    elif doc_context:
+    if doc_context:
         logger.debug(
             '[Flow Executor] Using pre-fetched document context: %s sections', doc_context.section_count())
 
@@ -4198,7 +4193,7 @@ def create_flow_supervisor(
         db_user_id: Database user ID for private/project agent visibility checks
         document_name: Optional filename for prompt context
         active_groups: Active group IDs for database queries
-        doc_context: Pre-fetched DocumentContext (optimization to avoid re-fetch)
+        doc_context: Prepared DocumentContext, required when document_id is supplied
         inspection_context: Server-authorized prior refs for a preferred-flow follow-up
 
     Returns:
@@ -4954,7 +4949,7 @@ async def execute_flow(
     doc_context = None
     if document_id and user_id:
         with cost_scope(flow_cost_context), runtime_cost_scope(preparation_accounting):
-            doc_context = DocumentContext.fetch(document_id, user_id, document_name)
+            doc_context = await DocumentContext.fetch(document_id, user_id, document_name)
         logger.info(
             f"[Flow Executor] Pre-fetched document context: {doc_context.section_count()} sections, "
             f"abstract={'yes' if doc_context.abstract else 'no'}"

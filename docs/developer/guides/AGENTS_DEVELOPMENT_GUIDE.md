@@ -622,3 +622,40 @@ See `packages/alliance/tools/bindings.yaml` and the normalized `TOOL_REGISTRY` /
 - `config/agents/` -- Explicit source-development runtime overrides and authoring examples
 - Langfuse docs: https://langfuse.com/docs
 - OpenAI Agents SDK: https://github.com/openai/openai-agents-python
+
+
+### Awaited document preparation
+
+Chat, flow execution, and direct benchmark execution await `DocumentContext.fetch`
+before constructing document-aware agents. Synchronous flow builders require a
+prepared `doc_context` when given a document ID; they perform no metadata retrieval.
+Supplied context and warm tenant-scoped cache entries avoid additional retrieval.
+Hierarchy precedes abstract discovery so its `abstract_section_title` remains the
+first search target. Existing section, keyword, and first-chunk strategies remain.
+The LLM's abstract is preserved without a minimum-length semantic veto.
+
+`DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS` defaults to 10 seconds **per stage**.
+A failed/timed-out hierarchy permits abstract discovery without hierarchy; an
+abstract failure/timeout preserves any hierarchy already retrieved. This replaces
+the old executor `future.result(timeout=10)` wait, whose executor shutdown could
+block beyond that value. The new timeout stops awaiting work; it does not kill
+synchronous database/client operations already running in a worker. Cancellation
+propagates without starting another strategy or publishing a cache entry. Workers
+finish and close their own Weaviate/SQL sessions; provider cleanup may take time.
+Thread-dispatch failure is an optional-context failure, never a reason to execute
+blocking retrieval on the event loop. Cold connection setup also runs in workers,
+with singleton initialization serialized until the connection is ready.
+
+`DOCUMENT_CONTEXT_CACHE_TTL_SECONDS` retains the 600-second default, including
+negative (all-None) and partial results. Invalidating a document revokes its active
+cache fills, so obsolete completions cannot repopulate the entry. Concurrent cold
+misses remain independent (including same-key misses): each run owns its actual
+requests and costs; the last non-invalidated completed fill wins. No tasks or costs
+are shared across runs or event loops. Active fill bookkeeping is released on
+completion or cancellation, without retaining invalidation tombstones.
+
+Preparation stays inside flow preparation cost scopes and before direct benchmark
+invocation capture/stage scopes. Awaiting and `asyncio.to_thread` preserve contextvars;
+actual LLM requests retain measured request and child-invocation accounting. Tests
+use event barriers to demonstrate loop responsiveness; this is synthetic/code
+validation, not a measured production latency or throughput improvement.

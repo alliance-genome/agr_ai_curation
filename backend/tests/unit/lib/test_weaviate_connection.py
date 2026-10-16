@@ -366,3 +366,54 @@ def test_connect_passes_configured_query_timeout(
     # Only the query timeout is configured; init and insert keep library defaults.
     assert timeout.init == 2
     assert timeout.insert == 90
+
+
+def test_failed_initialization_is_not_published(monkeypatch):
+    class Broken:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            raise RuntimeError("connect failed")
+
+    monkeypatch.setattr(wc, "WeaviateConnection", Broken)
+    with pytest.raises(RuntimeError, match="connect failed"):
+        wc.get_connection()
+    assert wc._connection is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_cold_connection_initialization_is_shared(monkeypatch):
+    import asyncio
+    from threading import Event
+
+    entered, second_started = asyncio.Event(), asyncio.Event()
+    release = Event()
+    loop = asyncio.get_running_loop()
+    created = []
+
+    class Connection:
+        def __init__(self, **kwargs):
+            created.append(self)
+
+        def connect(self):
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5)
+
+    monkeypatch.setattr(wc, "WeaviateConnection", Connection)
+    first = asyncio.create_task(asyncio.to_thread(wc.get_connection))
+    second = None
+    def get_second():
+        loop.call_soon_threadsafe(second_started.set)
+        return wc.get_connection()
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert wc._connection is None
+        second = asyncio.create_task(asyncio.to_thread(get_second))
+        await asyncio.wait_for(second_started.wait(), 5)
+        assert len(created) == 1
+    finally:
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(first, *([second] if second else [])), 5)
+    assert len(results) == 2 and results[0] is results[1]
+    assert len(created) == 1

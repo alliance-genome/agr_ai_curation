@@ -1,4 +1,5 @@
 """Tests for flow executor custom_instructions wiring."""
+from src.lib.document_context import DocumentContext
 from agents import RunConfig as SDKRunConfig
 
 import asyncio
@@ -10,7 +11,7 @@ import logging
 from types import SimpleNamespace
 from uuid import UUID
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents import Agent, ModelSettings, function_tool
 
@@ -2883,6 +2884,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             include_unavailable=True,
             flow_run_id="flow-run-123",
             document_id="document-1",
+            doc_context=DocumentContext(document_id="document-1", user_id="user"),
         )
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
@@ -4676,6 +4678,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 session_id="session-123",
                 flow_run_id="flow-run-123",
                 user_query="Focus on the confirmed findings.",
+                doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
             )
 
             assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
@@ -4815,6 +4818,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow_run_id="flow-run-123",
                 user_query="Focus on the confirmed findings.",
                 active_groups=groups,
+                doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
             )
 
             assert created_names == {"ask_gene_specialist", "ask_curation_handoff_specialist"}
@@ -4911,6 +4915,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 session_id="session-123",
                 flow_run_id="flow-run-123",
                 include_unavailable=True,
+                doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
             )
             tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
@@ -4953,6 +4958,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             user_id="user-123",
             session_id="session-123",
             include_unavailable=True,
+            doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
         )
 
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
@@ -5029,6 +5035,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             user_id="user-123",
             session_id="session-123",
             include_unavailable=True,
+            doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
         )
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
@@ -5077,6 +5084,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             document_id="doc-123",
             user_id="user-123",
             include_unavailable=True,
+            doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
         )
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(
@@ -5826,6 +5834,7 @@ class TestFlowSupervisorPromptCacheKey:
         mock_settings.return_value = ModelSettings()
 
         def key_for(flow, **kwargs):
+            kwargs["doc_context"] = DocumentContext(document_id=kwargs["document_id"], user_id="user")
             create_flow_supervisor(flow, **kwargs)
             identity = mock_settings.call_args.kwargs["prompt_cache"]
             assert identity.agent_key == "flow_supervisor"
@@ -6085,7 +6094,7 @@ class TestExecuteFlowTermination:
         flow = _make_flow([_task_input_node(), _agent_node("n1", "gene")])
         captured = []
 
-        def fetch(*args):
+        async def fetch(*args):
             captured.append((current_runtime_cost_context(), current_cost_context()))
             raise RuntimeError("prefetch sentinel")
 
@@ -7522,11 +7531,11 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(
+            AsyncMock(return_value=SimpleNamespace(
                 hierarchy=None,
                 abstract=None,
                 section_count=lambda: 0,
-            ),
+            )),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -8007,7 +8016,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -8119,7 +8128,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
 
         def _persist_first_only(requests):
@@ -8229,7 +8238,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -8348,7 +8357,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -8459,7 +8468,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -8584,7 +8593,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
 
         def _raise_persistence_error(_requests):
@@ -8712,7 +8721,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -8807,7 +8816,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
@@ -8872,7 +8881,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -8962,7 +8971,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -9073,7 +9082,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -9141,7 +9150,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.DocumentContext.fetch",
-            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+            AsyncMock(return_value=SimpleNamespace(section_count=lambda: 0, abstract=None)),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.build_flow_prompt",
@@ -9347,7 +9356,7 @@ def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_resul
     ], source_node_id="gene", output_node_id="chat")
     tools, _, _, execution_state = get_all_agent_tools(
         flow, document_id="doc-1", include_unavailable=True
-    )
+    , doc_context=DocumentContext(document_id="doc-1", user_id="user"),)
     tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
     asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
@@ -9557,3 +9566,13 @@ class TestFlowStepProgressEvents:
 
         assert flow_started["type"] == "FLOW_STARTED"
         assert flow_started["data"]["total_steps"] == 2
+
+
+@pytest.mark.parametrize("user_id", [None, "user"])
+def test_document_builder_requires_prepared_context_before_construction(monkeypatch, user_id):
+    executor = _executor_module()
+    fetch = AsyncMock()
+    monkeypatch.setattr(executor.DocumentContext, "fetch", fetch)
+    with pytest.raises(ValueError, match="requires prepared doc_context"):
+        executor.get_all_agent_tools(SimpleNamespace(), document_id="doc", user_id=user_id)
+    fetch.assert_not_called()

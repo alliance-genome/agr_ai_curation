@@ -13,13 +13,14 @@ Key benefits:
 Usage:
     from src.lib.document_context import DocumentContext
 
-    # Fetch with caching (single Weaviate query per document)
-    doc_ctx = DocumentContext.fetch(document_id, user_id, document_name)
+    # Await preparation with caching
+    doc_ctx = await DocumentContext.fetch(document_id, user_id, document_name)
 
     # Pass to unified agent builder kwargs
     kwargs = doc_ctx.to_agent_kwargs()
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -48,7 +49,7 @@ class DocumentContext:
     sections: Optional[List[str]] = field(default=None)
 
     @classmethod
-    def fetch(
+    async def fetch(
         cls,
         document_id: str,
         user_id: str,
@@ -67,9 +68,10 @@ class DocumentContext:
         Returns:
             DocumentContext with hierarchy, abstract, and sections populated
         """
-        from .document_cache import get_cached_metadata, set_cached_metadata
-        from .openai_agents.agents.supervisor_agent import fetch_document_hierarchy_sync
-        from .openai_agents.prompt_utils import fetch_document_abstract_sync
+        from .document_cache import get_cached_metadata, metadata_cache_fill
+        from .weaviate_client.chunks import get_document_sections_hierarchical
+        from .openai_agents.prompt_utils import fetch_document_abstract
+        from .openai_agents.config import get_document_context_stage_timeout_seconds
 
         hierarchy = None
         abstract = None
@@ -88,20 +90,21 @@ class DocumentContext:
             # Cache miss - fetch from Weaviate
             logger.info('[DocumentContext] Cache miss, fetching from Weaviate: %s...', document_id[:8])
 
-            hierarchy = fetch_document_hierarchy_sync(document_id, user_id)
-            if hierarchy:
-                logger.info(
-                    f"[DocumentContext] Fetched hierarchy: "
-                    f"{len(hierarchy.get('sections', []))} sections"
-                )
-
-            # Fetch abstract (uses hierarchy's abstract_section_title if available)
-            abstract = fetch_document_abstract_sync(document_id, user_id, hierarchy)
-            if abstract:
-                logger.info('[DocumentContext] Fetched abstract: %s chars', len(abstract))
-
-            # Store in cache for subsequent requests
-            set_cached_metadata(user_id, document_id, hierarchy, abstract)
+            # Independent fills keep each request's contextvars and LLM costs local.
+            # The lease is revoked by invalidation and released on cancellation.
+            with metadata_cache_fill(user_id, document_id) as publish:
+                for stage in ("hierarchy", "abstract"):
+                    try:
+                        async with asyncio.timeout(get_document_context_stage_timeout_seconds()):
+                            if stage == "hierarchy":
+                                hierarchy = await get_document_sections_hierarchical(document_id, user_id)
+                            else:
+                                abstract = await fetch_document_abstract(document_id, user_id, hierarchy)
+                    except Exception:
+                        # CancelledError is deliberately not caught. A hierarchy
+                        # failure permits abstract discovery without its metadata.
+                        _report_preparation_failure(stage)
+                publish(hierarchy, abstract)
 
         # Extract flat section names from hierarchy
         if hierarchy and hierarchy.get("sections"):
@@ -159,3 +162,20 @@ class DocumentContext:
         if self.hierarchy and self.hierarchy.get("sections"):
             return len(self.hierarchy.get("sections", []))
         return 0
+
+
+def _report_preparation_failure(stage: str) -> None:
+    """Optional metadata/reporting failures must not fail agent execution."""
+    from .observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error("Document context preparation failed"),
+            component="document_context",
+            operation="fetch_document_context_failed",
+            tags={"phase": "context_preparation"},
+            context={"stage": stage},
+        )
+    except Exception:
+        pass
+    logger.warning("Document context %s preparation failed", stage, extra={"sentry_skip_event": True})

@@ -1,6 +1,7 @@
 """Weaviate connection management library."""
 
 import logging
+from threading import RLock
 from typing import Optional, Dict, Any
 from contextlib import contextmanager
 import asyncio
@@ -205,6 +206,7 @@ class WeaviateConnection:
 
 # Module-level singleton connection
 _connection: Optional[WeaviateConnection] = None
+_connection_lock = RLock()
 
 
 def get_connection() -> WeaviateConnection:
@@ -217,19 +219,21 @@ def get_connection() -> WeaviateConnection:
         RuntimeError: If connection not initialized
     """
     global _connection
-    if _connection is None:
-        # Create and connect to default Weaviate instance
-        import os
-        weaviate_host = os.getenv("WEAVIATE_HOST", "localhost")
-        weaviate_port = os.getenv("WEAVIATE_PORT", "8080")
-        weaviate_scheme = os.getenv("WEAVIATE_SCHEME", "http")
-        weaviate_api_key = os.getenv("WEAVIATE_API_KEY") or None
-        weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
+    with _connection_lock:
+        if _connection is None:
+            # Create and connect to default Weaviate instance
+            import os
+            weaviate_host = os.getenv("WEAVIATE_HOST", "localhost")
+            weaviate_port = os.getenv("WEAVIATE_PORT", "8080")
+            weaviate_scheme = os.getenv("WEAVIATE_SCHEME", "http")
+            weaviate_api_key = os.getenv("WEAVIATE_API_KEY") or None
+            weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
 
-        _connection = WeaviateConnection(url=weaviate_url, api_key=weaviate_api_key)
-        # Actually connect to Weaviate
-        _connection.connect()
-    return _connection
+            connection = WeaviateConnection(url=weaviate_url, api_key=weaviate_api_key)
+            # Actually connect to Weaviate
+            connection.connect()
+            _connection = connection
+        return _connection
 
 
 def set_connection(connection: WeaviateConnection) -> None:
