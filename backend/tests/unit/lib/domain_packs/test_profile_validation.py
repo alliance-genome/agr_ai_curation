@@ -390,7 +390,7 @@ def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nest
                if cap.ref.domain_pack_id == "agr.alliance.allele"
                and cap.ref.binding_id == "allele_mention_reference_validation")
     assert not capability_issues(cap, ["MGI"])
-    assert cap.ref.domain_pack_version == "0.1.1"
+    assert cap.ref.domain_pack_version == "0.1.2"
     # Optional custom details and parts can supply the lookup input.
     raw["fields"][0]["required"] = False
     raw["fields"][0]["nullable"] = True
@@ -429,13 +429,14 @@ def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nest
         assert built.request.selected_inputs["taxon"] == "NCBITaxon:10090"
 
 
-def test_previous_allele_capability_version_is_not_silently_reused(example):
+@pytest.mark.parametrize("previous_version", ["0.1.0", "0.1.1"])
+def test_previous_allele_capability_version_is_not_silently_reused(example, previous_version):
     from src.lib.agent_studio.profile_mapping_service import capability_catalog
 
     raw, _, pack = example
     cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
                if cap.ref.domain_pack_id == "agr.alliance.allele")
-    old_ref = cap.ref.model_copy(update={"domain_pack_version": "0.1.0"})
+    old_ref = cap.ref.model_copy(update={"domain_pack_version": previous_version})
     raw["validator_mappings"][0].update(
         capability_ref=old_ref.model_dump(), capability_fingerprint=cap.fingerprint(),
         inputs={"mention": {"field_path": "attributes.paper_name"}},
@@ -465,11 +466,12 @@ def test_allele_capability_persistence_uses_new_version_identity(example):
         fingerprint=cap.fingerprint(), snapshot=cap.snapshot())
     persist_capability_references(db, SimpleNamespace(id=uuid4(), contract=raw), [cap])
     insert, select = [call.args[0] for call in db.execute.call_args_list]
-    assert insert.compile(dialect=postgresql.dialect()).params["domain_pack_version"] == "0.1.1"
+    assert insert.compile(dialect=postgresql.dialect()).params["domain_pack_version"] == "0.1.2"
     # The select must look up the new immutable row, not a previously persisted
-    # 0.1.0 snapshot with different bytes.
-    assert "0.1.1" in select.compile(dialect=postgresql.dialect()).params.values()
+    # 0.1.0 or 0.1.1 snapshot with different bytes.
+    assert "0.1.2" in select.compile(dialect=postgresql.dialect()).params.values()
     assert "0.1.0" not in select.compile(dialect=postgresql.dialect()).params.values()
+    assert "0.1.1" not in select.compile(dialect=postgresql.dialect()).params.values()
     assert db.add.call_args.args[0].capability_fingerprint == cap.fingerprint()
 
 
