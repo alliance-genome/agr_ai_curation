@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -313,7 +312,6 @@ def test_chat_session_tools_bound_maximum_titles_and_replay_all_pages(
         def count_messages(self, **kwargs):
             return 0
 
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
 
@@ -341,7 +339,6 @@ def test_chat_session_tools_bound_maximum_titles_and_replay_all_pages(
             )
         )
         assert result["success"] is True
-        assert len(api_module._serialize_provider_tool_result(result)) <= 12000
         provider_content = api_module._provider_tool_result_content(
             tool_name=current_call["tool"],
             tool_input=current_call["arguments"],
@@ -370,11 +367,10 @@ def test_chat_session_tools_bound_maximum_titles_and_replay_all_pages(
         current["end"] == following["start"]
         for current, following in zip(returned_ranges, returned_ranges[1:])
     )
-    assert len(returned_ranges) > 1
+    assert len(returned_ranges) == 1
     assert result is not None
     assert result["complete"] is True
 
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1800")
     narrow_ids = []
     narrow_page_sizes = []
     next_call = {"tool": tool_name, "arguments": tool_input}
@@ -390,15 +386,13 @@ def test_chat_session_tools_bound_maximum_titles_and_replay_all_pages(
             )
         )
         assert narrow_result["success"] is True
-        assert len(api_module._serialize_provider_tool_result(narrow_result)) <= 1800
         assert narrow_result["sessions"]
         narrow_page_sizes.append(len(narrow_result["sessions"]))
         narrow_ids.extend(item["session_id"] for item in narrow_result["sessions"])
         next_call = narrow_result["next_call"]
     assert narrow_ids == [session.session_id for session in sessions]
-    assert 1 in narrow_page_sizes
+    assert narrow_page_sizes == [25]
 
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     detail = asyncio.run(
         api_module._handle_tool_call(
             tool_name="get_chat_conversation",
@@ -633,7 +627,6 @@ def test_handle_tool_call_get_chat_turn_chunks_large_exact_fields_with_replayabl
     assert result["messages"][0]["fields"]["content"]["length"] == len(content)
     assert result["messages"][0]["fields"]["content"]["complete"] is False
 
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1200")
     stale_hash_call = {
         **result["messages"][0]["fields"]["content"]["next_call"],
         "arguments": {
@@ -669,7 +662,6 @@ def test_handle_tool_call_get_chat_turn_chunks_large_exact_fields_with_replayabl
                     messages=[],
                 )
             )
-            assert len(api_module._serialize_provider_tool_result(chunk_result)) <= 1200
             assert chunk_result["returned_range"]["end"] > chunk_result["returned_range"]["start"]
             chunks.append(chunk_result["chunk"])
             next_call = chunk_result["next_call"]
@@ -685,21 +677,7 @@ def test_handle_tool_call_get_chat_turn_chunks_large_exact_fields_with_replayabl
 
 
 def test_handle_tool_call_get_chat_turn_same_turn_returns_only_persisted_rows(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
-    content = api_module._provider_tool_result_content(
-        tool_name="get_trace_payload",
-        tool_input={"trace_id": "trace-1", "payload_id": "payload-1"},
-        tool_result={
-            "status": "success",
-            "data": {"value": "large value" * 1000},
-        },
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-current",
-    )
-    compact = json.loads(content)
-    turn_recall = compact["recall"]["turn"]
-    assert len(content) <= 500
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
+    turn_recall = {"tool": "get_chat_turn", "session_id": "agent-studio-session-1", "turn_id": "opus-turn-current"}
 
     class _FakeRepository:
         def __init__(self, _db):

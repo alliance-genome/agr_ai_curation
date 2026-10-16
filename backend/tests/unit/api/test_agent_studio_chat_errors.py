@@ -203,7 +203,8 @@ def _assert_provider_context_preflight(event: dict) -> None:
     assert event["operation"] == "agents_sdk_run"
     assert event["provider"] == "openai"
     assert event["model"] == "gpt-6-astra"
-    assert event["model_live"] is True
+    assert event["model_live"] is False
+    assert event["payload_summary"]["scope"] == "application_turn_before_session_restore"
     assert event["payload_summary"]["json_chars"] > 0
 
 
@@ -737,7 +738,6 @@ def test_application_continuation_reaches_model_without_rewriting_curator_turn(m
 
     asyncio.run(scenario())
     assert captured == [
-        {"role": "user", "content": "Please help"},
         {"role": "developer", "content": instruction},
     ]
 

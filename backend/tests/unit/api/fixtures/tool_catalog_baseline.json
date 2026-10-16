@@ -1044,7 +1044,7 @@
           "type": "string"
         }
       ],
-      "summary": "Connects a saved piece of evidence to a concrete field on a finding. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs."
+      "summary": "Connects a saved piece of evidence to a concrete field on a finding. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current chunk_index/span_index selections."
     },
     "methods": null,
     "name": "Attach Evidence To Object",
@@ -4149,9 +4149,9 @@
       "parameters": [
         {
           "description": "Which passage to read, taken from a search result or a section's list of passages.",
-          "name": "chunk_id",
+          "name": "chunk_index",
           "required": true,
-          "type": "string"
+          "type": "integer"
         },
         {
           "description": "Only for a passage shown in windows, where the next window starts, as given in the previous reply.",
@@ -4334,10 +4334,10 @@
           "type": "string"
         },
         {
-          "description": "The snippets to save, picked from a passage that was read.",
-          "name": "span_ids",
+          "description": "Pairs of chunk_index and span_index from passages read in this conversation.",
+          "name": "selections",
           "required": true,
-          "type": "array[string]"
+          "type": "array[object]"
         },
         {
           "description": "Existing active-run evidence record ID to update in place when correcting the source spans.",
@@ -5849,7 +5849,7 @@
           "type": "string"
         }
       ],
-      "summary": "Changes the editable details on a piece of evidence -- what it is about, which field it supports, and the agent's note. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current span IDs."
+      "summary": "Changes the editable details on a piece of evidence -- what it is about, which field it supports, and the agent's note. To correct the quote or source provenance, call record_evidence again with the existing evidence_record_id and current chunk_index/span_index selections."
     },
     "methods": null,
     "name": "Update Evidence Metadata",

@@ -308,3 +308,19 @@ async def test_page_compaction_only_dispatches_a_fitting_closed_prefix():
     with pytest.raises(ContextRecoveryError, match="No source content fits"):
         await policy.next_page("read")
     assert request.compactions == [policy.last_input]
+
+
+@pytest.mark.asyncio
+async def test_deferred_business_choice_overhead_participates_in_capacity_recovery():
+    class ChoiceAwareRequest(FakeRequest):
+        async def count(self, items):
+            base = await super().count(items)
+            return base + (100 if self.settings.tool_choice == "submit_prompt_suggestion" else 0)
+    items = [{"role": "user", "content": "old " * 290}, {"role": "user", "content": "continue " * 30}]
+    request = ChoiceAwareRequest(len(exact_json(items)))
+    policy = ContextCapacityPolicy(MemoryHistory())
+    policy.deferred_tool_choice = "submit_prompt_suggestion"
+    result, settings = await policy.prepare(request, items, ModelSettings())
+    assert request.compactions == [items[:1]]
+    assert settings.tool_choice == "submit_prompt_suggestion"
+    assert await request.count(result) <= request.capacity

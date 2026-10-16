@@ -183,12 +183,25 @@ class ContextCapacityPolicy:
         self.replacement_keys, self.replacement_items = value["source_item_keys"], deepcopy(prepared)
         self.state_dirty = False
 
+    def _ingestion_settings(self, settings):
+        choice = settings.tool_choice
+        if isinstance(choice, str) and choice not in {"auto", "none", "required", CONTEXT_READ_TOOL}:
+            self.deferred_tool_choice = choice
+        return replace(settings, tool_choice=CONTEXT_READ_TOOL, parallel_tool_calls=False)
+
     async def prepare(self, request, items: list, settings):
         from .model_context_view import ContextRecoveryError
         self.request = request
         await self.restore(self.canonical_input or items)
         original = deepcopy(self.canonical_input or items)
         prepared = self.apply(items)
+        # Count the choice that will actually be sent. Restoring it after recovery
+        # would reject a request that could fit after compacting closed history.
+        if self.pending:
+            settings = self._ingestion_settings(settings)
+        elif self.deferred_tool_choice:
+            settings = replace(settings, tool_choice=self.deferred_tool_choice)
+        request.set_settings(settings)
         count = await request.count(prepared)
         self.metrics = {"input_tokens_before": count, "input_capacity": request.capacity,
             "standalone_compactions": 0, "capacity_ingress_payloads": 0}
@@ -219,6 +232,9 @@ class ContextCapacityPolicy:
                 # Only actual overflow reaches this path. Consider text anywhere
                 # in restored history too: a single old item may exceed /compact's
                 # own capacity. Preserve exchanges and queue source data in order.
+                settings = self._ingestion_settings(settings)
+                request.set_settings(settings)
+                count = await request.count(prepared)
                 calls = {item.get("call_id"): item.get("name") for item in prepared
                     if item.get("type") == "function_call"}
                 candidates = []
@@ -269,23 +285,6 @@ class ContextCapacityPolicy:
                     raise ContextRecoveryError("The request's instructions, tool definitions, or non-text inputs exceed model capacity; textual ingestion cannot reduce them.")
             self.state_dirty = True
         self.last_input, self.last_output = deepcopy(prepared), []
-        if self.pending:
-            choice = settings.tool_choice
-            if isinstance(choice, str) and choice not in {"auto", "none", "required", CONTEXT_READ_TOOL}:
-                self.deferred_tool_choice = choice
-            settings = replace(settings, tool_choice=CONTEXT_READ_TOOL, parallel_tool_calls=False)
-            request.set_settings(settings)
-            count = await request.count(prepared)
-            if count > request.capacity:
-                raise ContextRecoveryError("Required context-ingestion tool instructions exceed model capacity.")
-        elif self.deferred_tool_choice:
-            # SDK reset_tool_choice observes infrastructure tools too. Preserve
-            # the requested business action until it actually gets called.
-            settings = replace(settings, tool_choice=self.deferred_tool_choice)
-            request.set_settings(settings)
-            count = await request.count(prepared)
-            if count > request.capacity:
-                raise ContextRecoveryError("Required business tool instructions exceed model capacity.")
         if self.state_dirty:
             await self._save_projection(original, prepared)
         self.metrics.update(input_tokens_after=count, pending_payloads=len(self.pending),
