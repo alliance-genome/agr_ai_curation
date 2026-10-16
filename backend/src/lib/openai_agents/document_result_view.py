@@ -26,7 +26,11 @@ def require_document_read_result(tool_name: str, result: Any) -> None:
         raise DocumentReadError(tool_name) from TypeError(
             f"{tool_name} must return a structured document result"
         )
-    if raw.get("error_code") or (tool_name == "read_chunk" and raw.get("chunk") is None):
+    # Paging/request and response-size errors are not failed source retrievals.
+    # Their existing structured recovery/reporting contracts remain in force.
+    if raw.get("error_code") in {"invalid_result_cursor", "tool_result_budget_unmet"}:
+        return
+    if tool_name == "read_chunk" and raw.get("chunk") is None:
         raise DocumentReadError(tool_name)
 
 
@@ -50,8 +54,6 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
     if tool_name not in DOCUMENT_READ_TOOLS:
         return result, []
     raw = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
-    if not isinstance(raw, dict):
-        raise TypeError(f"{tool_name} must return a structured document result")
     view = deepcopy(raw)
     if tool_name == "search_document":
         records = view.get("hits") or []

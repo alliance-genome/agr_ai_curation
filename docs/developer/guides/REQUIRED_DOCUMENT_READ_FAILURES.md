@@ -4,6 +4,8 @@ A missing required chunk, failed source retrieval, or invalid exact-text/span
 result stops the current extraction. It must not become an empty extraction,
 recoverable validator finding, or instruction to continue without source text.
 An empty search or unmatched section query remains a valid discovery result.
+Structured cursor and response-size errors retain their existing correction and
+reporting paths; they do not assert that PDF source retrieval failed.
 
 Package document tools raise `DocumentReadError` with the original exception
 chained as its cause. The SDK failure callback raises instead of turning a

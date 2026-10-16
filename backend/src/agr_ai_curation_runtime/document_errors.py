@@ -1,6 +1,8 @@
 """Required source-read failures shared by package tools and application runners."""
 from __future__ import annotations
 
+from builtins import BaseExceptionGroup
+
 
 class DocumentReadError(RuntimeError):
     """A required PDF read failed; callers must stop, not invent missing evidence.

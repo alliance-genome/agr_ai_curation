@@ -7427,13 +7427,14 @@ class TestExecuteFlowTermination:
 
     @pytest.mark.parametrize(
         "drain_error_timing",
-        [None, "post-output", "pre-output", "early-close", "budget"],
+        [None, "post-output", "pre-output", "early-close", "budget", "pdf"],
         ids=[
             "clean-drain",
             "failed-drain",
             "pre-output-failure",
             "early-close",
             "budget-exhausted",
+            "pdf-read-failed",
         ],
     )
     @pytest.mark.parametrize(
@@ -7588,6 +7589,9 @@ class TestExecuteFlowTermination:
                 if drain_error_timing == "budget":
                     from src.lib.openai_agents.provider_usage import BenchmarkInvocationBudgetExceeded
                     raise BenchmarkInvocationBudgetExceeded(1, 1)
+                if drain_error_timing == "pdf":
+                    from agr_ai_curation_runtime.document_errors import DocumentReadError
+                    raise RuntimeError("sensitive SDK wrapper") from DocumentReadError(tool_name="read_chunk")
                 if drain_error_timing == "post-output":
                     raise RuntimeError("post-output supervisor failure")
                 lifecycle_order.append("sdk_stream_drained")
@@ -7705,6 +7709,23 @@ class TestExecuteFlowTermination:
             assert not any(event.get("type") == "FLOW_FINISHED" for event in events)
             assert persisted_requests == []
             assert reported_drain_errors == []
+            return
+
+        if drain_error_timing == "pdf":
+            from src.lib.openai_agents.curator_errors import classify_failure
+            events = []
+            with pytest.raises(RuntimeError, match="sensitive SDK wrapper") as raised:
+                async for event in flow_events:
+                    events.append(event)
+            failure = classify_failure(raised.value)
+            assert failure.category == "pdf_read_failed"
+            assert "sensitive" not in failure.message
+            assert not any(event.get("type") in {
+                "FLOW_FINISHED", "CHAT_OUTPUT_READY", "CURATION_HANDOFF_READY",
+            } for event in events)
+            assert persisted_requests == []
+            assert reported_drain_errors == []
+            assert lifecycle_order == ["provider_closed", "client_closed"]
             return
 
         events = [event async for event in flow_events]

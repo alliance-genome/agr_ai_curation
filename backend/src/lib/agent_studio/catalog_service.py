@@ -919,9 +919,6 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
                 **execute_kwargs,
             )
         if not result.ok:
-            from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS
-            if tool_id in DOCUMENT_READ_TOOLS:
-                raise DocumentReadError(tool_id)
             error_message = result.error.message if result.error else "Unknown package tool error"
             raise RuntimeError(
                 f"Package tool '{tool_id}' execution failed: {error_message}"

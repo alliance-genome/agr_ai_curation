@@ -42,6 +42,8 @@ from agents import (
 )
 from pydantic import ValidationError
 
+from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+
 from src.lib.curation_workspace.execution_provenance import capture_source_document
 from src.schemas.execution_provenance import ExtractionExecutionContext
 from src.lib.observability.cost_context import costed_call
@@ -4236,6 +4238,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         )
         return serialized_envelope
     except SpecialistOutputError as exc:
+        raise_if_document_read_failed(exc)
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",
             specialist_name,
@@ -4283,6 +4286,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
     except BenchmarkInvocationBudgetExceeded:
         raise
     except Exception as exc:
+        raise_if_document_read_failed(exc)
         raise_if_provider_budget_exhausted()
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",
