@@ -516,3 +516,118 @@ async def test_document_hierarchy_fetches_db_metadata(monkeypatch):
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _Session())
     hierarchy = await chunks.get_document_hierarchy("11111111-1111-1111-1111-111111111111", "user-1")
     assert hierarchy == {"sections": [{"name": "Intro"}]}
+
+
+_PREPARATION_QUERIES = [
+    ("get_document_sections_hierarchical", {}),
+    ("get_chunks_by_parent_section", {"parent_section": "Abstract"}),
+    ("search_chunks_by_keyword", {"keyword": "abstract"}),
+    ("get_chunks_from_index", {"start_index": 0}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, kwargs", _PREPARATION_QUERIES)
+async def test_preparation_dispatch_failure_never_calls_connection_on_loop(monkeypatch, name, kwargs):
+    def forbidden():
+        pytest.fail("Blocking connection must not run after dispatch failure")
+
+    async def unavailable(*args, **kwargs):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(chunks, "get_connection", forbidden)
+    monkeypatch.setattr(asyncio, "to_thread", unavailable)
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        await getattr(chunks, name)(document_id="doc", user_id="user", **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name, kwargs", _PREPARATION_QUERIES)
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, name, kwargs, cancel):
+    from contextvars import ContextVar
+    from threading import Event, get_ident
+    from src.lib.weaviate_client import connection as wc
+
+    loop = asyncio.get_running_loop()
+    entered, finished = asyncio.Event(), asyncio.Event()
+    release = Event()
+    owner: ContextVar[str | None] = ContextVar("owner", default=None)
+    main_thread = get_ident()
+    lifecycle = []
+    monkeypatch.setattr(wc, "_connection", None)
+
+    class Connection:
+        def __init__(self, **kwargs):
+            pass
+
+        def connect(self):
+            assert get_ident() != main_thread
+            assert owner.get() == "run-a"
+            lifecycle.append("connect")
+            loop.call_soon_threadsafe(entered.set)
+            assert release.wait(5), "observer failed to release connection"
+
+        @contextmanager
+        def session(self):
+            try:
+                assert get_ident() != main_thread
+                lifecycle.append("session")
+                yield MagicMock()
+            finally:
+                lifecycle.append("closed")
+                loop.call_soon_threadsafe(finished.set)
+
+    monkeypatch.setattr(wc, "WeaviateConnection", Connection)
+    monkeypatch.setattr(chunks, "get_connection", wc.get_connection)
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *args: (collection, None))
+    # The hierarchy SQL session must also be created and closed on the worker.
+    sql_threads = []
+    sql = MagicMock()
+    sql.query.return_value.filter.return_value.first.return_value = None
+    def session_local():
+        sql_threads.append(get_ident())
+        return sql
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", session_local)
+    token = owner.set("run-a")
+    task = asyncio.create_task(getattr(chunks, name)(document_id="11111111-1111-1111-1111-111111111111", user_id="user", **kwargs))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert not task.done()  # Observer progresses while synchronous connect waits.
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
+        await asyncio.wait_for(finished.wait(), 5)
+        # Hierarchy SQL processing follows the Weaviate session body.
+        owner.reset(token)
+    assert lifecycle == ["connect", "session", "closed"]
+    if name == "get_document_sections_hierarchical":
+        assert len(sql_threads) == 1 and sql_threads[0] != main_thread
+        sql.close.assert_called_once()
+    assert wc.get_connection() is wc._connection
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_fails", [False, True])
+async def test_hierarchy_sql_failure_is_optional_sanitized_and_closes(monkeypatch, caplog, capture_fails):
+    connection = _connection_with_client(MagicMock())
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+    sql = MagicMock()
+    sql.query.side_effect = RuntimeError("SECRET sql content")
+    report = MagicMock(side_effect=RuntimeError("SECRET report") if capture_fails else None)
+    monkeypatch.setattr(chunks, "get_connection", lambda: connection)
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *args: (collection, None))
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: sql)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+    result = await chunks.get_document_sections_hierarchical("11111111-1111-1111-1111-111111111111", "user")
+    assert result == {"sections": [], "top_level_sections": [], "abstract_section_title": None}
+    sql.close.assert_called_once()
+    report.assert_called_once()
+    assert "SECRET" not in caplog.text + str(report.call_args)

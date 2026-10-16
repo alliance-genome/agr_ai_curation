@@ -10,29 +10,13 @@ Thread Safety:
     in FastAPI's async environment. This matches the pattern used by
     chat_state.py and other module-level runtime state in this codebase.
 
-Usage:
-    from src.lib.document_cache import get_cached_metadata, set_cached_metadata, invalidate_cache
-
-    # Check cache first
-    cached = get_cached_metadata(user_id, document_id)
-    if cached:
-        hierarchy = cached.hierarchy
-        abstract = cached.abstract
-    else:
-        # Fetch from Weaviate
-        hierarchy = fetch_document_hierarchy_sync(document_id, user_id)
-        abstract = fetch_document_abstract_sync(document_id, user_id, hierarchy)
-        # Cache for subsequent requests
-        set_cached_metadata(user_id, document_id, hierarchy, abstract)
-
-    # Invalidate on document load/reload
-    invalidate_cache(user_id, document_id)
-
-Performance Impact:
-    Before: Every chat message → 2 Weaviate queries (hierarchy + abstract)
-    After:  First message → 2 queries (cached), subsequent → 0 queries (cache hit)
+Cold preparations run independently. Active fill leases are revoked on
+invalidation, preventing obsolete work from repopulating the cache. Leases
+are removed on completion/cancellation; no per-document tombstones accumulate.
+All-None results retain the same TTL as successful metadata.
 """
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import RLock
 from typing import Dict, Any, Optional, Tuple
@@ -56,8 +40,7 @@ _cache: Dict[Tuple[str, str], CachedDocumentMetadata] = {}
 # Thread lock for safe concurrent access (matches pattern in chat_state.py)
 _lock = RLock()
 
-# Cache TTL in seconds (10 minutes)
-_TTL_SECONDS = 600
+_pending_fills: Dict[Tuple[str, str], set] = {}
 
 
 def get_cached_metadata(user_id: str, document_id: str) -> Optional[CachedDocumentMetadata]:
@@ -71,12 +54,14 @@ def get_cached_metadata(user_id: str, document_id: str) -> Optional[CachedDocume
     Returns:
         CachedDocumentMetadata if cache hit and not expired, None otherwise
     """
+    from .openai_agents.config import get_document_context_cache_ttl_seconds
+
     key = (user_id, document_id)
 
     with _lock:
         cached = _cache.get(key)
 
-        if cached and (time.time() - cached.fetched_at) < _TTL_SECONDS:
+        if cached and (time.time() - cached.fetched_at) < get_document_context_cache_ttl_seconds():
             logger.info('[DocumentCache] Cache HIT for document %s...', document_id[:8])
             return cached
 
@@ -128,6 +113,31 @@ def invalidate_cache(user_id: str, document_id: str) -> None:
     key = (user_id, document_id)
 
     with _lock:
+        _pending_fills.pop(key, None)
         if key in _cache:
             del _cache[key]
             logger.info('[DocumentCache] Invalidated cache for document %s...', document_id[:8])
+
+
+@contextmanager
+def metadata_cache_fill(user_id: str, document_id: str):
+    """Register a revocable fill; never hold the lock while fetching."""
+    key = (user_id, document_id)
+    token = object()
+    with _lock:
+        _pending_fills.setdefault(key, set()).add(token)
+
+    def publish(hierarchy, abstract):
+        with _lock:
+            if token in _pending_fills.get(key, ()):
+                set_cached_metadata(user_id, document_id, hierarchy, abstract)
+
+    try:
+        yield publish
+    finally:
+        with _lock:
+            tokens = _pending_fills.get(key)
+            if tokens is not None:
+                tokens.discard(token)
+                if not tokens:
+                    del _pending_fills[key]

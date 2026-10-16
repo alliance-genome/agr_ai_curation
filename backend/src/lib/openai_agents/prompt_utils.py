@@ -9,7 +9,6 @@ Do not duplicate these functions in individual agent files.
 """
 
 import logging
-from contextvars import copy_context
 from typing import Optional, List, Dict, Any, Type
 
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
@@ -398,8 +397,8 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
             result = content.strip()
             logger.debug('LLM abstract extraction result: %s chars', len(result))
 
-            if result == "NO_ABSTRACT_FOUND" or len(result) < 50:
-                logger.debug('LLM could not extract a clear abstract (result=%s)', result[:50] if result else 'empty')
+            if result == "NO_ABSTRACT_FOUND" or not result:
+                logger.debug('LLM returned no abstract')
                 return None
 
             return result
@@ -407,25 +406,31 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
             try:
                 await client.close()
             except Exception:
-                report_runtime_exception(
-                    sanitized_runtime_error("Failed to close abstract extraction LLM client"),
-                    component="abstract_extraction",
-                    operation="client_close_failed",
-                    level="warning",
-                )
+                try:
+                    report_runtime_exception(
+                        sanitized_runtime_error("Failed to close abstract extraction LLM client"),
+                        component="abstract_extraction",
+                        operation="client_close_failed",
+                        level="warning",
+                    )
+                except Exception:
+                    pass
                 logger.warning(
                     'Failed to close abstract extraction LLM client',
                     extra={"sentry_skip_event": True},
                 )
 
     except Exception as exc:
-        report_runtime_exception(
-            sanitized_runtime_error("LLM abstract extraction failed"),
-            component="abstract_extraction",
-            operation="extraction_failed",
-            level="error",
-            context={"error_type": type(exc).__name__},
-        )
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error("LLM abstract extraction failed"),
+                component="abstract_extraction",
+                operation="extraction_failed",
+                level="error",
+                context={"error_type": type(exc).__name__},
+            )
+        except Exception:
+            pass
         logger.warning(
             'LLM abstract extraction failed',
             extra={"sentry_skip_event": True},
@@ -632,45 +637,3 @@ async def fetch_document_abstract(
 
     logger.debug('No abstract found for document %s...', document_id[:8])
     return None
-
-
-def fetch_document_abstract_sync(
-    document_id: str,
-    user_id: str,
-    hierarchy: Optional[Dict[str, Any]] = None
-) -> Optional[str]:
-    """
-    Fetch the abstract section from a document (sync wrapper).
-
-    This is a synchronous wrapper for use in sync contexts like agent creation.
-
-    Args:
-        document_id: The document UUID
-        user_id: The user's ID for tenant isolation
-        hierarchy: Optional hierarchy metadata with LLM-identified abstract_section_title
-
-    Returns:
-        Abstract text if found, None otherwise.
-    """
-    import asyncio
-
-    try:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run()
-            return asyncio.run(fetch_document_abstract(document_id, user_id, hierarchy))
-        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(
-                copy_context().run,
-                asyncio.run,
-                fetch_document_abstract(document_id, user_id, hierarchy)
-            )
-            return future.result(timeout=10)
-    except Exception:
-        _report_abstract_context_failure(
-            "sync_fetch_failed", "sync_worker", "Synchronous document abstract fetch failed"
-        )
-        return None

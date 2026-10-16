@@ -176,7 +176,7 @@ async def test_resolved_agent_uses_same_document_context_for_tools_and_runner(mo
     )
     captured = {}
 
-    def fetch(document_id, user_id, document_name):
+    async def fetch(document_id, user_id, document_name):
         assert (document_id, user_id, document_name) == (
             context.document_id, context.user_id, context.document_name
         )

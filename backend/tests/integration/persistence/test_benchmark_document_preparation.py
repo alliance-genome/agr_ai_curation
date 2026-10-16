@@ -200,8 +200,8 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
             return SimpleNamespace(model=SimpleNamespace())
 
         # Metadata-only network reads are empty; use the actual DocumentContext.
-        monkeypatch.setattr("src.lib.openai_agents.agents.supervisor_agent.fetch_document_hierarchy_sync", lambda *_: None)
-        monkeypatch.setattr("src.lib.openai_agents.prompt_utils.fetch_document_abstract_sync", lambda *_: None)
+        monkeypatch.setattr("src.lib.weaviate_client.chunks.get_document_sections_hierarchical", AsyncMock(return_value=None))
+        monkeypatch.setattr("src.lib.openai_agents.prompt_utils.fetch_document_abstract", AsyncMock(return_value=None))
         monkeypatch.setattr(benchmark_runtime, "get_agent_by_id", build_agent)
 
         async def stream_target(**runtime_input):

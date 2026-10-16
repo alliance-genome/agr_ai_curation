@@ -318,69 +318,6 @@ def _build_chat_formatter_bundle(
     )
 
 
-def _fetch_document_sections_sync(document_id: str, user_id: str) -> List[Dict[str, Any]]:
-    """
-    Synchronously fetch document sections for injection into the PDF agent prompt.
-
-    This wrapper handles the async get_document_sections function in a sync context.
-    """
-    from src.lib.weaviate_client.chunks import get_document_sections
-
-    try:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run()
-            return asyncio.run(get_document_sections(document_id, user_id))
-        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, get_document_sections(document_id, user_id))
-            return future.result(timeout=10)
-    except Exception as e:
-        logger.warning("Failed to fetch document sections: %s", e)
-        return []
-
-
-def fetch_document_hierarchy_sync(document_id: str, user_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Synchronously fetch hierarchical document structure for injection into PDF agent prompt.
-
-    Returns the LLM-resolved hierarchy with top-level sections and subsections.
-    This wrapper handles the async get_document_sections_hierarchical in a sync context.
-
-    This is a public function, exported for use by runner.py.
-    """
-    from src.lib.weaviate_client.chunks import get_document_sections_hierarchical
-
-    try:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run()
-            return asyncio.run(get_document_sections_hierarchical(document_id, user_id))
-        # A running loop forbids asyncio.run() here; run the fetch on a worker thread.
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            future = pool.submit(asyncio.run, get_document_sections_hierarchical(document_id, user_id))
-            return future.result(timeout=10)
-    except Exception as e:
-        logger.warning("Failed to fetch document hierarchy: %s", e)
-        try:
-            from src.lib.observability.runtime import report_runtime_exception
-
-            report_runtime_exception(
-                e,
-                component="document_context",
-                operation="fetch_document_hierarchy_failed",
-                tags={"phase": "context_preparation"},
-                context={"document_id": document_id, "hierarchy_available": False},
-            )
-        except Exception:
-            # Observability must not turn optional context into a chat failure.
-            logger.warning("Could not report document hierarchy retrieval failure")
-        return None
-
 
 # Import guardrails (optional - won't break if module has issues)
 try:

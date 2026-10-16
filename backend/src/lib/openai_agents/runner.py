@@ -2677,7 +2677,7 @@ async def run_agent_streamed(
         # Fetch fresh (standard chat path)
         from src.lib.document_context import DocumentContext
 
-        doc_context = DocumentContext.fetch(document_id, user_id, document_name)
+        doc_context = await DocumentContext.fetch(document_id, user_id, document_name)
         hierarchy = doc_context.hierarchy
         abstract = doc_context.abstract
 

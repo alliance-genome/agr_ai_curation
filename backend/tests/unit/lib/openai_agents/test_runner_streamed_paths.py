@@ -592,6 +592,9 @@ async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(m
 
 @pytest.mark.asyncio
 async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
+    from unittest.mock import AsyncMock
+    fetch = AsyncMock(side_effect=AssertionError("Supplied context must not retrieve metadata"))
+    monkeypatch.setattr("src.lib.document_context.DocumentContext.fetch", fetch)
     captured = {}
     _patch_common_runtime(monkeypatch, captured)
 
@@ -672,6 +675,7 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
         runner.run_agent_streamed(
             context_messages=[{"role": "user", "content": "longer message"}],
             user_id="user-2",
+            document_id="document-2",
             session_id="session-2",
             agent=SimpleNamespace(name="Flow Supervisor", model="gpt-5", tools=[]),
             doc_context=SimpleNamespace(hierarchy={"sections": []}, abstract="abstract text", section_count=lambda: 0),
@@ -681,6 +685,7 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
         )
     )
 
+    fetch.assert_not_called()
     assert events[0]["type"] == "RUN_STARTED"
     assert events[0]["data"]["trace_id"] == "trace-abc"
     assert events[-1]["type"] == "RUN_FINISHED"
@@ -1810,3 +1815,26 @@ async def test_chat_propagated_provider_failure(monkeypatch, caplog, error_type,
         assert terminal["data"]["retryable"] is (code != "context_length_exceeded")
         audit = next(event for event in events if event["type"] == "SUPERVISOR_ERROR")
         assert "PRIVATE" not in str(audit)
+
+
+@pytest.mark.asyncio
+async def test_chat_awaits_preparation_and_propagates_cancellation(monkeypatch):
+    entered = asyncio.Event()
+
+    async def fetch(document_id, user_id, document_name):
+        assert (document_id, user_id, document_name) == ("doc", "user", "paper.pdf")
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("src.lib.document_context.DocumentContext.fetch", fetch)
+    task = asyncio.create_task(_collect_events(runner.run_agent_streamed(
+        context_messages=[{"role": "user", "content": "Read this paper"}],
+        user_id="user", session_id="session", document_id="doc", document_name="paper.pdf",
+    )))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert not task.done()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)

@@ -26,7 +26,7 @@ inject_structured_output_instruction = prompt_utils.inject_structured_output_ins
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("inherited", [False, True])
-async def test_abstract_fallback_reserves_owned_cost_across_sync_worker(monkeypatch, inherited):
+async def test_abstract_fallback_reserves_owned_cost_across_async_preparation(monkeypatch, inherited):
     from src.lib.cost_ledger.runtime_context import RuntimeCostContext, current_runtime_cost_context, runtime_cost_scope
     from src.lib.observability.cost_context import cost_scope
     captured = []
@@ -57,7 +57,7 @@ async def test_abstract_fallback_reserves_owned_cost_across_sync_worker(monkeypa
                         lambda measurement: captured.append(current_runtime_cost_context()))
     parent = RuntimeCostContext("user-2", "session", "turn", "interactive_chat", invocation_id="parent") if inherited else None
     with cost_scope({"run_id": "turn", "activity": "interactive_chat"} if inherited else {}), runtime_cost_scope(parent):
-        assert prompt_utils.fetch_document_abstract_sync("doc-2", "user-2") == "A" * 80
+        assert await prompt_utils.fetch_document_abstract("doc-2", "user-2") == "A" * 80
         assert current_runtime_cost_context() == parent
     assert len(captured) == 1
     context = captured[0]
@@ -353,11 +353,12 @@ async def test_extract_abstract_with_llm_uses_catalog_temperature_support(monkey
 
 
 @pytest.mark.asyncio
-async def test_extract_abstract_with_llm_returns_none_for_short_or_missing_output(monkeypatch):
+@pytest.mark.parametrize("content, expected", [(None, None), ("NO_ABSTRACT_FOUND", None), ("Brief abstract.", "Brief abstract.")])
+async def test_extract_abstract_with_llm_preserves_short_output_and_missing_sentinel(monkeypatch, content, expected):
     class _FakeCompletionsNone:
         async def create(self, **_kwargs):
             return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content=None))]
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
             )
 
     class _FakeAsyncOpenAI:
@@ -371,16 +372,16 @@ async def test_extract_abstract_with_llm_returns_none_for_short_or_missing_outpu
     monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
     monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
 
-    assert await prompt_utils._extract_abstract_with_llm("raw text") is None
+    assert await prompt_utils._extract_abstract_with_llm("raw text") == expected
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("captured", [True, False])
+@pytest.mark.parametrize("captured", [True, False, "raises"])
 @pytest.mark.parametrize("outcome", ["success", "error", "cancelled", "configuration", "construction"])
 async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
     monkeypatch, outcome, captured, caplog
 ):
-    report = Mock(return_value=captured)
+    report = Mock(return_value=captured, side_effect=RuntimeError("SECRET reporting") if captured == "raises" else None)
     monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
     lifecycle = {"created": 0, "closed": 0}
 
@@ -437,12 +438,12 @@ async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("captured", [True, False])
+@pytest.mark.parametrize("captured", [True, False, "raises"])
 @pytest.mark.parametrize("outcome", ["success", "error", "cancelled", "close_cancelled"])
 async def test_extract_abstract_with_llm_preserves_result_when_close_fails(
     monkeypatch, caplog, captured, outcome
 ):
-    report = Mock(return_value=captured)
+    report = Mock(return_value=captured, side_effect=RuntimeError("SECRET reporting") if captured == "raises" else None)
     monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
     class _FakeCompletions:
         async def create(self, **_kwargs):
@@ -633,52 +634,6 @@ async def test_fetch_document_abstract_uses_last_resort_first_chunks(monkeypatch
     assert result == "last resort extracted abstract"
 
 
-def test_fetch_document_abstract_sync_handles_missing_event_loop(monkeypatch):
-    import asyncio
-
-    monkeypatch.setattr(asyncio, "get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError()))
-
-    def _fake_run(coro):
-        coro.close()
-        return "sync abstract result"
-
-    monkeypatch.setattr(asyncio, "run", _fake_run)
-
-    result = prompt_utils.fetch_document_abstract_sync("doc", "user")
-    assert result == "sync abstract result"
-
-
-def test_fetch_document_abstract_sync_returns_none_on_unexpected_error(monkeypatch):
-    import asyncio
-    import concurrent.futures
-
-    class _BrokenPool:
-        def __enter__(self):
-            raise RuntimeError("boom")
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    monkeypatch.setattr(asyncio, "get_running_loop", lambda: object())
-    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", lambda: _BrokenPool())
-
-    result = prompt_utils.fetch_document_abstract_sync("doc", "user")
-    assert result is None
-
-
-def test_fetch_document_abstract_sync_contains_worker_runtime_error_under_running_loop(monkeypatch):
-    async def _worker_failure(_document_id, _user_id, _hierarchy):
-        raise RuntimeError("can't start new thread")
-
-    monkeypatch.setattr(prompt_utils, "fetch_document_abstract", _worker_failure)
-
-    async def _from_running_loop():
-        return prompt_utils.fetch_document_abstract_sync("doc", "user")
-
-    # A worker RuntimeError is a failed fetch, not a missing event loop.
-    assert asyncio.run(_from_running_loop()) is None
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["section", "keyword", "consecutive", "first_chunks", "all", "empty", "cancelled"])
 @pytest.mark.parametrize("capture_fails", [False, True])
@@ -753,60 +708,18 @@ async def test_abstract_retrieval_reports_failure_before_success(monkeypatch, ca
     report.assert_called_once()
 
 
-@pytest.mark.parametrize("running_loop", [False, True])
-@pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
-@pytest.mark.parametrize("capture_fails", [False, True])
-def test_abstract_sync_failure_reporting(monkeypatch, caplog, running_loop, error_type, capture_fails):
-    report = Mock(side_effect=RuntimeError("SECRET capture") if capture_fails else None)
-    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
+@pytest.mark.asyncio
+async def test_abstract_client_close_and_reporting_failure_preserve_llm_result(monkeypatch):
+    async def close():
+        raise RuntimeError("SECRET close")
 
-    async def failed_fetch(*args):
-        raise error_type("SECRET worker payload")
-
-    monkeypatch.setattr(prompt_utils, "fetch_document_abstract", failed_fetch)
-
-    async def from_loop():
-        return prompt_utils.fetch_document_abstract_sync("SECRET doc", "SECRET user")
-
-    result = asyncio.run(from_loop()) if running_loop else prompt_utils.fetch_document_abstract_sync("SECRET doc", "SECRET user")
-    assert result is None
-    report.assert_called_once()
-    exc = report.call_args.args[0]
-    assert str(exc) == "Synchronous document abstract fetch failed"
-    assert exc.__traceback__ is not None
-    assert exc.__cause__ is None and exc.__context__ is None
-    assert report.call_args.kwargs == {
-        "component": "abstract_context", "operation": "sync_fetch_failed",
-        "context": {"strategy": "sync_worker"}, "level": "error",
-    }
-    assert "SECRET" not in caplog.text
-    assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records)
-
-
-@pytest.mark.parametrize("capture_fails", [False, True])
-def test_abstract_sync_future_timeout_reporting(monkeypatch, caplog, capture_fails):
-    import concurrent.futures
-
-    report = Mock(side_effect=RuntimeError("SECRET capture") if capture_fails else None)
-    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
-    future = Mock()
-    future.result.side_effect = concurrent.futures.TimeoutError("SECRET timeout")
-
-    class Pool:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def submit(self, run_context, run_async, coro):
-            coro.close()
-            return future
-
-    monkeypatch.setattr(asyncio, "get_running_loop", lambda: object())
-    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", Pool)
-    assert prompt_utils.fetch_document_abstract_sync("doc", "user") is None
-    future.result.assert_called_once_with(timeout=10)
-    report.assert_called_once()
-    assert report.call_args.kwargs["operation"] == "sync_fetch_failed"
-    assert "SECRET" not in caplog.text
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(
+            return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Brief abstract."))])
+        ))), close=close,
+    )
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda: client))
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
+    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
+    monkeypatch.setattr(prompt_utils, "report_runtime_exception", Mock(side_effect=RuntimeError("SECRET report")))
+    assert await prompt_utils._extract_abstract_with_llm("raw") == "Brief abstract."

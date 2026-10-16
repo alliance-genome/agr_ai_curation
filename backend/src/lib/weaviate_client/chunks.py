@@ -1141,11 +1141,10 @@ async def search_chunks_by_keyword(
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped search")
 
-    connection = get_connection()
-    if not connection:
-        raise RuntimeError("No Weaviate connection established")
-
     def _search():
+        connection = get_connection()
+        if not connection:
+            raise RuntimeError("No Weaviate connection established")
         with connection.session() as client:
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
@@ -1207,16 +1206,8 @@ async def search_chunks_by_keyword(
 
             return chunks
 
-    try:
-        if hasattr(asyncio, 'to_thread'):
-            return await asyncio.to_thread(_search)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _search)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            return _search()
-        raise
+    # Dispatch failures propagate to optional-context recovery; never run I/O on the loop.
+    return await asyncio.to_thread(_search)
 
 
 async def get_chunks_from_index(
@@ -1245,11 +1236,10 @@ async def get_chunks_from_index(
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval")
 
-    connection = get_connection()
-    if not connection:
-        raise RuntimeError("No Weaviate connection established")
-
     def _fetch():
+        connection = get_connection()
+        if not connection:
+            raise RuntimeError("No Weaviate connection established")
         with connection.session() as client:
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
@@ -1309,16 +1299,8 @@ async def get_chunks_from_index(
 
             return chunks
 
-    try:
-        if hasattr(asyncio, 'to_thread'):
-            return await asyncio.to_thread(_fetch)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _fetch)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            return _fetch()
-        raise
+    # Dispatch failures propagate to optional-context recovery; never run I/O on the loop.
+    return await asyncio.to_thread(_fetch)
 
 
 async def get_document_sections(
@@ -1483,11 +1465,10 @@ async def get_chunks_by_parent_section(
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval")
 
-    connection = get_connection()
-    if not connection:
-        raise RuntimeError("No Weaviate connection established")
-
     def _fetch():
+        connection = get_connection()
+        if not connection:
+            raise RuntimeError("No Weaviate connection established")
         with connection.session() as client:
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
@@ -1558,16 +1539,8 @@ async def get_chunks_by_parent_section(
 
             return chunks
 
-    try:
-        if hasattr(asyncio, 'to_thread'):
-            return await asyncio.to_thread(_fetch)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _fetch)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            return _fetch()
-        raise
+    # Dispatch failures propagate to optional-context recovery; never run I/O on the loop.
+    return await asyncio.to_thread(_fetch)
 
 
 async def get_chunks_by_subsection(
@@ -1718,11 +1691,10 @@ async def get_document_sections_hierarchical(
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped section listing")
 
-    connection = get_connection()
-    if not connection:
-        raise RuntimeError("No Weaviate connection established")
-
     def _fetch():
+        connection = get_connection()
+        if not connection:
+            raise RuntimeError("No Weaviate connection established")
         with connection.session() as client:
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
@@ -1828,8 +1800,21 @@ async def get_document_sections_hierarchical(
                         abstract_section_title = doc.hierarchy_metadata.get("abstract_section_title")
                 finally:
                     session.close()
-            except Exception as e:
-                logger.warning("Could not fetch abstract_section_title from database: %s", e)
+            except Exception:
+                try:
+                    from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+
+                    report_runtime_exception(
+                        sanitized_runtime_error("Could not fetch abstract section metadata"),
+                        component="document_context",
+                        operation="abstract_section_metadata_failed",
+                    )
+                except Exception:
+                    pass
+                logger.warning(
+                    "Could not fetch abstract section metadata",
+                    extra={"sentry_skip_event": True},
+                )
 
             return {
                 "sections": result,
@@ -1837,16 +1822,8 @@ async def get_document_sections_hierarchical(
                 "abstract_section_title": abstract_section_title
             }
 
-    try:
-        if hasattr(asyncio, 'to_thread'):
-            return await asyncio.to_thread(_fetch)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _fetch)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            return _fetch()
-        raise
+    # Dispatch failures propagate to optional-context recovery; never run I/O on the loop.
+    return await asyncio.to_thread(_fetch)
 
 
 def delete_chunks(document_id: str, user_id: str) -> Dict[str, Any]:
