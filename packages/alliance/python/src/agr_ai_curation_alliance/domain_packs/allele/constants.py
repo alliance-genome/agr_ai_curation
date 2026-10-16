@@ -8,7 +8,7 @@ from ..schema_refs import ALLIANCE_LINKML_COMMIT
 
 
 ALLELE_DOMAIN_PACK_ID = "agr.alliance.allele"
-ALLELE_DOMAIN_PACK_VERSION = "0.1.1"
+ALLELE_DOMAIN_PACK_VERSION = "0.1.2"
 
 # Object types in the 4-object pending association graph (the extractor NEVER emits Allele;
 # the active allele validator materializes allele identity).

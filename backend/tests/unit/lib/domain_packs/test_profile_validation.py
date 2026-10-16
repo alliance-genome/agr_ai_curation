@@ -522,3 +522,40 @@ def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leave
     assert (covered["attributes"]["gene"]["resolution_state"], covered["attributes"]["gene"]["gene_id"]) == (
         "resolved", "EX:1")
     assert display_text(covered["attributes"]["gene"], fields["attributes.gene"].metadata["display"]) == "EX:1"
+
+
+def test_allele_capability_identity_preserves_contract_but_not_operational_allowance():
+    from dataclasses import replace
+    from src.lib.agent_studio.profile_mapping_service import capability_catalog
+    from agr_ai_curation_alliance.domain_packs.allele.constants import ALLELE_DOMAIN_PACK_VERSION
+
+    cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
+               if cap.ref.domain_pack_id == "agr.alliance.allele")
+    assert cap.ref.domain_pack_version == ALLELE_DOMAIN_PACK_VERSION == "0.1.2"
+    original = cap.fingerprint()
+    for allowance in (16, 64, 128):
+        changed = replace(cap, binding=replace(cap.binding, max_tool_calls=allowance,
+                          raw={**cap.binding.raw, "max_tool_calls": allowance}))
+        assert changed.fingerprint() == original
+        assert changed.snapshot() == cap.snapshot()
+        assert changed.binding.max_tool_calls == allowance
+    # Semantic policy and exact custom validator provenance remain identity-bearing.
+    for updates in ({"blocking": not cap.binding.raw["blocking"]},
+                    {"custom_validator": {"revision_id": "different-revision"}}):
+        changed = replace(cap, binding=replace(cap.binding, raw={**cap.binding.raw, **updates}))
+        assert changed.fingerprint() != original
+    assert "max_tool_calls" in cap.binding.raw
+    assert "max_tool_calls" not in cap.snapshot()["binding"]
+
+
+def test_saved_profile_uses_live_allowance_without_changing_its_capability_pin(example):
+    raw, cap, pack = example
+    receipt, profile = resolve(raw)
+    for allowance in (16, 64, 128):
+        live = replace(cap, binding=replace(cap.binding, max_tool_calls=allowance,
+                       raw={**cap.binding.raw, "max_tool_calls": allowance}))
+        context = compile_profile_validation(receipt, profile, pack, capabilities=[live])
+        assert not context.unavailable
+        binding, = context.registry.bindings
+        assert binding.max_tool_calls == allowance
+        assert profile.contract.validator_mappings[0].capability_fingerprint == live.fingerprint()

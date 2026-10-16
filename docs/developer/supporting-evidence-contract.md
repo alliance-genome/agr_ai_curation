@@ -80,8 +80,10 @@ chosen import/reprocessing workflow preserves the historical source identity and
 audit records (use a distinct document/source identity when necessary). Broad
 reindexing and repair of stored curator documents are separate operational work.
 
-The v0.10.9 hotfix advances the allele domain pack to `0.1.2` because its
-validator tool allowance changes the immutable capability snapshot. Saved
+The v0.10.9 hotfix advances the allele domain pack to `0.1.2` to separate
+the operational validator tool allowance from immutable capability identity. Saved
 profiles require reviewed `0.1.1` to `0.1.2` capability transitions; preserve
 previous capability receipts and custom validator revision pins. Scientific
-input/output mappings remain unchanged.
+input/output mappings remain unchanged. The live binding supplies the configured
+`max_tool_calls`; capability snapshots omit that operational setting so later
+allowance changes do not invalidate saved profiles.
