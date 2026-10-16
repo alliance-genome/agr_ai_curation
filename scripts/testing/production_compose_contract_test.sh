@@ -93,6 +93,13 @@ printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
   >"${unsafe_frontend_build_metadata_file}"
 
 publish_workflow="${repo_root}/.github/workflows/publish-images.yml"
+# Build-only Vite inputs must not participate in the dependency-install cache.
+awk '
+  /^RUN npm ci$/ { installed = 1 }
+  /^ARG VITE_/ { if (!installed) exit 1; arguments++ }
+  /^ENV VITE_DEV_MODE=/ { if (!installed || !arguments) exit 1 }
+  END { if (!installed || !arguments) exit 1 }
+' "${repo_root}/frontend/Dockerfile"
 grep -Fq 'Verify frontend compiled mode artifact' "${publish_workflow}"
 grep -Fq '/usr/share/nginx/html/build-metadata.json' "${publish_workflow}"
 grep -Fq '.vite_dev_mode == false' "${publish_workflow}"

@@ -5,6 +5,17 @@ FROM public.ecr.aws/docker/library/node:20-alpine AS builder
 
 WORKDIR /app
 
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Keep build-only arguments after npm ci: RUN implicitly includes in-scope ARGs
+# in its cache identity, even when the shell command does not reference them.
 # Build arguments for Vite environment variables (VITE_* prefix)
 ARG VITE_DEV_MODE=true
 ARG VITE_GIT_SHA=unknown
@@ -16,15 +27,6 @@ ARG VITE_PDF_UPLOAD_MAX_SELECTED_FILES=10
 ARG VITE_PDF_JOB_WINDOW_DAYS=7
 ARG VITE_PDF_JOB_LIMIT=50
 ARG VITE_PDF_JOB_FALLBACK_POLL_INTERVAL_MS=5000
-
-# Copy package files
-COPY package.json package-lock.json* ./
-
-# Install dependencies
-RUN npm ci
-
-# Copy source code
-COPY . .
 
 # Build the app for production with environment variables
 # Vite embeds VITE_* environment variables at build time
