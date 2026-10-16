@@ -349,145 +349,6 @@ def _select_progress_snapshot(*, pipeline_status: Any, job: Any) -> dict[str, An
     return None
 
 
-async def cleanup_phantom_documents(user: dict[str, Any]) -> int:
-    """Clean up phantom documents - records in PostgreSQL that don't exist in Weaviate.
-
-    This prevents the "invisible documents" issue where a user has documents in the
-    database but they don't appear in the UI because the Weaviate records are missing.
-
-    Args:
-        user: Authenticated user dict with 'sub' key
-
-    Returns:
-        Number of phantom documents cleaned up
-    """
-    from ..lib.weaviate_helpers import get_connection, get_user_collections
-    from ..models.sql.user import User
-
-    user_id = user["sub"]
-    cleaned_count = 0
-
-    logger.info('[Phantom Check] Starting phantom document check for user %s...', user_id[:8])
-
-    try:
-        # Step 1: Get user's database ID
-        session = SessionLocal()
-        try:
-            db_user = session.query(User).filter(User.auth_sub == user_id).first()
-            if not db_user:
-                logger.info('[Phantom Check] User not provisioned yet, skipping')
-                return 0  # User not provisioned yet
-
-            # Step 2: Get all document IDs from PostgreSQL for this user
-            pg_docs = session.query(ViewerPDFDocument).filter(
-                ViewerPDFDocument.user_id == db_user.id
-            ).all()
-
-            if not pg_docs:
-                logger.info('[Phantom Check] No documents in PostgreSQL, nothing to check')
-                return 0  # No documents to check
-
-            pg_doc_ids = {str(doc.id) for doc in pg_docs}
-            benchmark_doc_ids = {
-                str(doc.id) for doc in pg_docs if doc.viewer_mode == "benchmark_frozen"
-            }
-            logger.info('[Phantom Check] Found %s documents in PostgreSQL', len(pg_doc_ids))
-
-            # Step 3: Get all document IDs from Weaviate for this user's tenant
-            connection = get_connection()
-            if not connection:
-                logger.warning("No Weaviate connection for phantom cleanup")
-                return 0
-
-            weaviate_doc_ids = set()
-            with connection.session() as client:
-                try:
-                    _, pdf_collection = get_user_collections(client, user_id)
-
-                    # Fetch all documents in the tenant (just IDs)
-                    response = pdf_collection.query.fetch_objects(
-                        limit=1000,  # Should be enough for most users
-                        include_vector=False
-                    )
-
-                    weaviate_doc_ids = {str(obj.uuid) for obj in response.objects}
-                    logger.info('[Phantom Check] Found %s documents in Weaviate', len(weaviate_doc_ids))
-
-                except Exception as e:
-                    logger.warning('[Phantom Check] Error fetching Weaviate documents: %s', e)
-                    return 0
-
-            # Step 4: Find inconsistencies in both directions
-            # Phantom = in PostgreSQL but NOT in Weaviate (user can't see their doc)
-            # Orphan = in Weaviate but NOT in PostgreSQL (leftover data)
-            # Preparation deliberately creates SQL before vectors. Its journal
-            # owns partial-state cleanup, not the curator library's repair pass.
-            phantom_ids = pg_doc_ids - weaviate_doc_ids - benchmark_doc_ids
-            orphan_ids = weaviate_doc_ids - pg_doc_ids
-
-            if not phantom_ids and not orphan_ids:
-                logger.info('[Phantom Check] ✓ All clean - %s documents in sync', len(pg_doc_ids))
-                return 0
-
-            # Step 5a: Delete phantom records from PostgreSQL
-            if phantom_ids:
-                logger.warning('[Phantom Check] Found %s phantom documents (in PG, not in Weaviate)', len(phantom_ids))
-
-                for phantom_id in phantom_ids:
-                    phantom_doc = session.query(ViewerPDFDocument).filter(
-                        ViewerPDFDocument.id == uuid.UUID(phantom_id)
-                    ).first()
-
-                    if phantom_doc:
-                        # Also clean up filesystem artifacts if they exist
-                        try:
-                            base_storage = get_pdf_storage_path()
-                            if phantom_doc.file_path:
-                                file_path = FilePath(base_storage) / phantom_doc.file_path
-                                doc_dir = file_path.parent
-                                if doc_dir.exists():
-                                    shutil.rmtree(doc_dir)
-                                    logger.info('[Phantom Check] Cleaned up filesystem for phantom doc %s', phantom_id)
-                        except Exception as fs_err:
-                            logger.warning('[Phantom Check] Failed to cleanup files for phantom %s: %s', phantom_id, fs_err)
-
-                        cleanup_document_curation_dependencies(session, phantom_doc.id)
-                        session.delete(phantom_doc)
-                        cleaned_count += 1
-                        logger.info('[Phantom Check] Deleted phantom PG record %s (%s)', phantom_id, phantom_doc.filename)
-
-                session.commit()
-
-            # Step 5b: Delete orphan records from Weaviate
-            if orphan_ids:
-                logger.warning('[Phantom Check] Found %s orphan documents (in Weaviate, not in PG)', len(orphan_ids))
-
-                with connection.session() as client:
-                    try:
-                        _, pdf_collection = get_user_collections(client, user_id)
-
-                        for orphan_id in orphan_ids:
-                            try:
-                                pdf_collection.data.delete_by_id(uuid.UUID(orphan_id))
-                                cleaned_count += 1
-                                logger.info('[Phantom Check] Deleted orphan Weaviate doc %s', orphan_id)
-                            except Exception as del_err:
-                                logger.warning('[Phantom Check] Failed to delete orphan %s: %s', orphan_id, del_err)
-
-                    except Exception as e:
-                        logger.error('[Phantom Check] Error cleaning orphan Weaviate docs: %s', e)
-
-            logger.info('[Phantom Check] Cleaned up %s inconsistent documents for user %s', cleaned_count, user_id[:8])
-
-        finally:
-            session.close()
-
-    except Exception as e:
-        logger.error('Error during phantom document cleanup: %s', e)
-
-    return cleaned_count
-
-
 def verify_document_ownership(
     db: Session,
     document_id: str,
@@ -943,17 +804,9 @@ async def list_documents_endpoint(
 
     Returns paginated list of documents with their metadata and processing status.
 
-    Note: This endpoint automatically cleans up "phantom" documents - records that
-    exist in PostgreSQL but are missing from Weaviate. This ensures users always
-    see an accurate document list.
+    Listing is read-only; missing vector records do not authorize cleanup.
     """
     try:
-        # Clean up any phantom documents before listing
-        # This handles cases where documents exist in PostgreSQL but not Weaviate
-        phantoms_cleaned = await cleanup_phantom_documents(user)
-        if phantoms_cleaned > 0:
-            logger.info('Cleaned up %s phantom documents before listing', phantoms_cleaned)
-
         doc_filter = DocumentFilter(
             search_term=search,
             embedding_status=embedding_status,

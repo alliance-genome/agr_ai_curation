@@ -23,23 +23,6 @@ from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
 
 
-@pytest.mark.asyncio
-async def test_phantom_cleanup_preserves_benchmark_copy_before_vectors_exist(monkeypatch):
-    session = MagicMock()
-    session.query.return_value.filter.return_value.first.return_value = SimpleNamespace(id=42)
-    document = SimpleNamespace(id=uuid4(), viewer_mode="benchmark_frozen")
-    session.query.return_value.filter.return_value.all.return_value = [document]
-    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
-    connection = MagicMock()
-    pdf_collection = MagicMock()
-    pdf_collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
-    monkeypatch.setattr("src.lib.weaviate_helpers.get_connection", lambda: connection)
-    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (MagicMock(), pdf_collection))
-    assert await documents.cleanup_phantom_documents({"sub": "synthetic-curator"}) == 0
-    session.delete.assert_not_called()
-    pdf_collection.data.delete_by_id.assert_not_called()
-
-
 class _FakeQuery:
     def __init__(self, doc):
         self._doc = doc
@@ -215,7 +198,6 @@ async def test_validate_user_file_path_handles_resolve_errors(tmp_path):
 
 @pytest.mark.asyncio
 async def test_list_documents_endpoint_sanitizes_backend_error(monkeypatch, caplog):
-    monkeypatch.setattr(documents, "cleanup_phantom_documents", lambda *_args, **_kwargs: _async_value(0))
 
     async def _raise(*_args, **_kwargs):
         raise RuntimeError("weaviate down")
@@ -1774,3 +1756,89 @@ async def _collect_stream(response):
         else:
             chunks.append(str(chunk))
     return "".join(chunks)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["truncated", "empty", "vector_error", "invalid_date", "invalid_count"])
+async def test_listing_never_reconciles_incomplete_inventory(monkeypatch, scenario):
+    """Exercise the real endpoint/library with >1,000 durable SQL records."""
+    from src.lib.weaviate_client import documents as library
+
+    durable = [
+        SimpleNamespace(id=uuid4(), viewer_mode=None, file_path="paper/source.pdf")
+        for _ in range(1001)
+    ]
+    durable.append(SimpleNamespace(id=uuid4(), viewer_mode="benchmark_frozen"))
+    session = MagicMock()
+    session.query.return_value.filter.return_value.first.return_value = SimpleNamespace(id=42)
+    session.query.return_value.filter.return_value.all.return_value = durable
+    session.execute.return_value.scalar_one_or_none.return_value = SimpleNamespace(id=42)
+    session.execute.return_value.scalars.return_value.all.return_value = []
+    session.scalars.return_value = [durable[-1].id]
+
+    def get_db():
+        try:
+            yield session
+        finally:
+            session.close()
+
+    connection = MagicMock()
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(
+        objects=[SimpleNamespace(uuid=durable[0].id, properties={})] if scenario == "truncated" else []
+    )
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=1 if scenario == "truncated" else 0)
+    if scenario == "vector_error":
+        collection.query.fetch_objects.side_effect = RuntimeError("synthetic vector outage")
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(library, "get_db", get_db)
+    monkeypatch.setattr(library, "get_connection", lambda: connection)
+    monkeypatch.setattr(library, "get_user_collections", lambda *_: (collection, collection))
+    # These also catch an accidental reintroduction of the former cleanup path.
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_connection", lambda: connection)
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (collection, collection))
+    cleanup = MagicMock()
+    remove_tree = MagicMock()
+    unlink = MagicMock()
+    monkeypatch.setattr(documents, "cleanup_document_curation_dependencies", cleanup)
+    monkeypatch.setattr(documents.shutil, "rmtree", remove_tree)
+    monkeypatch.setattr(documents.FilePath, "unlink", unlink)
+
+    kwargs: dict[str, Any] = dict(
+        user={"sub": "synthetic-curator"}, page=2, page_size=20,
+        search=None, embedding_status=None, sort_by=documents.SortBy.CREATION_DATE,
+        sort_order=documents.SortOrder.DESC, date_from=None, date_to=None,
+        min_vector_count=None, max_vector_count=None,
+    )
+    if scenario == "invalid_date":
+        kwargs.update(date_from=datetime(2026, 2, 1), date_to=datetime(2026, 1, 1))
+    if scenario == "invalid_count":
+        kwargs.update(min_vector_count=2, max_vector_count=1)
+    if scenario in {"vector_error", "invalid_date", "invalid_count"}:
+        with pytest.raises(HTTPException) as exc:
+            await documents.list_documents_endpoint(**kwargs)
+        assert exc.value.status_code == (500 if scenario == "vector_error" else 400)
+    else:
+        result = await documents.list_documents_endpoint(**kwargs)
+        assert result.documents == []
+        assert result.total == (1 if scenario == "truncated" else 0)
+        assert result.limit == 20
+        assert result.offset == 20
+
+    session.delete.assert_not_called()
+    session.commit.assert_not_called()
+    session.query.assert_not_called()  # No full SQL inventory.
+    cleanup.assert_not_called()
+    remove_tree.assert_not_called()
+    unlink.assert_not_called()
+    assert collection.data.mock_calls == []
+    if scenario.startswith("invalid"):
+        session.execute.assert_not_called()
+        collection.query.fetch_objects.assert_not_called()
+        connection.session.assert_not_called()
+    else:
+        collection.query.fetch_objects.assert_called_once()
+        assert collection.query.fetch_objects.call_args.kwargs["limit"] == 20
+        assert collection.query.fetch_objects.call_args.kwargs["offset"] == 20
+        assert session.close.call_count == (1 if scenario == "vector_error" else 2)
+        assert collection.aggregate.over_all.call_count == (0 if scenario == "vector_error" else 1)

@@ -63,6 +63,17 @@ async def async_list_documents(
     Raises:
         ValueError: If user_id is None (required for tenant scoping)
     """
+    # The default executor owns all blocking I/O, including connection readiness.
+    # Cancellation stops awaiting the result; the worker still closes its sessions.
+    return await asyncio.get_running_loop().run_in_executor(
+        None, lambda: _list_documents_sync(user_id, filter_obj, pagination)
+    )
+
+
+def _list_documents_sync(
+    user_id: str, filter_obj: Any, pagination: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Own listing resources in one worker and return only plain response data."""
     # T037: Validate user_id is provided (required for tenant scoping)
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped document listing (FR-011, FR-014)")
@@ -89,6 +100,7 @@ async def async_list_documents(
                 "offset": (pagination.get("page", 1) - 1) * pagination.get("page_size", 20)
             }
         # user_id parameter already contains auth_sub, use it for tenant naming
+        db_user_id = db_user.id
         tenant_name = get_tenant_name(user_id)
         # Runtime benchmark copies share the real curator tenant for normal
         # tools, but are not library entries. Exclude them in the vector query
@@ -96,13 +108,13 @@ async def async_list_documents(
         benchmark_document_ids = [
             str(identifier) for identifier in db.scalars(
                 select(PdfDocumentModel.id).where(
-                    PdfDocumentModel.user_id == db_user.id,
+                    PdfDocumentModel.user_id == db_user_id,
                     PdfDocumentModel.viewer_mode == "benchmark_frozen",
                 )
             )
         ]
     finally:
-        db.close()
+        db_gen.close()
 
     with connection.session() as client:
         try:
@@ -208,15 +220,12 @@ async def async_list_documents(
 
             query_start = time.monotonic()
             # Execute query with limit and offset using gRPC filters API
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: collection.query.fetch_objects(
-                    limit=page_size,
-                    offset=offset,
-                    filters=where_filter if where_filter else None,
-                    sort=sort_obj,
-                    include_vector=False
-                )
+            response = collection.query.fetch_objects(
+                limit=page_size,
+                offset=offset,
+                filters=where_filter if where_filter else None,
+                sort=sort_obj,
+                include_vector=False
             )
             logger.debug("Weaviate query returned %s objects", len(response.objects))
             for obj in response.objects[:3]:  # Log first 3
@@ -238,63 +247,60 @@ async def async_list_documents(
                 pg_docs = db.execute(
                     select(PGDocument).where(
                         PGDocument.id.in_([UUID(doc_id) for doc_id in weaviate_doc_ids]),
-                        PGDocument.user_id == db_user.id,  # T030: PostgreSQL ownership filter (integer)
+                        PGDocument.user_id == db_user_id,  # T030: PostgreSQL ownership filter (integer)
                         PGDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
                     )
                 ).scalars().all()
 
                 # Create lookup map by document ID
                 pg_doc_map = {str(doc.id): doc for doc in pg_docs}
+                # Convert response to contract Document schema format
+                documents = []
+                for obj in response.objects:
+                    doc_id = str(obj.uuid)
+
+                    # T030: Skip documents not owned by user (defense-in-depth)
+                    # Weaviate tenant scoping should prevent this, but PostgreSQL is authoritative
+                    if doc_id not in pg_doc_map:
+                        continue
+
+                    pg_doc = pg_doc_map[doc_id]
+                    doc_props = obj.properties
+                    # PostgreSQL is authoritative for provider-ingestion failures
+                    # and display metadata. Prefer either store's terminal state so
+                    # a stale Weaviate "pending" value cannot strand a failed row.
+                    processing_status = _effective_list_processing_status(
+                        pg_doc.status,
+                        doc_props.get("processingStatus"),
+                    )
+
+                    # Map to contract Document schema (document_endpoints.yaml)
+                    doc = {
+                        "document_id": doc_id,  # Contract field name
+                        "user_id": user_id,  # Required by contract
+                        "filename": pg_doc.filename,
+                        "title": pg_doc.title,
+                        "status": processing_status.upper(),  # Contract requires uppercase enum
+                        "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
+                        "processing_started_at": pg_doc.processing_started_at.isoformat() if pg_doc.processing_started_at else None,
+                        "processing_completed_at": pg_doc.processing_completed_at.isoformat() if pg_doc.processing_completed_at else None,
+                        "file_size_bytes": pg_doc.file_size,  # Contract field name from PostgreSQL
+                        "weaviate_tenant": tenant_name,  # Required by contract
+                        "chunk_count": doc_props.get("chunkCount"),
+                        "vector_count": doc_props.get("vectorCount"),
+                        "embedding_status": doc_props.get("embeddingStatus", "pending"),  # Frontend expects this field
+                        "error_message": pg_doc.error_message,
+                        "source_provenance": build_document_source_provenance(pg_doc),
+                    }
+                    documents.append(doc)
+
             finally:
-                db.close()
-
-            # Convert response to contract Document schema format
-            documents = []
-            for obj in response.objects:
-                doc_id = str(obj.uuid)
-
-                # T030: Skip documents not owned by user (defense-in-depth)
-                # Weaviate tenant scoping should prevent this, but PostgreSQL is authoritative
-                if doc_id not in pg_doc_map:
-                    continue
-
-                pg_doc = pg_doc_map[doc_id]
-                doc_props = obj.properties
-                # PostgreSQL is authoritative for provider-ingestion failures
-                # and display metadata. Prefer either store's terminal state so
-                # a stale Weaviate "pending" value cannot strand a failed row.
-                processing_status = _effective_list_processing_status(
-                    pg_doc.status,
-                    doc_props.get("processingStatus"),
-                )
-
-                # Map to contract Document schema (document_endpoints.yaml)
-                doc = {
-                    "document_id": doc_id,  # Contract field name
-                    "user_id": user_id,  # Required by contract
-                    "filename": pg_doc.filename,
-                    "title": pg_doc.title,
-                    "status": processing_status.upper(),  # Contract requires uppercase enum
-                    "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
-                    "processing_started_at": pg_doc.processing_started_at.isoformat() if pg_doc.processing_started_at else None,
-                    "processing_completed_at": pg_doc.processing_completed_at.isoformat() if pg_doc.processing_completed_at else None,
-                    "file_size_bytes": pg_doc.file_size,  # Contract field name from PostgreSQL
-                    "weaviate_tenant": tenant_name,  # Required by contract
-                    "chunk_count": doc_props.get("chunkCount"),
-                    "vector_count": doc_props.get("vectorCount"),
-                    "embedding_status": doc_props.get("embeddingStatus", "pending"),  # Frontend expects this field
-                    "error_message": pg_doc.error_message,
-                    "source_provenance": build_document_source_provenance(pg_doc),
-                }
-                documents.append(doc)
+                db_gen.close()
 
             # Get total count efficiently
-            count_response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: collection.aggregate.over_all(
-                    filters=where_filter if where_filter else None,
-                    total_count=True
-                )
+            count_response = collection.aggregate.over_all(
+                filters=where_filter if where_filter else None,
+                total_count=True
             )
 
             total_items = count_response.total_count if count_response else 0
