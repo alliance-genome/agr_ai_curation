@@ -55,6 +55,19 @@ def closed_boundaries(items: list[dict], stop: int) -> list[int]:
     return boundaries
 
 
+async def fitting_closed_prefix(request, items, stop, *, after=0):
+    """Choose a complete prefix measured to fit the standalone endpoint."""
+    boundaries = [boundary for boundary in closed_boundaries(items, stop) if boundary > after]
+    low, high = 0, len(boundaries)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if await request.count(items[:boundaries[mid - 1]]) <= request.capacity:
+            low = mid
+        else:
+            high = mid - 1
+    return boundaries[low - 1] if low else 0
+
+
 def matching_projection_anchor(projection, items):
     keys = item_keys(items)
     for anchor in projection.get("anchors", []):
@@ -92,6 +105,7 @@ class ContextCapacityPolicy:
     reasoning_item_id_policy: str | None = None
     restored: bool = False
     state_dirty: bool = False
+    deferred_tool_choice: str | None = None
 
     def apply(self, items: list) -> list:
         if self.replacement_keys and item_keys(items[:len(self.replacement_keys)]) == self.replacement_keys:
@@ -185,20 +199,12 @@ class ContextCapacityPolicy:
             compacted_prefix_size = 0
             while count > request.capacity:
                 stop = pending_start(prepared)
-                boundaries = [boundary for boundary in closed_boundaries(prepared, stop)
-                              if boundary > compacted_prefix_size]
-                # /compact input must fit too. Each successful iteration consumes
-                # additional original history; opaque state alone is never retried.
-                low, high = 0, len(boundaries)
-                while low < high:
-                    mid = (low + high + 1) // 2
-                    if await request.count(prepared[:boundaries[mid - 1]]) <= request.capacity:
-                        low = mid
-                    else:
-                        high = mid - 1
-                if not low:
+                # /compact input must fit too. Each iteration consumes additional
+                # original history; opaque state alone is never retried.
+                boundary = await fitting_closed_prefix(request, prepared, stop,
+                                                       after=compacted_prefix_size)
+                if not boundary:
                     break
-                boundary = boundaries[low - 1]
                 compacted = await request.compact(prepared[:boundary])
                 candidate = [*compacted, *prepared[boundary:]]
                 after = await request.count(candidate)
@@ -239,7 +245,16 @@ class ContextCapacityPolicy:
                         "read_tool": CONTEXT_READ_TOOL, "exact_recovery": {"tool": "read_run_history", "event_id": ref, "detail_path": "payload.content"},
                         "source": source, "total_chars": len(body)})
                     candidate = [*prepared]
-                    candidate[index] = {**item, key: descriptor}
+                    replacement = descriptor
+                    if isinstance(item.get(key), list):
+                        # Output-message content is a block list on the Responses
+                        # wire, even when its exact body lives in the archive.
+                        block_type = item[key][0]["type"] if item[key] else "input_text"
+                        block = {"type": block_type, "text": descriptor}
+                        if block_type == "output_text":
+                            block["annotations"] = []
+                        replacement = [block]
+                    candidate[index] = {**item, key: replacement}
                     after = await request.count(candidate)
                     if after >= count:
                         continue
@@ -255,11 +270,22 @@ class ContextCapacityPolicy:
             self.state_dirty = True
         self.last_input, self.last_output = deepcopy(prepared), []
         if self.pending:
+            choice = settings.tool_choice
+            if isinstance(choice, str) and choice not in {"auto", "none", "required", CONTEXT_READ_TOOL}:
+                self.deferred_tool_choice = choice
             settings = replace(settings, tool_choice=CONTEXT_READ_TOOL, parallel_tool_calls=False)
             request.set_settings(settings)
             count = await request.count(prepared)
             if count > request.capacity:
                 raise ContextRecoveryError("Required context-ingestion tool instructions exceed model capacity.")
+        elif self.deferred_tool_choice:
+            # SDK reset_tool_choice observes infrastructure tools too. Preserve
+            # the requested business action until it actually gets called.
+            settings = replace(settings, tool_choice=self.deferred_tool_choice)
+            request.set_settings(settings)
+            count = await request.count(prepared)
+            if count > request.capacity:
+                raise ContextRecoveryError("Required business tool instructions exceed model capacity.")
         if self.state_dirty:
             await self._save_projection(original, prepared)
         self.metrics.update(input_tokens_after=count, pending_payloads=len(self.pending),
@@ -278,6 +304,11 @@ class ContextCapacityPolicy:
                 to_input_item=lambda value=converted: value,
             )
             self.last_output.append(run_item_to_input_item(run_item, self.reasoning_item_id_policy))
+            if converted.get("type") == "function_call":
+                name = converted.get("name")
+                qualified_name = f"{converted['namespace']}.{name}" if converted.get("namespace") else name
+                if self.deferred_tool_choice in {name, qualified_name}:
+                    self.deferred_tool_choice = None
 
     async def checkpoint_output(self, *, native_compaction=False):
         # The SDK persists response outputs separately. Record a candidate anchored
@@ -302,7 +333,8 @@ class ContextCapacityPolicy:
         def with_page(end):
             return [*prefix, {"type": "function_call_output", "call_id": call_id, "output": str(render(end))}]
         if await self.request.count(with_page(payload.cursor + 1)) > self.request.capacity:
-            boundary = pending_start(prefix + [{"type": "function_call_output", "call_id": call_id, "output": ""}])
+            stop = pending_start(prefix + [{"type": "function_call_output", "call_id": call_id, "output": ""}])
+            boundary = await fitting_closed_prefix(self.request, prefix, stop)
             if not boundary:
                 raise ContextRecoveryError("Required context leaves no space for source ingestion.")
             compacted = await self.request.compact(prefix[:boundary])

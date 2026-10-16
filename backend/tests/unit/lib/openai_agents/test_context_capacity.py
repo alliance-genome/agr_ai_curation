@@ -270,3 +270,41 @@ async def test_ordinary_outputs_do_not_duplicate_capacity_projection_windows():
         policy.observe_output([{"type": "function_call", "call_id": "a", "name": "read_pending_context", "arguments": "{}"}])
         await policy.checkpoint_output()
     assert len(projections()) == 1
+
+
+@pytest.mark.asyncio
+async def test_oversized_assistant_output_keeps_valid_message_blocks():
+    from openai.types.responses import ResponseOutputMessage
+    history = MemoryHistory()
+    policy = ContextCapacityPolicy(history)
+    message = {"type": "message", "role": "assistant", "id": "msg-old", "status": "completed",
+        "content": [{"type": "output_text", "text": "Exact source α😀 " * 500, "annotations": []}]}
+    original = deepcopy(message)
+    result, _ = await policy.prepare(FakeRequest(3000), [message], ModelSettings())
+    validated = ResponseOutputMessage.model_validate(result[0])
+    assert "context_ingress_event" in validated.content[0].text
+    assert message == original
+    assert history.rows[0][1]["content"] == exact_json(original["content"])
+
+
+@pytest.mark.asyncio
+async def test_page_compaction_only_dispatches_a_fitting_closed_prefix():
+    from src.lib.openai_agents.context_capacity import PendingPayload
+    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+    request = FakeRequest(2000)
+    original_compact = request.compact
+    async def checked_compact(items):
+        assert await request.count(items) <= request.capacity
+        return await original_compact(items)
+    request.compact = checked_compact
+    policy = ContextCapacityPolicy(MemoryHistory())
+    policy.request = request
+    policy.pending = [PendingPayload("source", "exact body", {"role": "user"})]
+    policy.last_input = [{"role": "user", "content": "old " * 100}]
+    # A single oversized newly generated message cannot be sent to /compact.
+    policy.last_output = [
+        {"role": "assistant", "content": "new " * 1000},
+        {"type": "function_call", "call_id": "read", "name": "read_pending_context", "arguments": "{}"}]
+    with pytest.raises(ContextRecoveryError, match="No source content fits"):
+        await policy.next_page("read")
+    assert request.compactions == [policy.last_input]

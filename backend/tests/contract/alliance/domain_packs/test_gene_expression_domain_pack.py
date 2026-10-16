@@ -928,13 +928,15 @@ def test_gene_expression_field_scoped_evidence_quote_bundle_selected_from_nested
             "page": 4,
             "section": "Results",
             "subsection": "Gene expression analysis",
-            "chunk_id": "chunk-tmem67-metanephros",
             "verified_quote": (
                 "Tmem67 expression was detected in the metanephros at TS26 "
                 "by reverse transcription polymerase chain reaction assay."
             ),
         }
     ]
+
+    # Canonical provenance stays internal; validator input carries exact quotes.
+    assert evidence_records[0]["chunk_id"] == "chunk-tmem67-metanephros"
 
 
 def test_gene_expression_assay_materializes_from_validator_result():

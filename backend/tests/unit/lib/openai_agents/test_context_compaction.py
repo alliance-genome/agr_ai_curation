@@ -298,7 +298,8 @@ async def test_archive_write_failure_cannot_publish_compaction_or_execute_tools(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["http", "websocket"])
-async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_repeating_write(monkeypatch, tmp_path, transport):
+@pytest.mark.parametrize("ingress_source", ["tool", "initial"])
+async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_repeating_write(monkeypatch, tmp_path, transport, ingress_source):
     import ast
     import httpx
     from agents import SQLiteSession
@@ -318,7 +319,7 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
     @function_tool
     def save_once() -> str:
         writes.append("saved")
-        return body
+        return body if ingress_source == "tool" else "saved"
 
     def response(wire):
         wires.append(deepcopy(wire))
@@ -337,6 +338,10 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
         choice = wire.get("tool_choice")
         forced = choice.get("name") if isinstance(choice, dict) else choice
         name = "read_pending_context" if forced == "read_pending_context" else ("save_once" if not writes else None)
+        if ingress_source == "initial" and name == "save_once":
+            assert forced == "save_once"  # Ingestion must not consume forced business intent.
+        if ingress_source == "initial" and name is None:
+            assert forced in (None, "auto")  # The actual business call consumes it once.
         n = len(wires)
         output = ([{"type": "reasoning", "id": f"rs-{n}", "summary": [], "encrypted_content": "reasoning"},
                    {"type": "function_call", "id": f"fc-{n}", "call_id": f"call-{n}", "name": name,
@@ -373,8 +378,9 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
         if transport == "websocket":
             monkeypatch.setattr(model, "_open_websocket_connection", AsyncMock(side_effect=lambda *args, **kwargs: Socket()))
         agent = Agent(name="capacity fixture", model=model, tools=[save_once, *history_tools(archive)],
-                      model_settings=ModelSettings(store=False, max_tokens=1000))
-        result = await Runner.run(agent, "Save and inspect every source character", max_turns=64,
+                      model_settings=ModelSettings(store=False, max_tokens=1000,
+                          tool_choice="save_once" if ingress_source == "initial" else None))
+        result = await Runner.run(agent, body if ingress_source == "initial" else "Save and inspect every source character", max_turns=64,
             run_config=run_config_with_history(RunConfig(tracing_disabled=True), archive),
             session=SQLiteSession("capacity", str(tmp_path / "session.db")))
         assert result.final_output == "done"
