@@ -1,0 +1,55 @@
+Plain BuildKit progress excerpts (2026-10-16)
+
+=== a ===
+#16 [builder 4/6] RUN npm ci
+#16 DONE 21.1s
+#18 [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-a)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
+#18 DONE 2.2s
+
+=== b ===
+#9 [builder 4/6] RUN npm ci
+#9 CACHED
+#12 [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-b)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
+#12 DONE 2.1s
+
+=== mode ===
+#9 [builder 4/6] RUN npm ci
+#9 CACHED
+#12 [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-b)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
+#12 DONE 1.9s
+
+=== invalid ===
+#9 [builder 4/6] RUN npm ci
+#9 CACHED
+#12 [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-b)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
+#12 1.710 Error: VITE_DEV_MODE must be true or false
+ > [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-b)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")':
+  44 | >>> RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") && \
+
+=== manifest ===
+#10 [builder 4/6] RUN npm ci
+#10 DONE 15.5s
+#12 [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-b)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
+#12 DONE 2.4s
+
+=== lock ===
+#10 [builder 4/6] RUN npm ci
+#10 DONE 14.6s
+#12 [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-b)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
+#12 DONE 2.1s
+
+=== restored ===
+#9 [builder 6/6] RUN export VITE_APP_VERSION=$(node -p "require('./package.json').version") &&     echo "Building version: $VITE_APP_VERSION (SHA: cache-probe-b)" &&     npm run build &&     node -e 'const fs = require("fs"); const raw = process.env.VITE_DEV_MODE; if (raw !== "true" && raw !== "false") throw new Error("VITE_DEV_MODE must be true or false"); fs.writeFileSync("dist/build-metadata.json", JSON.stringify({ schema_version: 1, vite_dev_mode: raw === "true", git_sha: process.env.VITE_GIT_SHA }) + "\n")'
+#9 CACHED
+#14 [builder 4/6] RUN npm ci
+#14 CACHED
+
+a final-image metadata: {"schema_version":1,"vite_dev_mode":false,"git_sha":"cache-probe-a"}
+
+b final-image metadata: {"schema_version":1,"vite_dev_mode":false,"git_sha":"cache-probe-b"}
+
+mode final-image metadata: {"schema_version":1,"vite_dev_mode":true,"git_sha":"cache-probe-b"}
+
+restored final-image metadata: {"schema_version":1,"vite_dev_mode":false,"git_sha":"cache-probe-b"}
+
+Compiled .js assertions passed for SHA A/B and mode false/true.
