@@ -104,7 +104,6 @@ def test_tool_verified_allele_fixture_builds_active_mention_validation_request()
             "page": 3,
             "section": "Results",
             "subsection": "Dauer phenotype",
-            "chunk_id": "chunk-allele-phenotype",
             "figure_reference": "Figure 3B",
         }],
     }

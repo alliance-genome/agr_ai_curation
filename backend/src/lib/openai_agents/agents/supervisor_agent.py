@@ -908,6 +908,8 @@ def _create_streaming_tool(
         )
 
     def specialist_error_result(ctx: RunContextWrapper[Any], error: Exception) -> str:
+        from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+        raise_if_document_read_failed(error)
         if provider_policy_error(error) is not None:
             report_chat_policy_failure(
                 error, tool_name=tool_name,
@@ -1302,8 +1304,8 @@ def _build_runtime_tool_availability_note(
         "about why a previous answer behaved a certain way or what tools ran. "
         "Use recall_chat_history for exact prior user/assistant transcript text "
         "when earlier chat turns may have been compacted out of live context; "
-        "continue truncated pages with next_cursor and read a withheld long "
-        "message exactly with detail=\"message\"."
+        "continue requested row pages with next_cursor or select one exact "
+        "message with detail=\"message\"."
     )
 
     return "\n\n".join(notes)
@@ -1636,8 +1638,8 @@ def create_supervisor_agent(
         name_override=_INSPECT_RESULTS_TOOL_NAME,
         description_override=(
             "Explore persisted canonical extraction results for this chat without "
-            "rerunning extraction. Every response is size-bounded: pass next_call "
-            "exactly to continue a page or an exact chunk. Start with "
+            "rerunning extraction. Use next_call to continue explicitly selected "
+            "row pages; exact detail reads return complete selected content. Start with "
             "action=\"summary\" (counts by object type, status and validation state), "
             "then action=\"objects\" filtered by object_type, status, validation_state "
             "(open|resolved|none|any), severity, query (field text) or field_path, with "
@@ -1648,8 +1650,8 @@ def create_supervisor_agent(
             "object_ref for evidence text; action=\"details\" with object_ref for saved "
             "generic/custom attributes; action=\"list\" and action=\"search\" with "
             "query/target to choose among results. Values shown withheld are read "
-            "exactly with their read call (detail_path/cursor); pass cursor, limit and "
-            "result_sha256 only from a next_call. Address a specific "
+            "exactly with their read call. Continue row pages with next_call; optional "
+            "detail cursors select exact suffixes and result_sha256 verifies the source. Address a specific "
             "result with result_ref in extraction-result:<uuid> form. Direct validators use "
             "validator-result:<uuid>; action=\"validator_runs\" lists this chat's runs. "
             "For either kind, validator_results plus validator_result_key and "
@@ -1769,12 +1771,12 @@ def create_supervisor_agent(
             "detail=\"recent\" for a bounded recent transcript page, detail=\"turn\" "
             "with turn_ref=\"latest\", a turn id, message id, or 1-based turn ordinal "
             "to fetch a specific turn, and detail=\"search\" with query to full-text "
-            "search this conversation. Pages are size-bounded: when truncated is true, "
-            "call again with the returned next_cursor. A message too long for a page "
-            "is marked withheld; read it exactly with the arguments in its "
-            "detail_calls (detail=\"message\", message_id, message_field content or "
-            "flow_assistant_message, content_cursor), following next_content_cursor "
-            "until complete. Use this when earlier turns may have been "
+            "search this conversation. Recent results use requested row pages; when "
+            "truncated is true, continue with next_cursor. Turn and search reads "
+            "return complete selected messages. For one exact message or suffix, "
+            "use detail=\"message\", message_id, message_field content or "
+            "flow_assistant_message, and optional content_cursor. Use this when "
+            "earlier turns may have been "
             "compacted or summarized and you need exact user/assistant wording. This "
             "does not inspect TraceReview behavior; use inspect_chat_traces for why "
             "tools ran or failed."
@@ -1793,14 +1795,14 @@ def create_supervisor_agent(
         """Recall exact transcript text for the active main chat.
 
         Args:
-            detail: recent, turn, search, or message (one exact message in chunks).
+            detail: recent, turn, search, or message (one complete exact message or selected suffix).
             turn_ref: For detail="turn": latest, a turn id, message id, or 1-based turn ordinal.
             query: For detail="search": text to find in this conversation.
             limit: Most messages on one page.
             cursor: The next_cursor from the previous page of the same request.
             message_id: For detail="message": the message to read exactly.
             message_field: For detail="message": content or flow_assistant_message.
-            content_cursor: For detail="message": the next_content_cursor from the previous chunk.
+            content_cursor: For detail="message": optional character offset selecting the complete remaining text.
         """
 
         return await recall_chat_history(

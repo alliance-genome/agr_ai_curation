@@ -1,37 +1,25 @@
 """
-Provider Budget Utilities for Claude-Specific Endpoints
+Advisory Size Metadata for Claude-Specific Endpoints
 
-Measures serialized response characters against Agent Studio's provider boundary
-and retains token estimates as advisory metadata.
+Reports character counts and heuristic token estimates for diagnostics.
+Model capacity is governed by the shared context policy, not these estimates.
 """
 
 import json
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from ..config import get_agent_studio_provider_tool_result_inline_max_chars
 
 
 # Configuration
 CHARS_PER_TOKEN = 4  # Heuristic: 4 characters ≈ 1 token
 
 
-@dataclass
-class TokenBudgetResult:
-    """Result of a serialized provider-result budget check."""
-    estimated_tokens: int
-    serialized_chars: int
-    max_serialized_chars: int
-    within_budget: bool
-    warning: Optional[str] = None
-
-
 def estimate_tokens(text: str) -> int:
     """
     Estimate token count using character heuristic.
 
-    Uses 4 chars ≈ 1 token, which is accurate enough for budget management.
+    Uses 4 chars ≈ 1 token, as advisory size metadata, not as a capacity decision.
     This avoids API calls to tokenizers while providing reasonable estimates.
 
     Args:
@@ -45,63 +33,10 @@ def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
-def check_budget(
-    data: Any,
-    max_chars: int | None = None,
-) -> TokenBudgetResult:
-    """
-    Check whether data fits within the serialized-character boundary.
-
-    Args:
-        data: Any JSON-serializable data to check
-        max_chars: Maximum serialized response characters. Defaults to the
-            shared Agent Studio provider inline-result boundary.
-
-    Returns:
-        TokenBudgetResult with estimated tokens, budget status, and warning if exceeded
-    """
+def create_token_info_dict(data: Any) -> Dict[str, Any]:
+    """Advisory response size; shared native model policy owns capacity."""
     serialized = json.dumps(data, default=str)
-    serialized_chars = len(serialized)
-    resolved_max_chars = max_chars or get_agent_studio_provider_tool_result_inline_max_chars()
-    estimated = estimate_tokens(serialized)
-    within_budget = serialized_chars <= resolved_max_chars
-
-    warning = None
-    if not within_budget:
-        warning = (
-            "Response exceeds the Agent Studio serialized-character boundary "
-            f"({serialized_chars:,} chars > {resolved_max_chars:,}). "
-            "Use the response collection inventory and continuation arguments."
-        )
-
-    return TokenBudgetResult(
-        estimated_tokens=estimated,
-        serialized_chars=serialized_chars,
-        max_serialized_chars=resolved_max_chars,
-        within_budget=within_budget,
-        warning=warning
-    )
-
-
-def create_token_info_dict(data: Any, max_chars: int | None = None) -> Dict[str, Any]:
-    """
-    Create a token info dictionary suitable for API responses.
-
-    Args:
-        data: The response data to check
-        max_chars: Maximum serialized response characters
-
-    Returns:
-        Dictionary with token info fields
-    """
-    result = check_budget(data, max_chars)
-    return {
-        "estimated_tokens": result.estimated_tokens,
-        "serialized_chars": result.serialized_chars,
-        "max_serialized_chars": result.max_serialized_chars,
-        "within_budget": result.within_budget,
-        "warning": result.warning
-    }
+    return {"estimated_tokens": estimate_tokens(serialized), "serialized_chars": len(serialized)}
 
 
 def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:

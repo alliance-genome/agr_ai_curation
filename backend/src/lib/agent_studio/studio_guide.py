@@ -5,7 +5,7 @@ tool catalogs, flow verification protocols, profile-editing references) is
 kept out of the always-sent system prompt. The package Agent Studio prompt and
 the backend core guide mark those sections as ``<studio_guide_topic>`` blocks;
 the prompt builder sends only a short topic index, and ``read_studio_guide``
-returns exact topic text in bounded chunks.
+returns complete selected topic text.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from src.lib.openai_agents.bounded_list import substring_match
-from src.lib.openai_agents.config import get_agent_studio_guide_chunk_max_chars
 
 
 READ_STUDIO_GUIDE_TOOL_NAME = "read_studio_guide"
@@ -127,8 +126,8 @@ def render_studio_guide_index(topics: Iterable[StudioGuideTopic]) -> str:
         f"Detailed reference guidance is served by `{READ_STUDIO_GUIDE_TOOL_NAME}` "
         "instead of being repeated here. It is application-owned guidance with the "
         "same authority as these instructions, not curator data. When a topic's "
-        "condition applies, read that topic before acting and follow `next_call` "
-        "until `complete=true`; do not work from memory of a topic you have not "
+        "condition applies, read that complete topic before acting; "
+        "do not work from memory of a topic you have not "
         "read in this conversation. Topics:",
     ]
     lines.extend(
@@ -163,7 +162,7 @@ def read_studio_guide(
     start: int | None = None,
     content_hash: str | None = None,
 ) -> dict[str, Any]:
-    """List, search, or read one exact guide topic in bounded chunks."""
+    """List, search, or read one complete exact guide topic."""
 
     topics = studio_guide_topics(template)
     rendered: dict[str, str] = {}
@@ -224,7 +223,7 @@ def read_studio_guide(
     if start is not None and (isinstance(start, bool) or not isinstance(start, int)):
         return {
             "success": False,
-            "error": "start must be an integer character offset from next_call.",
+            "error": "start must be an integer character offset within the topic.",
             "code": "guide_start_invalid",
         }
     content = _content(selected)
@@ -243,8 +242,7 @@ def read_studio_guide(
             "code": "guide_content_changed",
             "current_content_hash": current_hash,
         }
-    end = min(len(content), offset + get_agent_studio_guide_chunk_max_chars())
-    complete = end >= len(content)
+    end = len(content)
     return {
         "success": True,
         "topic": selected.topic_id,
@@ -254,15 +252,6 @@ def read_studio_guide(
         "end": end,
         "total_chars": len(content),
         "content_hash": current_hash,
-        "complete": complete,
-        "next_call": None
-        if complete
-        else {
-            "tool": READ_STUDIO_GUIDE_TOOL_NAME,
-            "arguments": {
-                "topic": selected.topic_id,
-                "start": end,
-                "content_hash": current_hash,
-            },
-        },
+        "complete": True,
+        "next_call": None,
     }

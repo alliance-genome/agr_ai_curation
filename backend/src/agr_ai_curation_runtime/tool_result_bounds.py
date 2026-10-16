@@ -1,20 +1,7 @@
-"""Size-bounded model-facing tool results.
+"""Exact tool-result views and caller-selected pagination.
 
-Row limits alone do not bound what a model receives: one wide record, a long
-quote, or a page of long passages can each exceed any sensible context share.
-These helpers measure the serialized result the model will actually see and
-build pages that fit a configured byte budget, with explicit continuation and
-exact, hash-addressed chunk reads for values too large to show whole.
-
-Nothing here drops content silently. A page ends where the budget ends and says
-where to continue; an oversized single value is replaced by a descriptor that
-names its exact detail path; and when even the compact form cannot fit, callers
-get a compact ``tool_result_budget_unmet`` failure that the backend adapter
-reports as an unexpected contract escape.
-
-This module is pure (standard library only) so isolated package tools and the
-backend share one implementation. Package code reads the same environment
-variables the backend config getters document.
+Context capacity belongs to the shared model boundary. These helpers preserve
+complete results and validate explicit cursors, revisions, and detail paths.
 """
 
 from __future__ import annotations
@@ -30,15 +17,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-TOOL_RESULT_BUDGET_UNMET = "tool_result_budget_unmet"
 INVALID_RESULT_CURSOR = "invalid_result_cursor"
 STALE_RESULT_CURSOR = "stale_result_cursor"
-
-TOOL_RESULT_MAX_BYTES_ENV = "TOOL_RESULT_MAX_BYTES"
-TOOL_RESULT_MAX_BYTES_DEFAULT = 32768
-# The compact failure and descriptors must always fit; below this the contract
-# cannot be expressed at all, so configuration is clamped up to it.
-TOOL_RESULT_MIN_BYTES = 2048
 
 
 _FULL_TOOL_RESULTS_REQUESTED: ContextVar[bool] = ContextVar(
@@ -67,18 +47,6 @@ def full_tool_results_are_requested() -> bool:
     return _FULL_TOOL_RESULTS_REQUESTED.get()
 
 
-class ToolResultBudgetError(RuntimeError):
-    """The compact form of a result still does not fit its byte budget."""
-
-    def __init__(self, *, measured: int, limit: int, field: str | None = None) -> None:
-        super().__init__(
-            f"Tool result needs {measured} bytes but the configured budget is {limit} bytes"
-        )
-        self.measured = measured
-        self.limit = limit
-        self.field = field
-
-
 def env_positive_int(name: str, default: int, *, minimum: int = 1) -> int:
     """Read a positive integer setting shared with the backend config getters."""
 
@@ -94,16 +62,6 @@ def env_positive_int(name: str, default: int, *, minimum: int = 1) -> int:
         logger.warning("%s=%s is below minimum %s; using %s", name, value, minimum, minimum)
         return minimum
     return value
-
-
-def tool_result_max_bytes() -> int:
-    """Total serialized byte budget for one bounded model-facing tool result."""
-
-    return env_positive_int(
-        TOOL_RESULT_MAX_BYTES_ENV,
-        TOOL_RESULT_MAX_BYTES_DEFAULT,
-        minimum=TOOL_RESULT_MIN_BYTES,
-    )
 
 
 def _plain(value: Any) -> Any:
@@ -130,7 +88,7 @@ def serialized_size(value: Any) -> int:
     The Agents SDK stringifies structured tool returns (Python ``str``), while
     package transport, validator wrappers and replay use JSON with or without
     ASCII escaping. Measure each and keep the largest so Unicode, escapes and
-    every representation stay inside the budget.
+    the measurement reflects escaping in each representation.
     """
 
     plain = _plain(value)
@@ -149,35 +107,6 @@ def content_sha256(value: Any) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def budget_failure(
-    *,
-    tool_name: str,
-    measured: int,
-    limit: int,
-    field: str | None = None,
-) -> dict[str, Any]:
-    """Compact failure returned when a result cannot meet its contract.
-
-    Backend tool adapters recognize ``error_code`` and report the escape once.
-    """
-
-    return {
-        "status": "error",
-        "error_code": TOOL_RESULT_BUDGET_UNMET,
-        "tool_name": tool_name,
-        "result_bounds": {
-            "measured_bytes": measured,
-            "limit_bytes": limit,
-            "setting": TOOL_RESULT_MAX_BYTES_ENV,
-            "field": field,
-        },
-        "message": (
-            "The result could not be reduced to fit the tool result budget. "
-            "Narrow the request with filters or a smaller limit."
-        ),
-    }
-
-
 def invalid_cursor(message: str, **details: Any) -> dict[str, Any]:
     """Explicit caller error for a malformed or out-of-range cursor."""
 
@@ -187,18 +116,6 @@ def invalid_cursor(message: str, **details: Any) -> dict[str, Any]:
         "message": message,
         **details,
     }
-
-
-def is_budget_failure(result: Any) -> bool:
-    """Return whether a tool result is the compact budget failure."""
-
-    payload = _plain(result)
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except (TypeError, ValueError):
-            return False
-    return isinstance(payload, Mapping) and payload.get("error_code") == TOOL_RESULT_BUDGET_UNMET
 
 
 def clamp_page_limit(
@@ -233,6 +150,15 @@ def clamp_page_limit(
     }
 
 
+def requested_text_length(requested: Any, total: int) -> int:
+    """An optional caller-selected range; omitted means the complete value."""
+    if requested is None:
+        return total
+    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+        raise ValueError("Requested text length must be a positive integer")
+    return requested
+
+
 def parse_offset(offset: Any, *, total: int, name: str = "offset") -> int:
     """Validate a forward offset against the current total.
 
@@ -257,83 +183,19 @@ def parse_offset(offset: Any, *, total: int, name: str = "offset") -> int:
 
 
 def fit_page(
-    items: Sequence[Any],
-    *,
-    start: int,
-    limit: int,
+    items: Sequence[Any], *, start: int, limit: int,
     render: Callable[[list[Any], int], Any],
-    budget: int,
-    oversized: Callable[[Any, int], Any] | None = None,
 ) -> tuple[Any, int]:
-    """Render the largest page of ``items[start:start+limit]`` within ``budget``.
-
-    ``render(page_items, returned_count)`` must build the complete response,
-    including continuation metadata derived from ``returned_count``, so the
-    whole serialized response is measured, not only the rows. Items are taken
-    in order; the page ends before the first item that would overflow.
-
-    A first item that cannot fit alone is replaced by ``oversized(item, index)``
-    (an exact-detail descriptor). If there is no replacement, or even the
-    replacement or the empty page overflows, ``ToolResultBudgetError`` is
-    raised so the tool can return a compact failure.
-    """
-
-    stop = min(len(items), start + max(0, limit))
-    page: list[Any] = []
-    response = render(page, 0)
-    measured = serialized_size(response)
-    if measured > budget:
-        raise ToolResultBudgetError(measured=measured, limit=budget)
-    for index in range(start, stop):
-        candidate_page = [*page, items[index]]
-        candidate = render(candidate_page, len(candidate_page))
-        measured = serialized_size(candidate)
-        if measured <= budget:
-            page, response = candidate_page, candidate
-            continue
-        if page:
-            break
-        if oversized is None:
-            raise ToolResultBudgetError(measured=measured, limit=budget)
-        candidate_page = [oversized(items[index], index)]
-        candidate = render(candidate_page, 1)
-        measured = serialized_size(candidate)
-        if measured > budget:
-            raise ToolResultBudgetError(measured=measured, limit=budget)
-        page, response = candidate_page, candidate
-        break
-    return response, len(page)
+    """Render the complete caller-selected page, without a context quota."""
+    page = list(items[start:min(len(items), start + max(0, limit))])
+    return render(page, len(page)), len(page)
 
 
-def fit_text_window(
-    text: str,
-    *,
-    cursor: int,
-    render: Callable[[str, int], Any],
-    budget: int,
-) -> Any:
-    """Return ``render(text[cursor:end], end)`` for the largest end that fits.
-
-    The slice is exact (no ellipses, no rewriting). ``render`` builds the whole
-    response including the returned range and next cursor. Raises
-    ``ValueError`` for an out-of-range cursor and ``ToolResultBudgetError``
-    when not even one character fits.
-    """
-
+def fit_text_window(text: str, *, cursor: int, render: Callable[[str, int], Any]) -> Any:
+    """Return every exact character from a validated cursor to the end."""
     if isinstance(cursor, bool) or not isinstance(cursor, int) or cursor < 0 or cursor > len(text):
         raise ValueError(f"cursor must be an integer between 0 and {len(text)}")
-    low, high = cursor, len(text)
-    while low < high:
-        middle = (low + high + 1) // 2
-        if serialized_size(render(text[cursor:middle], middle)) <= budget:
-            low = middle
-        else:
-            high = middle - 1
-    response = render(text[cursor:low], low)
-    measured = serialized_size(response)
-    if measured > budget or (low == cursor and cursor < len(text)):
-        raise ToolResultBudgetError(measured=measured, limit=budget)
-    return response
+    return render(text[cursor:], len(text))
 
 
 def resolve_path(root: Any, path: str) -> Any:
@@ -390,17 +252,14 @@ def detail_chunk(
     *,
     path: str,
     cursor: Any,
-    budget: int,
     expected_sha256: str | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return one exact chunk of the value at ``path``.
+    """Return the complete exact value suffix at ``path`` and ``cursor``.
 
-    Strings are chunked as text; anything else as canonical JSON. Chunks are
-    contiguous and lossless: concatenating every chunk up to ``complete`` gives
-    back exactly the value whose ``sha256`` is reported. When the caller passes
-    the hash from an earlier chunk and the value has since changed, a
-    ``stale_result_cursor`` error is returned instead of mixing versions.
+    Strings use text; anything else uses canonical JSON. The reported hash
+    identifies the whole source value. A supplied hash from a previous read
+    must still match or the result is ``stale_result_cursor``.
     """
 
     value = resolve_path(root, path)
@@ -422,7 +281,6 @@ def detail_chunk(
     base = dict(extra or {})
 
     def render(content: str, end: int) -> dict[str, Any]:
-        complete = end >= len(text)
         return {
             **base,
             "status": "ok",
@@ -433,12 +291,12 @@ def detail_chunk(
                 "sha256": digest,
                 "total_chars": len(text),
                 "returned_range": {"start": start, "end": end},
-                "next_cursor": None if complete else end,
-                "complete": complete,
+                "next_cursor": None,
+                "complete": True,
             },
         }
 
-    return fit_text_window(text, cursor=start, render=render, budget=budget)
+    return fit_text_window(text, cursor=start, render=render)
 
 
 # Small top-level fields that identify a result's outcome. They are repeated
@@ -496,7 +354,6 @@ def _json_pointer(keys: Sequence[str], index: int) -> str:
 def bounded_json_result(
     result: Mapping[str, Any],
     *,
-    budget: int,
     offset: Any = None,
     expected_sha256: str | None = None,
     detail_path: str | None = None,
@@ -507,12 +364,11 @@ def bounded_json_result(
     body_key: str = "data",
     identity_keys: Sequence[str] = RESULT_IDENTITY_KEYS,
 ) -> dict[str, Any] | None:
-    """Serve a structured result as budget-bounded pages and exact detail chunks.
+    """Return complete selected data, with explicit page/detail views when requested.
 
-    Returns ``None`` when no view was requested and the complete result already
-    fits, so compact results reach the model unchanged. Otherwise returns the
-    requested page or detail chunk. Nothing is dropped: withheld fields and
-    oversized items are replaced by descriptors naming an exact ``detail_path``.
+    Returns ``None`` when no view is requested, so the full result reaches the
+    shared model boundary. Explicit pages preserve complete items and expose
+    exact detail paths for fields not repeated on subsequent pages.
 
     ``stateless`` results are recomputed on every call, so pages carry the
     full-result hash and a mismatched ``expected_sha256`` is reported as stale.
@@ -545,12 +401,11 @@ def bounded_json_result(
             full,
             path=detail_path,
             cursor=detail_cursor,
-            budget=budget,
             extra={**identity, "result_sha256": digest} if stateless else identity,
         )
     if detail_cursor is not None:
         raise ValueError("detail_cursor requires detail_path")
-    if offset is None and not expected_sha256 and serialized_size(full) <= budget:
+    if offset is None and not expected_sha256:
         return None
 
     primary = _primary_collection(full, body_key)
@@ -563,9 +418,8 @@ def bounded_json_result(
     start = parse_offset(offset, total=len(items), name="result_offset")
     first_page = start == 0
 
-    # Fields outside the paged collection: shown on the first page, deferred
-    # largest-first only as far as needed for the page frame to fit, and named
-    # (never silently dropped) on continuation pages.
+    # Fields outside the selected collection are shown at offset zero and named
+    # for exact detail reads when the caller explicitly starts later.
     outer: list[tuple[str, Any]] = [
         (key, value)
         for key, value in full.items()
@@ -578,7 +432,6 @@ def bounded_json_result(
             if key != keys[1]
         )
     shown = dict(outer) if first_page else {}
-    withheld: list[dict[str, Any]] = []
     omitted = [] if first_page else [path for path, _ in outer]
 
     def render(page: list[Any], returned: int) -> dict[str, Any]:
@@ -597,53 +450,33 @@ def bounded_json_result(
                 body[keys[0]] = page_value
         if page_extras is not None:
             body.update(page_extras(keys or None, mode, start, returned))
-        next_offset = start + returned
-        more = next_offset < len(items)
         body["result_page"] = {
             "bounded": True,
-            "budget_bytes": budget,
             "primary_path": ".".join(keys) or None,
             "page_mode": mode,
             "total_items": len(items),
             "offset": start,
             "returned_items": returned,
-            "next_offset": next_offset if more else None,
-            "complete": not more,
-            "withheld_fields": withheld,
+            "next_offset": None,
+            "complete": True,
             "omitted_fields": omitted,
-            "next_call": {**carry, "result_offset": next_offset} if more else None,
+            "next_call": None,
             "detail_call": {**carry, "detail_path": "<detail_path>", "detail_cursor": 0},
             "instructions": (
-                "This result is larger than one tool response, so it is shown in pages. "
-                "Continue with the arguments in next_call. Items or fields marked "
-                "withheld, and fields listed in omitted_fields, are read exactly with "
-                "detail_call using their detail_path; follow each chunk's next_cursor."
+                "This is the complete requested result suffix. "
+                "Fields listed in omitted_fields are read exactly with "
+                "detail_call using their detail_path."
             ),
         }
         if stateless:
             body["result_page"]["result_sha256"] = digest
         return body
 
-    if first_page:
-        by_size = sorted(shown, key=lambda path: serialized_size(shown[path]), reverse=True)
-        for path in by_size:
-            if serialized_size(render([], 0)) <= budget:
-                break
-            withheld.append(value_descriptor(shown.pop(path), detail_path=path))
-
-    def oversized(item: Any, index: int) -> Any:
-        if mode == "fields":
-            key, value = item
-            return (key, value_descriptor(value, detail_path=f"{'.'.join(keys)}.{key}"))
-        return value_descriptor(item, detail_path=f"{'.'.join(keys)}.{index}")
-
     response, _ = fit_page(
         items,
         start=start,
         limit=len(items) - start,
         render=render,
-        budget=budget,
-        oversized=oversized,
     )
     return response
 
@@ -658,13 +491,7 @@ __all__ = [
     "INVALID_RESULT_CURSOR",
     "RESULT_IDENTITY_KEYS",
     "STALE_RESULT_CURSOR",
-    "TOOL_RESULT_BUDGET_UNMET",
-    "TOOL_RESULT_MAX_BYTES_DEFAULT",
-    "TOOL_RESULT_MAX_BYTES_ENV",
-    "TOOL_RESULT_MIN_BYTES",
-    "ToolResultBudgetError",
     "bounded_json_result",
-    "budget_failure",
     "canonical_json",
     "clamp_page_limit",
     "content_sha256",
@@ -673,11 +500,10 @@ __all__ = [
     "fit_page",
     "fit_text_window",
     "invalid_cursor",
-    "is_budget_failure",
     "json_pointer_for_row",
     "parse_offset",
+    "requested_text_length",
     "resolve_path",
     "serialized_size",
-    "tool_result_max_bytes",
     "value_descriptor",
 ]

@@ -100,8 +100,8 @@ def test_extractor_prompts_state_span_evidence_workflow():
         content = " ".join(_effective_prompt_content(path).lower().split())
         label = str(path.relative_to(REPO_ROOT))
         for fragment in [
-            "read_chunk.evidence_spans[].span_id",
-            "record_evidence(span_ids=[...])",
+            "read_chunk.evidence_spans[].span_index",
+            'record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])',
             # One record_evidence call maps to one evidence unit. Envelope
             # prompts spell this as "...for truly disjoint evidence units" while
             # the terser builder prompts (e.g. phenotype) instruct selecting span
@@ -141,8 +141,8 @@ def test_builder_extractor_prompts_require_field_targets_and_same_id_source_upda
 
 def test_gene_expression_prompt_contract_states_span_workspace_workflow():
     required_fragments = [
-        "read_chunk.evidence_spans[].span_id",
-        "record_evidence(span_ids=[...])",
+        "read_chunk.evidence_spans[].span_index",
+        'record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])',
         "list_recorded_evidence",
         "get_recorded_evidence",
         "attach_evidence_to_object",
@@ -151,7 +151,7 @@ def test_gene_expression_prompt_contract_states_span_workspace_workflow():
         "update_recorded_evidence_metadata",
         "source quote and provenance fields are backend-owned",
         "object-level-only evidence",
-        "Multiple `span_ids` in one `record_evidence` call produce one evidence record",
+        "Multiple `selections` in one `record_evidence` call produce one evidence record",
     ]
 
     missing = []
@@ -236,7 +236,7 @@ def test_agent_studio_catalog_tool_inventory_exposes_span_workspace_contract():
     assert missing == []
 
 
-def test_evidence_fixtures_use_span_id_tool_inputs():
+def test_evidence_fixtures_use_local_selection_tool_inputs():
     stale_hits: list[str] = []
     missing: list[str] = []
 
@@ -255,9 +255,14 @@ def test_evidence_fixtures_use_span_id_tool_inputs():
                 stale_hits.append(f"{label}: claimed_quote")
             if "chunk_id" in tool_input:
                 stale_hits.append(f"{label}: chunk_id")
-            span_ids = tool_input.get("span_ids")
-            if not isinstance(span_ids, list) or not all(isinstance(item, str) for item in span_ids):
-                missing.append(f"{label}: span_ids")
+            assert "span_ids" not in tool_input
+            selections = tool_input.get("selections")
+            if not isinstance(selections, list) or not all(
+                isinstance(item, dict) and set(item) == {"chunk_index", "span_index"}
+                and all(type(value) is int and value >= 0 for value in item.values())
+                for item in selections
+            ):
+                missing.append(f"{label}: selections")
             expected_tool_result = tool_case.get("expected_tool_result")
             assert isinstance(expected_tool_result, dict), f"{label} has no expected_tool_result mapping"
             result_span_ids = expected_tool_result.get("source_span_ids")

@@ -390,7 +390,7 @@ def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nest
                if cap.ref.domain_pack_id == "agr.alliance.allele"
                and cap.ref.binding_id == "allele_mention_reference_validation")
     assert not capability_issues(cap, ["MGI"])
-    assert cap.ref.domain_pack_version == "0.1.1"
+    assert cap.ref.domain_pack_version == "0.1.2"
     # Optional custom details and parts can supply the lookup input.
     raw["fields"][0]["required"] = False
     raw["fields"][0]["nullable"] = True
@@ -424,18 +424,19 @@ def test_packaged_allele_custom_field_does_not_require_paper_quote(example, nest
     assert built.request.selected_inputs["mention"] == "MGI:2175911"
     assert built.request.validator_agent.agent_id == "allele_validation"
     assert built.request.expected_result_fields == {"curie": prefix + ".resolved_id"}
-    assert built.request.selected_inputs.get("evidence_quotes", []) == (records if with_context else [])
+    assert built.request.selected_inputs.get("evidence_quotes", []) == ([{k: v for k, v in record.items() if k != "chunk_id"} for record in records] if with_context else [])
     if with_context:
         assert built.request.selected_inputs["taxon"] == "NCBITaxon:10090"
 
 
-def test_previous_allele_capability_version_is_not_silently_reused(example):
+@pytest.mark.parametrize("previous_version", ["0.1.0", "0.1.1"])
+def test_previous_allele_capability_version_is_not_silently_reused(example, previous_version):
     from src.lib.agent_studio.profile_mapping_service import capability_catalog
 
     raw, _, pack = example
     cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
                if cap.ref.domain_pack_id == "agr.alliance.allele")
-    old_ref = cap.ref.model_copy(update={"domain_pack_version": "0.1.0"})
+    old_ref = cap.ref.model_copy(update={"domain_pack_version": previous_version})
     raw["validator_mappings"][0].update(
         capability_ref=old_ref.model_dump(), capability_fingerprint=cap.fingerprint(),
         inputs={"mention": {"field_path": "attributes.paper_name"}},
@@ -465,11 +466,12 @@ def test_allele_capability_persistence_uses_new_version_identity(example):
         fingerprint=cap.fingerprint(), snapshot=cap.snapshot())
     persist_capability_references(db, SimpleNamespace(id=uuid4(), contract=raw), [cap])
     insert, select = [call.args[0] for call in db.execute.call_args_list]
-    assert insert.compile(dialect=postgresql.dialect()).params["domain_pack_version"] == "0.1.1"
+    assert insert.compile(dialect=postgresql.dialect()).params["domain_pack_version"] == "0.1.2"
     # The select must look up the new immutable row, not a previously persisted
-    # 0.1.0 snapshot with different bytes.
-    assert "0.1.1" in select.compile(dialect=postgresql.dialect()).params.values()
+    # 0.1.0 or 0.1.1 snapshot with different bytes.
+    assert "0.1.2" in select.compile(dialect=postgresql.dialect()).params.values()
     assert "0.1.0" not in select.compile(dialect=postgresql.dialect()).params.values()
+    assert "0.1.1" not in select.compile(dialect=postgresql.dialect()).params.values()
     assert db.add.call_args.args[0].capability_fingerprint == cap.fingerprint()
 
 
@@ -520,3 +522,40 @@ def test_overlay_declares_a_resolvable_values_paper_wording_and_resolution_leave
     assert (covered["attributes"]["gene"]["resolution_state"], covered["attributes"]["gene"]["gene_id"]) == (
         "resolved", "EX:1")
     assert display_text(covered["attributes"]["gene"], fields["attributes.gene"].metadata["display"]) == "EX:1"
+
+
+def test_allele_capability_identity_preserves_contract_but_not_operational_allowance():
+    from dataclasses import replace
+    from src.lib.agent_studio.profile_mapping_service import capability_catalog
+    from agr_ai_curation_alliance.domain_packs.allele.constants import ALLELE_DOMAIN_PACK_VERSION
+
+    cap = next(cap for cap in capability_catalog(active_group_ids=["MGI"])
+               if cap.ref.domain_pack_id == "agr.alliance.allele")
+    assert cap.ref.domain_pack_version == ALLELE_DOMAIN_PACK_VERSION == "0.1.2"
+    original = cap.fingerprint()
+    for allowance in (16, 64, 128):
+        changed = replace(cap, binding=replace(cap.binding, max_tool_calls=allowance,
+                          raw={**cap.binding.raw, "max_tool_calls": allowance}))
+        assert changed.fingerprint() == original
+        assert changed.snapshot() == cap.snapshot()
+        assert changed.binding.max_tool_calls == allowance
+    # Semantic policy and exact custom validator provenance remain identity-bearing.
+    for updates in ({"blocking": not cap.binding.raw["blocking"]},
+                    {"custom_validator": {"revision_id": "different-revision"}}):
+        changed = replace(cap, binding=replace(cap.binding, raw={**cap.binding.raw, **updates}))
+        assert changed.fingerprint() != original
+    assert "max_tool_calls" in cap.binding.raw
+    assert "max_tool_calls" not in cap.snapshot()["binding"]
+
+
+def test_saved_profile_uses_live_allowance_without_changing_its_capability_pin(example):
+    raw, cap, pack = example
+    receipt, profile = resolve(raw)
+    for allowance in (16, 64, 128):
+        live = replace(cap, binding=replace(cap.binding, max_tool_calls=allowance,
+                       raw={**cap.binding.raw, "max_tool_calls": allowance}))
+        context = compile_profile_validation(receipt, profile, pack, capabilities=[live])
+        assert not context.unavailable
+        binding, = context.registry.bindings
+        assert binding.max_tool_calls == allowance
+        assert profile.contract.validator_mappings[0].capability_fingerprint == live.fingerprint()

@@ -27,7 +27,6 @@ from openai.types.responses import (
 from src.lib.agent_studio.catalog_service import ToolExecutionContext, resolve_tools
 from src.lib.config.agent_loader import get_agent_definition
 from src.lib.flows.chat_output_delivery import chat_output_delivery_scope
-from src.lib.openai_agents.config import get_output_tool_max_response_chars
 from tests.fixtures.flows.semantic_chat_output import (
     CURATOR_REQUEST,
     EM_DASH,
@@ -209,7 +208,6 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     """Regression: the chat formatter must not receive the bundle in instructions."""
 
     executor = _executor_module()
-    budget = get_output_tool_max_response_chars()
     model = _ScriptedFormatterModel(
         [
             ("inspect_output_artifacts", {"catalog_query": "anatomy"}),
@@ -246,12 +244,10 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     assert "read_output_value" in model.requests[0]["tool_names"]
     assert "finalize_and_save" not in model.requests[0]["tool_names"]
 
-    # Every tool return the model sees obeys the configured total budget.
+    # Selected tool results retain complete data; the common boundary owns capacity.
     final_input = model.requests[-1]["input"]
     outputs = _tool_outputs(final_input)
     assert len(outputs) == 6
-    for output in outputs.values():
-        assert len(output) <= budget
     catalog_page = json.loads(outputs["call-0"])["inventory"]["field_catalog"]
     # One resolvable-term field (ALL-1283) instead of parallel label/id/status lists.
     assert catalog_page["matching_fields"] >= 1
@@ -260,21 +256,19 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     assert validation_catalog["row_source"] == "validation_finding"
     row_page = json.loads(outputs["call-2"])
     assert row_page["status"] == "ok"
-    assert row_page["next_cursor"]
-    assert len(row_page["rows"]) < row_page["total_count"]
+    assert not row_page["next_cursor"]
+    assert len(row_page["rows"]) == row_page["total_count"]
     assert len(row_page["row_refs"]) == len(row_page["rows"])
     value_slice = json.loads(outputs["call-3"])
     assert value_slice["status"] == "ok"
-    assert value_slice["next_offset"] is not None
-    assert value_slice["total_chars"] > len(value_slice["value_slice"])
+    assert value_slice["next_offset"] is None
+    assert value_slice["total_chars"] == len(value_slice["value_slice"])
     preview = json.loads(outputs["call-4"])["preview"]
     assert preview["total_count"] == 7
     finalize_receipt = json.loads(outputs["call-5"])
     assert finalize_receipt["delivered"] is True
     assert finalize_receipt["projection_summary"]["row_count"] == 7
     assert "body wall musculature" not in outputs["call-5"]
-    total_input_chars = sum(len(json.dumps(item, default=str)) for item in final_input)
-    assert total_input_chars < 8 * budget
 
     # The caller receives a compact receipt; the application holds the table.
     assert len(receipt_text) < _MAX_RECEIPT_CHARS

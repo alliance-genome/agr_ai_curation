@@ -320,6 +320,25 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         )
         self.assertEqual(result["parse_status"], "full")
 
+    def test_document_local_references_remain_exact_in_tool_diagnostics(self):
+        selections = [{"chunk_index": 42, "span_index": 3}]
+        payload = {"status": "verified", "selections": selections,
+                   "verified_quote": "No β signal was observed."}
+        arguments = {"entity": "example", "selections": selections}
+        observations = [{"id": "local-reference-generation", "type": "GENERATION",
+            "name": "OpenAI-generation", "startTime": "2026-10-16T12:00:00Z",
+            "input": [
+                {"type": "function_call", "name": "record_evidence", "call_id": "call-local",
+                 "arguments": json.dumps(arguments), "status": "completed"},
+                {"type": "function_call_output", "call_id": "call-local", "output": json.dumps(payload)},
+            ], "output": {}}]
+        result = ToolCallAnalyzer.extract_tool_calls(observations)
+        self.assertEqual(result["total_count"], 1)
+        self.assertIn("42", json.dumps(result["tool_calls"][0]))
+        parsed = ToolResultParser.parse(json.dumps(payload))
+        self.assertEqual(parsed["parse_status"], "full")
+        self.assertEqual(parsed["parsed"]["json_data"], payload)
+
     def test_tool_calls_keep_repeated_no_id_calls_from_separate_generations(self):
         observations = [
             {

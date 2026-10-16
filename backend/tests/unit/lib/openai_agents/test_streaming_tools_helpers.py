@@ -4142,3 +4142,47 @@ async def test_nested_validator_original_is_durable_before_compact_handoff(monke
     assert calls[0][0] == typed.model_dump(mode="json")
     assert calls[0][1]["user_id"] == "authenticated-owner"
     assert calls[0][1]["session_id"] == "active-session"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("specialist_wrapper", [False, True])
+async def test_inline_validator_pdf_failure_reaches_terminal_owner_without_generic_event(
+    monkeypatch, _repo_package_curation_registry, specialist_wrapper,
+):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    from src.lib.curation_workspace import extraction_results
+    from src.lib.domain_packs import validator_dispatch
+    from src.lib.openai_agents.curator_errors import classify_failure
+
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+    monkeypatch.setattr(
+        extraction_results, "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+    source_error = DocumentReadError(tool_name="read_chunk")
+    if specialist_wrapper:
+        wrapper = streaming_tools.SpecialistOutputError(
+            specialist_name="Gene Extraction", output_type_name="response",
+            message="sensitive validator wrapper",
+        )
+    else:
+        wrapper = RuntimeError("sensitive validator wrapper")
+    wrapper.__cause__ = source_error
+
+    def fail_validator(request, *, binding):
+        raise wrapper
+
+    monkeypatch.setattr(validator_dispatch, "run_package_scoped_validator_agent", fail_validator)
+    with pytest.raises(type(wrapper)) as raised:
+        await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist",
+        )
+    assert raised.value is wrapper
+    assert not any(event["type"] == "SPECIALIST_ERROR" for event in emitted)
+    failure = classify_failure(raised.value)
+    assert failure.category == "pdf_read_failed"
+    assert failure.message == "There was an error reading the PDF. We couldn't continue the extraction."

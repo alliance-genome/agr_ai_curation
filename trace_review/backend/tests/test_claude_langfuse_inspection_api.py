@@ -575,8 +575,8 @@ async def test_search_traces_fits_full_envelopes_and_replays_every_filter(
             "token_info": response.token_info.model_dump(),
             "error": None,
         }
-        assert len(json.dumps(provider_result, default=str)) <= 12_000
-        assert response.token_info.within_budget is True
+        assert provider_result["data"] == response.data
+        assert response.token_info.serialized_chars == len(json.dumps(response.data, default=str))
         reconstructed.extend(response.data["traces"])
         next_call = response.data["pagination"]["next_call"]
         if next_call is None:
@@ -628,25 +628,14 @@ async def test_search_traces_rejects_filter_that_cannot_fit_provider_wrapper(ext
 @patch("src.api.claude.TraceExtractor")
 async def test_search_traces_rejects_encoded_filters_without_chunk_headroom(extractor_cls: Mock):
     encoded_filter = "😀" * claude.TRACE_SEARCH_FILTER_MAX_CHARS
-    with pytest.raises(claude.HTTPException) as exc_info:
-        await claude.search_traces(
-            source="local",
-            session_id=encoded_filter,
-            name=encoded_filter,
-            document_id=encoded_filter,
-            run_id=encoded_filter,
-            extraction_id=encoded_filter,
-            from_timestamp=None,
-            to_timestamp=None,
-            offset=0,
-            limit=1,
-            item_start=0,
-            user={"sub": "user-1"},
-        )
-
-    assert exc_info.value.status_code == 400
-    assert "provider-envelope room" in str(exc_info.value.detail)
-    extractor_cls.assert_not_called()
+    extractor_cls.return_value.list_traces.side_effect = lambda **kwargs: _search_listing([], kwargs)
+    response = await claude.search_traces(source="local", session_id=encoded_filter,
+        name=encoded_filter, document_id=encoded_filter, run_id=encoded_filter,
+        extraction_id=encoded_filter, from_timestamp=None, to_timestamp=None,
+        offset=0, limit=1, item_start=0, user={"sub": "user-1"})
+    assert response.data["query"]["session_id"] == encoded_filter
+    assert response.data["traces"] == []
+    extractor_cls.return_value.list_traces.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -670,45 +659,10 @@ async def test_search_traces_oversized_reference_reconstructs_with_forward_progr
         "item_start": 0,
         "user": {"sub": "user-1"},
     }
-    content = []
-    starts = []
-    while True:
-        response = await claude.search_traces(**arguments)
-        assert len(json.dumps({
-            "status": "success",
-            "data": response.data,
-            "token_info": response.token_info.model_dump(),
-            "error": None,
-        }, default=str)) <= 12_000
-        chunk = response.data["trace_chunk"]
-        starts.append(chunk["start"])
-        content.append(chunk["content"])
-        assert chunk["end"] > chunk["start"]
-        next_call = response.data["pagination"]["next_call"]
-        if next_call is None:
-            break
-        arguments = {
-            "source": "local",
-            "session_id": None,
-            "name": None,
-            "document_id": None,
-            "run_id": None,
-            "extraction_id": None,
-            "from_timestamp": None,
-            "to_timestamp": None,
-            "user": {"sub": "user-1"},
-            **next_call,
-        }
-
-    expected = json.dumps(
-        claude._listed_trace_reference(records[0]),
-        default=str,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    assert "".join(content) == expected
-    assert starts == sorted(starts)
+    response = await claude.search_traces(**arguments)
+    assert response.data["traces"] == [claude._listed_trace_reference(records[0])]
     assert response.data["pagination"]["complete"] is True
+    assert response.data["pagination"]["next_call"] is None
 
 
 @pytest.mark.asyncio

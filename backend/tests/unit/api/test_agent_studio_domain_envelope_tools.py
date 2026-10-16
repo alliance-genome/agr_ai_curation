@@ -134,7 +134,6 @@ def test_handle_tool_call_dispatches_domain_plan_section_inputs(monkeypatch):
 
 
 def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     results = [
         domain_tools.get_domain_pack_validation_plan(
             agent_id="disease_extractor"
@@ -157,20 +156,13 @@ def test_realistic_disease_plan_pages_remain_provider_visible(monkeypatch):
     for result in results:
         content = api_module._provider_tool_result_content(
             tool_name="get_domain_pack_validation_plan",
-            tool_input={
-                "domain_pack_id": result["domain_pack_id"],
-                "section": result["section"],
-            },
             tool_result=result,
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-domain-plan",
         )
         assert json.loads(content) == result
         assert len(content) <= 12000
 
 
 def test_realistic_multi_record_runtime_pages_remain_provider_visible(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     fixtures = [
         (
             "get_domain_envelope_state",
@@ -271,10 +263,7 @@ def test_realistic_multi_record_runtime_pages_remain_provider_visible(monkeypatc
     for tool_name, tool_input, result in fixtures:
         content = api_module._provider_tool_result_content(
             tool_name=tool_name,
-            tool_input=tool_input,
             tool_result=result,
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-domain-runtime",
         )
         assert json.loads(content) == result
         assert len(content) <= 12000
@@ -483,7 +472,6 @@ def test_domain_reference_summary_merges_stable_tool_refs_without_prompt_text():
     assert "Raw message should not become a reference." not in str(merged)
 
 
-
 def _validation_plan_pack_ids():
     from src.lib.flows.validation_attachments import domain_pack_validation_registries
 
@@ -494,7 +482,6 @@ def _validation_plan_pack_ids():
 def test_every_pack_plan_page_remains_provider_visible(monkeypatch, domain_pack_id):
     """Object definitions report field counts; the fields section pages the paths (ALL-1283)."""
 
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     for section in domain_tools._DOMAIN_PLAN_SECTIONS:
         cursor = None
         while True:
@@ -504,10 +491,7 @@ def test_every_pack_plan_page_remains_provider_visible(monkeypatch, domain_pack_
             assert page["success"], page
             content = api_module._provider_tool_result_content(
                 tool_name="get_domain_pack_validation_plan",
-                tool_input={"domain_pack_id": domain_pack_id, "section": section},
                 tool_result=page,
-                session_id="agent-studio-session-1",
-                turn_id="opus-turn-domain-plan",
             )
             assert json.loads(content) == page
             assert len(content) <= 12000, (section, len(content))

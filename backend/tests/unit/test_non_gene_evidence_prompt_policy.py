@@ -117,8 +117,8 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert "record_evidence" in content
     assert "Strong quote examples:" in content
     assert "curatable_objects[]" in content
-    assert "`read_chunk.evidence_spans[].span_id` values" in content
-    assert "record_evidence(span_ids=[...])" in content
+    assert "`read_chunk.evidence_spans[].span_index` values" in content
+    assert 'record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])' in content
     assert "active-run evidence workspace" in content
     assert "evidence_record_ids" in content
 

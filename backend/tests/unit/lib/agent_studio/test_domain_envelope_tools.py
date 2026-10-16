@@ -869,7 +869,6 @@ def test_envelope_list_max_limit_pages_are_stable_complete_and_filtered(
             **request,
         )
         assert page["total_count"] == len(expected_ids)
-        assert len(json.dumps(page)) <= domain_tools._PROVIDER_INLINE_MAX_CHARS
         observed_ids.extend(item["envelope_id"] for item in page["envelopes"])
         if page["complete"]:
             assert page["next_request"] is None
@@ -1088,8 +1087,7 @@ def test_large_persisted_references_are_manifested_and_exactly_chunked(
         limit=1,
     )
 
-    for response in (listing, summary, object_page, projection_page):
-        assert len(json.dumps(response, default=str)) <= domain_tools._PROVIDER_INLINE_MAX_CHARS
+    assert all(response["success"] for response in (listing, summary, object_page, projection_page))
 
     manifests = [
         listing["envelopes"][0]["schema_ref"],
@@ -1116,7 +1114,6 @@ def test_large_persisted_references_are_manifested_and_exactly_chunked(
                 user_auth_sub="curator-1",
                 **request,
             )
-            assert len(json.dumps(chunk)) <= domain_tools._PROVIDER_INLINE_MAX_CHARS
             chunks.append(chunk["content"])
             if chunk["complete"]:
                 break
@@ -1194,7 +1191,6 @@ def test_single_oversized_object_lookup_and_validator_values_are_exactly_chunked
                 **request,
             )
             assert chunk["success"] is True
-            assert len(json.dumps(chunk)) <= domain_tools._PROVIDER_INLINE_MAX_CHARS
             chunks.append(chunk["content"])
             if chunk["complete"]:
                 return "".join(chunks)
@@ -1230,7 +1226,6 @@ def test_single_oversized_object_lookup_and_validator_values_are_exactly_chunked
     for response in (object_page, lookup_page, validator_page):
         assert response["success"] is True
         assert response["returned_count"] == 1
-        assert len(json.dumps(response, default=str)) <= domain_tools._PROVIDER_INLINE_MAX_CHARS
 
     expected_keys = domain_tools._canonical_json(sorted(payload))
     assert reconstruct(object_page["items"][0]["payload_keys"]) == expected_keys
@@ -1791,7 +1786,6 @@ def test_large_readiness_is_authoritative_then_pages_candidates_and_blockers(mon
     assert summary["readiness_status"] == "blocked"
     assert summary["section_counts"] == {"candidates": 1000, "blockers": 1000}
     assert summary["domain_envelope_count"] == 1
-    assert len(json.dumps(summary)) < domain_tools._PROVIDER_INLINE_MAX_CHARS
     assert "items" not in summary
     assert all(
         request["readiness_token"] == summary["readiness_token"]
@@ -1813,7 +1807,6 @@ def test_large_readiness_is_authoritative_then_pages_candidates_and_blockers(mon
                 user_auth_sub="curator-1",
                 **request,
             )
-            assert len(json.dumps(page)) < domain_tools._PROVIDER_INLINE_MAX_CHARS
             items.extend(page["items"])
             if page["complete"]:
                 break

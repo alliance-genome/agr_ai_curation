@@ -110,7 +110,6 @@ def test_default_prompt_view_is_content_free_manifest(prompt_handler):
 
 
 def test_effective_prompt_chunks_reconstruct_exact_group_render(monkeypatch, prompt_handler):
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "7")
     expected = _bundle(group_id="test_group")
     summary = prompt_handler(agent_id="demo_agent", group_id="test_group")
     chunks = []
@@ -215,8 +214,6 @@ def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
         catalog=SimpleNamespace(categories=[]),
     )
     monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: service)
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1000")
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "8000")
     handler = tool_definitions._create_get_prompt_handler()
 
     for initial_arguments, expected, expected_hash in (
@@ -247,12 +244,9 @@ def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
             result = handler(**arguments)
             serialized = api_module._provider_tool_result_content(
                 tool_name="get_prompt",
-                tool_input=arguments,
                 tool_result=result,
-                session_id="session-1",
-                turn_id="turn-1",
             )
-            assert len(serialized) <= 1_000
+            assert result["complete"]
             assert json.loads(serialized).get("status") != "compacted_tool_result"
             assert result["returned_range"]["start"] == previous_end
             assert result["returned_range"]["end"] > previous_end
@@ -270,13 +264,12 @@ def test_escape_heavy_effective_and_group_layer_chunks_fit_provider_envelope(
 def test_prompt_detail_reports_provider_safe_configuration_error(
     monkeypatch, prompt_handler
 ):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "240")
 
     result = prompt_handler(agent_id="demo_agent", view="effective_prompt")
 
-    assert result["status"] == "error"
-    assert result["error"] == "provider_limit_too_small"
-    assert len(json.dumps(result, default=str)) <= 240
+    assert result["status"] == "ok"
+    assert result["content"] == _bundle().render()
+    assert result["complete"]
 
 
 @pytest.mark.parametrize(
@@ -305,13 +298,12 @@ def test_prompt_schema_advertises_only_summary_and_bounded_detail_views(
     from src.lib.prompts import cache as prompt_cache
 
     monkeypatch.setattr(prompt_cache, "is_initialized", lambda: False)
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "4321")
 
     description, schema = tool_definitions._get_prompt_diagnostic_contract()
 
     properties = schema["properties"]
     assert properties["view"]["enum"] == ["summary", "effective_prompt", "layer"]
-    assert properties["max_chars"]["maximum"] == 4321
+    assert "maximum" not in properties["max_chars"]
     assert properties["cursor"]["minimum"] == 0
     assert "next_cursor" in description
     assert "prompt" not in properties
@@ -406,8 +398,6 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
         catalog=SimpleNamespace(categories=[]),
     )
     monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: service)
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    monkeypatch.setenv("AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS", "8000")
     prompt_handler = tool_definitions._create_get_prompt_handler()
 
     prompt_summary = prompt_handler(
@@ -465,14 +455,11 @@ def test_installed_disease_prompt_and_document_tool_results_stay_provider_visibl
     for tool_name, result in boundary_results:
         content = api_module._provider_tool_result_content(
             tool_name=tool_name,
-            tool_input={"agent_id": "disease_extractor"},
             tool_result=result,
-            session_id="session-1",
-            turn_id="turn-1",
         )
         provider_result = json.loads(content)
         assert provider_result.get("status") != "compacted_tool_result"
-        assert len(content) <= 12_000
+        assert json.loads(content) == result
 
     reconstructed = "".join(
         result["content"]

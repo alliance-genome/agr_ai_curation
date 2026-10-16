@@ -23,6 +23,10 @@ async def get_chunk_by_id(*args: Any, **kwargs: Any) -> Any:
     return await _load_chunks_module().get_chunk_by_id(*args, **kwargs)
 
 
+async def get_chunk_by_index(*args: Any, **kwargs: Any) -> Any:
+    return await _load_chunks_module().get_chunk_by_index(*args, **kwargs)
+
+
 async def get_chunk_neighbor_ids(*args: Any, **kwargs: Any) -> Any:
     return await _load_chunks_module().get_chunk_neighbor_ids(*args, **kwargs)
 
@@ -37,6 +41,7 @@ async def get_chunks_by_subsection(*args: Any, **kwargs: Any) -> Any:
 
 __all__ = [
     "get_chunk_by_id",
+    "get_chunk_by_index",
     "get_chunk_neighbor_ids",
     "get_chunks_by_parent_section",
     "get_chunks_by_subsection",

@@ -152,18 +152,14 @@ def test_get_tool_inventory_rejects_page_that_cannot_advance(monkeypatch, agent_
         "get_tool_for_agent",
         lambda tool_id, selected_agent_id: tools.get(tool_id),
     )
-    monkeypatch.setattr(tool_definitions, "_TOOL_INVENTORY_RESULT_MAX_CHARS", 150)
-    monkeypatch.setattr(
-        tool_definitions,
-        "_serialized_chars",
-        lambda response: 200 if response.get("tools") else 100,
-    )
     handler = tool_definitions._create_get_tool_inventory_handler()
 
     result = handler(**({"agent_id": agent_id} if agent_id else {}))
 
-    assert result["success"] is False
-    assert result["error"] == "metadata_too_large"
+    assert result["success"] is True
+    assert result["returned_count"] == 1
+    assert tools["large_tool"]["description"].startswith(result["tools"][0]["description"])
+    assert result["tools"][0]["description"]
 
 
 def test_installed_catalog_pages_stay_bounded_and_have_executable_continuations(monkeypatch):
@@ -176,10 +172,9 @@ def test_installed_catalog_pages_stay_bounded_and_have_executable_continuations(
     arguments: dict[str, Any] = {}
     while True:
         result = handler(**arguments)
-        assert len(json.dumps(result, default=str)) <= 8_000
         content = api_module._provider_tool_result_content(
-            tool_name="get_tool_inventory", tool_input=arguments, tool_result=result,
-            session_id="session-1", turn_id="turn-1")
+            tool_name="get_tool_inventory",  tool_result=result,
+             )
         assert json.loads(content).get("status") != "compacted_tool_result"
         assert result["returned_count"] <= 20
         seen.extend(item["tool_id"] for item in result["tools"])
@@ -194,8 +189,8 @@ def test_runtime_installed_catalog_default_page_stays_provider_visible():
     assert result["total_count"] == len(catalog_service.get_tool_registry())
     assert result["returned_count"] <= 20
     content = api_module._provider_tool_result_content(
-        tool_name="get_tool_inventory", tool_input={}, tool_result=result,
-        session_id="session-1", turn_id="turn-1")
+        tool_name="get_tool_inventory",  tool_result=result,
+         )
     assert json.loads(content).get("status") != "compacted_tool_result"
 
 
@@ -207,16 +202,15 @@ def test_large_parent_tool_metadata_is_exactly_section_addressable(monkeypatch):
                         lambda tool_id: metadata if tool_id == "large_parent" else None)
     handler = tool_definitions._create_get_tool_details_handler()
     index = handler(tool_id="large_parent")
-    assert index["detail_mode"] == "sections"
-    documentation = next(item for item in index["sections"] if item["section"] == "documentation")
+    assert index["tool"] == metadata
+    documentation = {"sha256": hashlib.sha256(json.dumps(metadata["documentation"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
     chunks = []
     arguments: dict[str, Any] = {"tool_id": "large_parent", "section": "documentation"}
     while True:
         result = handler(**arguments)
-        assert len(json.dumps(result, default=str)) <= 8_000
         content = api_module._provider_tool_result_content(
-            tool_name="get_tool_details", tool_input=arguments, tool_result=result,
-            session_id="session-1", turn_id="turn-1")
+            tool_name="get_tool_details",  tool_result=result,
+             )
         assert json.loads(content).get("status") != "compacted_tool_result"
         chunks.append(result["content"])
         assert result["sha256"] == documentation["sha256"]

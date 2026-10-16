@@ -298,7 +298,8 @@ def test_validate_pipeline_requirements(orchestrator):
 
 
 @pytest.mark.asyncio
-async def test_process_pdf_document_helper(mock_weaviate_client, sample_pdf):
+async def test_process_pdf_document_helper(mock_weaviate_client, sample_pdf, monkeypatch):
+    monkeypatch.setattr(DocumentPipelineOrchestrator, "_sync_sql_document_status", AsyncMock())
     with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
         "elements": [],
         "pdfx_json_path": None,
@@ -314,3 +315,15 @@ async def test_process_pdf_document_helper(mock_weaviate_client, sample_pdf):
 
     assert result.success is True
     assert result.total_chunks == 0
+
+
+@pytest.mark.asyncio
+async def test_processing_status_failure_prevents_source_replacement(orchestrator, sample_pdf):
+    orchestrator._initialize_pipeline = AsyncMock()
+    orchestrator._sync_sql_document_status = AsyncMock(side_effect=RuntimeError("SQL unavailable"))
+    with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock()) as parser, \
+         patch("src.lib.pipeline.store.store_to_weaviate", new=AsyncMock()) as storage:
+        with pytest.raises(RuntimeError, match="SQL unavailable"):
+            await orchestrator.process_pdf_document(sample_pdf, "doc-123", "test-user", validate_first=False)
+    parser.assert_not_awaited()
+    storage.assert_not_awaited()

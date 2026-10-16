@@ -21,7 +21,7 @@ Search/read the document for candidate mentions and context.
 build a provisional list of the focal genes the question calls for before selecting evidence
 
 # Step 3 -- read the chunk, pick backend span ids, record one evidence unit.
-select the `evidence_spans[].span_id` values that directly support one evidence unit
+select the chunk index together with the `evidence_spans[].span_index` values that directly support one evidence unit
 
 # Step 4 -- stage each retained focal gene with its verified evidence ids.
 Stage each retained focal gene with `stage_gene_mention_evidence`, passing the verified `evidence_record_ids`

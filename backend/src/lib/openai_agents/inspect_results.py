@@ -1,9 +1,8 @@
 """Read-only supervisor inspection for persisted extraction results.
 
-Every response fits the shared tool result budget (TOOL_RESULT_MAX_BYTES,
-ALL-1287). The supervisor starts from a counts-only ``summary``, then filters
-object, finding and validator-result pages, and reads any value too large for
-a page exactly in chunks. Pages and chunks carry ``next_call`` arguments and a
+The supervisor starts from a counts-only ``summary``, then filters
+object, finding and validator-result pages, and reads selected details whole.
+Explicit row pages carry ``next_call`` arguments and a
 ``result_sha256``, so a result that changes between calls is reported instead
 of mixed. Values are never shortened: a value too long to show inline is
 replaced by a descriptor (size, hash, a short prefix preview) whose ``read``
@@ -54,21 +53,7 @@ from src.lib.openai_agents.extraction_manifest import (
     supervisor_manifest_objects,
     validator_result_entries,
 )
-from src.lib.openai_agents.tool_result_bounds import (
-    INVALID_RESULT_CURSOR,
-    STALE_RESULT_CURSOR,
-    ToolResultBudgetError,
-    budget_failure,
-    canonical_json,
-    clamp_page_limit,
-    content_sha256,
-    fit_page,
-    fit_text_window,
-    report_budget_failure_result,
-    resolve_path,
-    serialized_size,
-    tool_result_budget,
-)
+from src.lib.openai_agents.tool_result_bounds import INVALID_RESULT_CURSOR, STALE_RESULT_CURSOR, canonical_json, clamp_page_limit, content_sha256, fit_page, fit_text_window, resolve_path
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -83,7 +68,6 @@ from src.schemas.domain_pack_metadata import DomainPackMetadata
 
 
 _TOOL_NAME = "inspect_results"
-_COMPONENT = "supervisor_inspect_results"
 _RESULT_REF_PREFIX = "extraction-result:"
 _FINDING_INDEX_PREFIX = "finding-index:"
 _ACTIONS = frozenset(
@@ -113,7 +97,7 @@ _OBJECT_VALIDATION_STATES = ("open", "resolved", "none", "any")
 # Finding filter: open, or closed (resolved or waived).
 _FINDING_VALIDATION_STATES = ("open", "resolved")
 # Env-configurable; see config.py getters and .env.example. Page sizes are row
-# ceilings: every page also ends at TOOL_RESULT_MAX_BYTES.
+# selections; complete selected records reach the shared model boundary.
 _MAX_LIST_LIMIT = get_supervisor_max_list_limit()
 _EVIDENCE_PAGE_SIZE = get_inspect_results_evidence_page_size()
 _SNIPPET_LIMIT = get_inspect_results_evidence_text_limit()
@@ -186,14 +170,10 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 }
 _PAGE_ARGUMENTS = frozenset({"cursor", "limit", "result_sha256"})
 _CHUNK_ARGUMENTS = frozenset({"cursor", "result_sha256"})
-_FINDING_IDENTITY_KEYS = frozenset(
-    {"finding_ref", "finding_id", "severity", "status", "code", "object_ref",
-     "object_type", "field_path"}
-)
 
 
 class _RequestError(Exception):
-    """An explicit caller-facing error; never a budget escape."""
+    """An explicit caller-facing request error."""
 
     def __init__(self, error_code: str, message: str, **extra: Any) -> None:
         super().__init__(message)
@@ -255,8 +235,7 @@ async def inspect_results(
 ) -> str:
     """Inspect persisted canonical extraction results through bounded actions.
 
-    Every response fits TOOL_RESULT_MAX_BYTES; an unmeetable budget returns a
-    compact ``tool_result_budget_unmet`` failure that is reported once.
+    Exact reads return complete selected values; shared context policy owns capacity.
     """
 
     normalized_action = _normalize_action(action)
@@ -284,15 +263,6 @@ async def inspect_results(
         )
     except _RequestError as exc:
         response = exc.response
-    except ToolResultBudgetError as exc:
-        return _budget_failure(exc, action=normalized_action)
-    budget = tool_result_budget()
-    measured = serialized_size(response)
-    if measured > budget:
-        return _budget_failure(
-            ToolResultBudgetError(measured=measured, limit=budget),
-            action=normalized_action,
-        )
     return json.dumps(response, ensure_ascii=True, default=str)
 
 
@@ -374,8 +344,8 @@ def _inspect(
             "invalid_request",
             f"This action=\"{action}\" view does not use: {', '.join(unused)}. "
             "Single records (summary, object, finding_ref, validator_result_key) take "
-            "no continuation arguments and exact chunk reads take no limit; pass "
-            "cursor, limit and result_sha256 only from a next_call.",
+            "no selection arguments; exact value reads accept an optional cursor "
+            "and source hash but no row limit. Use next_call for row pages.",
             action=action,
             supported_continuation_arguments=sorted(continuation),
         )
@@ -399,7 +369,7 @@ def _inspect(
         )
 
     # Model-supplied text is echoed into filters, next_call or head: an over-long
-    # value is a caller error, never a tool result budget escape.
+    # value is rejected as an invalid caller argument.
     _check_argument_lengths(
         action,
         {
@@ -435,7 +405,7 @@ def _inspect(
 
     if isinstance(result_ref, str) and result_ref.startswith("validator-result:"):
         if adapter_keys or flow_run_id or limit is not None or (not detail_path and (cursor is not None or result_sha256 is not None)):
-            raise _RequestError("invalid_request", "Direct validator reads do not accept extraction filters or page arguments; follow exact-value next_call arguments.")
+            raise _RequestError("invalid_request", "Direct validator reads do not accept extraction filters or row limits; detail_path reads accept an optional character cursor and result_sha256.")
         return _standalone_validator_response(
             result_ref=result_ref, action=action, target=target, key=validator_result_key,
             detail_path=detail_path, cursor=cursor, expected_sha=result_sha256,
@@ -546,7 +516,7 @@ def _inspect(
     if action == "explanation":
         return _exact_value(
             result.envelope.specialist_explanation,
-            head=result.head("explanation"), call=result.call("explanation"),
+            head=result.head("explanation"),
             sha=result.sha(action="explanation"), expected_sha=result_sha256, cursor=cursor,
             message="Complete specialist-authored explanation; saved objects and findings determine persisted state.",
         )
@@ -640,8 +610,8 @@ def _continuation_arguments(
 ) -> frozenset[str]:
     """Continuation arguments the requested view uses; others are rejected.
 
-    Pages take cursor, limit and result_sha256; exact chunk reads take cursor
-    and result_sha256; single-record views take none.
+    Pages take cursor, limit and result_sha256; exact value reads take an optional
+    character cursor and result_sha256; single-record views take none.
     """
 
     if action in {"summary", "object"}:
@@ -732,10 +702,10 @@ def _help_response() -> dict[str, Any]:
             "(<index>.<key>, with object_ref) reads one exact evidence value",
         },
         "boundaries": [
-            "Every response fits the tool result budget. Continue pages and chunks by "
+            "Explicit selection controls determine each result view. Continue row pages by "
             "passing next_call exactly; a changed result returns stale_result_cursor.",
-            "cursor, limit and result_sha256 come from next_call: pages take all three, "
-            "exact detail_path/field chunks take cursor and result_sha256, and single "
+            "Pages accept cursor, limit and result_sha256. Exact detail_path/field reads "
+            "accept an optional character cursor and result_sha256, and single "
             "records (summary, object, finding_ref, validator_result_key) take none.",
             "Values too long to show are withheld with total_chars, value_sha256 and a "
             "read call that returns them exactly; nothing is shortened silently.",
@@ -766,17 +736,6 @@ def _help_response() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _budget_failure(exc: ToolResultBudgetError, *, action: str) -> str:
-    failure = budget_failure(
-        tool_name=_TOOL_NAME,
-        measured=exc.measured,
-        limit=exc.limit,
-        field=action,
-    )
-    report_budget_failure_result(failure, tool_name=_TOOL_NAME, component=_COMPONENT)
-    return json.dumps(failure, ensure_ascii=True, default=str)
-
-
 def _check_sha(expected: str | None, actual: str) -> None:
     if expected and expected != actual:
         raise _RequestError(
@@ -800,7 +759,7 @@ def _parse_cursor(cursor: Any, *, total: int, unit: str = "items") -> int:
     except ValueError:
         raise _RequestError(
             INVALID_RESULT_CURSOR,
-            "cursor must be the next_cursor (or next_call cursor) from a previous response.",
+            "cursor must be a non-negative integer offset for the selected view.",
             cursor=_echo(cursor),
         ) from None
     if value > total:
@@ -826,15 +785,9 @@ def _page(
     default_limit: int,
     max_limit: int,
     message: str,
-    oversized: Callable[[Any, int], Any] | None = None,
     overrides: Callable[[list[Any]], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """One forward page of ``items`` fitted to the byte budget.
-
-    Only the requested window is rendered. The page ends at the row limit or
-    where the next row would overflow; a first row too large alone is replaced
-    by ``oversized(row_view, index)`` (identity plus a read call).
-    """
+    """Render the complete requested row window with a continuation cursor."""
 
     _check_sha(expected_sha, sha)
     try:
@@ -853,16 +806,10 @@ def _page(
     def render(page: list[Any], returned: int) -> dict[str, Any]:
         next_offset = start + returned
         more = next_offset < total
-        ended_by = "end" if not more else ("limit" if returned >= effective else "size_budget")
-        withheld = sum(1 for row in page if isinstance(row, Mapping) and row.get("withheld"))
-        note = ""
-        if ended_by == "size_budget":
-            note += " The page ended at the tool result size budget; continue with next_call."
-        if withheld:
-            note += f" {withheld} row(s) were too large to show and are withheld; read each with its read call."
+        ended_by = "limit" if more else "end"
         body = {
             "status": "ok",
-            "message": message + note,
+            "message": message,
             **head,
             rows_key: page,
             "total_count": total,
@@ -881,10 +828,6 @@ def _page(
         }
         if overrides is not None:
             extra = dict(overrides(page))
-            if "message" in extra:
-                # An override replaces the lead message, never the continuation
-                # and withheld-row notes.
-                extra["message"] += note
             body.update(extra)
         return body
 
@@ -893,10 +836,6 @@ def _page(
         start=0,
         limit=len(window),
         render=render,
-        budget=tool_result_budget(),
-        oversized=(
-            (lambda row, offset: oversized(row, start + offset)) if oversized else None
-        ),
     )
     return response
 
@@ -905,16 +844,15 @@ def _exact_value(
     value: Any,
     *,
     head: Mapping[str, Any],
-    call: Mapping[str, Any],
     sha: str,
     expected_sha: str | None,
     cursor: Any,
     message: str,
 ) -> dict[str, Any]:
-    """Return a value whole when it fits, otherwise exact contiguous chunks.
+    """Return the complete exact value remainder from the requested cursor.
 
-    Strings are chunked as text and anything else as canonical JSON; joining
-    every chunk's content reproduces the value whose ``value_sha256`` is shown.
+    Strings use text and anything else uses canonical JSON. The source
+    ``value_sha256`` identifies the complete value before cursor selection.
     """
 
     _check_sha(expected_sha, sha)
@@ -922,7 +860,6 @@ def _exact_value(
     text = value if is_text else canonical_json(value)
     start = _parse_cursor(cursor, total=len(text), unit="characters")
     digest = content_sha256(value)
-    budget = tool_result_budget()
     if start == 0:
         whole = {
             "status": "ok",
@@ -934,16 +871,12 @@ def _exact_value(
             "value_sha256": digest,
             "result_sha256": sha,
         }
-        if serialized_size(whole) <= budget:
-            return whole
+        return whole
 
     def render(content: str, end: int) -> dict[str, Any]:
-        complete = end >= len(text)
         return {
             "status": "ok",
-            "message": message + (
-                "" if complete else " This is an exact chunk; continue with next_call."
-            ),
+            "message": message,
             **head,
             "detail": {
                 "encoding": "text" if is_text else "canonical_json",
@@ -951,49 +884,24 @@ def _exact_value(
                 "returned_range": {"start": start, "end": end},
                 "total_chars": len(text),
                 "value_sha256": digest,
-                "complete": complete,
+                "complete": True,
             },
-            "complete": complete,
+            "complete": True,
             "result_sha256": sha,
-            "next_call": (
-                None if complete else {**call, "cursor": str(end), "result_sha256": sha}
-            ),
+            "next_call": None,
         }
 
-    return fit_text_window(text, cursor=start, render=render, budget=budget)
+    return fit_text_window(text, cursor=start, render=render)
 
 
-def _fit_record(
+def _render_record(
     record: Mapping[str, Any],
     *,
     render: Callable[[dict[str, Any]], dict[str, Any]],
-    read_for: Callable[[str], dict[str, Any]],
-    protected: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Render ``record`` whole, withholding its largest values only as needed."""
+    """Render the complete selected record."""
 
-    budget = tool_result_budget()
-    shown = dict(record)
-    candidates = sorted(
-        (key for key in record if key not in protected),
-        key=lambda key: serialized_size(record[key]),
-        reverse=True,
-    )
-    for key in candidates:
-        if serialized_size(render(shown)) <= budget:
-            break
-        if _is_descriptor(record[key]):
-            continue
-        shown[key] = _descriptor(record[key], read=read_for(key))
-    response = render(shown)
-    measured = serialized_size(response)
-    if measured > budget:
-        raise ToolResultBudgetError(measured=measured, limit=budget)
-    return response
-
-
-def _is_descriptor(value: Any) -> bool:
-    return isinstance(value, Mapping) and value.get("withheld") is True
+    return render(dict(record))
 
 
 def _descriptor(value: Any, *, read: Mapping[str, Any]) -> dict[str, Any]:
@@ -1593,15 +1501,6 @@ def _objects_response(
             result, obj, metadata=metadata, policy=policy, findings=findings, selected=selected_paths(policy)
         )
 
-    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
-        return {
-            "object_ref": row["object_ref"],
-            "object_type": row["object_type"],
-            "status": row["status"],
-            "withheld": True,
-            "total_chars": len(canonical_json(row)),
-            "read": result.call("object", object_ref=row["object_ref"]),
-        }
 
     args = filters.as_args()
     return _page(
@@ -1626,7 +1525,6 @@ def _objects_response(
             f"{len(matched)} of {len(visible)} supervisor-visible object(s) matched. "
             "Values shown withheld are read exactly with their read call."
         ),
-        oversized=oversized,
     )
 
 
@@ -1692,7 +1590,7 @@ def _object_response(result: _Result, *, object_ref: str | None) -> dict[str, An
             ],
         }
 
-    return _fit_record(values, render=render, read_for=read)
+    return _render_record(values, render=render)
 
 
 def _field_response(
@@ -1775,7 +1673,6 @@ def _field_response(
     return _exact_value(
         value,
         head={**result.head("field"), "object_ref": object_ref, "field_path": field_path},
-        call=result.call("field", object_ref=object_ref, field_path=field_path),
         sha=result.sha(action="field", object_ref=object_ref, field_path=field_path),
         expected_sha=expected_sha,
         cursor=cursor,
@@ -1829,11 +1726,10 @@ def _details_response(
     call = result.call("details", object_ref=object_ref, field_path=path)
     sha = result.sha(action="details", object_ref=object_ref, field_path=path)
     if not isinstance(value, (Mapping, list)):
-        # Text can be long: exact chunks keep the saved value retrievable.
+        # Return the complete saved scalar value or explicitly selected suffix.
         return _exact_value(
             value,
             head=head,
-            call=call,
             sha=sha,
             expected_sha=expected_sha,
             cursor=cursor,
@@ -1921,7 +1817,6 @@ def _evidence_response(
         return _exact_value(
             _resolve_detail(evidence, detail_path),
             head={**head, "detail_path": detail_path},
-            call=result.call("evidence", object_ref=object_ref, detail_path=detail_path),
             sha=result.sha(action="evidence", object_ref=object_ref, detail_path=detail_path),
             expected_sha=expected_sha,
             cursor=cursor,
@@ -1931,25 +1826,6 @@ def _evidence_response(
     def view(record: dict[str, Any], index: int) -> dict[str, Any]:
         return {"index": index, **record}
 
-    def oversized(row: dict[str, Any], index: int) -> dict[str, Any]:
-        record = evidence[index]
-        identity = ("evidence_record_id", "id")
-        # Every withheld key gets an exact read, largest first.
-        withheld_keys = sorted(
-            (key for key in record if key not in identity),
-            key=lambda key: len(_value_text(record[key])),
-            reverse=True,
-        )
-        return {
-            "index": index,
-            **{key: record[key] for key in identity if key in record},
-            "withheld": True,
-            "total_chars": len(canonical_json(record)),
-            "reads": [
-                result.call("evidence", object_ref=object_ref, detail_path=f"{index}.{key}")
-                for key in withheld_keys
-            ] or [result.call("evidence", object_ref=object_ref, detail_path=str(index))],
-        }
 
     def overrides(page: list[Any]) -> dict[str, Any]:
         missing = [
@@ -1982,7 +1858,6 @@ def _evidence_response(
         default_limit=_EVIDENCE_PAGE_SIZE,
         max_limit=_MAX_LIST_LIMIT,
         message="Evidence text is ready.",
-        oversized=oversized,
         overrides=overrides,
     )
     if response.get("error_code") == "evidence_unavailable":
@@ -2094,25 +1969,20 @@ def _validation_response(
             return _exact_value(
                 _resolve_detail(full, detail_path),
                 head={**head, "detail_path": detail_path},
-                call=result.call("validation", finding_ref=finding_ref, detail_path=detail_path),
                 sha=sha,
                 expected_sha=expected_sha,
                 cursor=cursor,
                 message="Exact validation finding value is ready.",
             )
-        return _fit_record(
+        return _render_record(
             full,
             render=lambda shown: {
                 "status": "ok",
-                "message": "Validation finding is ready. Withheld values are read with their read call.",
+                "message": "Complete validation finding is ready.",
                 **head,
                 "finding": shown,
                 "result_sha256": sha,
             },
-            read_for=lambda key: result.call(
-                "validation", finding_ref=finding_ref, detail_path=key
-            ),
-            protected=_FINDING_IDENTITY_KEYS,
         )
 
     object_keys: set[tuple[str, str]] | None = None
@@ -2155,13 +2025,6 @@ def _validation_response(
             )
         return full
 
-    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
-        return {
-            **{key: row[key] for key in _FINDING_IDENTITY_KEYS if key in row},
-            "withheld": True,
-            "total_chars": len(canonical_json(row)),
-            "read": result.call("validation", finding_ref=row["finding_ref"]),
-        }
 
     args = {
         key: value
@@ -2188,7 +2051,6 @@ def _validation_response(
         default_limit=_VALIDATION_PAGE_SIZE,
         max_limit=_MAX_LIST_LIMIT,
         message="Validation findings are ready. Read one finding with its finding_ref.",
-        oversized=oversized,
     )
 
 
@@ -2221,17 +2083,15 @@ def _standalone_validator_response(
     if detail_path:
         return _exact_value(
             _resolve_detail(full, detail_path), head={**head, "detail_path": detail_path},
-            call={**carry, "detail_path": detail_path}, sha=sha, expected_sha=expected_sha,
+            sha=sha, expected_sha=expected_sha,
             cursor=cursor, message="Exact saved validator value; completeness applies to this value only.",
         )
     if action == "summary":
         return {"status": "ok", **head, "original_available": True,
                 "decision_status": full["decision_status"], "output_complete": full["output_complete"],
                 "read": {**carry, "detail_path": "original.result"}}
-    return _fit_record(
+    return _render_record(
         full, render=lambda shown: {"status": "ok", **head, "validator_result": shown, "result_sha256": sha},
-        read_for=lambda name: {**carry, "detail_path": name},
-        protected=frozenset({"result_ref", "validator_result_key", "decision_status", "original_available", "output_complete"}),
     )
 
 
@@ -2275,27 +2135,20 @@ def _validator_results_response(
             return _exact_value(
                 _resolve_detail(full, detail_path),
                 head={**head, "detail_path": detail_path},
-                call=result.call(
-                    "validator_results", validator_result_key=key, detail_path=detail_path
-                ),
                 sha=sha,
                 expected_sha=expected_sha,
                 cursor=cursor,
                 message="Exact validator result value is ready.",
             )
-        return _fit_record(
+        return _render_record(
             full,
             render=lambda shown: {
                 "status": "ok",
-                "message": "Validator result is ready. Withheld values are read with their read call.",
+                "message": "Complete validator result is ready.",
                 **head,
                 "validator_result": shown,
                 "result_sha256": sha,
             },
-            read_for=lambda name: result.call(
-                "validator_results", validator_result_key=key, detail_path=name
-            ),
-            protected=frozenset({"validator_result_key", "status", "open_finding", "writeback_rejected"}),
         )
 
     def target_value(entry: Mapping[str, Any], name: str) -> Any:
@@ -2351,19 +2204,6 @@ def _validator_results_response(
             },
         }
 
-    def oversized(row: dict[str, Any], _index: int) -> dict[str, Any]:
-        return {
-            **{
-                name: row[name]
-                for name in ("validator_result_key", "status", "open_finding", "writeback_rejected")
-                if name in row
-            },
-            "withheld": True,
-            "total_chars": len(canonical_json(row)),
-            "read": result.call(
-                "validator_results", validator_result_key=row["validator_result_key"]
-            ),
-        }
 
     args = {
         name: value
@@ -2393,7 +2233,6 @@ def _validator_results_response(
             "not proof of accepted writeback or export readiness; writeback_rejected "
             "results are not accepted identities and open findings stay open."
         ),
-        oversized=oversized,
     )
 
 

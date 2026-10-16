@@ -1225,7 +1225,10 @@ def _run_validator_jobs(
             for future in concurrent.futures.as_completed(future_by_run_group):
                 try:
                     result = future.result()
-                except BenchmarkInvocationBudgetExceeded:
+                except Exception as exc:
+                    from agr_ai_curation_runtime.document_errors import document_read_failure
+                    if not isinstance(exc, BenchmarkInvocationBudgetExceeded) and document_read_failure(exc) is None:
+                        raise
                     for pending in future_by_run_group:
                         pending.cancel()
                     # Executor exit drains already-running work and its usage records.
@@ -1541,6 +1544,8 @@ def _execute_validator_job_batch(
     except Exception as exc:
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
+        from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+        raise_if_document_read_failed(exc)
         record_handled_stage_failure(exc)
         raise_if_provider_budget_exhausted()
         if runner_duration_seconds == 0.0:
@@ -1633,6 +1638,8 @@ def _execute_single_validator_job(
     except Exception as exc:
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
+        from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+        raise_if_document_read_failed(exc)
         record_handled_stage_failure(exc)
         raise_if_provider_budget_exhausted()
         LOGGER.warning(
@@ -2559,7 +2566,7 @@ def _append_validator_source_context_instructions(
         "For single-request validation runs with scoped evidence tools, if you "
         "find a better supporting sentence, update the supplied evidence record "
         "by calling `record_evidence` with the existing `evidence_record_id` "
-        "and improved `span_ids`."
+        "and improved chunk_index/span_index `selections`."
         if not batch
         else (
             "Batch validator runs do not receive scoped evidence mutation tools; "
@@ -2570,7 +2577,9 @@ def _append_validator_source_context_instructions(
     paper_tool_text = (
         "If supplied quotes are missing, irrelevant, or incomplete, use "
         "`search_document` or `read_chunk` "
-        "to inspect the same paper. Search results are discovery only; exact "
+        "to inspect the same paper. If a quote has no chunk_index, search for "
+        "its exact wording to discover the current document-local index first. "
+        "Search results are discovery only; exact "
         "source support must come from `read_chunk` spans or supplied verified quotes."
         if paper_tools_available
         else (

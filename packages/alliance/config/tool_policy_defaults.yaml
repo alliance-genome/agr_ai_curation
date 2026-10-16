@@ -461,7 +461,7 @@ tool_policies:
 
   read_chunk:
     display_name: Read Chunk
-    description: Read one active-document chunk with selectable evidence_spans[].span_id values for record_evidence.
+    description: Read one active-document chunk with selectable evidence_spans[].span_index values and its chunk_index for record_evidence.
     category: Document
     curator_visible: true
     allow_attach: true

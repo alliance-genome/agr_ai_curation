@@ -67,6 +67,15 @@ OPENAI_LIMIT = 1_048_576
 # ---------------------------------------------------------------------------
 
 
+
+
+@pytest.fixture(autouse=True)
+def _capacity_fixture(monkeypatch):
+    from unittest.mock import AsyncMock
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", '{"gpt-test":{"context_window_tokens":1050000,"max_input_tokens":922000,"max_output_tokens":128000}}')
+    monkeypatch.setattr("src.lib.openai_agents.context_capacity.NativeCapacityRequest.count", AsyncMock(return_value=1000))
+
+
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch):
     measurement_module._reported_blocks.clear()
@@ -1130,7 +1139,7 @@ def test_agent_studio_run_measures_visible_and_deferred_tools(monkeypatch, publi
     [record] = published
     measured_tools = record["outbound"]["tools"]
     assert measured_tools["deferred"]["count"] == 2
-    assert measured_tools["initially_visible"]["count"] == 4  # tool_search + eager search + two runtime history reads
+    assert measured_tools["initially_visible"]["count"] == 5  # tool_search + eager search + three runtime context reads
     assert measured_tools["deferred"]["chars"] > 6000
     assert record["model_visible"]["json_chars"] < record["outbound"]["json_chars"]
     assert record["agent_id"] == "agent_studio_authoring"
@@ -1441,3 +1450,47 @@ def test_direct_output_reserve_uses_final_extra_body_override(published, api, ke
         kwargs={"model": "gpt-test", key: 100, "extra_body": {key: 200}, "input": "hello", "messages": []}, call=call,
     ))
     assert published[0]["output_reserve_tokens"] == 200
+
+@pytest.mark.asyncio
+async def test_standalone_compaction_reserves_benchmark_budget_and_records_exact_usage(monkeypatch):
+    from src.lib.openai_agents.provider_usage import (
+        capture_provider_usage, observe_provider_invocations, BenchmarkInvocationBudgetExceeded,
+    )
+    from src.lib.observability.cost_context import current_model_request
+    checkpoints, calls, spans = [], [], []
+
+    class Observer:
+        def started(self, pending):
+            checkpoints.append(("started", pending.model_request_id))
+        def completed(self, pending, record):
+            checkpoints.append(("completed", record.input_tokens, record.output_tokens))
+        def failed(self, pending, record):
+            checkpoints.append(("failed",))
+
+    class Span:
+        span_data = SimpleNamespace(usage=None)
+        def __enter__(self):
+            spans.append((self, current_model_request()))
+            return self
+        def __exit__(self, *args):
+            pass
+        def set_error(self, error):
+            self.error = error
+
+    monkeypatch.setattr("agents.tracing.generation_span", lambda **kwargs: Span())
+    async def compact(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(id="cmp-1", model="gpt-6-astra",
+            usage=ResponseUsage(input_tokens=123, output_tokens=17, total_tokens=140,
+                input_tokens_details=ResponseInputTokensDetails(cached_tokens=5),
+                output_tokens_details=ResponseOutputTokensDetails(reasoning_tokens=0)))
+    with pytest.raises(BenchmarkInvocationBudgetExceeded), capture_provider_usage(max_records=1) as records, observe_provider_invocations(Observer()):
+        await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
+            kwargs={"model": "gpt-6-astra", "input": [{"role": "user", "content": "old"}]}, call=compact)
+        with pytest.raises(BenchmarkInvocationBudgetExceeded):
+            await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
+                kwargs={"model": "gpt-6-astra", "input": []}, call=compact)
+    assert len(calls) == len(records) == len(spans) == 1
+    assert checkpoints[0][1] == spans[0][1]["model_request_id"]
+    assert checkpoints[1] == ("completed", 123, 17)
+    assert spans[0][0].span_data.usage["input_tokens_details"]["cached_tokens"] == 5

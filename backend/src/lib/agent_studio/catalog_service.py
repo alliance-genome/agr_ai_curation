@@ -30,6 +30,7 @@ from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from agents import Agent
+from agr_ai_curation_runtime.document_errors import DocumentReadError
 from src.lib.config.agent_loader import (
     canonical_system_agent_key,
     get_agent_definition,
@@ -44,21 +45,7 @@ from src.lib.prompts.assembly import (
     prompt_templates_for_bundle,
 )
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
-from src.lib.openai_agents.tool_result_bounds import (
-    RESULT_VIEW_ARGUMENTS,
-    ToolResultBudgetError,
-    bounded_json_result,
-    budget_failure,
-    canonical_json,
-    full_tool_results_are_requested,
-    invalid_cursor,
-    is_budget_failure,
-    report_budget_failure_result,
-    report_tool_result_budget_escape,
-    result_view_schema_properties,
-    serialized_size,
-    tool_result_budget,
-)
+from src.lib.openai_agents.tool_result_bounds import RESULT_VIEW_ARGUMENTS, bounded_json_result, canonical_json, full_tool_results_are_requested, invalid_cursor, result_view_schema_properties
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -82,15 +69,15 @@ _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
 _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "EVIDENCE VERIFICATION RULES:\n"
-    "- Call `read_chunk(chunk_id)` before recording evidence and select backend-generated "
-    "`evidence_spans[].span_id` values.\n"
+    "- Call `read_chunk(chunk_index)` before recording evidence and select backend-generated "
+    "`evidence_spans[].span_index` values.\n"
     "- Call `record_evidence` once for each distinct evidence unit you intend to keep.\n"
-    "- Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate records for truly disjoint evidence units.\n"
+    "- Multiple `selections` in one `record_evidence` call produce one evidence record; use separate records for truly disjoint evidence units.\n"
     "- Use multiple evidence records when one evidence unit alone does not fully support the retained item or claim.\n"
-    "- Pass the entity label and `span_ids`; do not write source evidence text yourself.\n"
-    "- `record_evidence` resolves span IDs against exact source text and copies the backend-owned slices into `verified_quote`.\n"
-    "- To correct the source quote/provenance for an existing active evidence record, call `record_evidence` again with that `evidence_record_id` and current `span_ids`; the backend updates the same record ID after span validation.\n"
-    "- If the tool returns `not_found`, call `read_chunk` again for current span IDs or drop the evidence.\n"
+    "- Pass the entity label and `selections`; do not write source evidence text yourself.\n"
+    "- `record_evidence` resolves numeric chunk/span selections against exact source text and copies the backend-owned slices into `verified_quote`.\n"
+    "- To correct the source quote/provenance for an existing active evidence record, call `record_evidence` again with that `evidence_record_id` and current `selections`; the backend updates the same record ID after span validation.\n"
+    "- Required PDF source failures stop the operation; do not drop the evidence and continue.\n"
     "- Only persist evidence records that came back `verified`.\n"
     "- Before final output, use `list_recorded_evidence` and `get_recorded_evidence` to review the active-run evidence workspace.\n"
     "- Use `attach_evidence_to_object` with a concrete `field_path` plus object or pending-ref target; new attachments must not be object-level only.\n"
@@ -139,7 +126,7 @@ _OUTPUT_FORMATTER_TOOL_CATALOG: Dict[str, Dict[str, Any]] = {
         "name": "Explain Formatter Capabilities",
         "description": (
             "Explain the bound CSV/TSV/JSON or chat formatter workflow, available saved "
-            "row sources, supported plan operations, response budgets, and completion rules."
+            "row sources, supported plan operations, and completion rules."
         ),
         "parameters": [],
     },
@@ -845,14 +832,19 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
         if execute_inline:
             inline_ctx = ctx or SimpleNamespace(tool_name=tool_id, run_config=None)
-            result = base_on_invoke_tool(inline_ctx, input_str)
-            if inspect.isawaitable(result):
-                result = await result
+            try:
+                result = base_on_invoke_tool(inline_ctx, input_str)
+                if inspect.isawaitable(result):
+                    result = await result
+            except Exception as exc:
+                from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS
+                if tool_id in DOCUMENT_READ_TOOLS:
+                    raise DocumentReadError(tool_id) from exc
+                raise
             from src.lib.openai_agents.run_history import record_runtime_payload
             await record_runtime_payload("canonical_tool_result", result, tool_name=tool_id,
                                          call_id=getattr(ctx, "tool_call_id", None))
             result = _document_model_result(tool_id, result)
-            _report_inline_package_result(tool_id, result)
             return result
 
         runner = _get_package_tool_runner()
@@ -921,9 +913,8 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
                                      call_id=getattr(ctx, "tool_call_id", None))
         model_result = _document_model_result(tool_id, result.result)
         if not requery_pages:
-            _report_inline_package_result(tool_id, model_result)
             return model_result
-        if is_write and not full_tool_results_are_requested() and serialized_size(result.result) > tool_result_budget():
+        if is_write and not full_tool_results_are_requested():
             result_ref = str(uuid4())
             captured_writes[result_ref] = (scope, request_identity, result.result)
         return _bounded_package_result(
@@ -943,8 +934,11 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
 
 def _document_model_result(tool_id: str, result: Any) -> Any:
-    from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS, document_result_view
+    from src.lib.openai_agents.document_result_view import (
+        DOCUMENT_READ_TOOLS, document_result_view, require_document_read_result,
+    )
 
+    require_document_read_result(tool_id, result)
     if tool_id not in DOCUMENT_READ_TOOLS or full_tool_results_are_requested():
         return result
 
@@ -958,11 +952,11 @@ def _document_model_result(tool_id: str, result: Any) -> Any:
 
 
 def _with_result_view_arguments(tool: Any) -> Dict[str, Any]:
-    """Add the bounded page/detail arguments to a subprocess package tool schema.
+    """Add explicit result selection arguments to a subprocess package tool schema.
 
     Subprocess package tools return complete results to the backend; the
-    backend serves the model budget-bounded pages and exact detail chunks, so
-    the continuation arguments belong to this adapter, not to package code.
+    backend exposes optional exact collection/field selections and source hashes.
+    These adapter controls do not impose per-tool model-context quotas.
     """
     schema = json.loads(json.dumps(getattr(tool, "params_json_schema", None) or {}))
     schema.setdefault("type", "object")
@@ -1000,16 +994,12 @@ def _bounded_package_result(
     *,
     result_ref: str | None = None,
 ) -> Any:
-    """Serve one subprocess package result within the model-facing budget.
+    """Present a complete subprocess result or an explicitly selected exact view.
 
-    Results that fit are returned unchanged. Larger ones become a first page
-    with explicit continuation; repeating the call with ``result_offset`` /
-    ``result_sha256`` or ``detail_path`` / ``detail_cursor`` pages the same
-    (recomputed and hash-checked) result. Application-side captures that need
-    the complete result (validator lookup capture) request it explicitly.
-
-    Writes are captured by the caller before presentation. A result_ref reads
-    that capture without executing the request again.
+    Shared model-context policy owns capacity. Query view arguments select rows
+    or fields without a per-result quota. Write results are captured before
+    presentation and wrapped with result_ref, including small results, so later
+    reads use that exact capture without executing the write again.
     """
     view_arguments = {
         key: value for key, value in view_arguments.items() if value is not None
@@ -1027,7 +1017,7 @@ def _bounded_package_result(
     try:
         bounded = bounded_json_result(
             body,
-            budget=tool_result_budget(),
+
             offset=view_arguments.get("result_offset"),
             expected_sha256=view_arguments.get("result_sha256"),
             detail_path=view_arguments.get("detail_path"),
@@ -1037,60 +1027,7 @@ def _bounded_package_result(
         )
     except ValueError as exc:
         return invalid_cursor(str(exc), tool_name=tool_id)
-    except ToolResultBudgetError as exc:
-        failure = budget_failure(
-            tool_name=tool_id,
-            measured=exc.measured,
-            limit=exc.limit,
-            field=view_arguments.get("detail_path"),
-        )
-        if result_ref is not None:
-            failure.update({
-                "result_ref": result_ref,
-                "operation_status": "response_captured",
-                "message": "The write returned and its response was captured. Do not repeat the write; read detail_path='data' with result_ref.",
-            })
-        report_budget_failure_result(
-            failure,
-            tool_name=tool_id,
-            component="package_tool_adapter",
-        )
-        return failure
-    return payload if bounded is None else bounded
-
-
-# Inline tools whose result contract is owned by a sibling change (ALL-1277
-# agent contract discovery); they are neither measured nor reported here.
-_INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT = frozenset({"get_agent_contract"})
-
-
-def _report_inline_package_result(tool_id: str, result: Any) -> None:
-    """Report a self-bounded package tool result that broke its size contract.
-
-    Inline document/evidence tools and builder run-state tools bound their own
-    results: a ``tool_result_budget_unmet`` result is reported once, and any
-    other result over the budget is reported as an escape (observed, result
-    unchanged).
-    """
-    if tool_id in _INLINE_TOOLS_WITH_SEPARATE_RESULT_CONTRACT:
-        return
-    if is_budget_failure(result):
-        report_budget_failure_result(
-            result,
-            tool_name=tool_id,
-            component="package_tool_adapter",
-        )
-        return
-    budget = tool_result_budget()
-    measured = serialized_size(result)
-    if measured > budget:
-        report_tool_result_budget_escape(
-            tool_name=tool_id,
-            measured=measured,
-            limit=budget,
-            component="package_tool_adapter",
-            enforced=False,
-        )
+    return (body if result_ref is not None else payload) if bounded is None else bounded
 
 
 def _tool_category_for_binding(binding: Any) -> str:
@@ -1877,7 +1814,6 @@ def get_prompt_catalog() -> PromptCatalogService:
 # =============================================================================
 # Agent Factory Functions (for Flow Execution)
 # =============================================================================
-
 
 
 def _coerce_db_user_id(raw_user_id: Any) -> Optional[int]:

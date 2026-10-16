@@ -1,31 +1,17 @@
-"""ALL-1278: evidence workspace tools stay inside the model-facing result budget."""
+"""Evidence pages and exact fields preserve selected content and authorization."""
 
 from __future__ import annotations
 
 import pytest
 
-import src.lib.openai_agents.tool_result_bounds as tool_result_bounds
 import src.lib.openai_agents.tools.evidence_workspace as evidence_workspace
-from src.lib.openai_agents.tool_result_bounds import serialized_size
 
 UNICODE_TEXT = "β-catenin 表达 in Drosophila wing disc 😀 "
 
 
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
-    monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn: fn)
-
-
-@pytest.fixture
-def reported(monkeypatch):
-    calls = []
-
-    def _capture(violation, **kwargs):
-        calls.append((violation, kwargs))
-        return True
-
-    monkeypatch.setattr(tool_result_bounds, "report_payload_contract_violation", _capture)
-    return calls
+    monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda wrapped: wrapped)
 
 
 def _record(index: int, *, note_chars: int = 0, quote: str | None = None) -> dict:
@@ -66,7 +52,7 @@ async def _page_all(list_tool, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_huge_requested_limit_clamps_to_configured_maximum(monkeypatch, reported):
+async def test_huge_requested_limit_clamps_to_configured_maximum(monkeypatch):
     monkeypatch.setenv("EVIDENCE_LIST_MAX_LIMIT", "25")
     list_tool = _tool(
         evidence_workspace.create_list_recorded_evidence_tool,
@@ -81,26 +67,22 @@ async def test_huge_requested_limit_clamps_to_configured_maximum(monkeypatch, re
     assert page["limit_clamped"] is True
     assert page["next_offset"] == page["returned_count"]
     assert page["count"] == 300
-    assert reported == []  # clamping is normal paging, not an alert
 
 
 @pytest.mark.asyncio
-async def test_wide_records_page_by_serialized_size_without_duplicates(
-    monkeypatch, reported
+async def test_wide_records_preserve_selected_page_without_duplicates(
+    monkeypatch
 ):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "8192")
     records = [_record(index, note_chars=900) for index in range(120)]
     list_tool = _tool(evidence_workspace.create_list_recorded_evidence_tool, records)
 
     first = await list_tool(limit=100)
-    assert serialized_size(first) <= 8192
-    assert first["page_ended_by"] == "size_budget"
-    assert 0 < first["returned_count"] < 100
+    assert first["returned_count"] == 100
+    assert first["page_ended_by"] == "limit"
 
     seen, pages = await _page_all(list_tool, limit=100)
     assert seen == [record["evidence_record_id"] for record in records]
     assert pages > 1
-    assert reported == []
 
 
 @pytest.mark.asyncio
@@ -119,50 +101,32 @@ async def test_invalid_or_stale_offset_is_an_explicit_error(offset):
 
 
 @pytest.mark.asyncio
-async def test_oversized_single_quote_is_read_exactly_in_bounded_chunks(
+async def test_large_quote_and_explicit_read_are_complete(
     monkeypatch
 ):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     quote = (UNICODE_TEXT * 2500)[:60000]
     get_tool = _tool(evidence_workspace.create_get_recorded_evidence_tool, [_record(1, quote=quote)])
 
     first = await get_tool("ev-0001")
 
-    assert serialized_size(first) <= 4096
-    withheld = {item["detail_path"]: item for item in first["result_page"]["withheld_fields"]}
-    assert "record.verified_quote" in withheld
-    descriptor = withheld["record.verified_quote"]
-    assert descriptor["total_chars"] == len(quote)
-
-    chunks = []
-    cursor = 0
-    while cursor is not None:
-        chunk = await get_tool(
-            "ev-0001",
-            detail_path="record.verified_quote",
-            detail_cursor=cursor,
-            result_sha256=first["result_page"]["result_sha256"],
-        )
-        assert serialized_size(chunk) <= 4096
-        assert chunk["detail"]["sha256"] == descriptor["sha256"]
-        chunks.append(chunk["detail"]["content"])
-        cursor = chunk["detail"]["next_cursor"]
-    assert "".join(chunks) == quote
+    assert first["record"]["verified_quote"] == quote
+    exact = await get_tool("ev-0001", detail_path="record.verified_quote", detail_cursor=0)
+    assert exact["detail"]["content"] == quote
+    assert exact["detail"]["complete"] is True
 
 
 @pytest.mark.asyncio
 async def test_detail_read_reports_changed_record_as_stale(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     records = [_record(1, quote="x" * 20000)]
     get_tool = _tool(evidence_workspace.create_get_recorded_evidence_tool, records)
-    first = await get_tool("ev-0001")
+    first = await get_tool("ev-0001", detail_path="record.verified_quote")
     records[0]["verified_quote"] = "y" * 20000
 
     stale = await get_tool(
         "ev-0001",
         detail_path="record.verified_quote",
         detail_cursor=0,
-        result_sha256=first["result_page"]["result_sha256"],
+        result_sha256=first["result_sha256"],
     )
 
     assert stale["error_code"] == "stale_result_cursor"
@@ -191,8 +155,7 @@ async def test_detail_reads_keep_document_and_validator_scope():
 
 
 @pytest.mark.asyncio
-async def test_mutation_acknowledgment_omits_quote_and_stays_bounded(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
+async def test_mutation_acknowledgment_preserves_metadata_and_omits_quote(monkeypatch):
     records = [_record(1, quote="long quote " * 3000)]
     attach = _tool(evidence_workspace.create_attach_evidence_to_object_tool, records)
     update = _tool(evidence_workspace.create_update_recorded_evidence_metadata_tool, records)
@@ -203,30 +166,8 @@ async def test_mutation_acknowledgment_omits_quote_and_stays_bounded(monkeypatch
     assert attached["status"] == "ok"
     assert "verified_quote" not in attached["record"]
     assert attached["record"]["verified_quote_chars"] == len(records[0]["verified_quote"])
-    assert serialized_size(attached) <= 4096
     assert noted["status"] == "ok"
-    assert noted["record"]["withheld"] is True
+    assert noted["record"]["agent_note"] == "n" * 50000
     assert noted["record"]["evidence_record_id"] == "ev-0001"
-    assert serialized_size(noted) <= 4096
     # The workspace keeps the full values.
     assert records[0]["agent_note"] == "n" * 50000
-
-
-@pytest.mark.asyncio
-async def test_unmeetable_budget_returns_compact_failure_and_reports_once(
-    monkeypatch, reported
-):
-    monkeypatch.setattr(evidence_workspace, "tool_result_budget", lambda: 64)
-    list_tool = _tool(
-        evidence_workspace.create_list_recorded_evidence_tool,
-        [_record(index) for index in range(5)],
-    )
-
-    result = await list_tool()
-
-    assert result["error_code"] == "tool_result_budget_unmet"
-    assert result["result_bounds"]["limit_bytes"] == 64
-    assert len(reported) == 1
-    violation, kwargs = reported[0]
-    assert violation.category == "tool_result_budget_escape"
-    assert kwargs["tool_name"] == "list_recorded_evidence"

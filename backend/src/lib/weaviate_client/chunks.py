@@ -406,6 +406,50 @@ async def get_chunk_by_id(
         raise
 
 
+async def get_chunk_by_index(
+    *, chunk_index: int, user_id: str, document_id: str,
+) -> Dict[str, Any] | None:
+    """Resolve exactly one stored index within the authenticated document.
+
+    Storage UUIDs remain internal (see pipeline.store.generate_deterministic_uuid).
+    Two matches prove ambiguity; this is a uniqueness check, not a retrieval cap.
+    """
+    if type(chunk_index) is not int or chunk_index < 0:
+        raise ValueError("chunk_index must be a non-negative integer")
+    if not document_id or not user_id:
+        raise ValueError("Document and user scope are required")
+    connection = get_connection()
+
+    def resolve():
+        with connection.session() as client:
+            from ..weaviate_helpers import get_user_collections
+            collection, _ = get_user_collections(client, user_id)
+            response = collection.query.fetch_objects(
+                filters=(Filter.by_property("documentId").equal(document_id)
+                         & Filter.by_property("chunkIndex").equal(chunk_index)),
+                limit=2, include_vector=False, return_properties=["documentId", "chunkIndex"],
+            )
+            matches = response.objects
+            if matches is None:
+                raise TypeError("Chunk index query omitted objects")
+            if len(matches) > 1:
+                raise ValueError("Stored document chunk index is ambiguous")
+            if not matches:
+                return None
+            obj = matches[0]
+            if obj.properties.get("documentId") != document_id or obj.properties.get("chunkIndex") != chunk_index:
+                raise ValueError("Chunk index query returned an inconsistent source")
+            return _weaviate_object_uuid(obj)
+
+    chunk_id = resolve() if _run_sync_in_package_tool_subprocess() else await asyncio.to_thread(resolve)
+    if chunk_id is None:
+        return None
+    chunk = await get_chunk_by_id(chunk_id=chunk_id, user_id=user_id, document_id=document_id)
+    if chunk is None or type(chunk.get("chunk_index")) is not int or chunk["chunk_index"] != chunk_index:
+        raise ValueError("Selected document chunk changed during retrieval")
+    return chunk
+
+
 async def get_chunk_neighbor_ids(
     *,
     document_id: str,
@@ -795,6 +839,7 @@ async def hybrid_search_chunks(
 
                     chunk = {
                         "id": chunk_uuid,
+                        "chunk_index": obj.properties.get("chunkIndex"),
                         # ✅ CRITICAL: Use 'text' to match chat.py
                         "text": full_content,
                         "content_preview": content_preview,

@@ -942,7 +942,8 @@ def _find_staged_go_recommendations_impl(
     """Search drafts and return a versioned index. For complete original fields,
     refs and errors, pass a row's detail_read arguments. For a nested value use
     detail_path='candidate.staged_fields.<field>' and result_sha256=null on the
-    first chunk, then retain the returned detail.sha256 and advance detail_cursor.
+    first read; the selected value is returned whole. Optional detail_cursor reads
+    an exact suffix and result_sha256 verifies the whole source value.
     Retain workspace_revision across list pages and detail reads; restart if stale.
     """
     attempted_query = _attempt_query(

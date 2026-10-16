@@ -609,14 +609,16 @@ does not grant access.
 
 **Base URL**: `http://localhost:8001/api/claude/traces` (TraceReview service on port 8001)
 
-Provider-boundary-aware endpoints exposed through a stable compatibility route. All responses include serialized-character metadata plus an advisory token estimate. These endpoints are used by the Workflow Analysis feature.
+Trace inspection endpoints exposed through a stable route. All responses include serialized-character metadata plus an advisory token estimate. These endpoints are used by the Workflow Analysis feature.
 
-### Provider Result Budget Strategy
+### Context and result selection
 
-- Aggregate results fit `AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS` after serializing the complete provider-visible response.
-- Token estimation remains advisory at roughly 4 characters per token.
-- Every response includes `token_info.serialized_chars`, `max_serialized_chars`, `estimated_tokens`, and `within_budget`.
-- Aggregate calls return an authoritative summary and collection inventory first. Request one named section and follow `next_call` until `complete=true`; an oversized item is returned as lossless JSON `item_chunk` pages with an `item_start` cursor.
+Responses include advisory `token_info.serialized_chars` and `estimated_tokens`.
+These are measurements, not per-tool quotas. The shared runtime policy counts
+actual model requests and compacts context as needed. Selected trace content is
+returned exactly. Explicit summary/inventory, named-section, filter and row-page
+arguments remain available; follow returned continuations for that selection.
+See [Agent context continuation](../guides/AGENT_CONTEXT_CONTINUATION.md).
 
 ### Response Schema
 
@@ -627,10 +629,7 @@ All endpoints return:
   "data": { ... },
   "token_info": {
     "estimated_tokens": 523,
-    "serialized_chars": 2092,
-    "max_serialized_chars": 12000,
-    "within_budget": true,
-    "warning": null
+    "serialized_chars": 2092
   }
 }
 ```
@@ -682,7 +681,7 @@ Response:
     "context_overflow_detected": false,
     "timestamp": "2025-01-24T14:00:00Z"
   },
-  "token_info": { "estimated_tokens": 487, "within_budget": true, "warning": null }
+  "token_info": { "estimated_tokens": 487 }
 }
 ```
 
@@ -725,7 +724,7 @@ Response:
     "has_duplicates": true,
     "duplicate_count": 3
   },
-  "token_info": { "estimated_tokens": 2300, "within_budget": true, "warning": null }
+  "token_info": { "estimated_tokens": 2300 }
 }
 ```
 
@@ -770,7 +769,7 @@ Response includes pagination info:
   },
   "next_call": { "trace_id": "<trace_id>", "page": 2, "page_size": 10 },
   "filter_applied": null,
-  "token_info": { "estimated_tokens": 4500, "within_budget": true, "warning": null }
+  "token_info": { "estimated_tokens": 4500 }
 }
 ```
 
@@ -804,7 +803,7 @@ Response:
     "next_call": null,
     "serialized": "{\"section_name\": \"Experimental Section\"}"
   },
-  "token_info": { "estimated_tokens": 180, "within_budget": true, "warning": null }
+  "token_info": { "estimated_tokens": 180 }
 }
 ```
 
@@ -838,7 +837,7 @@ Response:
     },
     "domain_envelope": null
   },
-  "token_info": { "estimated_tokens": 112, "within_budget": true, "warning": null }
+  "token_info": { "estimated_tokens": 112 }
 }
 ```
 

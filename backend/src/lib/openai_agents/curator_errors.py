@@ -7,6 +7,8 @@ from typing import Any, Mapping
 from agents.models.openai_responses import ResponsesWebSocketError
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
+from agr_ai_curation_runtime.document_errors import document_read_failure
+
 from .provider_errors import PROVIDER_POLICY_CHAT_MESSAGE, provider_policy_error
 
 
@@ -23,6 +25,7 @@ class CuratorFailure:
 
 
 _FAILURES = {
+    "pdf_read_failed": CuratorFailure("pdf_read_failed", "There was an error reading the PDF. We couldn't continue the extraction.", False),
     "history_unavailable": CuratorFailure("history_unavailable", "This run stopped because the request grew too large while its history could not be saved. Completed actions were not repeated. You can restore your request and try again later.", True),
     "protected_context_limit": CuratorFailure("protected_context_limit", "This run stopped before required context would be lost. Please split the task into smaller requests. Completed actions were not repeated.", False),
     "provider_unavailable": CuratorFailure("provider_unavailable", "The AI service is temporarily unavailable or busy. This request did not finish. You can restore your request and try again later. If it keeps happening, report it using the feedback menu.", True),
@@ -35,6 +38,7 @@ _FAILURES = {
     "provider_content_policy": CuratorFailure("provider_content_policy", PROVIDER_POLICY_CHAT_MESSAGE, False, "openai"),
 }
 _EVENT_CATEGORIES = {
+    "DocumentReadError": "pdf_read_failed",
     "HistoryStorageUnavailable": "history_unavailable",
     "ContextRecoveryError": "protected_context_limit",
     "ModelRequestBlockedError": "context_limit",
@@ -64,6 +68,8 @@ def failure_for_event(data: Mapping[str, Any]) -> CuratorFailure:
 
 def classify_failure(error: BaseException) -> CuratorFailure:
     """Inspect typed causes, including SDK tool wrappers, without matching prose."""
+    if document_read_failure(error) is not None:
+        return _FAILURES["pdf_read_failed"]
     if provider_policy_error(error) is not None:
         return _FAILURES["provider_content_policy"]
     current: BaseException | None = error

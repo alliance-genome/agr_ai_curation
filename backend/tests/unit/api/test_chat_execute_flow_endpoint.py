@@ -2973,9 +2973,10 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     assert keepalive_calls == [True]
 
 
-@pytest.mark.parametrize("websocket_failure", [False, True, "specialist"])
+@pytest.mark.parametrize("websocket_failure", [False, True, "specialist", "pdf"])
 def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog, websocket_failure):
     specialist_failure = websocket_failure == "specialist"
+    pdf_failure = websocket_failure == "pdf"
     websocket_failure = websocket_failure is True
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-error")
@@ -3000,6 +3001,10 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     async def _fake_execute_flow(**_kwargs):
         if False:
             yield {"type": "RUN_STARTED"}
+        if pdf_failure:
+            from agents import UserError
+            from agr_ai_curation_runtime.document_errors import DocumentReadError
+            raise UserError("executor boom") from DocumentReadError("read_chunk")
         if specialist_failure:
             from agents import UserError
             from src.lib.openai_agents.streaming_tools import SpecialistOutputError
@@ -3033,6 +3038,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
     expected_message = (
+        failure_for_event({"error_type": "DocumentReadError"}).message if pdf_failure else
         failure_for_event({"failure_category": "provider_unavailable"}).message
         if websocket_failure else failure_for_event({"error_type": "SpecialistOutputError"} if specialist_failure else {}).message
     )
@@ -3050,7 +3056,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     assert len(summaries) == 1
     assert summaries[0].payload_json["failure_reason"] == expected_message
     assert "terminal outcome was durable" not in json.dumps(summaries[0].payload_json)
-    expected_type = "UserError" if websocket_failure or specialist_failure else "RuntimeError"
+    expected_type = "UserError" if websocket_failure or specialist_failure or pdf_failure else "RuntimeError"
     assert events[1]["error_type"] == expected_type
     assert events[1]["session_id"] == "session-flow-error"
     assert calls["unregister"] == [("session-flow-error", "auth-sub", ANY)]

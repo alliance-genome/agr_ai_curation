@@ -276,7 +276,7 @@ def test_installed_agent_studio_prompts_require_targeted_flow_verification():
         always_sent, prompt = _flow_reachable_guidance(relative_path)
         assert "call `get_current_flow` tool FIRST" in always_sent, relative_path
         assert "read studio guide topic `flow_verification`" in always_sent, relative_path
-        assert "`compacted_tool_result`" in always_sent, relative_path
+        assert "required source content remains unread" in always_sent, relative_path
         assert "`output_key` is HIGH" in always_sent, relative_path
         assert 'get_available_agents(category="Output")' in prompt, relative_path
         assert 'get_prompt(agent_id, group_id, view="summary")' in prompt, relative_path
@@ -321,8 +321,8 @@ def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
     assert "PDF evidence is span-backed" in prompt
     assert "Do not tell curators or prompt authors that extraction agents should invent" in prompt
     assert "`search_document` for candidate chunks" in prompt
-    assert "`read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_id`" in prompt
-    assert "`record_evidence(span_ids=[...])`" in prompt
+    assert "`read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_index`" in prompt
+    assert '`record_evidence(selections=[{"chunk_index": 0, "span_index": 0}])`' in prompt
     assert "`search_document.search_mode` supports `auto`, `hybrid`, `lexical`, and `hybrid_lexical_first`" in prompt
     assert "Prefer lexical-heavy modes for exact biomedical symbols" in prompt
     assert "Active-run evidence workspace tools" in prompt

@@ -1208,8 +1208,7 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
         tool_name="ask_gene_validation_specialist",
     )
 
-    assert "structured result accepted" in result
-    assert "Full validated payload is retained by the specialist runtime" in result
+    assert json.loads(result)["genes"]
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
     assert evidence_events[0]["tool_name"] == "ask_gene_validation_specialist"
@@ -1519,7 +1518,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(
         tool_name="ask_gene_extractor_specialist",
     )
 
-    assert "structured result accepted" in result
+    assert json.loads(result)["genes"]
     assert "Extracted focal genes with verified evidence" in result
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
@@ -2028,7 +2027,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
         tool_name="ask_gene_extractor_specialist",
     )
 
-    assert "structured result accepted" in result
+    assert json.loads(result)["genes"]
     evidence_events = [event for event in captured_events if event.get("type") == "evidence_summary"]
     assert len(evidence_events) == 1
     assert {record["evidence_record_id"] for record in evidence_events[0]["evidence_records"]} == {

@@ -21,7 +21,7 @@ Do not hand-author `curatable_objects[]`; the backend builds the PhenotypeResult
 
 # PE-03 preserve description + causative context; evidence is backend-verified span source text
 For each retained phenotype, preserve the phenotype description as written, the causative genotype/allele/treatment/condition, polarity, severity or penetrance when stated, organism, and life stage when stated.
-Evidence here is backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values
+Evidence here is backend-verified source text, selected from `read_chunk.evidence_spans[].span_index` values
 active validator bindings own final phenotype ontology and subject identity decisions.
 
 # PE-05 retrieval before answering
@@ -34,10 +34,10 @@ Every retained phenotype is an individual phenotype assertion supported by an ex
 Composite descriptions (e.g. "reduced size and delayed development") are split into individual phenotype assertions while preserving shared context, so they are separate stage calls.
 
 # PE-07 evidence from backend-generated span ids
-Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_index` values.
 
 # PE-09 stage once per retained phenotype assertion (passage of several = one call per assertion)
-Each retained phenotype is staged once with `stage_phenotype_observation`, after `record_evidence(span_ids=[...])` creates its supporting source text.
+Each retained phenotype is staged once with `stage_phenotype_observation`, after `record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])` creates its supporting source text.
 A passage describing several distinct phenotypes is one stage call per phenotype assertion.
 
 # PE-08 retained phenotype carries statement + mentions + evidence ids + pending hints
@@ -134,8 +134,8 @@ pending subject/reference and pending ontology resolution keep export and write 
 single_reference (the source paper) is resolved downstream from the curation workspace document identity, not from free text. Do NOT stage a reference.
 
 # PE-48 read_chunk -> select spans -> record_evidence one evidence unit
-call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
-Multiple `span_ids` in one call make one evidence record; use separate calls for truly disjoint evidence units.
+call `read_chunk(chunk_index)` on the relevant chunk, select the backend-generated `evidence_spans[].span_index` values that directly support one evidence unit, and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`.
+Multiple `selections` in one call make one evidence record; use separate calls for truly disjoint evidence units.
 Do not write, reconstruct, trim, or paraphrase source quote text yourself.
 
 # PE-25 review then finalize once with returned candidate ids
@@ -158,7 +158,7 @@ Never infer a negated relation from the absence of an effect.
 A condition's MEANING is the COMBINATION of its fields (the class names the variable type; the chemical/quantity fill it). Stage them together so the composite condition validator can check both per-field existence AND cross-field coherence.
 
 # PE-54 conditions carry no quote text; read from the same evidence
-EVIDENCE CONTRACT: conditions carry NO quote text. They are read from the SAME evidence the annotation already cites (`record_evidence(span_ids=[...])` -> `evidence_record_ids`); the backend resolves the exact source text for the composite validator. Never type a condition quote.
+EVIDENCE CONTRACT: conditions carry NO quote text. They are read from the SAME evidence the annotation already cites (`record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])` -> `evidence_record_ids`); the backend resolves the exact source text for the composite validator. Never type a condition quote.
 
 # PE-55 backend finalization creates the envelope + no self-authored object graph
 # NOTE: phenotype must NOT enumerate the literal `top-level items[]`/`annotations[]`
@@ -196,7 +196,7 @@ If no phenotype finding has direct experimental support in this paper, stage not
 If phenotype identity or genotype attribution is unresolved after using the available paper context, do not guess: stage the supported, evidence-backed phenotype with its free-text statement and paper wording, leave identifiers the paper does not print unset for the validators
 
 # PE-61 span resolution failure recovery
-If span resolution fails, call `read_chunk` again for the current span IDs or drop that evidence.
+A required source-read or stale-selection failure stops the extraction; do not continue without the required source.
 
 # PE-62 never invent; leave unresolved to validator result fields + envelope validation findings
 Never invent phenotype descriptions, ontology identifiers, genotype/subject associations, or evidence text. Leave unresolved validator-bound values to the validators' result fields and envelope validation findings.

@@ -351,7 +351,7 @@ describe('OpusChat', () => {
     expect(prompt).toContain('get_tool_inventory(agent_id=')
     expect(prompt).toContain('truncated=false and no next_cursor remains')
     expect(prompt).toContain('get_domain_pack_validation_plan')
-    expect(prompt).toContain('compacted_tool_result')
+    expect(prompt).toContain('required source content remains unread')
     expect(prompt).toContain('not terminal control nodes')
     expect(prompt).toContain('Duplicate output_key is HIGH')
     expect(prompt).toContain('section="prompt_manifest"')

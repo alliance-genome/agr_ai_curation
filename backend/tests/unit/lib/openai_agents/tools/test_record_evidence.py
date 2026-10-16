@@ -36,9 +36,7 @@ def runtime_exception_reports(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        record_evidence,
-        "report_runtime_exception",
-        _fake_report_runtime_exception,
+        "src.lib.observability.runtime.report_runtime_exception", _fake_report_runtime_exception,
     )
     return reports
 
@@ -80,7 +78,7 @@ def _chunk_uuid(label: str) -> str:
 
 
 def test_record_evidence_schema_accepts_span_ids_not_claimed_quote():
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
     signature = inspect.signature(tool)
 
     assert "span_ids" in signature.parameters
@@ -91,7 +89,7 @@ def test_record_evidence_schema_accepts_span_ids_not_claimed_quote():
 
 @pytest.mark.asyncio
 async def test_record_evidence_rejects_claimed_quote_argument_in_primary_path():
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     with pytest.raises(TypeError, match="claimed_quote"):
         await tool(
@@ -184,7 +182,7 @@ async def test_record_evidence_copies_exact_span_text_and_tracks_call(monkeypatc
 
     tracker = _Tracker()
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool(
+    tool = record_evidence._create_canonical_evidence_recorder(
         "doc-12345678",
         "user-1",
         tracker=cast(Any, tracker),
@@ -257,7 +255,7 @@ async def test_record_evidence_rejects_target_identity_without_field_path(monkey
         raise AssertionError("target validation should run before span resolution")
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     result = await tool(
         entity="wg",
@@ -289,7 +287,7 @@ async def test_record_evidence_rejects_malformed_span_without_lookup_or_error_lo
         raise AssertionError("malformed span IDs must not reach chunk lookup")
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
         result = await tool(entity="wg", span_ids=["truncated-span-id"])
@@ -315,7 +313,7 @@ async def test_record_evidence_rejects_non_uuid_chunk_without_lookup_or_error_lo
         raise AssertionError("non-UUID chunk IDs must not reach chunk lookup")
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
         result = await tool(entity="wg", span_ids=[span_id])
@@ -343,7 +341,7 @@ async def test_record_evidence_rejects_unknown_span_chunk_without_record(
         return None
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
         result = await tool(entity="wg", span_ids=[span_id])
@@ -376,31 +374,15 @@ async def test_record_evidence_reports_lookup_runtime_failure_at_error_level(
         raise RuntimeError("sensitive chunk text from Weaviate")
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _failing_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
-    with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
-        result = await tool(entity="wg", span_ids=[span_id])
-
-    assert result["status"] == "not_found"
-    assert result["resolution_failure"] == "chunk_load_error"
-    assert "retry_instructions" not in result
-    assert any(
-        record.name == record_evidence.__name__ and record.levelno == logging.ERROR
-        for record in caplog.records
-    )
-    assert len(runtime_exception_reports) == 1
-    reported_exc, report_kwargs = runtime_exception_reports[0]
-    assert isinstance(reported_exc, record_evidence._ChunkLookupRuntimeError)
-    assert str(reported_exc) == "Evidence chunk lookup failed (RuntimeError)"
-    assert reported_exc.__traceback__ is not None
-    assert reported_exc.__context__ is None
-    assert reported_exc.__cause__ is None
-    assert report_kwargs == {
-        "component": "record_evidence",
-        "operation": "evidence_chunk_lookup_failed",
-        "context": {"document_id": "doc-123"},
-    }
-    assert "sensitive chunk text" not in caplog.text
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    with pytest.raises(DocumentReadError) as caught:
+        await tool(entity="wg", span_ids=[span_id])
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert str(caught.value.__cause__) == "sensitive chunk text from Weaviate"
+    assert "sensitive" not in str(caught.value)
+    assert runtime_exception_reports == []  # Terminal owners capture the cause once.
 
 
 @pytest.mark.asyncio
@@ -449,7 +431,7 @@ async def test_record_evidence_updates_existing_id_and_preserves_attachments(mon
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
     token = evidence_workspace.set_active_evidence_records(workspace_records)
     try:
-        tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+        tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
         result = await tool(
             entity="wg",
             span_ids=[span_ids[1]],
@@ -536,7 +518,7 @@ async def test_record_evidence_update_rejects_object_only_retarget_without_mutat
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
     token = evidence_workspace.set_active_evidence_records(workspace_records)
     try:
-        tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+        tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
         result = await tool(
             entity="wg",
             span_ids=["chunk-new:s0000:c0000-c0001:bbbbcccc"],
@@ -580,7 +562,7 @@ async def test_record_evidence_update_failure_does_not_mutate_existing_record(mo
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
     token = evidence_workspace.set_active_evidence_records(workspace_records)
     try:
-        tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+        tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
         result = await tool(
             entity="wg",
             span_ids=[stale_span_id],
@@ -597,7 +579,7 @@ async def test_record_evidence_update_failure_does_not_mutate_existing_record(mo
 
 @pytest.mark.asyncio
 async def test_record_evidence_update_requires_active_workspace():
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     result = await tool(
         entity="wg",
@@ -629,7 +611,7 @@ async def test_record_evidence_scoped_validator_tool_refuses_create_and_wrong_id
             "document_id": "doc-123",
         }
     ]
-    tool = record_evidence.create_record_evidence_tool(
+    tool = record_evidence._create_canonical_evidence_recorder(
         "doc-123",
         "user-1",
         workspace_records=workspace_records,
@@ -699,7 +681,7 @@ async def test_record_evidence_scoped_validator_tool_updates_allowed_record(monk
         return _chunk(chunk_id=chunk_id, text=chunk_text, page_number=6)
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool(
+    tool = record_evidence._create_canonical_evidence_recorder(
         "doc-123",
         "user-1",
         workspace_records=workspace_records,
@@ -742,7 +724,7 @@ async def test_record_evidence_rejects_stale_hash_mismatched_span_without_fallba
         )
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     result = await tool(entity="wg", span_ids=[stale_span_id])
 
@@ -769,7 +751,7 @@ async def test_record_evidence_rejects_stale_offsets_without_fallback(
         return _chunk(chunk_id=chunk_id, text="Exact current sentence.")
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     with caplog.at_level(logging.INFO, logger=record_evidence.__name__):
         result = await tool(entity="wg", span_ids=[span_id])
@@ -798,7 +780,7 @@ async def test_record_evidence_multi_span_call_creates_one_conjoined_record(monk
         return _chunk(chunk_id=chunk_id, text=chunk_text)
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     result = await tool(entity="wg", span_ids=[span_ids[0], span_ids[1]])
 
@@ -845,7 +827,7 @@ async def test_record_evidence_multi_span_failure_is_all_or_nothing(monkeypatch)
         )
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     result = await tool(entity="wg", span_ids=[span_ids[0], span_ids[1]])
 
@@ -877,7 +859,7 @@ async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_st
         )
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     result = await tool(entity="Act 87E", span_ids=[span_id])
 
@@ -902,7 +884,7 @@ async def test_record_evidence_does_not_invent_missing_chunk_page(monkeypatch):
         )
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
-    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+    tool = record_evidence._create_canonical_evidence_recorder("doc-123", "user-1")
 
     result = await tool(entity="figure", span_ids=[span_id])
 

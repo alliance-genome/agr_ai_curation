@@ -110,6 +110,7 @@ async def test_hybrid_search_chunks_runs_full_path_with_mmr(monkeypatch, caplog)
 
     assert len(results) == 2
     assert results[0]["id"] == "u1"
+    assert [row["chunk_index"] for row in results] == [0, 1]
     assert "_vector" not in results[0]
     assert results[0]["metadata"]["doc_items"] == [{"id": "bbox-1"}]
     assert results[1]["metadata"]["chunk_id"] == "u2"
@@ -199,6 +200,7 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
         )
 
     assert [chunk["id"] for chunk in results] == ["u2", "u1"]
+    assert [row["chunk_index"] for row in results] == [1, 0]
     assert "rerank" not in chunk_collection.query.hybrid.call_args.kwargs
     assert "auto_limit" not in chunk_collection.query.hybrid.call_args.kwargs
     assert chunk_collection.query.hybrid.call_args.kwargs["limit"] == 50
@@ -631,3 +633,39 @@ async def test_hierarchy_sql_failure_is_optional_sanitized_and_closes(monkeypatc
     sql.close.assert_called_once()
     report.assert_called_once()
     assert "SECRET" not in caplog.text + str(report.call_args)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [True, False, "42", -1, 1.5, None])
+async def test_local_chunk_index_requires_actual_nonnegative_integer(index):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        await chunks.get_chunk_by_index(chunk_index=index, user_id="alice", document_id="doc-a")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [0, 1, 2])
+async def test_local_chunk_index_never_selects_first_duplicate(monkeypatch, count):
+    from unittest.mock import AsyncMock
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
+        SimpleNamespace(uuid=f"chunk-{i}", properties={"documentId": "doc-a", "chunkIndex": 42})
+        for i in range(count)
+    ])
+    monkeypatch.setattr(chunks, "get_connection", lambda: _connection_with_client(MagicMock()))
+    get_collections = MagicMock(return_value=(collection, None))
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", get_collections)
+    fetch = AsyncMock(return_value={"id": "chunk-0", "chunk_index": 42, "text": "Not expressed."})
+    monkeypatch.setattr(chunks, "get_chunk_by_id", fetch)
+    if count == 2:
+        with pytest.raises(ValueError, match="ambiguous"):
+            await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a")
+        fetch.assert_not_called()
+    else:
+        result = await chunks.get_chunk_by_index(chunk_index=42, user_id="alice", document_id="doc-a")
+        assert result == (fetch.return_value if count else None)
+        if count:
+            fetch.assert_awaited_once_with(chunk_id="chunk-0", user_id="alice", document_id="doc-a")
+        else:
+            fetch.assert_not_called()
+    assert get_collections.call_args.args[1] == "alice"
+    args = collection.query.fetch_objects.call_args.kwargs
+    assert args["limit"] == 2
+    assert [f.value for f in args["filters"].filters] == ["doc-a", 42]

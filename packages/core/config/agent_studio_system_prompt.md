@@ -40,7 +40,7 @@ When answering questions about a flow:
    recommending creation or execution. Never invent unavailable steps.
 
 Never report PASS when a required detail is incomplete, selected text or a
-section has another page, or any required response is `compacted_tool_result`.
+section has another page, or required source content remains unread.
 Classify duplicate `output_key` as HIGH unless authoritative validation says
 CRITICAL. Keep suggestions evidence-based; do not page through unrelated
 catalogs or domain metadata speculatively.

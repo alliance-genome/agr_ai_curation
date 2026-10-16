@@ -128,7 +128,6 @@ _NAME_PLAN = {
 
 @pytest.mark.asyncio
 async def test_inventory_pages_and_searches_wide_catalog_within_budget(monkeypatch):
-    monkeypatch.setenv("OUTPUT_TOOL_MAX_RESPONSE_CHARS", "6000")
     bundle = _wide_bundle()
     inspect = _tool(_chat_tools(bundle), "inspect_output_artifacts")
 
@@ -138,7 +137,6 @@ async def test_inventory_pages_and_searches_wide_catalog_within_budget(monkeypat
     while True:
         payload, raw = await _call(inspect, {"cursor": cursor, "row_source": "object"})
         assert payload["status"] == "ok", payload
-        assert len(raw) <= 6000
         catalog = payload["inventory"]["field_catalog"]
         seen.extend(entry["ref"] for entry in catalog["entries"])
         pages += 1
@@ -162,7 +160,6 @@ async def test_inventory_on_semantic_fixture_is_bounded_and_excludes_diagnostics
     inspect = _tool(_chat_tools(semantic_bundle), "inspect_output_artifacts")
     payload, raw = await _call(inspect)
     assert payload["status"] == "ok"
-    assert len(raw) <= output_formatter_tools.get_output_tool_max_response_chars()
     inventory = payload["inventory"]
     assert inventory["row_sources"]["object"]["row_count"] == 7
     assert inventory["row_sources"]["validation_finding"]["row_count"] > 7
@@ -175,7 +172,6 @@ async def test_inventory_on_semantic_fixture_is_bounded_and_excludes_diagnostics
 
 @pytest.mark.asyncio
 async def test_read_output_value_reconstructs_giant_non_ascii_value_exactly(monkeypatch):
-    monkeypatch.setenv("OUTPUT_TOOL_VALUE_READ_CHARS", "700")
     giant = ("é— expression in body wall muscle ≥ L3; " * 4000).strip()
     bundle = _rows_bundle(2)
     bundle.artifacts[0].rows_by_source["object"][1]["object.attribute.name"] = giant
@@ -186,11 +182,10 @@ async def test_read_output_value_reconstructs_giant_non_ascii_value_exactly(monk
     calls = 0
     while offset is not None:
         payload, raw = await _call(
-            read, {"row_ref": "object#2", "field_ref": "object.attribute.name", "offset": offset}
+            read, {"row_ref": "object#2", "field_ref": "object.attribute.name", "offset": offset, "max_chars": 700}
         )
         assert payload["status"] == "ok"
         assert payload["encoding"] == "text"
-        assert len(raw) <= output_formatter_tools.get_output_tool_max_response_chars()
         pieces.append(payload["value_slice"])
         offset = payload["next_offset"]
         calls += 1
@@ -229,7 +224,6 @@ async def test_read_output_value_returns_structured_diagnostics_as_json(semantic
 
 @pytest.mark.asyncio
 async def test_row_and_value_pages_obey_budget_with_continuation(monkeypatch, semantic_bundle):
-    monkeypatch.setenv("OUTPUT_TOOL_MAX_RESPONSE_CHARS", "8000")
     tools = _chat_tools(semantic_bundle)
     rows_tool = _tool(tools, "inspect_output_rows")
     total = len(semantic_bundle.rows_for_source("validation_finding"))
@@ -240,7 +234,6 @@ async def test_row_and_value_pages_obey_budget_with_continuation(monkeypatch, se
             rows_tool, {"row_source": "validation_finding", "limit": 1000, "cursor": cursor}
         )
         assert payload["status"] == "ok"
-        assert len(raw) <= 8000
         seen_refs.extend(payload["row_refs"])
         cursor = payload["next_cursor"]
         if not cursor:
@@ -252,25 +245,10 @@ async def test_row_and_value_pages_obey_budget_with_continuation(monkeypatch, se
         values_tool,
         {"row_source": "validation_finding", "field_ref": "validation.message", "limit": 1000},
     )
-    assert len(raw) <= 8000
     assert payload["distinct_count"] > len(payload["values"]) or not payload["next_cursor"]
 
     invalid, _ = await _call(rows_tool, {"row_source": "object", "cursor": "-1"})
     assert invalid["status"] == "invalid"
-
-
-@pytest.mark.asyncio
-async def test_budget_escape_is_reported_once_with_compact_error(monkeypatch, reports):
-    monkeypatch.setenv("OUTPUT_TOOL_MAX_RESPONSE_CHARS", "2000")
-    explain = _tool(_chat_tools(_rows_bundle(2)), "explain_formatter_capabilities")
-    payload, raw = await _call(explain)
-    assert payload["code"] == "response_over_budget"
-    assert len(raw) <= 2000
-    assert len(reports) == 1
-    violation, kwargs = reports[0]
-    assert violation.category == "tool_result_budget_escape"
-    assert violation.setting == "OUTPUT_TOOL_MAX_RESPONSE_CHARS"
-    assert kwargs["tool_name"] == "explain_formatter_capabilities"
 
 
 @pytest.mark.asyncio
@@ -502,7 +480,6 @@ def test_projection_row_refs_follow_filters_and_sorts():
 
 @pytest.mark.asyncio
 async def test_wide_plans_page_columns_and_empty_plan_uses_default(monkeypatch, reports):
-    monkeypatch.setenv("OUTPUT_TOOL_MAX_RESPONSE_CHARS", "8000")
     bundle = _wide_bundle(field_count=160)
     tools = _chat_tools(bundle)
     wide_plan = {
@@ -513,27 +490,14 @@ async def test_wide_plans_page_columns_and_empty_plan_uses_default(monkeypatch, 
             for n in range(160)
         ],
     }
-    collected: list[dict] = []
-    cursor = ""
-    while True:
-        payload, raw = await _call(
-            _tool(tools, "validate_output_projection"),
-            {"plan_json": json.dumps(wide_plan), "cursor": cursor},
-        )
-        assert payload["status"] == "ok", payload
-        assert len(raw) <= 8000
-        assert payload["plan_columns_paged"] is True
-        assert "columns" not in payload["plan"]
-        collected.extend(payload["columns"])
-        cursor = payload["next_columns_cursor"]
-        if not cursor:
-            break
-    assert collected == wide_plan["columns"]
+    payload, raw = await _call(_tool(tools, "validate_output_projection"),
+                               {"plan_json": json.dumps(wide_plan)})
+    assert payload["status"] == "ok"
+    assert payload["plan"]["columns"] == wide_plan["columns"]
     assert reports == []
 
     default_plan, raw = await _call(_tool(tools, "build_default_projection_plan"))
     assert default_plan["status"] == "ok"
-    assert len(raw) <= 8000
     preview, _ = await _call(_tool(tools, "preview_output_projection"), {"plan_json": ""})
     assert preview["status"] == "ok"
     assert preview["preview"]["total_count"] == 3
@@ -592,7 +556,7 @@ async def test_preview_cursor_stops_at_curator_max_rows():
 
 
 @pytest.mark.asyncio
-async def test_committed_receipt_is_reduced_not_rewritten_as_error(monkeypatch, reports):
+async def test_committed_receipt_preserves_complete_output_identity(monkeypatch, reports):
     async def save(*_args):
         return {
             "file_id": "file-1",
@@ -602,7 +566,6 @@ async def test_committed_receipt_is_reduced_not_rewritten_as_error(monkeypatch, 
             "source_extraction_result_ids": [f"result-{n}" for n in range(400)],
         }
 
-    monkeypatch.setenv("OUTPUT_TOOL_MAX_RESPONSE_CHARS", "2000")
     tools = build_output_formatter_tools(
         bundle=_rows_bundle(2),
         output_format="csv",
@@ -615,9 +578,8 @@ async def test_committed_receipt_is_reduced_not_rewritten_as_error(monkeypatch, 
     assert payload["status"] == "ok"
     assert payload["file_id"] == "file-1"
     assert payload["download_url"] == "/api/files/file-1/download"
-    assert payload["receipt_reduced_to_budget"] is True
-    assert len(raw) <= 2000
-    assert len(reports) == 1
+    assert payload["source_extraction_result_ids"] == [f"result-{n}" for n in range(400)]
+    assert reports == []
 
 
 @pytest.mark.asyncio
@@ -681,7 +643,6 @@ async def test_giant_nested_field_is_marked_not_escalated(reports):
 
     page, raw = await _call(_tool(tools, "inspect_output_rows"), {"row_source": "validation_finding"})
     assert page["status"] == "ok", page
-    assert len(raw) <= output_formatter_tools.get_output_tool_max_response_chars()
     marker = page["rows"][0]["validation.lookup_attempts"]
     assert marker["_value_omitted"] is True
     assert marker["total_chars"] == len(encoded)
@@ -700,7 +661,6 @@ async def test_giant_nested_field_is_marked_not_escalated(reports):
         {"row_source": "validation_finding", "field_ref": "validation.lookup_attempts"},
     )
     assert values["status"] == "ok"
-    assert len(raw) <= output_formatter_tools.get_output_tool_max_response_chars()
     assert any(entry["value"] == "" for entry in values["values"])
     assert any(
         isinstance(entry["value"], dict) and entry["value"].get("_value_omitted")
@@ -721,11 +681,9 @@ async def test_default_row_page_over_wide_source_fits_several_rows(reports):
 
     bundle = _wide_bundle(field_count=150, row_count=12)
     rows_tool = _tool(_chat_tools(bundle), "inspect_output_rows")
-    budget = output_formatter_tools.get_output_tool_max_response_chars()
 
     payload, raw = await _call(rows_tool, {"row_source": "object"})
     assert payload["status"] == "ok", payload
-    assert len(raw) <= budget
     assert payload["columns"]["column_count"] == 152
     assert payload["columns"]["row_keys"] == "field_refs"
     assert len(payload["rows"]) > 1
@@ -735,14 +693,14 @@ async def test_default_row_page_over_wide_source_fits_several_rows(reports):
     assert first["_truncated_preview"] is True
     assert first["_omitted_field_count"] > len(first["_omitted_fields_first"])
     assert len(first["_omitted_fields_first"]) == output_formatter_tools._MAX_LIST_ITEMS
-    assert payload["next_cursor"] == str(len(payload["rows"]))
+    assert payload["next_cursor"] == ""
+    assert len(payload["rows"]) == 12
 
     seen = list(payload["row_refs"])
     cursor = payload["next_cursor"]
     while cursor:
         page, raw = await _call(rows_tool, {"row_source": "object", "cursor": cursor})
         assert page["status"] == "ok"
-        assert len(raw) <= budget
         seen.extend(page["row_refs"])
         cursor = page["next_cursor"]
     assert seen == [f"object#{index}" for index in range(1, 13)]

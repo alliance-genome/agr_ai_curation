@@ -1,6 +1,6 @@
 pack_id: agr.alliance.allele
 display_name: Alliance Allele Paper Evidence Domain Pack
-version: 0.1.1
+version: 0.1.2
 metadata_api_version: 1.0.0
 description: Pending allele paper/evidence association envelopes grounded to pinned Alliance LinkML and read-only curation DB targets.
 status: in_development
@@ -704,7 +704,7 @@ metadata:
         validator_agent:
           package_id: agr.alliance
           agent_id: allele_validation
-        max_tool_calls: ${ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS:-16}
+        max_tool_calls: ${ALLELE_MENTION_REFERENCE_VALIDATOR_MAX_TOOL_CALLS:-64}
         applies_to:
           domain_pack_id: agr.alliance.allele
           object_types:

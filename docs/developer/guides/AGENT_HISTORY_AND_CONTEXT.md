@@ -1,12 +1,8 @@
-# Exact history and bounded model input
+# Exact history and model context
 
-This policy separates stored information from the information repeated to a model.
-Mechanical output references do not rewrite scientific decisions, infer that a
-disagreement is unresolved, or remove canonical conversation items. Native OpenAI
-working-context compaction complements those references; its opaque state never
-replaces the exact archive. See [context continuation](AGENT_CONTEXT_CONTINUATION.md).
-It applies at runtime to packaged agents, saved custom agents, flow invocations,
-batch invocations, validators and authoring assistants.
+Canonical history is separate from the native OpenAI working context. The
+[context continuation policy](AGENT_CONTEXT_CONTINUATION.md) owns compaction
+and capacity recovery; no last-N tool retirement or per-tool byte quota remains.
 
 ## The five changes
 
@@ -18,7 +14,7 @@ batch invocations, validators and authoring assistants.
    chunk. Every removed span text is checked against the exact returned slice.
    Page/section/chunk identities and continuation fields remain. Geometry travels
    in `CHUNK_PROVENANCE` events, including for `read_chunk` and `read_subsection`.
-   Evidence recording still resolves canonical spans. Source paging budgets are
+   Evidence recording still resolves canonical spans. Explicit source ranges are
    conservative and unchanged; this change does not claim that an unread page
    has been read, nor enlarge document reads by discarding source information.
 
@@ -64,44 +60,17 @@ batch invocations, validators and authoring assistants.
    are not backfilled; storage failures and interrupted runs can leave gaps, so
    an empty search is not proof that an action did not happen.
 
-4. **The SDK receives a separate context view.** The pinned SDK's
-   `call_model_input_filter` archives canonical input before creating a copy.
-   Only completed older tool-output bodies can be replaced by exact event refs.
-   Original requests, instructions, tool-call arguments, opaque reasoning,
-   pending calls and recent results are retained. Error/warning records are
-   protected; source continuation fields are copied mechanically into refs.
-   This mechanical step introduces no scientific interpretation. Native Responses
-   compaction can separately reduce the working context during the same SDK run.
+4. **The SDK receives a separate context view.** Canonical input is archived,
+   PDF references are projected to authorized document-local numeric selections,
+   and known native-compaction prefixes are pruned only at complete exchanges.
+   Actual-capacity overflow uses the common policy documented above. Exact source
+   pages, immutable hashes and matching SDK-history anchors survive reconnect.
+   Required archive failures stop the run; no completed tool is re-executed.
 
-   The provisional trigger is 60,000 estimated total tokens, target 40,000,
-   with four recent tool outputs retained. Instructions, schemas, tools (including
-   deferred definitions) and output allowance count toward that estimate.
-   An explicit agent/run `max_tokens` supplies the allowance; otherwise the
-   provisional allowance is 16,000. These estimates are not provider usage.
-   These are soft optimization targets and never cause a context-size rejection.
-   Two runtime read tools are added; specialist domain tools remain scoped as before.
-
-   Failed persistence disables eviction for that invocation. A completed tool is
-   not retried because its archive write failed. A history-storage failure during
-   a required reduction is visible to the curator. A structured-output retry that
-   deliberately has no tools is archived but cannot externalize data; native
-   compaction can still operate. Standard chat persists native compaction state
-   between turns while retaining its canonical chat rows. The former separate
-   between-turn compact-session policy has been removed.
-   Studio no longer asks the provider to truncate automatically. Explicit
-   provider-managed conversation IDs are rejected with this policy enabled,
-   because their unseen history cannot be measured or recovered by this layer.
-   The ordinary SDK websocket transport remains enabled.
-
-5. **Measurement stays attached to the real request.** Existing request records
-   now include `context_view`: policy/checkpoint, before/after component sizes,
-   estimated total and output reserve, archived/retained item counts, externalized
-   outputs, archive health/write counts/submitted canonical bytes (including synchronous
-   builder writes), and retrieval call/output
-   overhead. Provider input, cached input, output and reasoning usage remain in
-   the existing accounting record. No second cost ledger or fabricated dollar
-   saving is introduced. `output_reserve_tokens` remains visible in redacted
-   diagnostic traces; credential tokens remain redacted.
+5. **Measurement stays attached to the real request.** Context metrics report
+   archive health, native/standalone compaction, actual input counts and counting
+   overhead. Provider usage and existing cost accounting remain authoritative.
+   Diagnostic previews are not exact archives or scientific fidelity guarantees.
 
 ## Runtime coverage and persistence
 

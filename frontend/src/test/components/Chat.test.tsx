@@ -2008,6 +2008,18 @@ describe('Chat turn reconciliation', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows a terminal required PDF read error while retaining partial work', async () => {
+    const message = "There was an error reading the PDF. We couldn't continue the extraction."
+    renderChat({ sessionId: 'session-1', events: [
+      { type: 'TEXT_MESSAGE_CONTENT', session_id: 'session-1', turn_id: 'pdf-failed', content: 'Partial evidence inspection' },
+      { type: 'RUN_ERROR', session_id: 'session-1', turn_id: 'pdf-failed', message,
+        failure_category: 'pdf_read_failed', retryable: false },
+    ] })
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.getByText('Partial evidence inspection')).toBeInTheDocument()
+    expect(vi.mocked(global.fetch).mock.calls.some(([url]) => String(url).includes('/assistant-rescue'))).toBe(false)
+  })
+
   it('does not rescue an unfinished request as a completed response when saving its failure notice fails', async () => {
     renderChat({ sessionId: 'session-1', events: [
       { type: 'TEXT_MESSAGE_CONTENT', session_id: 'session-1', turn_id: 'failed-save', content: 'Partial work' },

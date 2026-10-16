@@ -27,15 +27,12 @@ from src.lib.chat_history_repository import (
 )
 from src.lib.openai_agents.config import (
     get_agent_studio_chat_history_page_size,
-    get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_recent_flow_run_window_days,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_service_log_max_lines,
     get_agent_studio_service_log_max_lookback_minutes,
     get_agent_studio_trace_review_aggregate_page_size,
-    get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_review_summary_max_chars,
     get_agent_studio_trace_search_default_limit,
@@ -62,13 +59,11 @@ _DOMAIN_RUNTIME_INSPECTION_DEFAULT_LIMIT = min(
 )
 _TRACE_REVIEW_PAGE_SIZE = get_agent_studio_trace_review_page_size()
 _TRACE_REVIEW_AGGREGATE_PAGE_SIZE = get_agent_studio_trace_review_aggregate_page_size()
-_TRACE_REVIEW_CHUNK_MAX_CHARS = get_agent_studio_trace_review_chunk_max_chars()
 _TRACE_REVIEW_SUMMARY_MAX_CHARS = get_agent_studio_trace_review_summary_max_chars()
 _TRACE_SEARCH_DEFAULT_LIMIT = get_agent_studio_trace_search_default_limit()
 _TRACE_SEARCH_MAX_LIMIT = get_agent_studio_trace_search_max_limit()
 _TRACE_SEARCH_FILTER_MAX_CHARS = get_agent_studio_trace_search_filter_max_chars()
 _CHAT_RECALL_PAGE_SIZE = get_agent_studio_chat_recall_page_size()
-_CHAT_RECALL_CHUNK_MAX_CHARS = get_agent_studio_chat_recall_chunk_max_chars()
 _CHAT_HISTORY_PAGE_SIZE = get_agent_studio_chat_history_page_size()
 _SERVICE_LOG_DEFAULT_LINES = get_agent_studio_service_log_default_lines()
 _SERVICE_LOG_MAX_LINES = get_agent_studio_service_log_max_lines()
@@ -94,7 +89,7 @@ _AGGREGATE_PAGE_PROPERTIES = {
     },
     "item_start": {
         "type": "integer",
-        "description": "Exact JSON character cursor from page.next_call for one oversized item.",
+        "description": "Optional JSON character offset selecting an exact suffix of one item.",
         "default": 0,
         "minimum": 0,
     },
@@ -144,8 +139,8 @@ READ_STUDIO_GUIDE_TOOL = {
     "description": (
         "Read the application-owned Agent Studio reference guide named in the "
         "Studio Guide topic index of your instructions. Omit topic to list topics "
-        "(optionally filtered by query); pass topic to read its exact text and "
-        "follow next_call with start and content_hash until complete=true."
+        "(optionally filtered by query); pass topic to read its complete exact text. "
+        "Optional start selects a suffix and requires the topic content_hash."
     ),
     "input_schema": {
         "type": "object",
@@ -158,11 +153,11 @@ READ_STUDIO_GUIDE_TOOL = {
             "start": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Character offset from next_call; omit for the first chunk.",
+                "description": "Optional character offset selecting the complete topic suffix; omit for the whole topic.",
             },
             "content_hash": {
                 "type": "string",
-                "description": "content_hash from the previous chunk; required with a nonzero start.",
+                "description": "Source content_hash from a previous read; required with a nonzero start.",
             },
         },
         "required": [],
@@ -178,8 +173,9 @@ INSPECT_SAVED_STUDIO_RESOURCE_TOOL = {
         "the exact saved prompt, model, tools, output and access settings for a revision. "
         "For custom agents use sections instructions (editable text), prompt_manifest (all frozen base/core layers), tools, group_prompts (optionally group_id), "
         "output_profile and settings instead of built-in-only prompt/inventory lookups. "
-        "Large sections return JSON text pages: concatenate content ranges and follow next_call "
-        "until complete=true. Each page reauthorizes access and verifies content_hash. "
+        "Selected sections return whole by default. Optional start/max_chars select exact "
+        "ranges; follow next_call for these requested ranges. Each read reauthorizes "
+        "access and verifies any supplied content_hash. "
         "Use a Flow step's exact revision pin when explaining its behavior, never today's head. "
         "Use get_current_flow or refresh_workshop_prompt for unsaved edits. Follow next_call. "
         "When a curator reports that a flow failed or could not start, first call recent_flow_runs "
@@ -216,7 +212,7 @@ GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
     "name": "get_studio_capability_detail",
     "description": (
         "Reauthorize one catalog result and retrieve its exact hash-addressed "
-        "detail inline when it fits, otherwise in bounded chunks. Follow next_call only when detail is incomplete."
+        "complete selected detail. Follow next_call only when the selected result has further pages."
     ),
     "input_schema": {
         "type": "object",
@@ -229,7 +225,6 @@ GET_STUDIO_CAPABILITY_DETAIL_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": get_agent_studio_provider_tool_result_inline_max_chars(),
             },
         },
         "required": ["kind", "resource_id", "catalog_fingerprint"],
@@ -307,8 +302,8 @@ prompt-quality concern is fixed. Treat older chat history and version snapshots
 as historical after this tool returns. Omit start for a content-free identity,
 hash, length, and freshness summary. Then follow next_call with its prompt_hash,
 start, and max_chars until complete=true to reconstruct the exact prompt. Pair
-Use target_prompt="metadata" to reconstruct exact authoring fields when the
-system-context metadata preview is incomplete. Pair this with get_tool_inventory and get_tool_details before advising on
+Use target_prompt="metadata" to inspect exact current authoring fields. Pair this
+with get_tool_inventory and get_tool_details before advising on
 document/evidence tool instructions.
 """,
     "input_schema": {
@@ -336,7 +331,7 @@ document/evidence tool instructions.
             "max_chars": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Requested chunk size, bounded by backend configuration. Valid only with start.",
+                "description": "Optional exact character count; omit for the complete remainder. Valid only with start.",
             },
         },
         "required": [],
@@ -417,7 +412,7 @@ LIST_RECENT_CHATS_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum sessions requested before provider-envelope fitting.",
+                "description": "Maximum sessions selected for this page.",
                 "default": min(10, _CHAT_HISTORY_PAGE_SIZE),
                 "minimum": 1,
                 "maximum": _CHAT_HISTORY_PAGE_SIZE,
@@ -457,7 +452,7 @@ SEARCH_CHAT_HISTORY_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum matches requested before provider-envelope fitting.",
+                "description": "Maximum matches selected for this page.",
                 "default": min(10, _CHAT_HISTORY_PAGE_SIZE),
                 "minimum": 1,
                 "maximum": _CHAT_HISTORY_PAGE_SIZE,
@@ -557,9 +552,7 @@ GET_CHAT_TURN_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "description": "Maximum requested exact characters; runtime may shorten to fit provider JSON.",
-                "default": _CHAT_RECALL_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _CHAT_RECALL_CHUNK_MAX_CHARS,
             },
         },
         "required": ["session_id", "turn_id"],
@@ -684,9 +677,7 @@ GET_TOOL_CALL_DETAIL_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "description": "Maximum exact characters in this chunk.",
-                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
             },
         },
         "required": ["trace_id", "call_id", "field"],
@@ -715,9 +706,7 @@ GET_TRACE_CONVERSATION_TOOL = {
             },
             "max_chars": {
                 "type": "integer",
-                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
             },
         },
         "required": ["trace_id", "field"],
@@ -766,14 +755,14 @@ SEARCH_TRACES_TOOL = {
             },
             "limit": {
                 "type": "integer",
-                "description": "Maximum source matches requested before provider-envelope fitting.",
+                "description": "Maximum source matches selected for this page.",
                 "default": _TRACE_SEARCH_DEFAULT_LIMIT,
                 "minimum": 1,
                 "maximum": _TRACE_SEARCH_MAX_LIMIT,
             },
             "item_start": {
                 "type": "integer",
-                "description": "Exact JSON character cursor from pagination.next_call for one oversized trace reference.",
+                "description": "Optional JSON character offset selecting an exact trace-reference suffix.",
                 "default": 0,
                 "minimum": 0,
             },
@@ -952,9 +941,7 @@ GET_TRACE_PAYLOAD_TOOL = {
             "max_chars": {
                 "type": "integer",
                 "description": "Maximum exact characters in this chunk.",
-                "default": _TRACE_REVIEW_CHUNK_MAX_CHARS,
                 "minimum": 1,
-                "maximum": _TRACE_REVIEW_CHUNK_MAX_CHARS,
             },
         },
         "required": ["trace_id"],
@@ -1465,20 +1452,6 @@ _BUILTIN_OPUS_TOOLS = (
     GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL,
     GET_EXPORT_SUBMISSION_READINESS_TOOL,
 )
-
-
-def get_builtin_tool_required_inputs(tool_name: str) -> tuple[str, ...] | None:
-    """Return canonical required inputs, or None for a registry-provided tool."""
-
-    for tool in _BUILTIN_OPUS_TOOLS:
-        if tool.get("name") != tool_name:
-            continue
-        input_schema = tool.get("input_schema")
-        if not isinstance(input_schema, dict):
-            return ()
-        required = input_schema.get("required", [])
-        return tuple(str(field) for field in required)
-    return None
 
 
 @lru_cache(maxsize=1)

@@ -1069,13 +1069,8 @@ def get_agent_config(agent_id: str) -> AgentConfig:
 # =============================================================================
 
 def get_max_turns() -> int:
-    """Get maximum turns for agent runs."""
-    val = os.getenv("AGENT_MAX_TURNS", "60")
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning('Invalid AGENT_MAX_TURNS value: %s, using default 60', val)
-        return 60
+    """SDK turn backstop; 256 allows the observed 224-call workload headroom."""
+    return max(1, _get_env_int_with_fallback("AGENT_MAX_TURNS", 256))
 
 
 def get_supervisor_max_specialist_calls_per_turn() -> int:
@@ -1085,7 +1080,7 @@ def get_supervisor_max_specialist_calls_per_turn() -> int:
     is the primary brake). Set high so legitimate multi-lookup chats are never
     truncated. Tunable via SUPERVISOR_MAX_SPECIALIST_CALLS_PER_TURN.
     """
-    limit = _get_env_int_with_fallback("SUPERVISOR_MAX_SPECIALIST_CALLS_PER_TURN", 25)
+    limit = _get_env_int_with_fallback("SUPERVISOR_MAX_SPECIALIST_CALLS_PER_TURN", 256)
     return max(1, limit)
 
 
@@ -1096,7 +1091,7 @@ def get_supervisor_max_calls_per_specialist() -> int:
     lookups) without serializing legitimate different-query work. Tunable via
     SUPERVISOR_MAX_CALLS_PER_SPECIALIST.
     """
-    limit = _get_env_int_with_fallback("SUPERVISOR_MAX_CALLS_PER_SPECIALIST", 8)
+    limit = _get_env_int_with_fallback("SUPERVISOR_MAX_CALLS_PER_SPECIALIST", 64)
     return max(1, limit)
 
 
@@ -1113,7 +1108,7 @@ def get_supervisor_specialist_deadline_seconds() -> float:
         0.1,
         _get_env_float_with_fallback(
             "SUPERVISOR_SPECIALIST_DEADLINE_SECONDS",
-            900.0,
+            3600.0,
         ),
     )
 
@@ -1978,9 +1973,9 @@ def get_validator_max_tool_calls() -> int:
     """Per-job tool-call budget for a binding without ``max_tool_calls`` (VALIDATOR_MAX_TOOL_CALLS).
 
     The batch ``max_turns`` is derived as ``len(jobs) * this`` so a multi-lookup
-    composite validator is never starved mid-batch. Default 8.
+    composite validator has room for lookup-heavy work. Default 64.
     """
-    return max(1, _get_env_int_with_fallback("VALIDATOR_MAX_TOOL_CALLS", 8))
+    return max(1, _get_env_int_with_fallback("VALIDATOR_MAX_TOOL_CALLS", 64))
 
 
 # --- Structured finalization ---
@@ -2008,9 +2003,9 @@ def get_structured_finalization_retry_max_turns() -> int:
     """Turn budget for the simplified output-synthesis retry agent (STRUCTURED_FINALIZATION_RETRY_MAX_TURNS).
 
     The retry agent runs without tools/guardrails and just needs to synthesize
-    output, so its turn budget is deliberately tight. Default 5.
+    output; additional turns allow shared context ingestion. Default 64.
     """
-    return max(1, _get_env_int_with_fallback("STRUCTURED_FINALIZATION_RETRY_MAX_TURNS", 5))
+    return max(1, _get_env_int_with_fallback("STRUCTURED_FINALIZATION_RETRY_MAX_TURNS", 64))
 
 
 def get_batching_nudge_threshold() -> int:
@@ -2387,7 +2382,7 @@ def get_agent_studio_reasoning_effort() -> str:
 def get_agent_studio_openai_max_turns() -> int:
     """Maximum Agents SDK turns for one Agent Studio authoring response."""
 
-    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_TURNS", 24))
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_OPENAI_MAX_TURNS", 256))
 
 
 def get_agent_studio_openai_max_output_tokens() -> int:
@@ -2402,7 +2397,7 @@ def get_agent_studio_openai_max_output_tokens() -> int:
 def get_agent_studio_suggestion_max_turns() -> int:
     """Maximum Agents SDK turns for forced AI-assisted suggestion submission."""
 
-    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_SUGGESTION_MAX_TURNS", 2))
+    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_SUGGESTION_MAX_TURNS", 64))
 
 
 def get_agent_studio_suggestion_max_output_tokens() -> int:
@@ -2435,29 +2430,10 @@ def get_agent_studio_capability_catalog_max_records() -> int:
     )
 
 
-def get_agent_studio_provider_tool_result_inline_max_chars() -> int:
-    """Max raw tool-result JSON chars replayed to provider continuation.
-
-    Larger Agent Studio tool results are replaced with compact provider-only
-    summaries and recall instructions while the frontend still receives the full
-    result event. The minimum 24 characters holds the smallest explicit JSON
-    configuration error. Default 12000.
-    """
-    configured_max_chars = _get_env_int_with_fallback(
-        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
-        12_000,
-    )
-    if configured_max_chars < 24:
-        raise ValueError(
-            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS must be at least 24"
-        )
-    return configured_max_chars
-
-
 def get_agent_studio_chat_history_page_size() -> int:
     """Maximum sessions requested by one Agent Studio list/search call.
 
-    Provider-envelope fitting may return fewer rows with a continuation. Default 25.
+    Controls selected rows and database work per explicit page. Default 25.
     """
     return max(
         1,
@@ -2471,7 +2447,7 @@ def get_agent_studio_chat_history_page_size() -> int:
 def get_agent_studio_chat_recall_page_size() -> int:
     """Maximum durable chat rows returned by one Agent Studio recall page.
 
-    Metadata-only pages remain bounded beneath the provider result envelope.
+    Controls the number of selected transcript rows per explicit page.
     Default 10.
     """
     return max(
@@ -2479,21 +2455,6 @@ def get_agent_studio_chat_recall_page_size() -> int:
         _get_env_int_with_fallback(
             "AGENT_STUDIO_CHAT_RECALL_PAGE_SIZE",
             10,
-        ),
-    )
-
-
-def get_agent_studio_chat_recall_chunk_max_chars() -> int:
-    """Maximum exact durable chat field characters requested per chunk.
-
-    Runtime envelope fitting may return fewer characters when JSON escaping
-    expands a value. Default 8000.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_CHAT_RECALL_CHUNK_MAX_CHARS",
-            8_000,
         ),
     )
 
@@ -2513,82 +2474,6 @@ def get_agent_studio_workshop_prompt_max_chars() -> int:
     )
 
 
-def get_agent_studio_workshop_context_prompt_max_chars() -> int:
-    """Max main-prompt characters included in Agent Workshop system context.
-
-    Exact current prompt text remains available through the bounded Workshop
-    refresh tool when this preview is clipped. Default 12000.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_WORKSHOP_CONTEXT_PROMPT_MAX_CHARS",
-            12_000,
-        ),
-    )
-
-
-def get_agent_studio_workshop_context_group_prompt_max_chars() -> int:
-    """Max selected-group prompt characters included in Workshop context.
-
-    Exact current group prompt text remains available through the bounded
-    Workshop refresh tool when this preview is clipped. Default 6000.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_WORKSHOP_CONTEXT_GROUP_PROMPT_MAX_CHARS",
-            6_000,
-        ),
-    )
-
-
-def get_agent_studio_workshop_context_metadata_max_chars() -> int:
-    """Max Workshop authoring-metadata characters included in system context.
-
-    Exact metadata remains available through the bounded Workshop refresh tool
-    when this preview is clipped. Default 2000.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_WORKSHOP_CONTEXT_METADATA_MAX_CHARS",
-            2_000,
-        ),
-    )
-
-
-def get_agent_studio_workshop_prompt_chunk_max_chars() -> int:
-    """Max exact prompt characters returned by one Workshop refresh chunk.
-
-    The default leaves room for chunk identity and freshness metadata beneath
-    the provider's default inline-result boundary. Default 8000.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_WORKSHOP_PROMPT_CHUNK_MAX_CHARS",
-            8_000,
-        ),
-    )
-
-
-def get_agent_studio_prompt_inspection_chunk_max_chars() -> int:
-    """Max prompt characters returned by one get_prompt detail call.
-
-    The default leaves room for deterministic chunk metadata and JSON escaping
-    beneath the provider's default 12,000-character inline-result boundary.
-    Default 8000.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_PROMPT_INSPECTION_CHUNK_MAX_CHARS",
-            8_000,
-        ),
-    )
-
-
 def get_agent_studio_tool_inventory_default_items() -> int:
     """Default summaries returned by one Agent Studio tool inventory page."""
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_DEFAULT_ITEMS", 20))
@@ -2604,21 +2489,6 @@ def get_agent_studio_tool_inventory_summary_max_chars() -> int:
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_SUMMARY_MAX_CHARS", 300))
 
 
-def get_agent_studio_tool_inventory_result_max_chars() -> int:
-    """Maximum serialized characters targeted by one inventory page."""
-    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_INVENTORY_RESULT_MAX_CHARS", 8_000))
-
-
-def get_agent_studio_tool_details_result_max_chars() -> int:
-    """Maximum serialized characters for one inline tool-details result."""
-    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_DETAILS_RESULT_MAX_CHARS", 8_000))
-
-
-def get_agent_studio_tool_details_chunk_max_chars() -> int:
-    """Maximum exact source characters requested from one metadata chunk."""
-    return max(1, _get_env_int_with_fallback("AGENT_STUDIO_TOOL_DETAILS_CHUNK_MAX_CHARS", 6_000))
-
-
 def get_agent_studio_flow_template_default_items() -> int:
     """Default compatible templates returned by one independent page."""
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_TEMPLATE_DEFAULT_ITEMS", 5))
@@ -2627,28 +2497,6 @@ def get_agent_studio_flow_template_default_items() -> int:
 def get_agent_studio_flow_template_max_items() -> int:
     """Maximum compatible templates accepted by one page request."""
     return max(1, _get_env_int_with_fallback("AGENT_STUDIO_FLOW_TEMPLATE_MAX_ITEMS", 20))
-
-
-def get_agent_studio_flow_catalog_result_max_chars() -> int:
-    """Maximum provider-serialized characters for one flow catalog result."""
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_FLOW_CATALOG_RESULT_MAX_CHARS",
-            8_000,
-        ),
-    )
-
-
-def get_agent_studio_flow_catalog_chunk_max_chars() -> int:
-    """Maximum exact characters requested from one flow catalog detail chunk."""
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_FLOW_CATALOG_CHUNK_MAX_CHARS",
-            6_000,
-        ),
-    )
 
 
 def get_agent_studio_trace_review_page_size() -> int:
@@ -2805,44 +2653,6 @@ def get_agent_studio_package_diagnostic_page_max_items() -> int:
     )
 
 
-def get_agent_studio_trace_review_chunk_max_chars() -> int:
-    """Max JSON-encoded exact content characters in one TraceReview chunk.
-
-    Source text is shortened when JSON escaping expands it. The default leaves
-    envelope headroom beneath the provider's 12,000-character inline-result
-    boundary. Default 8000.
-    """
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_TRACE_REVIEW_CHUNK_MAX_CHARS",
-            8_000,
-        ),
-    )
-
-
-def get_agent_studio_package_diagnostic_result_max_chars() -> int:
-    """Maximum serialized characters targeted by package diagnostic summaries/pages."""
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS",
-            8_000,
-        ),
-    )
-
-
-def get_agent_studio_package_diagnostic_chunk_max_chars() -> int:
-    """Maximum exact characters returned by one package diagnostic detail chunk."""
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_PACKAGE_DIAGNOSTIC_CHUNK_MAX_CHARS",
-            6_000,
-        ),
-    )
-
-
 def get_agent_studio_package_diagnostic_scalar_preview_max_chars() -> int:
     """Maximum inline preview characters for an oversized diagnostic scalar."""
     return max(
@@ -2981,18 +2791,6 @@ def get_agent_studio_flow_proposal_max_operations() -> int:
     )
 
 
-def get_agent_studio_flow_inspection_chunk_max_chars() -> int:
-    """Maximum exact text characters returned by one flow detail call."""
-
-    return max(
-        1,
-        _get_env_int_with_fallback(
-            "AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS",
-            4000,
-        ),
-    )
-
-
 def get_trace_review_export_timeout_seconds() -> float:
     """HTTP timeout for the TraceReview export call (TRACE_REVIEW_EXPORT_TIMEOUT_SECONDS).
 
@@ -3009,24 +2807,6 @@ def get_codebase_search_timeout_seconds() -> int:
     aborted. Default 30.
     """
     return max(1, _get_env_int_with_fallback("CODEBASE_SEARCH_TIMEOUT_SECONDS", 30))
-
-
-def get_codebase_read_max_lines() -> int:
-    """Max lines one Agent Studio code-read returns (CODEBASE_READ_MAX_LINES).
-
-    Bounds a single read-only file read. Default 400.
-    """
-    return max(1, _get_env_int_with_fallback("CODEBASE_READ_MAX_LINES", 400))
-
-
-def get_codebase_result_max_chars() -> int:
-    """Maximum serialized characters returned by one code inspection call."""
-    return max(1, _get_env_int_with_fallback("CODEBASE_RESULT_MAX_CHARS", 8_000))
-
-
-def get_codebase_long_line_chunk_max_chars() -> int:
-    """Maximum exact source characters requested from one long-line chunk."""
-    return max(1, _get_env_int_with_fallback("CODEBASE_LONG_LINE_CHUNK_MAX_CHARS", 6_000))
 
 
 def get_codebase_search_max_results() -> int:
@@ -3127,8 +2907,8 @@ def get_domain_envelope_max_limit() -> int:
 def get_domain_pack_validation_plan_default_limit() -> int:
     """Default detail page size for domain-pack validation plans.
 
-    ``DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT`` defaults to 3 so verbose
-    disease-pack records remain below the provider's inline result budget.
+    ``DOMAIN_PACK_VALIDATION_PLAN_DEFAULT_LIMIT`` defaults to 3 selected
+    records per explicit detail page.
     """
     return max(
         1,
@@ -3679,100 +3459,18 @@ def log_agent_config(agent_name: str, config: AgentConfig) -> None:
 
 
 # =============================================================================
-# ALL-1277: Agent contract discovery bounds
-# =============================================================================
-
-_AGENT_CONTRACT_CLAMP_WARNINGS: set[tuple[str, str]] = set()
-
-
-def _warn_agent_contract_clamp_once(key: str, message: str, *args: object) -> None:
-    """Warn once per distinct (setting, raw environment value) clamp."""
-    marker = (key, str(os.getenv(key)))
-    if marker in _AGENT_CONTRACT_CLAMP_WARNINGS:
-        return
-    _AGENT_CONTRACT_CLAMP_WARNINGS.add(marker)
-    logger.warning(message, *args)
-
-
-def get_agent_contract_max_response_chars() -> int:
-    """Total serialized size budget for one get_agent_contract result.
-
-    Environment variable: AGENT_CONTRACT_MAX_RESPONSE_CHARS. Default 24000.
-    Pages stop early when the next item would exceed this budget and return an
-    explicit continuation cursor. Values below 4000 use 4000 so one bounded
-    item plus the response envelope always fits.
-    """
-    configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_RESPONSE_CHARS", 24000)
-    if configured < 4000:
-        _warn_agent_contract_clamp_once(
-            "AGENT_CONTRACT_MAX_RESPONSE_CHARS",
-            "AGENT_CONTRACT_MAX_RESPONSE_CHARS=%s is below minimum 4000; using 4000",
-            configured,
-        )
-        return 4000
-    return configured
-
-
-def get_agent_contract_max_item_chars() -> int:
-    """Serialized size budget for one item inside a get_agent_contract page.
-
-    Environment variable: AGENT_CONTRACT_MAX_ITEM_CHARS. Default 8000. A larger
-    item is returned as an outline whose omitted values are read through
-    item_ref and detail_pointer drilldown. Clamped to 1000 at minimum and to
-    half of AGENT_CONTRACT_MAX_RESPONSE_CHARS at maximum; the default is capped
-    to that half silently, an explicit operator value is capped with a warning.
-    """
-    configured = _get_env_int_with_fallback("AGENT_CONTRACT_MAX_ITEM_CHARS", 8000)
-    maximum = get_agent_contract_max_response_chars() // 2
-    if configured < 1000:
-        _warn_agent_contract_clamp_once(
-            "AGENT_CONTRACT_MAX_ITEM_CHARS",
-            "AGENT_CONTRACT_MAX_ITEM_CHARS=%s is below minimum 1000; using 1000",
-            configured,
-        )
-        return 1000
-    if configured > maximum:
-        if os.getenv("AGENT_CONTRACT_MAX_ITEM_CHARS") is not None:
-            _warn_agent_contract_clamp_once(
-                "AGENT_CONTRACT_MAX_ITEM_CHARS",
-                "AGENT_CONTRACT_MAX_ITEM_CHARS=%s exceeds half of "
-                "AGENT_CONTRACT_MAX_RESPONSE_CHARS; using %s",
-                configured,
-                maximum,
-            )
-        return maximum
-    return configured
-
-
-# =============================================================================
 # ALL-1278: Bounded tool results
 # =============================================================================
 # Isolated package tools read these same variables directly (without importing
 # backend) through agr_ai_curation_runtime.tool_result_bounds and their own
 # modules; keep names and defaults aligned.
 
-def get_tool_result_max_bytes() -> int:
-    """Total serialized budget for one bounded model-facing tool result (TOOL_RESULT_MAX_BYTES).
-
-    Measured as UTF-8 bytes of the largest model-visible serialization (Python
-    string form and JSON with and without ASCII escaping), including page
-    metadata, descriptors and errors. Evidence, builder, document retrieval and
-    package lookup/query tools page by this budget and expose exact detail
-    chunks for anything larger. Default 32768 (about 8k tokens: under 1% of a
-    1M-token window and about 3% of a 272k window per result, while still
-    fitting a typical page of about 20 section passages or the default page of
-    most lookups). Minimum 2048, below which the compact page frame and
-    failure receipts cannot be expressed.
-    """
-    return max(2048, _get_env_int_with_fallback("TOOL_RESULT_MAX_BYTES", 32768))
-
 
 def get_evidence_list_max_limit() -> int:
     """Largest page list_recorded_evidence serves (EVIDENCE_LIST_MAX_LIMIT).
 
     Larger requested limits are clamped to this value and the response reports
-    the requested and effective limits plus the next offset. The byte budget
-    (TOOL_RESULT_MAX_BYTES) can end a page earlier. Default 100, matching the
+    the requested and effective limits plus the next offset. Default 100, matching the
     historical default page (LIST_RECORDED_EVIDENCE_LIMIT).
     """
     return max(1, _get_env_int_with_fallback("EVIDENCE_LIST_MAX_LIMIT", 100))
@@ -3783,21 +3481,10 @@ def get_builder_list_max_limit() -> int:
 
     Read directly by the isolated alliance package builder tools. Larger
     requested limits are clamped with requested/effective counts and next
-    offset; the byte budget can end a page earlier. Default 100 (twice the
+    offset. Default 100 (twice the
     BUILDER_LIST_DEFAULT_LIMIT default page of 50).
     """
     return max(1, _get_env_int_with_fallback("BUILDER_LIST_MAX_LIMIT", 100))
-
-
-def get_section_read_page_max_chunks() -> int:
-    """Largest page of passages read_section/read_subsection serve (SECTION_READ_PAGE_MAX_CHUNKS).
-
-    Read directly by the isolated alliance package document tools. Larger
-    max_chunks requests are clamped with requested/effective counts and next
-    offset; the byte budget can end a page earlier. Default 100 (above the
-    SECTION_READ_MAX_CHUNKS default page of 30).
-    """
-    return max(1, _get_env_int_with_fallback("SECTION_READ_PAGE_MAX_CHUNKS", 100))
 
 
 # =============================================================================
@@ -3834,9 +3521,9 @@ def get_model_request_warning_estimated_tokens() -> int:
 def get_model_request_tool_result_warning_chars() -> int:
     """Characters in one tool result that trigger a request-size warning (MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS).
 
-    Warning only: the request is still sent unchanged. Bounded tool responses
-    should stay far below this; a larger single result usually means a tool
-    returned a full dataset instead of a bounded inspection. Default 200000
+    Advisory only: complete selected datasets may legitimately exceed this.
+    The shared context policy handles model capacity before dispatch; this
+    warning imposes no result quota. Default 200000 characters
     (about 50k estimated tokens).
     """
     return max(1, _get_env_int_with_fallback("MODEL_REQUEST_TOOL_RESULT_WARNING_CHARS", 200_000))
@@ -3846,37 +3533,15 @@ def get_model_request_tool_result_warning_chars() -> int:
 # ALL-1275: Application-owned flow output rendering
 # =============================================================================
 
-def get_output_tool_max_response_chars() -> int:
-    """Total serialized chars one output-formatter tool response may return (OUTPUT_TOOL_MAX_RESPONSE_CHARS).
-
-    Applies to every formatter tool response (inventory/catalog pages, row and
-    value pages, previews, plans, errors and finalization receipts). Paged
-    tools fill pages up to this budget and return a continuation cursor; the
-    full data stays in the application-held bundle. Default 24000 (about 6k
-    tokens), a third of the 72k-char inventory that one production formatter
-    call returned for seven objects.
-    """
-    return max(2_000, _get_env_int_with_fallback("OUTPUT_TOOL_MAX_RESPONSE_CHARS", 24_000))
-
 
 def get_output_tool_catalog_page_size() -> int:
     """Field-catalog entries per output-formatter inventory page (OUTPUT_TOOL_CATALOG_PAGE_SIZE).
 
-    Upper bound on catalog entries returned per page before the response budget
-    applies; later entries are reached through the returned cursor or a
+    Upper bound on catalog entries selected per page; later entries are
+    reached through the returned cursor or a
     catalog search. Default 40.
     """
     return max(1, _get_env_int_with_fallback("OUTPUT_TOOL_CATALOG_PAGE_SIZE", 40))
-
-
-def get_output_tool_value_read_chars() -> int:
-    """Max chars returned by one exact bounded value read (OUTPUT_TOOL_VALUE_READ_CHARS).
-
-    ``read_output_value`` returns an exact slice of one saved cell's serialized
-    value plus the next offset, so one giant field stays readable in order.
-    Default 8000.
-    """
-    return max(200, _get_env_int_with_fallback("OUTPUT_TOOL_VALUE_READ_CHARS", 8_000))
 
 
 def get_flow_output_chat_max_chars() -> int:
@@ -3932,8 +3597,7 @@ def get_inspect_results_object_page_size() -> int:
     """Default page size for inspect_results object pages (INSPECT_RESULTS_OBJECT_PAGE_SIZE).
 
     Rows returned by ``objects``, the evidence inventory and ``validator_results``
-    when no explicit limit is supplied. Every page also ends early at
-    TOOL_RESULT_MAX_BYTES and continues with ``next_call``. The supervisor starts
+    when no explicit limit is supplied, with ``next_call`` for later pages. The supervisor starts
     from the counts-only ``summary`` and filters, so a small default keeps
     browsing cheap. Default 20.
     """
@@ -3944,7 +3608,7 @@ def get_inspect_results_object_max_page_size() -> int:
     """Largest requested inspect_results object page (INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE).
 
     Larger requested limits are clamped and reported in the page's ``limit``
-    block. Pages still end at TOOL_RESULT_MAX_BYTES. Default 100.
+    block. Selected records are complete. Default 100.
     """
     return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_OBJECT_MAX_PAGE_SIZE", 100))
 
@@ -3952,26 +3616,6 @@ def get_inspect_results_object_max_page_size() -> int:
 # =============================================================================
 # ALL-1292: Agent Studio on-demand reference guide
 # =============================================================================
-
-def get_agent_studio_guide_chunk_max_chars() -> int:
-    """Max exact guide characters returned by one read_studio_guide chunk (AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS).
-
-    Reference topics moved out of the always-sent Agent Studio instructions
-    are read on demand; longer topics continue through ``next_call``. The
-    default leaves room for chunk metadata and JSON escaping beneath the
-    provider's default 12,000-character inline-result boundary; a value at or
-    above AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS is rejected because
-    every chunk would be compacted instead of returned. Default 8000.
-    """
-    chunk_max_chars = max(
-        1, _get_env_int_with_fallback("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", 8_000)
-    )
-    if chunk_max_chars >= get_agent_studio_provider_tool_result_inline_max_chars():
-        raise ValueError(
-            "AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS must be below "
-            "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS"
-        )
-    return chunk_max_chars
 
 
 # =============================================================================
@@ -4057,31 +3701,26 @@ def get_agent_history_search_max_results() -> int:
     return max(1, _get_env_int_with_fallback("AGENT_HISTORY_SEARCH_MAX_RESULTS", 20))
 
 
-def get_agent_context_view_enabled() -> bool:
-    return _get_env_bool("AGENT_CONTEXT_VIEW_ENABLED", True)
-
-
-def get_agent_context_trigger_estimated_tokens() -> int:
-    return max(1, _get_env_int_with_fallback("AGENT_CONTEXT_TRIGGER_ESTIMATED_TOKENS", 60000))
-
-
-def get_agent_context_target_estimated_tokens() -> int:
-    return min(get_agent_context_trigger_estimated_tokens(),
-               max(1, _get_env_int_with_fallback("AGENT_CONTEXT_TARGET_ESTIMATED_TOKENS", 40000)))
-
-
-def get_agent_context_recent_tool_results() -> int:
-    return max(1, _get_env_int_with_fallback("AGENT_CONTEXT_RECENT_TOOL_RESULTS", 4))
-
-
-def get_agent_context_output_reserve_tokens() -> int:
-    return max(0, _get_env_int_with_fallback("AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS", 16000))
-
-
 def get_agent_context_compaction_enabled() -> bool:
     return _get_env_bool("AGENT_CONTEXT_COMPACTION_ENABLED", True)
 
 
 def get_agent_context_compaction_token_threshold() -> int:
     """Provider-token trigger, not a request size limit or a local estimate."""
-    return max(1, _get_env_int_with_fallback("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", 60000))
+    return max(1, _get_env_int_with_fallback("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", 250000))
+
+
+def get_agent_model_capacity_overrides() -> dict:
+    """Verified deployment capability overrides by model (AGENT_MODEL_CAPACITY_OVERRIDES_JSON).
+
+    Defaults to the model catalog. This is actual provider capacity, never a
+    tool quota or a replacement compaction trigger.
+    """
+    import json
+    value = json.loads(os.getenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", "").strip() or "{}")
+    names = {"context_window_tokens", "max_input_tokens", "max_output_tokens"}
+    if not isinstance(value, dict) or any(not isinstance(item, dict) or
+            any(key not in names or type(limit) is not int or limit < 1 for key, limit in item.items())
+            for item in value.values()):
+        raise ValueError("AGENT_MODEL_CAPACITY_OVERRIDES_JSON must map model IDs to positive capacity values")
+    return value

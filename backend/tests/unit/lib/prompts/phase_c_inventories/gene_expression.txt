@@ -15,7 +15,7 @@ You are the Gene Expression Extraction Agent for biological curation at the Alli
 Do not hand-author the `GeneExpressionEnvelope` or `curatable_objects[]`; the backend materializes the envelope from your staged builder state and recorded evidence.
 
 # GEX-04 evidence is backend-verified span source text
-backend-verified source text, selected from `read_chunk.evidence_spans[].span_id` values
+backend-verified source text, selected from `read_chunk.evidence_spans[].span_index` values
 
 # GEX-05 retrieval before answering
 You must call document retrieval tools before answering.
@@ -24,7 +24,7 @@ You must call document retrieval tools before answering.
 Every retained annotation is supported by an experiment in THIS paper.
 
 # GEX-07 evidence from backend-generated span ids
-Each retained evidence record was created from backend-generated `read_chunk.evidence_spans[].span_id` values.
+Each retained evidence record was created from backend-generated `read_chunk.evidence_spans[].span_index` values.
 
 # GEX-09 validator owns final relation/data-provider
 Validator-bound fields carry evidence-backed selector inputs only; active validator bindings own final relation and data-provider verification.
@@ -131,7 +131,7 @@ Never recall, guess, or look up an ID.
 Your only lookup is `agr_species_context_lookup`, for organism/provider/taxon context.
 
 # GEX-40 read_chunk -> select spans -> record_evidence; reuse existing record
-call `read_chunk(chunk_id)` on the relevant chunk, select the backend-generated `evidence_spans[].span_id` values that directly support one evidence unit, and call `record_evidence(entity=..., span_ids=[...])`.
+call `read_chunk(chunk_index)` on the relevant chunk, select the backend-generated `evidence_spans[].span_index` values that directly support one evidence unit, and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`.
 reuse that `evidence_record_id`; do not call `record_evidence` again for the same evidence unit.
 
 # GEX-42 stage call payload
@@ -150,7 +150,7 @@ active-run evidence workspace: the deduplicated union of all verified evidence r
 Backend materialization stores source quotes, page numbers, figure references, `metadata.evidence_records[]`
 
 # GEX-47 one call one record / separate calls for disjoint units
-Multiple `span_ids` in one `record_evidence` call produce one evidence record; use separate `record_evidence` calls for truly disjoint evidence units.
+Multiple `selections` in one `record_evidence` call produce one evidence record; use separate `record_evidence` calls for truly disjoint evidence units.
 
 # GEX-48 source quote and provenance immutable
 # Reworded by the field-level evidence-flow change (96844f70): "immutable" -> "backend-owned"; the
@@ -220,8 +220,8 @@ Never invent genes, IDs, reagent details, or evidence text.
 # GEX-68 span resolution failure recovery
 # Re-baselined (Phase C lean cut): the <stop_rules> duplicate of this line was cut
 # as cross-section restatement; the surviving verbatim home is <evidence_record_contract>
-# ("for current span IDs", no "the"). Verbatim substring of that surviving copy.
-If span resolution fails, call `read_chunk` again for current span IDs or drop that evidence.
+# ("for current chunk_index/span_index selections", no "the"). Verbatim substring of that surviving copy.
+If source span resolution fails, stop the extraction with the PDF reading error; do not drop the evidence or continue.
 
 # GEX-69 active validator bindings own final fields; unresolved -> validation findings
 # Reworded from <unresolved_validation> (metadata-mechanism template rule: dropped the

@@ -11,12 +11,12 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
     sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
 
 from agr_ai_curation_alliance.domain_packs import load_alliance_domain_pack_registry  # noqa: E402
-from src.lib.domain_packs.input_selectors import build_domain_validation_request
-from src.lib.domain_packs.validation_registry import (
+from src.lib.domain_packs.input_selectors import build_domain_validation_request  # noqa: E402
+from src.lib.domain_packs.validation_registry import (  # noqa: E402
     DomainPackValidationRegistry,
     ValidatorBindingMatch,
 )
-from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope  # noqa: E402
 
 
 def _supporting_bindings():
@@ -62,7 +62,7 @@ def test_shipped_supporting_evidence_contract(pack_id, binding, name, selector, 
         assert result.request is not None
         # Both conflicting quotes survive, each paired with its own provenance;
         # selection itself neither chooses one nor resolves a biological identity.
-        assert result.selected_inputs.get(name, []) == records
+        assert result.selected_inputs.get(name, []) == [{k: v for k, v in record.items() if k != "chunk_id"} for record in records]
 
 
 def test_all_shipped_supporting_evidence_datatypes_are_audited():

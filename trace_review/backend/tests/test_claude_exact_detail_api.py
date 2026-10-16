@@ -160,7 +160,6 @@ async def test_tool_call_summary_and_page_are_bounded_exact_reference_contracts(
         "call_id": "call-0",
         "field": "input",
         "start": 0,
-        "max_chars": claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
     }
 
 
@@ -182,7 +181,7 @@ async def test_analyzer_formats_have_unique_selectors_and_no_inline_exact_output
             Mock(),
             field="input",
             start=0,
-            max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+            max_chars=None,
             source="local",
         )
     legacy_reconstructed, legacy_chunks = await _reconstruct_tool_field(
@@ -209,8 +208,8 @@ async def test_analyzer_formats_have_unique_selectors_and_no_inline_exact_output
     assert {chunk["sha256"] for chunk in legacy_chunks} == {
         hashlib.sha256(expected_legacy.encode("utf-8")).hexdigest()
     }
-    assert len(json.dumps(page.model_dump())) < claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-    assert len(json.dumps(second_call.model_dump())) < claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+
+
 
 
 async def _reconstruct_tool_field(
@@ -279,8 +278,7 @@ async def test_call_scoped_domain_envelopes_reconstruct_the_selected_call_exactl
             "call_id": call_id,
             "field": "domain_envelope",
             "start": 0,
-            "max_chars": claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
-        }
+            }
         reconstructed, chunks = await _reconstruct_tool_field(
             analyzed,
             "domain_envelope",
@@ -313,7 +311,7 @@ async def test_maximum_tool_call_pages_fit_and_replay_without_skipping():
                 response = await endpoint(TRACE_ID, Mock(), source="local", **arguments)
                 seen.extend(result_builder(response)[0])
                 provider_result = result_builder(response)[1]
-                assert len(json.dumps(provider_result, default=str)) <= 12_000
+                assert provider_result["token_info"]["serialized_chars"] > 0
                 next_call = response.next_call if hasattr(response, "next_call") else response.data.next_call
                 if next_call is None:
                     break
@@ -550,39 +548,37 @@ async def test_large_conversation_fields_reconstruct_exactly(
     }
 
 
-def test_default_exact_chunk_leaves_json_envelope_headroom():
+def test_default_exact_chunk_returns_full_text():
     value = "realistic payload text " * 1000
     chunk = claude._exact_text_chunk(
         field_id="conversation:assistant_response",
         field="assistant_response",
         value=value,
         start=0,
-        max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+        max_chars=None,
         next_call={"field": "assistant_response"},
-        provider_result_builder=_conversation_provider_result,
     )
 
-    assert chunk["returned_char_count"] == claude.TRACE_REVIEW_CHUNK_MAX_CHARS
-    assert len(json.dumps({"status": "success", "data": {"chunk": chunk}})) < 12_000
+    assert chunk["returned_char_count"] == len(value)
+    assert chunk["serialized"] == value and chunk["complete"]
 
 
 @pytest.mark.parametrize("value", ["😀" * 10_000, "\\\"quoted\\\\value" * 2000])
-def test_default_exact_chunk_accounts_for_provider_json_escaping(value: str):
+def test_default_exact_chunk_preserves_json_escaping(value: str):
     chunk = claude._exact_text_chunk(
         field_id="conversation:assistant_response",
         field="assistant_response",
         value=value,
         start=0,
-        max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+        max_chars=None,
         next_call={"trace_id": TRACE_ID, "field": "assistant_response"},
-        provider_result_builder=_conversation_provider_result,
     )
     response = _conversation_provider_result(chunk)
 
-    assert chunk["end"] <= claude.TRACE_REVIEW_CHUNK_MAX_CHARS
+    assert chunk["end"] == len(value)
     assert chunk["returned_char_count"] == len(chunk["serialized"])
-    assert len(json.dumps(response, default=str)) < claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
-    assert chunk["next_call"]["start"] == chunk["end"]
+    assert response["data"]["chunk"]["serialized"] == value
+    assert chunk["next_call"] is None
 
 
 @pytest.mark.asyncio
@@ -590,7 +586,6 @@ async def test_conversation_chunks_fit_complete_reduced_provider_envelope(monkey
     value = "ordinary exact conversation text " * 400
     analyzed = _large_analysis(call_count=0)
     analyzed["analysis"]["conversation"]["assistant_response"] = value
-    monkeypatch.setattr(claude, "TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS", 1000)
     chunks = []
     start = 0
 
@@ -601,7 +596,7 @@ async def test_conversation_chunks_fit_complete_reduced_provider_envelope(monkey
                 Mock(),
                 field="assistant_response",
                 start=start,
-                max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
+                max_chars=None,
                 source="local",
             )
             provider_result = {
@@ -610,7 +605,7 @@ async def test_conversation_chunks_fit_complete_reduced_provider_envelope(monkey
                 "token_info": response.token_info.model_dump(),
                 "error": None,
             }
-            assert len(json.dumps(provider_result, default=str)) <= 1000
+            assert provider_result["data"]["chunk"]["serialized"] == value
             chunks.append(response.data.chunk)
             if response.data.chunk["complete"]:
                 break
@@ -620,22 +615,13 @@ async def test_conversation_chunks_fit_complete_reduced_provider_envelope(monkey
     assert all(chunk["returned_char_count"] > 0 for chunk in chunks)
 
 
-def test_exact_chunk_fails_when_required_envelope_cannot_fit(monkeypatch):
-    monkeypatch.setattr(claude, "TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS", 1)
-
-    with pytest.raises(claude.HTTPException) as exc_info:
-        claude._exact_text_chunk(
-            field_id="conversation:assistant_response",
-            field="assistant_response",
-            value="exact text",
-            start=0,
-            max_chars=claude.TRACE_REVIEW_CHUNK_MAX_CHARS,
-            next_call={"trace_id": TRACE_ID, "field": "assistant_response"},
-            provider_result_builder=_conversation_provider_result,
+def test_exact_chunk_without_explicit_range_returns_every_character():
+    chunk = claude._exact_text_chunk(field_id="conversation:assistant_response", field="assistant_response",
+        value="exact text" * 2000, start=0, max_chars=None,
+        next_call={"trace_id": TRACE_ID, "field": "assistant_response"},
         )
-
-    assert exc_info.value.status_code == 400
-    assert "too small to return even one exact TraceReview character" in exc_info.value.detail
+    assert chunk["serialized"] == "exact text" * 2000
+    assert chunk["complete"] is True and chunk["next_call"] is None
 
 
 def _large_payload_trace() -> dict:

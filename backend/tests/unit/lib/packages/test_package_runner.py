@@ -624,13 +624,12 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
         "hits": [
             {
                 "chunk_id": "chunk-search-1",
+                "chunk_index": 4,
                 "section_title": "Results",
                 "page_number": 7,
                 "score": 0.91,
                 "content": "Wingless expression expanded in the mutant tissue.",
                 "doc_items": [{"id": "bbox-search"}],
-                "content_withheld": None,
-                "content_chars": None,
             }
         ],
         "error_code": None,
@@ -640,14 +639,14 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
 
     chunk_result = runner.execute_tool(
         "read_chunk",
-        kwargs={"chunk_id": "chunk-search-1"},
+        kwargs={"chunk_index": 4},
         context={"document_id": "doc-42", "user_id": "user-9"},
     )
 
     assert chunk_result.ok is True
     assert chunk_result.result["summary"] == (
-        "Read chunk 'chunk-search-1' from page 7. "
-        "Select evidence_spans[].span_id for record_evidence."
+        "Read chunk 4 from page 7. "
+        "Select chunk_index/span_index pairs for record_evidence."
     )
     assert chunk_result.result["chunk"]["chunk_id"] == "chunk-search-1"
     assert chunk_result.result["chunk"]["chunk_index"] == 4
@@ -717,8 +716,8 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     assert section_result.result == {
         "summary": (
             "Read 2 of 2 chunks from 'Materials and Methods'. "
-            "Use section.source_chunks[].chunk_id with read_chunk, then pass selected "
-            "evidence_spans[].span_id values to record_evidence."
+            "Use section.source_chunks[].chunk_index with read_chunk, then pass selected "
+            "evidence_spans[].span_index values to record_evidence."
         ),
         "section": {
             "section_title": "Materials and Methods",
@@ -739,7 +738,6 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                     "subsection": "Animals",
                     "char_count": 13,
                     "snippet": None,
-                    "content_withheld": None,
                 },
                 {
                     "chunk_id": "chunk-methods-2",
@@ -749,16 +747,13 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                     "subsection": None,
                     "char_count": 13,
                     "snippet": None,
-                    "content_withheld": None,
                 },
             ],
             "doc_items": [{"id": "bbox-1"}, {"id": "bbox-2"}],
             # ALL-1278: page bounds are reported alongside the unchanged content.
             "page_ended_by": "end",
-            "requested_max_chunks": 30,
-            "effective_max_chunks": 30,
-            "max_chunks_clamped": False,
-            "budget_bytes": 32768,
+            "requested_max_chunks": None,
+            "effective_max_chunks": 2,
         },
         "error_code": None,
         "result_bounds": None,
@@ -1234,6 +1229,26 @@ def _write_fake_weaviate_backend(tmp_path: Path) -> Path:
     ):
         (directory / "__init__.py").write_text("", encoding="utf-8")
 
+    reference_root = backend_root / "src" / "lib" / "openai_agents"
+    reference_root.mkdir()
+    (reference_root / "__init__.py").write_text("", encoding="utf-8")
+    # This subprocess contract test isolates host services; real durable source
+    # scope/generation/issued-window behavior has persistence coverage separately.
+    (reference_root / "document_references.py").write_text(
+        """from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def document_reference_scope(document_id, user_id):
+    assert document_id == "doc-42" and user_id == "user-9"
+    yield
+
+async def retain_issued_spans(chunk, spans, issued_indexes):
+    assert chunk["chunk_index"] == 4
+    assert chunk["id"] == "chunk-search-1"
+    assert issued_indexes == [0, 1]
+    assert all(span["span_id"].startswith("chunk-search-1:") for span in spans)
+""", encoding="utf-8",
+    )
     (package_root / "chunks.py").write_text(
         """async def hybrid_search_chunks(*, document_id, query, user_id, limit=10, initial_limit=None, alpha=None, section_keywords=None, apply_mmr=None, mmr_lambda=None, strategy=\"hybrid\", **_kwargs):
     section_title = strategy if query == \"strategy-check\" else \"Results\"
@@ -1246,6 +1261,7 @@ def _write_fake_weaviate_backend(tmp_path: Path) -> Path:
     return [
         {
             \"id\": \"chunk-search-1\",
+            \"chunk_index\": 4,
             \"score\": 0.91,
             \"text\": text,
             \"metadata\": {
@@ -1269,11 +1285,12 @@ async def get_document_sections(*_args, **_kwargs):
     return [{\"title\": \"Methods\", \"page_number\": 3, \"chunk_count\": 2}]
 
 
-async def get_chunk_by_id(*, chunk_id, document_id, user_id, **_kwargs):
+async def get_chunk_by_index(*, chunk_index, document_id, user_id, **_kwargs):
+    assert chunk_index == 4
     assert document_id == \"doc-42\"
     assert user_id == \"user-9\"
     return {
-        \"id\": chunk_id,
+        \"id\": \"chunk-search-1\",
         \"text\": \"Wingless expression expanded in the mutant tissue. This sentence is exact evidence.\",
         \"chunk_index\": 4,
         \"page_number\": 7,
@@ -1295,6 +1312,7 @@ async def get_chunks_by_parent_section(*, document_id, parent_section, user_id, 
     return [
         {
             \"id\": \"chunk-methods-1\",
+            \"chunk_index\": 0,
             \"text\": \"Paragraph one\",
             \"page_number\": 3,
             \"section_title\": \"Materials and Methods\",
@@ -1303,6 +1321,7 @@ async def get_chunks_by_parent_section(*, document_id, parent_section, user_id, 
         },
         {
             \"chunkId\": \"chunk-methods-2\",
+            \"chunk_index\": 1,
             \"content\": \"Paragraph two\",
             \"pageNumber\": 4,
             \"sectionTitle\": \"Materials and Methods\",

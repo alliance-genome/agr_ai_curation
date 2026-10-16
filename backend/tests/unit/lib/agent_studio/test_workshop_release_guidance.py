@@ -25,14 +25,13 @@ ROOT = Path(__file__).resolve().parents[5]
 ])
 def test_curator_question_finds_complete_relevant_guidance(monkeypatch, query, topic, requirements):
     template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
-    monkeypatch.setenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", "1000")
     index = read_studio_guide(template=template, render_diagnostic_tools=str, query=query)
     assert topic in {item["topic"] for item in index["topics"]}
     arguments = {"topic": topic}
     chunks = []
     while True:
         result = read_studio_guide(template=template, render_diagnostic_tools=str, **arguments)
-        assert result["success"] and len(result["content"]) <= 1000
+        assert result["success"] and result["complete"]
         chunks.append(result["content"])
         if result["complete"]:
             assert not result["next_call"]
@@ -51,7 +50,7 @@ def test_extraction_guidance_has_no_lookup_helper_exception():
     assert "agr_species_context_lookup" in template
     assert "Domain-pack-declared extractor helper tools may provide" not in template
     assert "For current 0.7.x" not in template
-    assert "record_evidence(span_ids=[...])" in template
+    assert 'record_evidence(selections=[{"chunk_index": 0, "span_index": 0}])' in template
 
 
 def test_curator_domain_docs_match_shipped_scope():

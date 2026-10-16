@@ -378,21 +378,13 @@ def test_tool_efficiency_instruction_requires_package_declared_text(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_provider_adapter_reports_budget_failure_once_and_skips_full_capture(monkeypatch):
-    from src.lib.agent_studio import catalog_service
-    from src.lib.openai_agents.tool_result_bounds import budget_failure, full_tool_results_requested
-
-    payload = budget_failure(tool_name="demo", measured=99999, limit=2048)
+async def test_provider_adapter_preserves_full_result_without_context_quota(monkeypatch):
+    payload = {"content": "NOT observed α😀 " * 10000}
     replacement = _Adapter("demo", AsyncMock(return_value=payload))
     monkeypatch.setattr(
         "src.lib.openai_agents.streaming_tools._tool_provider_adapter_factories",
         lambda _: {"demo": lambda: replacement},
     )
-    reports = []
-    monkeypatch.setattr(catalog_service, "_report_inline_package_result", lambda *args: reports.append(args))
     tool = _adapt_tools_with_provider_adapter([SimpleNamespace(name="demo")], "test")[0]
     assert await tool.on_invoke_tool(None, "{}") is payload
-    assert reports == [("demo", payload)]
-    with full_tool_results_requested():
-        assert await tool.on_invoke_tool(None, "{}") is payload
-    assert len(reports) == 1
+    replacement.on_invoke_tool.assert_awaited_once()
