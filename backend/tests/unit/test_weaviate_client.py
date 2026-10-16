@@ -102,7 +102,16 @@ async def test_update_document_filename_updates_tenant_index():
 
 
 @pytest.mark.asyncio
-async def test_async_list_documents_normalises_results():
+@pytest.mark.parametrize("sql_status,indexed_status,expected_status", [
+    ("completed", "completed", "COMPLETED"),
+    ("failed", "embedding", "FAILED"),
+    ("completed", "embedding", "EMBEDDING"),
+    ("processing", "completed", "PROCESSING"),
+    ("completed", "pending", "COMPLETED"),
+    ("pending", "failed", "FAILED"),
+    (None, None, "PENDING"),
+])
+async def test_async_list_documents_normalises_results(sql_status, indexed_status, expected_status):
     mock_uuid = UUID("00000000-0000-0000-0000-000000000001")
     fetch_result = SimpleNamespace(
         objects=[
@@ -113,7 +122,7 @@ async def test_async_list_documents_normalises_results():
                     "fileSize": 2048,
                     "creationDate": "2024-01-01T00:00:00",
                     "lastAccessedDate": "2024-01-02T00:00:00",
-                    "processingStatus": "completed",
+                    "processingStatus": indexed_status,
                     "embeddingStatus": "processing",
                     "chunkCount": 10,
                     "vectorCount": 10,
@@ -145,7 +154,7 @@ async def test_async_list_documents_normalises_results():
         id=mock_uuid,
         filename="paper.pdf",
         title=None,
-        status="completed",
+        status=sql_status,
         error_message=None,
         upload_timestamp=datetime(2024, 1, 1),
         processing_started_at=None,
@@ -179,13 +188,9 @@ async def test_async_list_documents_normalises_results():
     def mock_get_db():
         yield mock_db_session
 
-    event_loop = MagicMock()
-    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
-
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
          patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
          patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(mock_collection, mock_collection)), \
-         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_tenant_name", return_value="test_tenant"):
         from src.models.api_schemas import DocumentFilter, PaginationParams
 
@@ -194,6 +199,7 @@ async def test_async_list_documents_normalises_results():
 
         result = await _documents_module().async_list_documents("test_user_user_id", filter_model, pagination)
 
+    assert result["documents"][0]["status"] == expected_status
     assert result["total"] == 1
     assert result["limit"] == 10
     assert result["offset"] == 0
@@ -421,9 +427,6 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     def mock_get_db():
         yield mock_db_session
 
-    event_loop = MagicMock()
-    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
-
     filter_obj = SimpleNamespace(
         search_term="paper",
         embedding_status=["pending", "completed"],
@@ -435,7 +438,6 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
          patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
          patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(chunk_collection, pdf_collection)), \
-         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-owned"):
         result = await _documents_module().async_list_documents("auth-sub-1", filter_obj, pagination)
 
@@ -512,15 +514,11 @@ async def test_async_list_documents_applies_date_filters():
     def mock_get_db():
         yield mock_db_session
 
-    event_loop = MagicMock()
-    event_loop.run_in_executor.side_effect = lambda _, func: asyncio.sleep(0, result=func())
-
     from src.models.api_schemas import DocumentFilter
 
     with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
          patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
          patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(MagicMock(), pdf_collection)), \
-         patch("src.lib.weaviate_client.documents.asyncio.get_event_loop", return_value=event_loop), \
          patch("src.lib.weaviate_helpers.get_tenant_name", return_value="tenant-owned"):
         await _documents_module().async_list_documents(
             "auth-sub-1",
@@ -532,3 +530,120 @@ async def test_async_list_documents_applies_date_filters():
         )
 
     assert pdf_collection.query.fetch_objects.call_args.kwargs["filters"] is not None
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "user", "page", "metadata", "count", "unprovisioned"])
+async def test_listing_io_and_session_lifetime_belong_to_worker(monkeypatch, failure):
+    import threading
+    module = _documents_module()
+    loop_thread = threading.get_ident()
+    events = []
+    active_sessions = set()
+
+    def record(name):
+        assert threading.get_ident() != loop_thread
+        events.append((name, threading.get_ident()))
+
+    def get_db():
+        index = sum(name == "sql_open" for name, _ in events)
+        record("sql_open")
+        active_sessions.add(index)
+        db = MagicMock()
+
+        def execute(_statement):
+            record("sql_query")
+            if failure == ("user" if index == 0 else "metadata"):
+                raise RuntimeError("synthetic SQL failure")
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = None if failure == "unprovisioned" else SimpleNamespace(id=42)
+            result.scalars.return_value.all.return_value = []
+            return result
+
+        db.execute.side_effect = execute
+        db.scalars.side_effect = lambda _: (record("benchmark_query") or [])
+        try:
+            yield db
+        finally:
+            record("sql_close")
+            active_sessions.remove(index)
+
+    collection = MagicMock()
+
+    def remote(name, result):
+        record(name)
+        assert not active_sessions
+        if failure == name:
+            raise RuntimeError("synthetic remote failure")
+        return result
+
+    collection.query.fetch_objects.side_effect = lambda **_: remote("page", SimpleNamespace(objects=[]))
+    collection.aggregate.over_all.side_effect = lambda **_: remote("count", SimpleNamespace(total_count=0))
+
+    @contextmanager
+    def session():
+        record("connection_enter")
+        assert not active_sessions
+        try:
+            yield MagicMock()
+        finally:
+            record("connection_exit")
+
+    connection = MagicMock()
+    connection.session.side_effect = session
+    monkeypatch.setattr(module, "get_connection", lambda: (record("connection_acquire") or connection))
+    monkeypatch.setattr(module, "get_user_collections", lambda *_: (record("tenant") or (collection, collection)))
+    monkeypatch.setattr(module, "get_db", get_db)
+    if failure in {"user", "page", "metadata", "count"}:
+        with pytest.raises(RuntimeError):
+            await module.async_list_documents("curator", None, {})
+    else:
+        assert await module.async_list_documents("curator", None, {}) == {
+            "documents": [], "total": 0, "limit": 20, "offset": 0,
+        }
+    assert not active_sessions
+    assert len({thread for _, thread in events}) == 1
+    names = [name for name, _ in events]
+    assert names.count("sql_open") == names.count("sql_close")
+    assert names.count("connection_enter") == names.count("connection_exit")
+
+@pytest.mark.asyncio
+async def test_cancelled_listing_worker_closes_its_sql_session(monkeypatch):
+    import threading
+    module = _documents_module()
+    loop = asyncio.get_running_loop()
+    entered = loop.create_future()
+    closed = loop.create_future()
+    release = threading.Event()
+    worker_threads = []
+
+    def database():
+        worker_threads.append(threading.get_ident())
+        db = MagicMock()
+
+        def execute(_):
+            loop.call_soon_threadsafe(entered.set_result, None)
+            assert release.wait(5), "test did not release SQL worker"
+            result = MagicMock()
+            result.scalar_one_or_none.return_value = None
+            return result
+
+        db.execute.side_effect = execute
+        try:
+            yield db
+        finally:
+            worker_threads.append(threading.get_ident())
+            loop.call_soon_threadsafe(closed.set_result, None)
+
+    monkeypatch.setattr(module, "get_connection", MagicMock())
+    monkeypatch.setattr(module, "get_db", database)
+    task = asyncio.create_task(module.async_list_documents("curator", None, {}))
+    try:
+        await asyncio.wait_for(entered, timeout=5)
+        # This coroutine runs while the worker is blocked in SQL, proving scheduling.
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
+    await asyncio.wait_for(closed, timeout=5)
+    assert worker_threads[0] == worker_threads[1] != threading.get_ident()

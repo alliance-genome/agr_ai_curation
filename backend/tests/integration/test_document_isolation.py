@@ -57,7 +57,7 @@ def test_db():
 @pytest.fixture(autouse=True)
 def mock_weaviate():
     """Mock Weaviate client for document upload tests."""
-    # Patch all connection entry points used by upload/list/phantom cleanup.
+    # Patch all connection entry points used by upload/list.
     with patch("src.services.user_service.get_connection") as mock_user_connection, \
          patch("src.lib.weaviate_client.documents.get_connection") as mock_doc_connection, \
          patch("src.lib.weaviate_helpers.get_connection") as mock_helper_connection:

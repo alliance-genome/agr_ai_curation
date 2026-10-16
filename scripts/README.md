@@ -34,7 +34,6 @@ scripts/
 │
 └── utilities/
     ├── check_services.sh               # Health check all Docker services
-    ├── cleanup_orphaned_pdf_records.py # Clean PostgreSQL records missing from Weaviate
     ├── pdfjs_find_probe.mjs            # Inspect raw PDF text, real PDF.js find internals, and whitespace-boundary drift
     ├── pdfjs_quote_benchmark.mjs       # Sample realistic quote-like passages from chunks and benchmark them against PDF.js
     ├── pdfjs_native_verifier_benchmark.py # Benchmark the frontend's native-highlight verifier against the 100-quote corpus
@@ -934,19 +933,14 @@ Health check script that verifies all Docker services are running and responding
 ./scripts/utilities/check_services.sh
 ```
 
-### utilities/cleanup_orphaned_pdf_records.py
+### Retired orphan-record cleanup
 
-Finds and removes PostgreSQL `PDFDocument` records that don't have corresponding entries in Weaviate. These "orphan" records can prevent users from re-uploading files.
-
-```bash
-# Dry-run (default) - shows what would be deleted
-docker compose exec backend python scripts/utilities/cleanup_orphaned_pdf_records.py
-
-# Actually delete orphaned records
-docker compose exec backend python scripts/utilities/cleanup_orphaned_pdf_records.py --no-dry-run
-```
-
-**Note:** The application has automatic cleanup that runs on document list operations (`cleanup_phantom_documents()`), so this script is typically only needed for emergency admin access or bulk cleanup of legacy data.
+The unsafe `utilities/cleanup_orphaned_pdf_records.py` script has been removed.
+Missing Weaviate records do not establish deletion eligibility: ingestion and
+benchmark preparation legitimately create SQL records before vectors exist.
+Document listing is read-only and does not reconcile either store. Use the
+authorized document deletion API for intentional deletion; lifecycle recovery
+continues to own cleanup of its partial work.
 
 ## Running Scripts
 

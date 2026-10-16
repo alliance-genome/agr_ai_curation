@@ -449,9 +449,8 @@ class TestCrossUserAccessPrevention:
             "offset": 0,
         }
 
-        with patch("src.api.documents.cleanup_phantom_documents", new=AsyncMock(return_value=0)):
-            with patch("src.api.documents.list_documents", new=AsyncMock(return_value=mock_list_payload)):
-                response = client_as_curator2.get("/weaviate/documents")
+        with patch("src.api.documents.list_documents", new=AsyncMock(return_value=mock_list_payload)):
+            response = client_as_curator2.get("/weaviate/documents")
 
         assert response.status_code == 200
         data = response.json()
