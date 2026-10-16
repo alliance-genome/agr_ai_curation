@@ -1225,7 +1225,10 @@ def _run_validator_jobs(
             for future in concurrent.futures.as_completed(future_by_run_group):
                 try:
                     result = future.result()
-                except BenchmarkInvocationBudgetExceeded:
+                except Exception as exc:
+                    from agr_ai_curation_runtime.document_errors import document_read_failure
+                    if not isinstance(exc, BenchmarkInvocationBudgetExceeded) and document_read_failure(exc) is None:
+                        raise
                     for pending in future_by_run_group:
                         pending.cancel()
                     # Executor exit drains already-running work and its usage records.
@@ -1541,6 +1544,8 @@ def _execute_validator_job_batch(
     except Exception as exc:
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
+        from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+        raise_if_document_read_failed(exc)
         record_handled_stage_failure(exc)
         raise_if_provider_budget_exhausted()
         if runner_duration_seconds == 0.0:
@@ -1633,6 +1638,8 @@ def _execute_single_validator_job(
     except Exception as exc:
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
+        from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+        raise_if_document_read_failed(exc)
         record_handled_stage_failure(exc)
         raise_if_provider_budget_exhausted()
         LOGGER.warning(

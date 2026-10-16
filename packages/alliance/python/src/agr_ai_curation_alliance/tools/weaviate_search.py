@@ -15,6 +15,7 @@ from typing import Optional, List, TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 from agents import function_tool
+from agr_ai_curation_runtime.document_errors import DocumentReadError
 from agr_ai_curation_runtime.evidence_spans import (
     EVIDENCE_SPANIZER_VERSION,
     build_evidence_spans,
@@ -44,6 +45,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SearchMode = Literal["auto", "hybrid", "lexical", "hybrid_lexical_first"]
+
+
+def _raise_document_read_error(ctx: Any, error: Exception) -> str:
+    # Raising from the SDK handler retains the original cause instead of returning
+    # its error text as a successful tool result for the document adapter.
+    if isinstance(error, DocumentReadError):
+        raise error
+    raise DocumentReadError(getattr(ctx, "tool_name", "document_read")) from error
+
 
 
 def _env_int(key: str, default: int, *, minimum: int = 0) -> int:
@@ -250,7 +260,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
     Returns a function_tool that emits structured ChunkSearchResult objects.
     """
 
-    @function_tool(failure_error_function=None)
+    @function_tool(failure_error_function=_raise_document_read_error)
     async def search_document(
         query: str,
         limit: int = 5,
@@ -462,7 +472,7 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
     exact-text evidence spans for extraction evidence selection.
     """
 
-    @function_tool
+    @function_tool(failure_error_function=_raise_document_read_error)
     async def read_chunk(chunk_id: str, span_offset: int = 0) -> ChunkReadResult:
         """Read one PDF chunk and return its full text plus selectable evidence_spans.
 
@@ -496,10 +506,7 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
             document_id=document_id,
         )
         if not chunk:
-            return ChunkReadResult(
-                summary=f"No chunk found for chunk_id '{chunk_id}'.",
-                chunk=None,
-            )
+            raise DocumentReadError("read_chunk")
 
         content = chunk.get("text")
         if not isinstance(content, str):
@@ -886,7 +893,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
     Returns a function_tool that retrieves ALL content from a specific section.
     """
 
-    @function_tool(failure_error_function=None)
+    @function_tool(failure_error_function=_raise_document_read_error)
     async def read_section(
         section_name: str,
         max_chunks: int = _DEFAULT_SECTION_MAX_CHUNKS,
@@ -1081,7 +1088,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
     Uses LLM-resolved hierarchy for accurate subsection boundaries.
     """
 
-    @function_tool(failure_error_function=None)
+    @function_tool(failure_error_function=_raise_document_read_error)
     async def read_subsection(
         parent_section: str,
         subsection: str,

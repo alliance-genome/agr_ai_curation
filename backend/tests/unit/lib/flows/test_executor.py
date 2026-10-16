@@ -6767,7 +6767,7 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is None
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("category,retryable", [("persistence_failed", False), ("context_limit", False), ("provider_unavailable", True)])
+    @pytest.mark.parametrize("category,retryable", [("persistence_failed", False), ("context_limit", False), ("provider_unavailable", True), ("pdf_read_failed", False)])
     async def test_fatal_specialist_error_still_fails_flow(self, monkeypatch, category, retryable):
         """A genuinely-fatal specialist error (no fatal:False / warning) must fail."""
         flow = _make_flow([

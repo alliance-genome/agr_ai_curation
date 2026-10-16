@@ -175,10 +175,11 @@ async def test_search_tool_propagates_dependency_exception(monkeypatch):
     tool = weaviate_search.create_search_tool("doc-12345678", "user-1")
     payload = {"query": "q"}
 
-    with pytest.raises(RuntimeError, match="search blew up"):
+    with pytest.raises(RuntimeError, match="required PDF") as caught:
         await tool.on_invoke_tool(
             _build_tool_context(tool.name, payload), json.dumps(payload)
         )
+    assert str(caught.value.__cause__) == "search blew up"
 
 
 @pytest.mark.asyncio
@@ -319,10 +320,9 @@ async def test_read_chunk_tool_handles_missing_chunk(monkeypatch):
     monkeypatch.setattr(weaviate_search, "get_chunk_by_id", _fake_get_chunk_by_id)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
-    result = await tool("missing-chunk")
-
-    assert "No chunk found" in result.summary
-    assert result.chunk is None
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    with pytest.raises(DocumentReadError):
+        await tool("missing-chunk")
 
 
 @pytest.mark.asyncio
@@ -473,10 +473,11 @@ async def test_read_section_tool_propagates_dependency_exception(monkeypatch):
     tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
     payload = {"section_name": "Results"}
 
-    with pytest.raises(RuntimeError, match="section read failed"):
+    with pytest.raises(RuntimeError, match="required PDF") as caught:
         await tool.on_invoke_tool(
             _build_tool_context(tool.name, payload), json.dumps(payload)
         )
+    assert str(caught.value.__cause__) == "section read failed"
 
 
 @pytest.mark.asyncio
@@ -591,10 +592,11 @@ async def test_read_subsection_tool_propagates_dependency_exception(monkeypatch)
     tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
     payload = {"parent_section": "Results", "subsection": "Expression"}
 
-    with pytest.raises(RuntimeError, match="subsection failed"):
+    with pytest.raises(RuntimeError, match="required PDF") as caught:
         await tool.on_invoke_tool(
             _build_tool_context(tool.name, payload), json.dumps(payload)
         )
+    assert str(caught.value.__cause__) == "subsection failed"
 
 
 def _numbered_chunks(count: int, *, prefix: str = "chunk", text_for=None):
@@ -863,3 +865,24 @@ async def test_search_tool_terminal_failure_has_one_capture_owner(monkeypatch, c
         client.flush()
     assert len(events) == 1
     assert events[0]["level"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_preserves_required_pdf_read_failure(monkeypatch):
+    from agents import function_tool
+    from agr_ai_curation_runtime.document_errors import DocumentReadError, document_read_failure
+    from src.lib.openai_agents.curator_errors import classify_failure
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    cause = ValueError("Not valid uuid: PRIVATE DOCUMENT VALUE")
+    async def fail(**kwargs):
+        raise cause
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_id", fail)
+    tool = weaviate_search.create_read_chunk_tool("document", "owner")
+    with pytest.raises(DocumentReadError) as caught:
+        await tool.on_invoke_tool(_build_tool_context(tool.name, {}), json.dumps({
+            "chunk_id": "89220bef-62f7-0440-12bb-1d34e1f98ce", "span_offset": 0,
+        }))
+    assert document_read_failure(caught.value).__cause__ is cause
+    failure = classify_failure(caught.value)
+    assert failure.category == "pdf_read_failed"
+    assert "PRIVATE" not in failure.message

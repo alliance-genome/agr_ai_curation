@@ -30,6 +30,7 @@ from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from agents import Agent
+from agr_ai_curation_runtime.document_errors import DocumentReadError
 from src.lib.config.agent_loader import (
     canonical_system_agent_key,
     get_agent_definition,
@@ -845,9 +846,15 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
         if execute_inline:
             inline_ctx = ctx or SimpleNamespace(tool_name=tool_id, run_config=None)
-            result = base_on_invoke_tool(inline_ctx, input_str)
-            if inspect.isawaitable(result):
-                result = await result
+            try:
+                result = base_on_invoke_tool(inline_ctx, input_str)
+                if inspect.isawaitable(result):
+                    result = await result
+            except Exception as exc:
+                from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS
+                if tool_id in DOCUMENT_READ_TOOLS:
+                    raise DocumentReadError(tool_id) from exc
+                raise
             from src.lib.openai_agents.run_history import record_runtime_payload
             await record_runtime_payload("canonical_tool_result", result, tool_name=tool_id,
                                          call_id=getattr(ctx, "tool_call_id", None))
@@ -912,6 +919,9 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
                 **execute_kwargs,
             )
         if not result.ok:
+            from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS
+            if tool_id in DOCUMENT_READ_TOOLS:
+                raise DocumentReadError(tool_id)
             error_message = result.error.message if result.error else "Unknown package tool error"
             raise RuntimeError(
                 f"Package tool '{tool_id}' execution failed: {error_message}"
@@ -943,8 +953,11 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
 
 def _document_model_result(tool_id: str, result: Any) -> Any:
-    from src.lib.openai_agents.document_result_view import DOCUMENT_READ_TOOLS, document_result_view
+    from src.lib.openai_agents.document_result_view import (
+        DOCUMENT_READ_TOOLS, document_result_view, require_document_read_result,
+    )
 
+    require_document_read_result(tool_id, result)
     if tool_id not in DOCUMENT_READ_TOOLS or full_tool_results_are_requested():
         return result
 

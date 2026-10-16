@@ -574,3 +574,24 @@ async def test_flow_streaming_tool_closes_isolated_provider_after_error(monkeypa
     assert close_calls == [
         (resources, {"trace_id": "trace-1", "user_id": "user-1"}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_pdf_read_failure_escapes_sdk_specialist_recovery(monkeypatch):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    supervisor = _supervisor_module()
+    cause = DocumentReadError("read_chunk")
+    async def failed(**kwargs):
+        raise cause
+    monkeypatch.setattr(supervisor, "run_specialist_with_events", failed)
+    tool = supervisor._create_streaming_tool(
+        agent=SimpleNamespace(name="PDF Specialist"),
+        tool_name="ask_pdf_extraction_specialist", tool_description="Extract",
+        specialist_name="PDF Specialist", propagate_errors=False,
+    )
+    with pytest.raises(DocumentReadError) as caught:
+        await tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name, run_config=None),
+            json.dumps({"query": "Extract evidence"}),
+        )
+    assert caught.value is cause

@@ -7,11 +7,40 @@ import hashlib
 from typing import Any
 from uuid import uuid4
 
+from agr_ai_curation_runtime.document_errors import DocumentReadError
+
 
 DOCUMENT_READ_TOOLS = frozenset({"read_chunk", "search_document", "read_section", "read_subsection"})
 
 
+def require_document_read_result(tool_name: str, result: Any) -> None:
+    """Failed required reads cannot be returned to the model as empty success.
+
+    An empty search is valid. Section/subsection discovery can also find no
+    matching section; only an explicitly selected chunk is a required locator.
+    """
+    if tool_name not in DOCUMENT_READ_TOOLS:
+        return
+    raw = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+    if not isinstance(raw, dict):
+        raise DocumentReadError(tool_name) from TypeError(
+            f"{tool_name} must return a structured document result"
+        )
+    if raw.get("error_code") or (tool_name == "read_chunk" and raw.get("chunk") is None):
+        raise DocumentReadError(tool_name)
+
+
 def document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]:
+    require_document_read_result(tool_name, result)
+    try:
+        return _document_result_view(tool_name, result)
+    except DocumentReadError:
+        raise
+    except (ValueError, TypeError, KeyError) as exc:
+        raise DocumentReadError(tool_name) from exc
+
+
+def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]:
     """Return a separate model view and provenance events; never alter originals.
 
     Span positions remain absolute character offsets into the original chunk.

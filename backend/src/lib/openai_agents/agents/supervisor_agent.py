@@ -971,6 +971,8 @@ def _create_streaming_tool(
         )
 
     def specialist_error_result(ctx: RunContextWrapper[Any], error: Exception) -> str:
+        from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+        raise_if_document_read_failed(error)
         if provider_policy_error(error) is not None:
             report_chat_policy_failure(
                 error, tool_name=tool_name,

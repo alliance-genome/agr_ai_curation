@@ -895,6 +895,7 @@ async def test_resolve_package_tool_executes_document_tools_inline(
         calls.append(("invoke", input_str))
         return {
             "summary": "Found 1 chunks",
+            "chunk": {"chunk_id": "chunk-1"},
             "input": input_str,
         }
 
@@ -934,6 +935,7 @@ async def test_resolve_package_tool_executes_document_tools_inline(
 
     assert result == {
         "summary": "Found 1 chunks",
+        "chunk": {"chunk_id": "chunk-1"},
         "input": input_payload,
     }
     assert calls == [

@@ -1860,6 +1860,8 @@ async def _collect_flow_validator_materialization_inputs(
                         request=request,
                     )
                 except Exception as exc:
+                    from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+                    raise_if_document_read_failed(exc)
                     record_handled_stage_failure(exc)
                     logger.warning(
                         "[Flow Executor] Validator group '%s' failed for binding %s",

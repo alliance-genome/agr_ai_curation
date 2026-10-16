@@ -40,9 +40,11 @@ def test_other_document_views_preserve_content_navigation_and_provenance(tool, k
 
 
 def test_invalid_offsets_fail_explicitly_instead_of_changing_evidence():
-    with pytest.raises(ValueError, match="Evidence span"):
+    with pytest.raises(RuntimeError, match="required PDF") as caught:
         document_result_view("read_chunk", {"chunk": {"content": "negative", "evidence_spans": [
             {"span_id": "s1", "text": "positive", "char_start": 0, "char_end": 8}]}})
+    assert isinstance(caught.value.__cause__, ValueError)
+    assert "Evidence span" in str(caught.value.__cause__)
 
 
 def test_large_chunk_has_one_copy_of_scientific_text_in_model_view():
@@ -77,3 +79,14 @@ def test_section_provenance_identity_preserved():
     _, events = document_result_view("read_section", {
         "section": {"section_title": "Methods", "doc_items": [{"page": 3}]}})
     assert events[0]["chunk_id"] == "section:Methods"
+
+
+@pytest.mark.parametrize("raw", [{"chunk": None}, {"chunk": None, "error_code": "invalid_result_cursor"}, "An error occurred while running the tool. Please try again."])
+def test_required_chunk_failure_is_terminal_not_a_model_result(raw):
+    with pytest.raises(RuntimeError, match="required PDF"):
+        document_result_view("read_chunk", raw)
+
+
+def test_no_search_matches_is_a_valid_result():
+    raw = {"hits": [], "summary": "No matches"}
+    assert document_result_view("search_document", raw) == (raw, [])
