@@ -1,4 +1,5 @@
 """Unit tests for Agent Studio catalog endpoints."""
+from unittest.mock import AsyncMock
 
 import asyncio
 import logging
@@ -22,7 +23,7 @@ class TestAgentStudioCatalogEndpoints:
             observed["called"] = True
             return catalog
 
-        monkeypatch.setattr(api_module, "_merge_custom_agents_into_catalog", _merge)
+        monkeypatch.setattr(api_module, "_merge_custom_agents_into_catalog", AsyncMock(side_effect=_merge))
 
         result = asyncio.run(
             api_module.get_catalog(
@@ -73,7 +74,7 @@ class TestAgentStudioCatalogEndpoints:
             observed["merge_called"] = True
             return catalog
 
-        monkeypatch.setattr(api_module, "_merge_custom_agents_into_catalog", _merge)
+        monkeypatch.setattr(api_module, "_merge_custom_agents_into_catalog", AsyncMock(side_effect=_merge))
 
         result = asyncio.run(
             api_module.refresh_catalog(
@@ -125,8 +126,8 @@ class TestAgentStudioCatalogEndpoints:
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -174,8 +175,8 @@ class TestAgentStudioCatalogEndpoints:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -253,8 +254,8 @@ class TestAgentStudioCatalogEndpoints:
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,

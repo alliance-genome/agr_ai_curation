@@ -1,4 +1,5 @@
 """Frozen copies cannot be selected through ordinary curator execution APIs."""
+from unittest.mock import AsyncMock
 
 import asyncio
 from types import SimpleNamespace
@@ -49,7 +50,7 @@ def test_flow_rejects_frozen_document_before_runtime(monkeypatch, shared):
         project_id=project_id,
     )
     db.query.return_value.filter.return_value.all.return_value = [(project_id,)] if shared else []
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=42))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=42)))
     monkeypatch.setattr(api, "_get_chat_history_repository", lambda *_: MagicMock())
     runtime = MagicMock()
     monkeypatch.setattr(api, "execute_flow", runtime)
@@ -73,7 +74,7 @@ def test_custom_agent_rejects_frozen_document_before_runtime(monkeypatch):
     db = MagicMock()
     db.scalar.return_value = "benchmark_frozen"
     agent_id = uuid4()
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=42))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=42)))
     monkeypatch.setattr(api, "get_custom_agent_for_user", lambda *_: SimpleNamespace(id=agent_id))
     monkeypatch.setattr(api, "_require_custom_agent_group_access", lambda *_: None)
     monkeypatch.setattr(api, "get_custom_agent_runtime_info", lambda *_, **__: SimpleNamespace(requires_document=True))

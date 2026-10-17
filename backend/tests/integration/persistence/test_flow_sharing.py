@@ -1,4 +1,5 @@
 """Disposable PostgreSQL migration and flow authorization/clone coverage."""
+from unittest.mock import AsyncMock
 import asyncio
 from importlib.util import module_from_spec, spec_from_file_location
 import os
@@ -123,7 +124,7 @@ def test_shared_list_clone_collision_and_revocation(sharing_db, monkeypatch):
     source.execution_count = 12
     source.last_executed_at = source.created_at
     db.commit()
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda _db, user: SimpleNamespace(id=user["id"]))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(side_effect=lambda principal: SimpleNamespace(id=principal.raw_claims['id'])))
     monkeypatch.setattr(flows, "_flow_agent_policy_entry", lambda *_, **__: {"category": "Extraction", "supervisor": {}})
     asyncio.run(flows.share_flow(source.id, ShareFlowRequest(visibility="project"), {"id": 7}, db))
     member_list = asyncio.run(flows.list_flows(1, 1, {"id": 99}, db))

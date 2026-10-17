@@ -1197,7 +1197,8 @@ explicit commits for those mutations. First-login insertion arbitrates only the
 unique `auth_sub` conflict in PostgreSQL; unrelated integrity failures still fail.
 Default-project membership and a newly inserted user commit together.
 
-Async auth, users, batch, document and PDF-job API provisioning uses
+Async auth, users, batch, document, PDF-job, chat, flow, Agent Studio and
+curation workspace API provisioning uses
 `await provision_user_async(principal)`. The worker creates, uses and closes its
 own Session and returns frozen `ProvisionedUser` scalars (`id`, `auth_sub`,
 `email`, `display_name`, `created_at`, `last_login`, `is_active`); it never returns
@@ -1205,8 +1206,11 @@ ORM relationships. Request Sessions remain with their caller. Cancellation does
 not interrupt a running worker's cleanup. PDF SSE provisions once at connection
 setup; subsequent stream-loop/session changes belong to the stream tickets.
 Upload intake and identifier import services await the same provisioning boundary;
-their document persistence Sessions remain with the caller. Synchronous viewer
-and onboarding consumers retain the synchronous boundary in their owner context. This does not change authentication,
+their document persistence Sessions remain with the caller. Flow ownership and
+Agent Studio catalog/prompt helpers also await provisioning; their subsequent
+queries and mutations still use the request Session on the request thread.
+Synchronous viewer, generic profile and onboarding consumers retain the
+synchronous boundary in their owner context. This does not change authentication,
 role/group checks, deactivation policy, tenant mapping or ownership filtering.
 
 Tenant success is separate from activity sampling. Both collections must complete

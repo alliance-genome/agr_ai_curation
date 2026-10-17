@@ -1,4 +1,5 @@
 """Tests for Phase 3 Agent Workshop sharing/clone endpoints."""
+from unittest.mock import AsyncMock
 
 import asyncio
 from datetime import UTC, datetime
@@ -43,8 +44,8 @@ def test_clone_agent_endpoint_clones_visible_agent(monkeypatch):
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
     )
 
     def _fake_clone_visible_agent_for_user(**kwargs):
@@ -86,8 +87,8 @@ def test_clone_agent_endpoint_returns_404_with_sanitized_missing_agent_detail(mo
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -126,8 +127,8 @@ def test_clone_agent_endpoint_returns_403_on_access_error(monkeypatch, caplog):
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -166,8 +167,8 @@ def test_clone_agent_endpoint_returns_409_for_duplicate_name(monkeypatch, caplog
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -209,8 +210,8 @@ def test_share_agent_endpoint_updates_visibility(monkeypatch):
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: custom_agent_uuid)
     monkeypatch.setattr(
@@ -261,8 +262,8 @@ def test_share_agent_endpoint_hides_group_restricted_agent_from_nonmatching_owne
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -310,8 +311,8 @@ def test_share_agent_endpoint_returns_403_on_access_error(monkeypatch, caplog):
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: custom_agent_uuid)
     monkeypatch.setattr(

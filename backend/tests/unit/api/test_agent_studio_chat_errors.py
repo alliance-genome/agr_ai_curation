@@ -1,4 +1,5 @@
 """Unit tests for Agent Studio OpenAI chat error handling."""
+from unittest.mock import AsyncMock
 
 import asyncio
 import json
@@ -77,8 +78,8 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1)),
     )
     monkeypatch.setattr(
         api_module,
@@ -223,8 +224,8 @@ def test_chat_with_opus_sanitizes_invalid_request_errors(monkeypatch, caplog):
     monkeypatch.setattr(api_module, "get_db", _fake_get_db)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1)),
     )
     monkeypatch.setattr(
         api_module,
@@ -261,8 +262,8 @@ def test_chat_with_opus_hides_group_restricted_workshop_agent_without_selected_i
     monkeypatch.setattr(api_module, "get_db", _fake_get_db)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1)),
     )
     monkeypatch.setattr(
         api_module,
@@ -332,8 +333,8 @@ def test_chat_with_opus_reports_sanitized_persistence_errors_and_closes_session(
     monkeypatch.setattr(api_module, "get_db", _fake_get_db)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1)),
     )
     monkeypatch.setattr(
         api_module,

@@ -1,4 +1,5 @@
 """Unit tests for chat misc/document/history endpoints and non-stream chat path."""
+from unittest.mock import AsyncMock
 
 import asyncio
 import json
@@ -42,8 +43,8 @@ def _stub_non_stream_turn_claims(monkeypatch):
     chat._LOCAL_NON_STREAM_TURN_OWNERS.clear()
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7, auth_sub=_user.get("sub")),
+        "provision_user_async",
+        AsyncMock(side_effect=lambda principal: SimpleNamespace(id=7, auth_sub=principal.raw_claims.get('sub'))),
     )
     _patch_chat_impl(
         monkeypatch,

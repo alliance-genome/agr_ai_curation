@@ -1,4 +1,5 @@
 """Complete Workshop proposals preserve local data and never persist."""
+from unittest.mock import AsyncMock
 
 from unittest.mock import Mock
 from datetime import datetime, timezone
@@ -658,7 +659,7 @@ def test_direct_save_api_rejects_tool_outside_authenticated_catalog(db, monkeypa
         None, SimpleNamespace(output_contract=AgentOutputContract(output_state="none"),
                               tool_ids=[], system_managed_tool_ids=[], group_tool_policy={}),
     ))
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *a: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=1)))
     monkeypatch.setattr(service, "get_model", lambda *a: SimpleNamespace(curator_visible=True))
     monkeypatch.setattr(service, "_tool_policy_by_key", lambda *a: {
         "read": SimpleNamespace(allow_attach=True, curator_visible=True, config={"allowed_group_ids": ["ZFIN"]}),
@@ -698,7 +699,7 @@ def test_case_variant_name_conflicts_in_proposal_and_save(db, base, monkeypatch)
     import asyncio
     monkeypatch.setattr(service, "custom_agent_name_exists", custom_agent_name_exists)
     monkeypatch.setattr(service, "get_model", lambda *a: SimpleNamespace(curator_visible=True))
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *a: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=1)))
     db.query.return_value.filter.return_value.first.return_value = SimpleNamespace(name="READER")
     result = propose(db, base, [{"operation": "set_name", "text": "reader"}])
     assert not result["valid"]

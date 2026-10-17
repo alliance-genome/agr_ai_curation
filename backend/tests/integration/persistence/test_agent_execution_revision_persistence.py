@@ -1,4 +1,5 @@
 """PostgreSQL identity and output-state constraints for executable revisions."""
+from unittest.mock import AsyncMock
 
 import importlib.util
 from pathlib import Path
@@ -734,7 +735,7 @@ def test_clone_api_preserves_profile_pin_and_records_explicit_edits(execution_db
     from src.lib.agent_studio.execution_revision_service import get_execution_revision
 
     db, _, _, _ = execution_db
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_args: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=1)))
     # Private-schema fixture has no deployment capability catalogs. Keep the
     # canonical draft validation, source authorization and pin authorization real.
     monkeypatch.setattr(service, "authorized_agent_validation_sources", lambda *_args, **kwargs: kwargs["sources"])
@@ -767,7 +768,7 @@ def test_revision_api_reads_and_restores_real_saved_head(execution_db, monkeypat
 
     db, _, _, _ = execution_db
     CustomAgentVersion.__table__.create(db.connection())
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda _db, user: SimpleNamespace(id=user["db_user_id"]))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(side_effect=lambda principal: SimpleNamespace(id=principal.raw_claims['db_user_id'])))
     owner, stranger = {"db_user_id": 1}, {"db_user_id": 2}
     head = service.create_custom_agent(
         db, 1, "Revision API", model_id="gpt-6.1-sol",
@@ -808,7 +809,7 @@ def test_restore_rejects_a_revision_whose_model_left_the_catalog(execution_db, m
 
     db, _, _, _ = execution_db
     CustomAgentVersion.__table__.create(db.connection())
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda _db, user: SimpleNamespace(id=user["db_user_id"]))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(side_effect=lambda principal: SimpleNamespace(id=principal.raw_claims['db_user_id'])))
     head = service.create_custom_agent(
         db, 1, "Retired model", model_id="gpt-6.1-sol",
         custom_prompt="First complete configuration", include_group_rules=False,
@@ -1266,7 +1267,7 @@ def test_shared_agent_grants_only_pinned_private_profile_and_clones_independentl
     db.add(flow)
     db.commit()
     monkeypatch.setattr(database,'SessionLocal',lambda: nullcontext(db))
-    monkeypatch.setattr(flows,'set_global_user_from_cognito',lambda *_:SimpleNamespace(id=2))
+    monkeypatch.setattr(flows,"provision_user_async",AsyncMock(return_value=SimpleNamespace(id=2)))
     monkeypatch.setattr(flows,'get_groups_from_provider_groups',lambda _:['FB'])
     read_only=flows._flow_to_response(flow,viewer_user_id=2,active_group_ids=['FB'],db=db)
     assert not read_only.has_critical_issues
@@ -1274,7 +1275,7 @@ def test_shared_agent_grants_only_pinned_private_profile_and_clones_independentl
     assert flow_clone.is_owner and flow_clone.visibility=='private'
     assert not flow_clone.has_critical_issues
     assert flow_clone.flow_definition.nodes[1].data.agent_revision_id==revision.id
-    monkeypatch.setattr(agent_studio_custom,'set_global_user_from_cognito',lambda *_:SimpleNamespace(id=2))
+    monkeypatch.setattr(agent_studio_custom,"provision_user_async",AsyncMock(return_value=SimpleNamespace(id=2)))
     monkeypatch.setattr(agent_studio_custom,'_authenticated_group_ids',lambda _:['FB'])
     scoped_profile=asyncio.run(agent_studio_custom.get_execution_profile_endpoint(head.id,revision.id,user={},db=db))
     assert scoped_profile.id==pin.profile_revision_id

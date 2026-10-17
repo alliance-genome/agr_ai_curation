@@ -73,7 +73,7 @@ def test_read_returns_automatic_default_when_no_row_exists(client):
     _override_user(authenticated=True)
     with (
         patch(
-            "src.api.users.set_global_user_from_cognito",
+            "src.api.users.provision_user_async",
             return_value=SimpleNamespace(id=9),
         ),
         patch(

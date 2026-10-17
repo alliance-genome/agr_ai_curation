@@ -1,4 +1,5 @@
 """Unit tests for /api/chat/execute-flow endpoint streaming behavior."""
+from unittest.mock import AsyncMock
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -496,8 +497,8 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
@@ -2758,8 +2759,8 @@ def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypat
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
@@ -2810,8 +2811,8 @@ def test_execute_flow_endpoint_rejects_local_session_collision_before_register(m
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
@@ -2863,8 +2864,8 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
     _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
@@ -2928,8 +2929,8 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     keepalive_calls = []
     monkeypatch.setattr(
@@ -3227,8 +3228,8 @@ def test_execute_flow_endpoint_returns_404_when_flow_missing(monkeypatch):
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -3258,8 +3259,8 @@ def test_execute_flow_endpoint_returns_403_for_cross_user_flow(monkeypatch):
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -3328,8 +3329,8 @@ def test_execute_flow_endpoint_requires_user_sub(monkeypatch):
 
     _patch_chat_impl(
         monkeypatch,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
 

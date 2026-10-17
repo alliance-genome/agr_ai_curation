@@ -1,4 +1,6 @@
 """Tests for agent metadata API endpoint."""
+from unittest.mock import AsyncMock
+import asyncio
 import logging
 from types import SimpleNamespace
 
@@ -309,8 +311,8 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -362,8 +364,8 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -443,8 +445,8 @@ class TestGetRegistryMetadata:
         # Monkeypatch dependencies used inside helper
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -452,11 +454,11 @@ class TestGetRegistryMetadata:
             lambda _db, _uid: [fake_custom],
         )
 
-        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+        catalog = asyncio.run(api_module._merge_custom_agents_into_catalog(  # type: ignore
             base_catalog,
             {"sub": "test-sub"},
             _FakeDB(),
-        )
+        ))
 
         assert catalog.total_agents == 2
         all_agents = [a for c in catalog.categories for a in c.agents]
@@ -510,8 +512,8 @@ class TestGetRegistryMetadata:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -519,11 +521,11 @@ class TestGetRegistryMetadata:
             lambda _db, _uid: [shared_custom],
         )
 
-        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+        catalog = asyncio.run(api_module._merge_custom_agents_into_catalog(  # type: ignore
             base_catalog,
             {"sub": "test-sub"},
             SimpleNamespace(query=lambda *_args, **_kwargs: None),
-        )
+        ))
 
         all_agents = [a for c in catalog.categories for a in c.agents]
         custom = next(a for a in all_agents if a.agent_name == "Shared Gene Agent")
@@ -607,8 +609,8 @@ class TestGetRegistryMetadata:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -627,11 +629,11 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(api_module, "build_agent_prompt_layers", _fake_build_agent_prompt_layers)
 
-        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+        catalog = asyncio.run(api_module._merge_custom_agents_into_catalog(  # type: ignore
             base_catalog,
             {"sub": "test-sub"},
             SimpleNamespace(query=lambda *_args, **_kwargs: None),
-        )
+        ))
 
         custom = next(
             a
@@ -690,8 +692,8 @@ class TestGetRegistryMetadata:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -714,11 +716,11 @@ class TestGetRegistryMetadata:
             lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("layer projection failed")),
         )
 
-        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+        catalog = asyncio.run(api_module._merge_custom_agents_into_catalog(  # type: ignore
             base_catalog,
             {"sub": "test-sub"},
             SimpleNamespace(query=lambda *_args, **_kwargs: None),
-        )
+        ))
 
         custom = next(
             a
@@ -752,8 +754,8 @@ class TestGetRegistryMetadata:
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _FakeService())
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1)),
         )
         monkeypatch.setattr(api_module, "get_agent_by_key", lambda *_args, **_kwargs: object())
 
@@ -805,8 +807,8 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -865,8 +867,8 @@ class TestGetRegistryMetadata:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -925,8 +927,8 @@ class TestGetRegistryMetadata:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
         monkeypatch.setattr(
             api_module,
@@ -960,8 +962,8 @@ class TestGetRegistryMetadata:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123)),
         )
 
         monkeypatch.setattr(
@@ -1022,8 +1024,8 @@ class TestGetRegistryMetadata:
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _BrokenService())
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1)),
         )
         monkeypatch.setattr(api_module, "get_agent_by_key", lambda *_args, **_kwargs: object())
 

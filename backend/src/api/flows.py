@@ -72,7 +72,7 @@ from ..schemas.flows import (
     UpdateFlowRequest,
     VALIDATION_ATTACHMENT_EDGE_ROLE,
 )
-from ..services.user_service import set_global_user_from_cognito
+from ..services.user_service import principal_from_claims, provision_user_async
 
 
 logger = logging.getLogger(__name__)
@@ -535,7 +535,7 @@ def _flow_to_response(
     )
 
 
-def verify_flow_ownership(
+async def verify_flow_ownership(
     db: Session,
     flow_id: UUID,
     auth_user: Dict[str, Any]
@@ -554,7 +554,7 @@ def verify_flow_ownership(
         HTTPException: 404 if flow not found (including soft-deleted), 403 if not owned by user
     """
     # Get database user (creates if first login)
-    db_user = set_global_user_from_cognito(db, auth_user)
+    db_user = await provision_user_async(principal_from_claims(auth_user))
 
     # Query flow - only active flows (is_active=True)
     flow = db.query(CurationFlow).filter(
@@ -629,7 +629,7 @@ async def list_flows(
     ordered by updated_at descending (most recently modified first).
     """
     # Get database user
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
 
     # Count total flows for user
     total_query = select(func.count(CurationFlow.id)).where(
@@ -856,7 +856,7 @@ async def get_flow(
 
     Returns the full flow including flow_definition.
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     flow = get_visible_flow(db, flow_id, db_user.id)
 
     logger.info('Retrieved flow %s for user %s', flow_id, db_user.id)
@@ -882,7 +882,7 @@ async def create_flow(
     The flow name must be unique for the user (among active flows).
     """
     # Get database user
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     active_group_ids = get_groups_from_provider_groups(user.get("cognito:groups", []))
 
     # Create flow model
@@ -954,7 +954,7 @@ async def update_flow(
         request.flow_definition is not None,
     )
 
-    flow = verify_flow_ownership(db, flow_id, user)
+    flow = await verify_flow_ownership(db, flow_id, user)
     active_group_ids = get_groups_from_provider_groups(user.get("cognito:groups", []))
     logger.debug(
         "[Flow Update] Current flow state: name='%s', updated_at=%s",
@@ -1026,7 +1026,7 @@ async def delete_flow(
     The flow is not removed from the database, just marked as inactive.
     Deleted flows no longer appear in list queries or can be accessed.
     """
-    flow = verify_flow_ownership(db, flow_id, user)
+    flow = await verify_flow_ownership(db, flow_id, user)
 
     # Soft delete - set is_active to False
     flow.is_active = False
@@ -1049,7 +1049,7 @@ async def share_flow(
     db: Session = Depends(get_db),
 ) -> FlowResponse:
     """Owner-controlled sharing; private visibility revokes project access."""
-    flow = verify_flow_ownership(db, flow_id, user)
+    flow = await verify_flow_ownership(db, flow_id, user)
     project_id = None
     if request.visibility == "project":
         try:
@@ -1075,7 +1075,7 @@ async def clone_flow(
     db: Session = Depends(get_db),
 ) -> FlowResponse:
     """Clone a visible definition privately; never copy run history or statistics."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     source = get_visible_flow(db, flow_id, db_user.id)
     visible = _flow_to_response(
         source, viewer_user_id=db_user.id, db=db,

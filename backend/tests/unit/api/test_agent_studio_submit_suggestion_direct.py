@@ -1,4 +1,5 @@
 """Tests for AI-assisted direct suggestion submission endpoints."""
+from unittest.mock import AsyncMock
 
 import asyncio
 import logging
@@ -44,8 +45,8 @@ def test_submit_suggestion_direct_rejects_invalid_system_agent(monkeypatch):
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -85,8 +86,8 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -299,8 +300,8 @@ def test_submit_suggestion_direct_sanitizes_unexpected_errors(monkeypatch, caplo
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+        "provision_user_async",
+        AsyncMock(side_effect=lambda principal: (_ for _ in ()).throw(RuntimeError('database unavailable'))),
     )
     caplog.set_level(logging.ERROR, logger=api_module.logger.name)
 

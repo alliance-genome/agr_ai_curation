@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
 from src.models.sql import get_db
-from src.services.user_service import set_global_user_from_cognito
+from src.services.user_service import principal_from_claims, provision_user_async
 from src.services.document_access import exclude_benchmark_document
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.openai_agents import run_agent_streamed
@@ -335,7 +335,7 @@ async def list_execution_revisions_endpoint(
     from src.lib.agent_studio.execution_revision_service import (
         list_execution_revisions, ExecutionRevisionNotFoundError,
     )
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         rows, cursor = list_execution_revisions(
             db, custom_agent_id, db_user.id,
@@ -359,7 +359,7 @@ async def get_execution_profile_endpoint(
     from src.lib.agent_studio.execution_revision_service import (
         get_execution_profile_revision, ExecutionRevisionNotFoundError,
     )
-    user_id = set_global_user_from_cognito(db, user).id
+    user_id = (await provision_user_async(principal_from_claims(user))).id
     try:
         profile = get_execution_profile_revision(
             db, custom_agent_id, revision_id, user_id,
@@ -381,7 +381,7 @@ async def get_execution_revision_endpoint(
     from src.lib.agent_studio.execution_revision_service import (
         get_execution_revision, ExecutionRevisionNotFoundError,
     )
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         row, saved = get_execution_revision(
             db, custom_agent_id, revision_id, db_user.id,
@@ -401,7 +401,7 @@ async def restore_execution_revision_endpoint(
     from src.lib.agent_studio.execution_revision_service import (
         restore_execution_revision, ExecutionRevisionNotFoundError,
     )
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         restore_execution_revision(
             db, custom_agent_id, revision_id, user_id=db_user.id,
@@ -530,7 +530,7 @@ async def create_custom_agent_endpoint(
     db: Session = Depends(get_db),
 ) -> CustomAgentResponse:
     """Create custom agent from template or explicit model/tool settings."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     log_context = _custom_agent_log_context(
         action="create",
         db_user=db_user,
@@ -646,7 +646,7 @@ async def list_custom_agents_endpoint(
     db: Session = Depends(get_db),
 ) -> ListCustomAgentsResponse:
     """List owned agents for management, or visible agents for discovery."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         list_agents = (
             list_custom_agents_visible_to_user
@@ -706,7 +706,7 @@ async def get_custom_agent_endpoint(
     db: Session = Depends(get_db),
 ) -> CustomAgentResponse:
     """Read a visible custom agent; mutation routes still require ownership."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         custom_agent = get_custom_agent_visible_to_user(db, custom_agent_id, db_user.id)
         _require_custom_agent_group_access(custom_agent, user)
@@ -726,7 +726,7 @@ async def update_custom_agent_endpoint(
     db: Session = Depends(get_db),
 ) -> CustomAgentResponse:
     """Update custom-agent settings and/or prompt text."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     log_context = _custom_agent_log_context(
         action="update",
         db_user=db_user,
@@ -825,7 +825,7 @@ async def delete_custom_agent_endpoint(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Soft delete custom agent."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
         _require_custom_agent_group_access(custom_agent, user)
@@ -847,7 +847,7 @@ async def list_custom_agent_versions_endpoint(
     db: Session = Depends(get_db),
 ) -> List[CustomAgentVersionResponse]:
     """List version snapshots for a custom agent."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
         _require_custom_agent_group_access(custom_agent, user)
@@ -868,7 +868,7 @@ async def test_custom_agent_endpoint(
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     """Run a quick isolated test for a custom agent and stream events via SSE."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
         _require_custom_agent_group_access(custom_agent, user)

@@ -1,4 +1,5 @@
 """Unit tests for Agent Studio test-agent endpoint and workshop prompt context."""
+from unittest.mock import AsyncMock
 
 import asyncio
 import json
@@ -44,8 +45,8 @@ class TestAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -71,8 +72,8 @@ class TestAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -262,8 +263,8 @@ class TestAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=123, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=123, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -331,8 +332,8 @@ class TestAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: None)
 
@@ -356,8 +357,8 @@ class TestAgentTestEndpoint:
         custom_uuid = uuid.uuid4()
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: custom_uuid)
 
@@ -405,8 +406,8 @@ class TestAgentTestEndpoint:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -452,8 +453,8 @@ class TestAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub=None),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub=None)),
         )
         monkeypatch.setattr(api_module, "get_agent_metadata", lambda *_args, **_kwargs: {"requires_document": False})
 
@@ -474,8 +475,8 @@ class TestAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(api_module, "set_current_session_id", lambda _sid: None)
         monkeypatch.setattr(api_module, "set_current_user_id", lambda _uid: None)

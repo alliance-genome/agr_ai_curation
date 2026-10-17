@@ -117,7 +117,7 @@ async def chat_endpoint(
     # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     effective_user_message = chat_message.message
     turn_claim_key: Optional[str] = None
     turn_claim_token: Optional[str] = None
@@ -603,7 +603,7 @@ async def chat_stream_endpoint(
     # Group claim key is aliased by auth.py; see _with_group_claim_aliases.
     provider_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_provider_groups(provider_groups)
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     if active_groups:
         logger.info(
             "User has active groups: %s (from provider groups: %s)",

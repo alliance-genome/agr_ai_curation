@@ -194,7 +194,7 @@ from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
-from src.services.user_service import set_global_user_from_cognito
+from src.services.user_service import principal_from_claims, provision_user_async
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +300,7 @@ def _require_selected_agent_access(
         raise HTTPException(status_code=404, detail="Agent not found")
 
 
-def _merge_custom_agents_into_catalog(
+async def _merge_custom_agents_into_catalog(
     catalog: PromptCatalog,
     auth_user: Any,
     db: Any,
@@ -330,7 +330,7 @@ def _merge_custom_agents_into_catalog(
     augmented.categories = [category for category in augmented.categories if category.agents]
     augmented.total_agents = sum(len(category.agents) for category in augmented.categories)
 
-    db_user = set_global_user_from_cognito(db, auth_user)
+    db_user = await provision_user_async(principal_from_claims(auth_user))
     custom_agents = [
         agent
         for agent in list_custom_agents_visible_to_user(db, db_user.id)
@@ -631,7 +631,7 @@ async def create_tool_idea_endpoint(
     db: Session = Depends(get_db),
 ) -> ToolIdeaResponseItem:
     """Create a tool idea request for the authenticated curator."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         project_id = get_primary_project_id_for_user(db, db_user.id)
         record = create_tool_idea_request(
@@ -668,7 +668,7 @@ async def list_tool_ideas_endpoint(
     db: Session = Depends(get_db),
 ) -> ToolIdeaListResponse:
     """List owned requests and project teammate summaries."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     rows = list_tool_idea_requests_visible_to_user(db, db_user.id)
     items = [tool_idea_request_to_dict(row, viewer_user_id=db_user.id) for row in rows]
     return ToolIdeaListResponse(tool_ideas=items, total=len(items))
@@ -688,7 +688,7 @@ async def clone_agent_endpoint(
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """Clone any user-visible agent into caller-owned custom agent space."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         custom_agent = clone_visible_agent_for_user(
             db=db,
@@ -742,7 +742,7 @@ async def share_agent_endpoint(
     custom_uuid = parse_custom_agent_id(agent_id)
     if not custom_uuid:
         raise HTTPException(status_code=400, detail="Only custom agents can be shared")
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
 
     try:
         custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
@@ -852,7 +852,7 @@ async def get_registry_metadata(
     # Include current user's custom agents when authenticated.
     # Direct unit-test calls pass dependency placeholders, so guard by type.
     if isinstance(user, dict):
-        db_user = set_global_user_from_cognito(db, user)
+        db_user = await provision_user_async(principal_from_claims(user))
         custom_agents = [
             agent
             for agent in list_custom_agents_visible_to_user(db, db_user.id)
@@ -912,7 +912,7 @@ def _custom_agent_template_source(custom: Any) -> Optional[str]:
     return template_source or None
 
 
-def _build_custom_agent_effective_prompt_bundle(
+async def _build_custom_agent_effective_prompt_bundle(
     *,
     agent_id: str,
     group_id: Optional[str],
@@ -926,7 +926,7 @@ def _build_custom_agent_effective_prompt_bundle(
     if not custom_uuid:
         raise HTTPException(status_code=400, detail="Invalid custom agent id")
 
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         custom_agent = lookup_custom_agent(db, custom_uuid, db_user.id)
     except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
@@ -1006,7 +1006,7 @@ async def get_catalog(
     """Get the complete prompt catalog."""
     try:
         service = get_prompt_catalog()
-        catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
+        catalog = await _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
     except Exception as exc:
         raise_sanitized_http_exception(
@@ -1032,7 +1032,7 @@ async def refresh_catalog(
     try:
         service = get_prompt_catalog()
         service.refresh()
-        catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
+        catalog = await _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
     except Exception as exc:
         raise_sanitized_http_exception(
@@ -1058,7 +1058,7 @@ async def get_combined_prompt(
     """Get a combined prompt (base + group rules)."""
     try:
         if request.agent_id.startswith("ca_"):
-            bundle, _, _ = _build_custom_agent_effective_prompt_bundle(
+            bundle, _, _ = await _build_custom_agent_effective_prompt_bundle(
                 agent_id=request.agent_id,
                 group_id=request.group_id,
                 user=user,
@@ -1073,7 +1073,7 @@ async def get_combined_prompt(
                 layer_manifest=bundle.to_manifest(),
             )
 
-        db_user = set_global_user_from_cognito(db, user)
+        db_user = await provision_user_async(principal_from_claims(user))
         if get_agent_by_key(
             db,
             request.agent_id,
@@ -1134,7 +1134,7 @@ async def get_prompt_preview(
         # Custom agent preview with ownership check
         if agent_id.startswith("ca_"):
             bundle, parent_agent_key, custom_group_rules_enabled = (
-                _build_custom_agent_effective_prompt_bundle(
+                await _build_custom_agent_effective_prompt_bundle(
                     agent_id=agent_id,
                     group_id=group_id,
                     user=user,
@@ -1155,7 +1155,7 @@ async def get_prompt_preview(
             )
 
         # System agent preview
-        db_user = set_global_user_from_cognito(db, user)
+        db_user = await provision_user_async(principal_from_claims(user))
         if get_agent_by_key(
             db,
             agent_id,
@@ -1202,7 +1202,7 @@ async def test_agent_endpoint(
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
     """Run a one-off isolated agent test and stream execution events."""
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     authenticated_groups = _authenticated_group_ids(user)
 
     resolved_agent_id = agent_id
@@ -3789,7 +3789,7 @@ async def chat_with_opus(
         db = next(get_db())
         try:
             try:
-                db_user = set_global_user_from_cognito(db, user)
+                db_user = await provision_user_async(principal_from_claims(user))
                 db_user_id = db_user.id
             except Exception as exc:
                 logger.warning("Could not resolve workflow user context: %s", exc)
@@ -4656,7 +4656,7 @@ async def submit_suggestion_direct(
         if not str(get_api_key("openai") or "").strip():
             raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
-        db_user = set_global_user_from_cognito(db, user)
+        db_user = await provision_user_async(principal_from_claims(user))
 
         # Validate selected_agent_id if provided
         if request.context and request.context.selected_agent_id:

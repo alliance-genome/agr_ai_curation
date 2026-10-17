@@ -1,6 +1,7 @@
 """Tests for Agent Workshop prompt refresh behavior in Agent Studio chat."""
 
 from __future__ import annotations
+from unittest.mock import AsyncMock
 
 import json
 from datetime import datetime, timezone
@@ -449,8 +450,8 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     monkeypatch.setattr(api_module, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))

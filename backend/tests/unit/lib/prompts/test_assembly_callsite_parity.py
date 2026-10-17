@@ -1,6 +1,7 @@
 """Parity tests for shared effective-prompt assembly call sites."""
 
 from __future__ import annotations
+from unittest.mock import AsyncMock
 
 import asyncio
 import uuid
@@ -99,8 +100,8 @@ def test_catalog_preview_diagnostic_and_runtime_share_prompt_bundle(
     monkeypatch.setattr(catalog_service, "get_prompt_catalog", lambda: prompt_parity_service)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     monkeypatch.setattr(
         api_module,
@@ -175,7 +176,7 @@ def test_custom_agent_preview_treats_instructions_as_base_override(
 
     custom_uuid = uuid.uuid4()
     monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: custom_uuid)
-    monkeypatch.setattr(api_module, "set_global_user_from_cognito", lambda _db, _user: SimpleNamespace(id=7))
+    monkeypatch.setattr(api_module, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
     monkeypatch.setattr(
         api_module,
         "get_custom_agent_for_user",

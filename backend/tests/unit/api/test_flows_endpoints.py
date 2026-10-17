@@ -1,4 +1,5 @@
 """Unit tests for flow CRUD endpoint handlers."""
+from unittest.mock import AsyncMock
 
 import importlib
 import inspect
@@ -121,7 +122,7 @@ async def test_list_flows_returns_paginated_response(monkeypatch):
         scalar=lambda _query: 2,
         scalars=lambda _query: _ScalarsResult([flow_a, flow_b]),
     )
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
 
     response = await flows.list_flows(page=1, page_size=20, user={"sub": "u1"}, db=db)
     assert response.total == 2
@@ -140,7 +141,7 @@ def test_list_flows_uses_shared_default_page_size():
 async def test_get_flow_uses_visible_access(monkeypatch):
     owned = _flow(name="Owned")
     monkeypatch.setattr(flows, "get_visible_flow", lambda *_args, **_kwargs: owned)
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
 
     response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
     assert response.id == owned.id
@@ -172,7 +173,7 @@ async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeyp
         return hydrated
 
     monkeypatch.setattr(flows, "get_visible_flow", lambda *_args, **_kwargs: owned)
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
     monkeypatch.setattr(flows, "apply_flow_validation_attachment_defaults", _hydrate)
 
     response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
@@ -186,7 +187,7 @@ async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeyp
 async def test_get_flow_reports_missing_agent_reference_on_read(monkeypatch):
     owned = _flow(name="Owned")
     monkeypatch.setattr(flows, "get_visible_flow", lambda *_args, **_kwargs: owned)
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
     monkeypatch.setattr(
         flows,
         "apply_flow_validation_attachment_defaults",
@@ -328,7 +329,7 @@ async def test_create_flow_success(monkeypatch):
             self.refreshed = True
 
     db = _DB()
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
 
     request = CreateFlowRequest(name="Created", description="new", flow_definition=_flow_definition())
     response = await flows.create_flow(request=request, user={"sub": "u1"}, db=db)
@@ -418,7 +419,7 @@ async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch)
     flow_definition["nodes"][1]["data"]["agent_display_name"] = "Disease Extractor"
 
     db = _DB()
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
 
     await flows.create_flow(
         request=CreateFlowRequest(
@@ -526,8 +527,8 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
     )
     monkeypatch.setattr(
         flows,
-        "set_global_user_from_cognito",
-        lambda *_args, **_kwargs: SimpleNamespace(id=17),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=17)),
     )
 
     db = _DB()
@@ -578,7 +579,7 @@ async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
     db = _DB()
     report = Mock()
     monkeypatch.setattr(http_errors, "report_runtime_exception", report)
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
 
     with pytest.raises(HTTPException) as exc:
         await flows.create_flow(
@@ -645,7 +646,7 @@ async def test_create_flow_reports_unexpected_persistence_failure(
                 raise failure
 
     db = _DB()
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
 
     capture = Mock()
     if capture_mode == "sdk_failure":
@@ -718,7 +719,7 @@ async def test_update_flow_commits_and_flags_json(monkeypatch):
             self.refreshed = True
 
     db = _DB()
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    monkeypatch.setattr(flows, "verify_flow_ownership", AsyncMock(side_effect=lambda *_args, **_kwargs: flow_obj))
     from src.lib.flows import flow_service
     monkeypatch.setattr(
         flow_service,
@@ -744,7 +745,7 @@ async def test_update_flow_commits_and_flags_json(monkeypatch):
 async def test_update_flow_saves_definitions_through_the_flow_service(monkeypatch):
     flow_obj = _flow(name="Before")
     save = Mock()
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    monkeypatch.setattr(flows, "verify_flow_ownership", AsyncMock(side_effect=lambda *_args, **_kwargs: flow_obj))
     monkeypatch.setattr(flows, "save_flow_definition", save)
     db = Mock()
     request = UpdateFlowRequest(name=None, description=None, flow_definition=_flow_definition())
@@ -768,7 +769,7 @@ async def test_update_flow_without_changes_skips_commit(monkeypatch):
             return None
 
     db = _DB()
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    monkeypatch.setattr(flows, "verify_flow_ownership", AsyncMock(side_effect=lambda *_args, **_kwargs: flow_obj))
 
     response = await flows.update_flow(
         flow_id=flow_obj.id,
@@ -799,7 +800,7 @@ async def test_update_flow_maps_unique_integrity_error_to_409(monkeypatch):
             return None
 
     db = _DB()
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    monkeypatch.setattr(flows, "verify_flow_ownership", AsyncMock(side_effect=lambda *_args, **_kwargs: flow_obj))
 
     with pytest.raises(HTTPException) as exc:
         await flows.update_flow(
@@ -832,7 +833,7 @@ async def test_update_flow_maps_other_integrity_error_to_500(monkeypatch, caplog
             return None
 
     db = _DB()
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    monkeypatch.setattr(flows, "verify_flow_ownership", AsyncMock(side_effect=lambda *_args, **_kwargs: flow_obj))
 
     def _fake_report_runtime_exception(exc, **kwargs):
         report_calls.append((exc, kwargs))
@@ -877,7 +878,7 @@ async def test_delete_flow_marks_inactive(monkeypatch):
             self.committed = True
 
     db = _DB()
-    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: flow_obj)
+    monkeypatch.setattr(flows, "verify_flow_ownership", AsyncMock(side_effect=lambda *_args, **_kwargs: flow_obj))
 
     response = await flows.delete_flow(flow_id=flow_obj.id, user={"sub": "u1"}, db=db)
     assert flow_obj.is_active is False
