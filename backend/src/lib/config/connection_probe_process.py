@@ -13,6 +13,10 @@ from dataclasses import asdict
 from src.lib.config import connections_loader as loader
 
 
+class IsolatedProbeFailed(RuntimeError):
+    """The owned probe process exited without a service observation."""
+
+
 async def probe_in_process(conn: loader.ConnectionDefinition) -> dict:
     process = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "src.lib.config.connection_probe_process",
@@ -24,7 +28,7 @@ async def probe_in_process(conn: loader.ConnectionDefinition) -> dict:
     try:
         output, _ = await process.communicate(json.dumps(asdict(conn)).encode())
         if process.returncode != 0:
-            raise RuntimeError("Isolated connection probe failed")
+            raise IsolatedProbeFailed("Isolated connection probe failed")
         return json.loads(output)
     finally:
         # Kill the whole process group, including external credential commands.

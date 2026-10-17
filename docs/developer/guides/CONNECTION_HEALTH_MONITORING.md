@@ -19,6 +19,10 @@ raises that probe's possible observation age and cleanup duration.
 Only complete sweeps are published. Explicit unhealthy and intentionally
 unconfigured service results may be cached; the existing healthy/degraded/
 unhealthy status and counts retain their meanings and remain HTTP 200.
+Reaching a service's total probe deadline or a nonzero isolated-probe exit
+produces an explicit unhealthy result for that service after resource cleanup;
+other service observations are retained. Isolated-process failures are reported
+through the runtime observability facade with a fixed, secret-free message.
 An aborted sweep returns a sanitized HTTP 503 and cannot reuse an expired healthy
 snapshot. The initialization guard remains HTTP 503 and unknown single-service
 diagnostics remain HTTP 404. Unexpected sweep failures are reported once through

@@ -293,3 +293,93 @@ async def test_aborted_snapshot_returns_sanitized_503(monkeypatch, request_stub)
     with pytest.raises(HTTPException) as exc:
         await admin_connections.check_all_connections(request_stub)
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("failure", ["http_timeout", "child_timeout", "child_exit"])
+async def test_probe_failure_remains_public_health_observation(monkeypatch, required, failure):
+    import httpx
+    from fastapi import FastAPI
+    from unittest.mock import AsyncMock, MagicMock
+    from src.lib.config import connections_loader as loader
+    from src.lib.config import connection_probe_process as process_module
+    from src.lib.config.connections_monitor import ConnectionsHealthMonitor
+
+    loader.reset_cache()
+    monkeypatch.setattr(loader, "_initialized", True)
+    secret = "private-probe-password"
+    secret_url = f"http://user:{secret}@service"
+    conn = ConnectionDefinition(
+        service_id="failing", required=required, url=secret_url,
+        timeout_seconds=1,
+        health_check=HealthCheck(
+            method="GET" if failure == "http_timeout" else "CONNECT",
+            endpoint="/health",
+        ),
+    )
+    healthy = ConnectionDefinition(service_id="healthy", required=True, url="http://healthy")
+    monkeypatch.setattr(loader, "_connection_registry", {"failing": conn, "healthy": healthy})
+    cleaned = asyncio.Event()
+
+    async def http_probe(definition):
+        if definition.service_id == "healthy":
+            return True, None
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    monkeypatch.setattr(loader, "_check_http_health", http_probe)
+    process = AsyncMock()
+    process.pid = 123456
+    process.returncode = 1
+    if failure == "child_timeout":
+        async def stuck(*args):
+            await asyncio.Event().wait()
+        process.communicate.side_effect = stuck
+    else:
+        process.communicate.return_value = (secret.encode(), None)
+    spawn = AsyncMock(return_value=process)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    kill = MagicMock()
+    monkeypatch.setattr(process_module.os, "killpg", kill)
+    report = MagicMock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
+
+    app = FastAPI()
+    app.include_router(admin_connections.router)
+    owner = ConnectionsHealthMonitor()
+    app.state.connections_health_monitor = owner
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            first = await client.get("/api/admin/health/connections")
+            cached = await client.get("/api/admin/health/connections")
+        assert first.status_code == cached.status_code == 200
+        assert first.json() == cached.json()
+        data = first.json()
+        assert data["status"] == ("unhealthy" if required else "degraded")
+        assert data["healthy_count"] == data["unhealthy_count"] == 1
+        assert data["unknown_count"] == 0
+        assert data["required_healthy"] is (not required)
+        assert secret not in first.text
+        assert not owner._pending
+        if failure == "http_timeout":
+            assert cleaned.is_set()
+            spawn.assert_not_called()
+        else:
+            spawn.assert_awaited_once()
+            kill.assert_called_once_with(process.pid, process_module.signal.SIGKILL)
+            process.wait.assert_awaited_once()
+        if failure == "child_exit":
+            report.assert_called_once()
+            error = report.call_args.args[0]
+            assert str(error) == "Isolated connection probe failed"
+            assert error.__context__ is None
+            assert error.__cause__ is None
+            assert secret not in repr(report.call_args)
+        else:
+            report.assert_not_called()
+    finally:
+        await owner.close()
+        loader.reset_cache()

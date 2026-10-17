@@ -1067,12 +1067,14 @@ class TestMonitoringSnapshots:
         report = MagicMock()
         monkeypatch.setattr(module, "report_runtime_exception", report)
         owner = module.ConnectionsHealthMonitor()
-        with pytest.raises(module.SnapshotUnavailable):
-            await owner.get()
+        snapshot = await owner.get()
+        assert snapshot.services["test_http"]["is_healthy"] is False
+        assert snapshot.services["test_http"]["last_error"] == "Health check timed out after 0.01s"
         assert cleaned.is_set()
-        assert owner._snapshot is None
+        assert (await owner.get()) == snapshot
         assert not owner._pending
-        report.assert_called_once()
+        report.assert_not_called()
+        monkeypatch.setattr(module.time, "monotonic", lambda: snapshot.expires_at)
         monkeypatch.setattr(loader, "_check_http_health", AsyncMock(return_value=(True, None)))
         assert (await owner.get()).services["test_http"]["is_healthy"] is True
         await owner.close()

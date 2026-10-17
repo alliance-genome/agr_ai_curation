@@ -886,13 +886,25 @@ async def probe_monitoring_connection(conn: ConnectionDefinition) -> Dict[str, A
     Blocking credential providers and the supported psycopg2 recovery path run
     in a killable child process. No executor threads outlive their sweep.
     """
-    from src.lib.config.connection_probe_process import probe_in_process
+    from src.lib.config.connection_probe_process import IsolatedProbeFailed, probe_in_process
 
-    async with asyncio.timeout(conn.timeout_seconds):
-        if conn.active and conn.health_check.method in {"CONNECT", "BEDROCK_RERANKER"}:
-            result = await probe_in_process(conn)
-            return result
-        await _check_connection_health(conn)
+    try:
+        async with asyncio.timeout(conn.timeout_seconds):
+            if conn.active and conn.health_check.method in {"CONNECT", "BEDROCK_RERANKER"}:
+                return await probe_in_process(conn)
+            await _check_connection_health(conn)
+    except TimeoutError:
+        conn.is_healthy = False
+        conn.last_error = f"Health check timed out after {conn.timeout_seconds}s"
+    except IsolatedProbeFailed:
+        from src.lib.observability.runtime import report_runtime_exception
+
+        report_runtime_exception(
+            RuntimeError("Isolated connection probe failed"),
+            component="connections_monitor", operation="isolated_probe",
+        )
+        conn.is_healthy = False
+        conn.last_error = "Isolated connection probe failed"
     return connection_status(conn)
 
 
