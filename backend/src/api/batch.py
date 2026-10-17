@@ -9,12 +9,10 @@ Batch ownership is enforced - users can only access their own batches.
 
 from datetime import datetime
 import logging
-from pathlib import Path
 from typing import Any, Dict
-import unicodedata
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -22,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 from .auth import get_auth_dependency
 from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.batch.service import BatchService
-from ..lib.batch.result_files import canonical_result_files as _batch_document_result_files
+from ..lib.batch.download import prepare_batch_zip
 from ..lib.batch.summaries import BatchFilter, BatchQueryError, terminal_summaries, lookup_summaries
 from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
@@ -33,7 +31,6 @@ from ..lib.group_rules import get_groups_from_provider_groups
 from ..lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from ..lib.flows.execution_revisions import flow_execution_revision_findings, resolve_flow_execution_revisions
 from ..schemas.flows import FlowDefinition
-from ..models.sql.batch import BatchDocumentStatus
 from ..schemas.batch import (
     BatchCreateRequest,
     BatchResponse,
@@ -51,29 +48,6 @@ router = APIRouter(prefix="/api/batches")
 
 # Secondary router for flow validation - handles /api/flows/{id}/validate-batch
 flow_validation_router = APIRouter(prefix="/api/flows")
-
-
-def _unique_zip_member_name(filename: str, used_names: set[str]) -> str:
-    """Preserve the download filename, suffixing only genuine ZIP collisions."""
-
-    without_control_characters = "".join(
-        character
-        for character in filename
-        if unicodedata.category(character) != "Cc"
-    )
-    original = Path(without_control_characters.replace("\\", "/")).name
-    if original in {"", ".", ".."}:
-        original = "result"
-
-    candidate = original
-    duplicate_number = 2
-    while candidate.casefold() in used_names:
-        path = Path(original)
-        candidate = f"{path.stem}_{duplicate_number}{path.suffix}"
-        duplicate_number += 1
-
-    used_names.add(candidate.casefold())
-    return candidate
 
 
 @router.post("", response_model=BatchResponse, status_code=201)
@@ -315,174 +289,11 @@ async def delete_batch(
 @router.get("/{batch_id}/download-zip")
 async def download_batch_zip(
     batch_id: UUID,
-    request: Request,
     user: Dict[str, Any] = get_auth_dependency(),
-    db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    """Download all completed batch results as a ZIP file.
-
-    Creates a ZIP archive containing all result files from completed
-    documents in the batch. Only includes documents with status=completed
-    and at least one valid result-file manifest entry.
-
-    Reads files directly from disk to avoid authentication issues with
-    internal HTTP requests (browser uses cookies, not Authorization headers).
-
-    Args:
-        batch_id: UUID of the batch to download
-        user: Authenticated user from Cognito JWT
-        db: Database session
-
-    Returns:
-        StreamingResponse with ZIP file
-
-    Raises:
-        404: If batch not found or not owned by user
-        400: If batch has no completed documents
-    """
-    import io
-    import tempfile
-    import zipfile
-    from ..models.sql.file_output import FileOutput
-
+    """Download authorized completed results without blocking the event loop."""
     db_user = await provision_user_async(principal_from_claims(user))
-    service = BatchService(db)
-
-    batch = service.get_batch(batch_id, db_user.id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
-
-    # Get completed documents with result files
-    completed_docs = [
-        doc for doc in batch.documents
-        if doc.status == BatchDocumentStatus.COMPLETED
-        and _batch_document_result_files(doc)
-    ]
-
-    if not completed_docs:
-        raise HTTPException(
-            status_code=400,
-            detail="No completed documents with results to download"
-        )
-
-    # Build on disk so aggregate multi-output batches cannot exhaust application RAM.
-    zip_buffer = tempfile.TemporaryFile(mode="w+b")
-    files_added = 0
-    used_filenames: set[str] = set()
-
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for doc in completed_docs:
-            for result_file in _batch_document_result_files(doc):
-                try:
-                    try:
-                        file_id = UUID(result_file["file_id"])
-                    except (KeyError, TypeError, ValueError):
-                        logger.warning(
-                            "Invalid file_id in batch result manifest: doc_id=%s, file_id=%r",
-                            doc.document_id,
-                            result_file.get("file_id"),
-                        )
-                        continue
-
-                    file_output = db.query(FileOutput).filter(
-                        FileOutput.id == file_id
-                    ).first()
-
-                    if not file_output:
-                        logger.warning(
-                            "FileOutput not found: doc_id=%s, file_id=%s",
-                            doc.document_id,
-                            file_id,
-                        )
-                        continue
-
-                    curator_id = user.get("sub") or user.get("uid", "unknown")
-                    if file_output.curator_id != curator_id:
-                        logger.warning(
-                            "File ownership mismatch: doc_id=%s, file_id=%s, "
-                            "expected_curator=%s, actual_curator=%s",
-                            doc.document_id,
-                            file_id,
-                            curator_id,
-                            file_output.curator_id,
-                        )
-                        continue
-
-                    from ..lib.file_outputs.storage import FileOutputStorageService
-
-                    storage = FileOutputStorageService()
-                    file_path = Path(file_output.file_path)
-
-                    try:
-                        resolved_path = file_path.resolve()
-                        base_path = storage.base_path.resolve()
-                        if not resolved_path.is_relative_to(base_path):
-                            logger.warning(
-                                "Path traversal attempt in batch ZIP: "
-                                "doc_id=%s, path=%s",
-                                doc.document_id,
-                                file_output.file_path,
-                            )
-                            continue
-                    except Exception as e:
-                        logger.warning(
-                            "Invalid file path in batch ZIP: doc_id=%s, "
-                            "path=%s, error=%s",
-                            doc.document_id,
-                            file_output.file_path,
-                            str(e),
-                        )
-                        continue
-
-                    if not resolved_path.exists():
-                        logger.warning(
-                            "File not found on disk: doc_id=%s, path=%s",
-                            doc.document_id,
-                            file_output.file_path,
-                        )
-                        continue
-
-                    filename = _unique_zip_member_name(
-                        file_output.filename,
-                        used_filenames,
-                    )
-
-                    zip_file.write(resolved_path, arcname=filename)
-                    logger.info("Added to ZIP: %s", filename)
-                    files_added += 1
-
-                except Exception as e:
-                    logger.warning(
-                        "Error reading result file: doc_id=%s, error=%s",
-                        doc.document_id,
-                        str(e),
-                    )
-
-    if files_added == 0:
-        zip_buffer.close()
-        raise HTTPException(
-            status_code=400,
-            detail="No downloadable result files available for this batch",
-        )
-
-    zip_buffer.seek(0)
-
-    def iter_zip_file():
-        try:
-            for chunk in iter(lambda: zip_buffer.read(io.DEFAULT_BUFFER_SIZE), b""):
-                yield chunk
-        finally:
-            zip_buffer.close()
-
-    filename = f"batch_{batch_id}_results.zip"
-
-    return StreamingResponse(
-        iter_zip_file(),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        }
-    )
+    return await prepare_batch_zip(batch_id, db_user.id, user.get("sub") or user.get("uid", "unknown"))
 
 
 @router.get("/{batch_id}/stream")
