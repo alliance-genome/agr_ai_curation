@@ -41,6 +41,7 @@ const nodePanelMocks = vi.hoisted(() => ({
 }))
 
 const reactFlowMocks = vi.hoisted(() => ({
+  lifecycleReady: null as Promise<void> | null,
   fitView: vi.fn(),
   screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
   onConnect: undefined as undefined | ((connection: { source: string; target: string }) => void),
@@ -141,10 +142,17 @@ vi.mock('reactflow', async () => {
       reactFlowMocks.nodes = nodes
       reactFlowMocks.edges = edges
       react.useEffect(() => {
-        onInit?.({
-          fitView: reactFlowMocks.fitView,
-          screenToFlowPosition: reactFlowMocks.screenToFlowPosition,
-        })
+        let active = true
+        const initialize = () => {
+          if (!active) return
+          onInit?.({
+            fitView: reactFlowMocks.fitView,
+            screenToFlowPosition: reactFlowMocks.screenToFlowPosition,
+          })
+        }
+        if (reactFlowMocks.lifecycleReady) void reactFlowMocks.lifecycleReady.then(initialize)
+        else initialize()
+        return () => { active = false }
       }, [onInit])
       react.useEffect(() => {
         reactFlowMocks.onConnect = onConnect
@@ -152,10 +160,20 @@ vi.mock('reactflow', async () => {
           reactFlowMocks.onConnect = undefined
         }
       }, [onConnect])
-      react.useEffect(() => {
-        reactFlowMocks.onNodeClick = onNodeClick
-        reactFlowMocks.onPaneClick = onPaneClick
+      // Real canvas event handlers are usable when its DOM commits. Publish the
+      // imperative test handles at that boundary, not in a later passive effect.
+      react.useLayoutEffect(() => {
+        let active = true
+        const register = () => {
+          if (!active) return
+          reactFlowMocks.onNodeClick = onNodeClick
+          reactFlowMocks.onPaneClick = onPaneClick
+        }
+        // The controlled gate reproduces the old passive-registration schedule.
+        if (reactFlowMocks.lifecycleReady) void reactFlowMocks.lifecycleReady.then(register)
+        else register()
         return () => {
+          active = false
           reactFlowMocks.onNodeClick = undefined
           reactFlowMocks.onPaneClick = undefined
         }
@@ -232,18 +250,12 @@ vi.mock('./NodePanel', async (importOriginal) => {
       nodePanelMocks.onApply = onApply
       nodePanelMocks.apply = onApply
       nodePanelMocks.reportDraft = onDraftChange ?? null
-      react.useEffect(() => {
-        if (!leaveGuardRef) return
-        const guard = {
-          requestLeave: nodePanelMocks.requestLeave,
-          captureAuthoringDraft: () => nodePanelMocks.captureAuthoringDraft(node),
-          takeLastLeaveOutcome: nodePanelMocks.takeLastLeaveOutcome,
-        }
-        leaveGuardRef.current = guard
-        return () => {
-          if (leaveGuardRef.current === guard) leaveGuardRef.current = null
-        }
-      }, [leaveGuardRef, node])
+      // Match the real panel: the guard is available during the layout commit.
+      react.useImperativeHandle(leaveGuardRef, () => ({
+        requestLeave: nodePanelMocks.requestLeave,
+        captureAuthoringDraft: () => nodePanelMocks.captureAuthoringDraft(node),
+        takeLastLeaveOutcome: nodePanelMocks.takeLastLeaveOutcome,
+      }), [node])
       react.useEffect(() => {
         nodePanelMocks.reportDirty = onDraftDirtyChange ?? null
         onDraftDirtyChange?.(nodePanelMocks.dirty)
@@ -727,16 +739,22 @@ describe('FlowBuilder', () => {
   })
 
   it('retries a cancelled request for the same shared flow through the discard guard', async () => {
+    let initializeCanvas!: () => void
+    reactFlowMocks.lifecycleReady = new Promise<void>((resolve) => { initializeCanvas = resolve })
     serviceMocks.getFlow.mockResolvedValueOnce(buildFlowResponse())
       .mockResolvedValueOnce(buildFlowResponse({ id: 'shared', name: 'Shared Original', visibility: 'project', is_owner: false }))
     const { rerender } = render(<FlowBuilder flowId="flow-1" flowOpenRequestId={0} />)
     await screen.findByText('Fresh Flow')
+    // Flow text can commit before ReactFlow's onInit effect supplies the instance.
+    expect(reactFlowMocks.onNodeClick).toBeUndefined()
+    await act(async () => initializeCanvas())
     fireEvent.drop(screen.getByTestId('react-flow'), {
       clientX: 320,
       clientY: 220,
       dataTransfer: { getData: (format: string) => format === 'application/reactflow'
         ? JSON.stringify({ type: 'agent', agentId: 'draft_agent', agentName: 'Draft Agent' }) : '' },
     })
+    expect(reactFlowMocks.screenToFlowPosition).toHaveBeenCalledTimes(1)
     await screen.findByText('2 steps')
     const discard = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
     rerender(<FlowBuilder flowId="shared" flowOpenRequestId={1} />)
@@ -844,6 +862,7 @@ describe('FlowBuilder', () => {
       findings: [],
     }))
     invalidationMocks.notifyFlowListInvalidated.mockReset()
+    reactFlowMocks.lifecycleReady = null
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
     reactFlowMocks.onConnect = undefined
@@ -888,25 +907,53 @@ describe('FlowBuilder', () => {
     expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
   })
 
-  it.each([false, true])('restores missing instructions without deleting or connecting existing steps (cancel=%s)', async (cancel) => {
+  it.each([
+    { cancel: false, dirty: false },
+    { cancel: true, dirty: false },
+    { cancel: false, dirty: true },
+    { cancel: true, dirty: true },
+  ])('restores missing instructions without deleting or connecting existing steps (cancel=$cancel, dirty=$dirty)', async ({ cancel, dirty }) => {
+    let registerHandlers!: () => void
+    reactFlowMocks.lifecycleReady = new Promise<void>((resolve) => { registerHandlers = resolve })
     const saved = buildFlowResponse()
     saved.flow_definition.nodes = [1, 2].map((i) => ({
       id: `node_${i}`, type: 'agent' as const, position: { x: 200, y: i * 120 },
       data: { agent_id: i === 1 ? 'allele_extractor' : 'gene_extractor', agent_display_name: `Extractor ${i}`, output_key: `result_${i}`, custom_instructions: 'Keep my text' },
     }))
-    saved.flow_definition.edges = []
+    saved.flow_definition.edges = [{ id: 'existing-edge', source: 'node_1', target: 'node_2' }]
     saved.flow_definition.entry_node_id = ''
     serviceMocks.getFlow.mockResolvedValue(saved)
     const ref = React.createRef<FlowAuthoringContextHandle>()
-    render(<FlowBuilder flowId={saved.id} authoringContextRef={ref} />)
+    const { unmount } = render(<FlowBuilder flowId={saved.id} authoringContextRef={ref} />)
     const restore = await screen.findByRole('button', { name: 'Restore Initial Instructions' })
-    act(() => reactFlowMocks.onNodeClick?.({} as never, reactFlowMocks.nodes[0] as never))
+    expect(reactFlowMocks.onNodeClick).toBeUndefined()
+    await act(async () => registerHandlers())
+    // Finding the alert is not proof that the canvas callback has registered.
+    await waitFor(() => expect(reactFlowMocks.onNodeClick).toBeTypeOf('function'))
+    nodePanelMocks.dirty = dirty
+    await act(async () => reactFlowMocks.onNodeClick!({} as never, reactFlowMocks.nodes[0] as never))
+    expect(screen.getByTestId('node-panel')).toBeInTheDocument()
     const before = ref.current!.captureAuthoringContext()
-    nodePanelMocks.requestLeave.mockResolvedValue(!cancel)
+    expect(nodePanelMocks.captureAuthoringDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'node_1' }),
+    )
+    expect(before.isDirty).toBe(dirty)
+    let finishLeave!: (leave: boolean) => void
+    nodePanelMocks.requestLeave.mockReturnValue(new Promise<boolean>((resolve) => { finishLeave = resolve }))
     await userEvent.click(restore)
+    expect(nodePanelMocks.requestLeave).toHaveBeenCalledTimes(1)
+    expect(ref.current!.captureAuthoringContext()).toEqual(before)
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+    await act(async () => finishLeave(!cancel))
     if (cancel) {
       expect(ref.current!.captureAuthoringContext()).toEqual(before)
       expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
+      expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+      expect(restore).toBeEnabled()
+      unmount()
+      expect(ref.current).toBeNull()
+      expect(reactFlowMocks.onNodeClick).toBeUndefined()
       return
     }
     await waitFor(() => expect(ref.current!.captureAuthoringContext().nodes).toHaveLength(3))
@@ -914,10 +961,42 @@ describe('FlowBuilder', () => {
     expect(after.nodes.slice(0, 2)).toEqual(before.nodes)
     expect(after.edges).toEqual(before.edges)
     expect(after.nodes[2].agent_id).toBe('task_input')
+    expect(after.entry_node_id).toBe(after.nodes[2].id)
+    expect(after.isDirty).toBe(true)
+    expect(after).toEqual({ ...before, nodes: after.nodes, entry_node_id: after.nodes[2].id, isDirty: true })
     expect(screen.queryByRole('button', { name: 'Restore Initial Instructions' })).not.toBeInTheDocument()
     expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
     expect(serviceMocks.createFlow).not.toHaveBeenCalled()
     expect(reactFlowMocks.nodes.find((node) => node.type === 'task_input')).toHaveProperty('deletable', false)
+    unmount()
+    expect(ref.current).toBeNull()
+    expect(reactFlowMocks.onNodeClick).toBeUndefined()
+  })
+
+  it('selects a step at canvas commit before passive initialization', () => {
+    function SelectAtCommit() {
+      React.useLayoutEffect(() => {
+        reactFlowMocks.onNodeClick?.({} as never, reactFlowMocks.nodes[0] as never)
+      }, [])
+      return <FlowBuilder />
+    }
+    render(<SelectAtCommit />)
+    expect(screen.getByTestId('node-panel')).toBeInTheDocument()
+  })
+
+  it('does not register delayed canvas handlers after unmount', async () => {
+    let finishLifecycle!: () => void
+    reactFlowMocks.lifecycleReady = new Promise<void>((resolve) => { finishLifecycle = resolve })
+    const ref = React.createRef<FlowAuthoringContextHandle>()
+    const { unmount } = render(<FlowBuilder authoringContextRef={ref} />)
+    expect(reactFlowMocks.onNodeClick).toBeUndefined()
+    unmount()
+    await act(async () => finishLifecycle())
+    expect(reactFlowMocks.onNodeClick).toBeUndefined()
+    expect(reactFlowMocks.onPaneClick).toBeUndefined()
+    expect(ref.current).toBeNull()
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+    expect(serviceMocks.updateFlow).not.toHaveBeenCalled()
   })
 
   it.each(['apply', 'stale', 'post_failure'] as const)('reviews restoration without approving unfinished execution (%s)', async (mode) => {
