@@ -1076,7 +1076,7 @@ def test_one_shot_helper_runner_entry_is_measured(published):
     assert record["activity"] == "background"  # costed_call boundary is correlated
 
 
-def test_agent_studio_run_measures_visible_and_deferred_tools(monkeypatch, published):
+def test_agent_studio_run_measures_visible_and_deferred_tools(monkeypatch, published, isolated_agent_history):
     from src.lib.agent_studio import openai_runtime as studio
 
     model = FakeResponsesHTTPModel([_final(text="Here is the plan", response_id="resp_studio")])

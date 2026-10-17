@@ -650,7 +650,7 @@ def test_sdk_accepts_review_on_last_allowed_model_turn_without_another_request()
     assert 'Apply changes' in result.final_output
 
 
-def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch):
+def test_streamed_invalid_then_valid_proposal_finishes_on_last_turn(monkeypatch, isolated_agent_history):
     from agents import Model, RunConfig
     from openai.types.responses import Response, ResponseCompletedEvent, ResponseFunctionToolCall
 
