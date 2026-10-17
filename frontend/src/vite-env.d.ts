@@ -1,6 +1,10 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_GLOBAL_POLL_OVERLAP_MS: string;
+  readonly VITE_GLOBAL_POLL_PAGE_SIZE: string;
+  readonly VITE_GLOBAL_POLL_TIMEOUT_MS: string;
+  readonly VITE_GLOBAL_POLL_INTERVAL_MS: string;
   readonly VITE_DEV_MODE: string;
   readonly VITE_DEV_USER_SUB: string;
   readonly VITE_DEV_USER_EMAIL: string;

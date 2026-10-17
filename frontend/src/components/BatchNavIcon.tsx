@@ -1,44 +1,14 @@
-import React, { useEffect, useState } from 'react';
-import { Box, IconButton, Typography, Badge } from '@mui/material';
+import React, { useContext } from 'react';
+import { Box, Typography, Badge } from '@mui/material';
 import { Inventory2 as BatchIcon } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 
-interface BatchStatus {
-  runningCount: number;
-  pendingDocuments: number;
-}
+import { BatchCountsContext } from '../features/notifications/useGlobalPolling';
 
 const BatchNavIcon: React.FC = () => {
   const navigate = useNavigate();
-  const [status, setStatus] = useState<BatchStatus>({ runningCount: 0, pendingDocuments: 0 });
-
-  // Poll for running batches every 10 seconds using lightweight endpoint
-  useEffect(() => {
-    const checkRunningBatches = async () => {
-      try {
-        const response = await fetch('/api/batches/running-count', {
-          credentials: 'include',
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setStatus({
-            runningCount: data.running_count || 0,
-            pendingDocuments: data.pending_documents || 0,
-          });
-        }
-      } catch (error) {
-        // Silently fail - badge just won't show
-      }
-    };
-
-    // Initial check
-    checkRunningBatches();
-
-    // Poll every 10 seconds
-    const interval = setInterval(checkRunningBatches, 10000);
-
-    return () => clearInterval(interval);
-  }, []);
+  const status = useContext(BatchCountsContext);
+  const pendingDocuments = status === null ? 0 : status.pending_documents;
 
   const handleClick = () => {
     navigate('/batch');
@@ -49,7 +19,7 @@ const BatchNavIcon: React.FC = () => {
       // CR-12: Add accessibility attributes
       role="button"
       tabIndex={0}
-      aria-label={`Batch processing${status.pendingDocuments > 0 ? `, ${status.pendingDocuments} document${status.pendingDocuments === 1 ? '' : 's'} remaining` : ''}`}
+      aria-label={`Batch processing${pendingDocuments > 0 ? `, ${pendingDocuments} document${pendingDocuments === 1 ? '' : 's'} remaining` : ''}`}
       onKeyDown={(e) => e.key === 'Enter' && handleClick()}
       sx={{
         display: 'flex',
@@ -66,9 +36,9 @@ const BatchNavIcon: React.FC = () => {
       onClick={handleClick}
     >
       <Badge
-        badgeContent={status.pendingDocuments}
+        badgeContent={pendingDocuments}
         color="warning"
-        invisible={status.pendingDocuments === 0}
+        invisible={pendingDocuments === 0}
         sx={{
           '& .MuiBadge-badge': {
             fontSize: '0.65rem',

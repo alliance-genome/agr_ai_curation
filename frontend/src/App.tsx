@@ -1,4 +1,3 @@
-import type { BatchTerminalResponse } from './types/batch';
 import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
 import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip, Snackbar, Alert, GlobalStyles } from '@mui/material'
@@ -36,11 +35,7 @@ import {
 } from './lib/browserStorage'
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
-import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
-import {
-  PDF_JOB_LIMIT,
-  PDF_JOB_WINDOW_DAYS,
-} from './features/documents/documentIntakeConfig'
+import { BatchCountsContext, useGlobalPolling } from './features/notifications/useGlobalPolling'
 import {
   CHAT_RUN_TERMINAL_EVENT,
   type ChatRunTerminalEventDetail,
@@ -329,11 +324,6 @@ export function AppContent() {
     actionLabel?: string;
     actionPath?: string;
   }>({ open: false, message: '', severity: 'info' });
-  const seededPdfJobsRef = React.useRef(false);
-  const seededBatchesRef = React.useRef(false);
-  const batchTerminalCursorRef = React.useRef<string | null>(null);
-  const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
-  const seenBatchTerminalRef = React.useRef<Set<string>>(new Set());
   const seenRunCompletionToastKeysRef = React.useRef<Set<string>>(new Set());
   const changelogStorageKey = user?.uid ? `changelog:last-seen:${user.uid}` : null;
 
@@ -495,124 +485,15 @@ export function AppContent() {
     lastAuthenticatedUserIdRef.current = currentUserId
   }, [isAuthenticated, user?.uid])
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      seededPdfJobsRef.current = false;
-      seededBatchesRef.current = false;
-      batchTerminalCursorRef.current = null;
-      seenPdfTerminalRef.current.clear();
-      seenBatchTerminalRef.current.clear();
-      return;
-    }
+  React.useLayoutEffect(() => {
+    setGlobalSnackbar({ open: false, message: '', severity: 'info' });
+  }, [isAuthenticated, user?.uid]);
 
-    const pollNotifications = async () => {
-      const currentPathname = location.pathname.replace(/\/+$/, '');
-      const onPdfJobsPage = currentPathname === '/weaviate/add-literature';
-      const onBatchPage = location.pathname.startsWith('/batch');
-
-      if (!onPdfJobsPage) {
-        try {
-          const jobQuery = new URLSearchParams({
-            window_days: String(PDF_JOB_WINDOW_DAYS),
-            limit: String(PDF_JOB_LIMIT),
-            offset: '0',
-          });
-          const response = await fetch(`/api/weaviate/pdf-jobs?${jobQuery.toString()}`, {
-            credentials: 'include',
-          });
-          if (response.ok) {
-            const payload = (await response.json()) as {
-              jobs?: Array<{ job_id: string; status: string; filename?: string; document_id: string; cancel_requested?: boolean }>;
-            };
-            const jobs = payload.jobs ?? [];
-
-            for (const job of jobs) {
-              const notification = buildPdfTerminalNotification(job);
-              if (!notification) {
-                continue;
-              }
-              const terminalKey = notification.key;
-              const alreadySeen = seenPdfTerminalRef.current.has(terminalKey);
-              if (!seededPdfJobsRef.current) {
-                seenPdfTerminalRef.current.add(terminalKey);
-                continue;
-              }
-              if (alreadySeen) {
-                continue;
-              }
-
-              seenPdfTerminalRef.current.add(terminalKey);
-              setGlobalSnackbar({ open: true, message: notification.message, severity: notification.severity });
-            }
-
-            seededPdfJobsRef.current = true;
-          }
-        } catch (error) {
-          console.error('Global PDF job notification poll failed:', error);
-        }
-      }
-
-      if (!onBatchPage) {
-        try {
-          const cursor = batchTerminalCursorRef.current;
-          const url = cursor === null ? '/api/batches/terminals' : `/api/batches/terminals?cursor=${encodeURIComponent(cursor)}`;
-          const response = await fetch(url, { credentials: 'include' });
-          if (response.ok) {
-            const payload = (await response.json()) as BatchTerminalResponse;
-            const batches = payload.batches;
-
-            for (const batch of batches) {
-              const status = String(batch.status).toLowerCase();
-              if (!['completed', 'cancelled'].includes(status)) {
-                continue;
-              }
-              const terminalKey = `${batch.id}:${status}`;
-              const alreadySeen = seenBatchTerminalRef.current.has(terminalKey);
-              if (!seededBatchesRef.current) {
-                seenBatchTerminalRef.current.add(terminalKey);
-                continue;
-              }
-              if (alreadySeen) {
-                continue;
-              }
-
-              seenBatchTerminalRef.current.add(terminalKey);
-              const flowLabel = batch.flow_name ? ` (${batch.flow_name})` : '';
-              if (status === 'cancelled') {
-                setGlobalSnackbar({
-                  open: true,
-                  message: `Batch processing cancelled${flowLabel}`,
-                  severity: 'info',
-                });
-              } else {
-                setGlobalSnackbar({
-                  open: true,
-                  message: `Batch completed${flowLabel}: ${batch.completed_documents}/${batch.total_documents} succeeded, ${batch.failed_documents} failed`,
-                  severity: 'success',
-                });
-              }
-            }
-
-            batchTerminalCursorRef.current = payload.next_cursor;
-            if (payload.next_cursor === null) seededBatchesRef.current = true;
-          }
-        } catch (error) {
-          console.error('Global batch notification poll failed:', error);
-        }
-      }
-    };
-
-    void pollNotifications();
-    const intervalId = window.setInterval(() => {
-      void pollNotifications();
-    }, 10000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [isAuthenticated, location.pathname]);
+  const batchCounts = useGlobalPolling(isAuthenticated && user?.uid ? user.uid : null, location.pathname,
+    notification => setGlobalSnackbar({ open: true, ...notification }));
 
   return (
+    <BatchCountsContext.Provider value={batchCounts}>
     <Box
       sx={{
         display: 'flex',
@@ -964,6 +845,7 @@ export function AppContent() {
         </Alert>
       </Snackbar>
     </Box>
+    </BatchCountsContext.Provider>
   );
 }
 
