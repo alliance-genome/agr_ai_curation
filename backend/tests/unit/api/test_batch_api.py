@@ -1,6 +1,7 @@
 """Unit tests for batch API endpoints."""
 
 from unittest.mock import AsyncMock, MagicMock
+from contextlib import nullcontext
 
 import asyncio
 from datetime import datetime, timezone
@@ -8,17 +9,17 @@ import io
 import json
 import logging
 from types import SimpleNamespace
-from typing import cast
 from uuid import uuid4
 import zipfile
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException, Request
+from fastapi import BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from src.api import batch as batch_api
 from src.lib.batch import streaming as batch_stream
+from src.lib.batch import download as batch_download
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 from src.schemas.batch import (
     BatchCreateRequest,
@@ -26,9 +27,6 @@ from src.schemas.batch import (
     BatchResultFile,
     BatchValidationResponse,
 )
-
-
-_TEST_REQUEST = cast(Request, object())
 
 
 @pytest.mark.asyncio
@@ -133,7 +131,7 @@ def test_batch_document_result_files_rejects_corrupt_manifests(result_files):
     document = SimpleNamespace(id=uuid4(), result_files=result_files)
 
     with pytest.raises(ValueError, match="invalid canonical result_files manifest"):
-        batch_api._batch_document_result_files(document)
+        batch_download.canonical_result_files(document)
 
 
 def test_batch_create_request_limits_document_ids_to_ten():
@@ -446,10 +444,11 @@ async def test_validate_flow_for_batch_endpoint_success(monkeypatch):
 async def test_download_batch_zip_404_when_batch_missing(monkeypatch):
     _mock_auth(monkeypatch, user_id=8)
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_download, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_download, "SessionLocal", MagicMock())
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(uuid4(), request=_TEST_REQUEST, user={"sub": "u-1"}, db=object())
+        await batch_api.download_batch_zip(uuid4(), user={"sub": "u-1"})
     assert exc.value.status_code == 404
 
 
@@ -460,10 +459,11 @@ async def test_download_batch_zip_400_when_no_completed_docs(monkeypatch):
         documents=[SimpleNamespace(status=BatchDocumentStatus.PENDING, result_files=[])]
     )
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_download, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_download, "SessionLocal", MagicMock())
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(uuid4(), request=_TEST_REQUEST, user={"sub": "u-1"}, db=object())
+        await batch_api.download_batch_zip(uuid4(), user={"sub": "u-1"})
     assert exc.value.status_code == 400
 
 
@@ -497,7 +497,7 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
     )
     batch = SimpleNamespace(id=batch_id, documents=[completed_doc])
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_download, "BatchService", lambda _db: service)
 
     file_output = SimpleNamespace(id=file_id, curator_id="u-1", file_path=str(file_path), filename="result.csv")
     second_file_output = SimpleNamespace(
@@ -508,18 +508,19 @@ async def test_download_batch_zip_success_with_matching_file(monkeypatch, tmp_pa
     )
     file_results = iter((file_output, second_file_output))
     db = SimpleNamespace(
-        query=lambda _model: SimpleNamespace(
+        query=lambda *_columns: SimpleNamespace(
             filter=lambda *_args, **_kwargs: SimpleNamespace(
-                first=lambda: next(file_results)
+                all=lambda: list(file_results)
             )
         )
     )
     monkeypatch.setattr(
-        "src.lib.file_outputs.storage.FileOutputStorageService",
+        "src.lib.batch.download.FileOutputStorageService",
         lambda: SimpleNamespace(base_path=tmp_path),
     )
 
-    response = await batch_api.download_batch_zip(batch_id, request=_TEST_REQUEST, user={"sub": "u-1"}, db=db)
+    monkeypatch.setattr(batch_download, "SessionLocal", lambda: nullcontext(db))
+    response = await batch_api.download_batch_zip(batch_id, user={"sub": "u-1"})
     assert isinstance(response, StreamingResponse)
     assert response.headers["content-disposition"].endswith(f'batch_{batch_id}_results.zip"')
 
@@ -577,26 +578,25 @@ async def test_download_batch_zip_preserves_custom_filenames_for_multiple_docume
 
     batch = SimpleNamespace(id=batch_id, documents=documents)
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_download, "BatchService", lambda _db: service)
 
     file_results = iter(file_outputs)
     db = SimpleNamespace(
-        query=lambda _model: SimpleNamespace(
+        query=lambda *_columns: SimpleNamespace(
             filter=lambda *_args, **_kwargs: SimpleNamespace(
-                first=lambda: next(file_results)
+                all=lambda: list(file_results)
             )
         )
     )
     monkeypatch.setattr(
-        "src.lib.file_outputs.storage.FileOutputStorageService",
+        "src.lib.batch.download.FileOutputStorageService",
         lambda: SimpleNamespace(base_path=tmp_path),
     )
 
+    monkeypatch.setattr(batch_download, "SessionLocal", lambda: nullcontext(db))
     response = await batch_api.download_batch_zip(
         batch_id,
-        request=_TEST_REQUEST,
         user={"sub": "u-1"},
-        db=db,
     )
     body = await _read_streaming_response(response)
 
@@ -607,12 +607,12 @@ async def test_download_batch_zip_preserves_custom_filenames_for_multiple_docume
 def test_unique_zip_member_name_only_suffixes_collisions():
     used_names: set[str] = set()
 
-    assert batch_api._unique_zip_member_name("results.csv", used_names) == "results.csv"
-    assert batch_api._unique_zip_member_name("results.csv", used_names) == "results_2.csv"
-    assert batch_api._unique_zip_member_name("RESULTS.CSV", used_names) == "RESULTS_3.CSV"
-    assert batch_api._unique_zip_member_name("../folder/safe.csv", used_names) == "safe.csv"
-    assert batch_api._unique_zip_member_name(r"..\folder\safe.csv", used_names) == "safe_2.csv"
-    assert batch_api._unique_zip_member_name("unsafe\x00\n.csv", used_names) == "unsafe.csv"
+    assert batch_download._unique_zip_member_name("results.csv", used_names) == "results.csv"
+    assert batch_download._unique_zip_member_name("results.csv", used_names) == "results_2.csv"
+    assert batch_download._unique_zip_member_name("RESULTS.CSV", used_names) == "RESULTS_3.CSV"
+    assert batch_download._unique_zip_member_name("../folder/safe.csv", used_names) == "safe.csv"
+    assert batch_download._unique_zip_member_name(r"..\folder\safe.csv", used_names) == "safe_2.csv"
+    assert batch_download._unique_zip_member_name("unsafe\x00\n.csv", used_names) == "unsafe.csv"
 
 
 @pytest.mark.asyncio
@@ -637,20 +637,20 @@ async def test_download_batch_zip_400_when_completed_docs_exist_but_none_downloa
     )
     batch = SimpleNamespace(id=batch_id, documents=[completed_doc])
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_download, "BatchService", lambda _db: service)
 
     # Ownership mismatch means the file is skipped from the ZIP.
-    file_output = SimpleNamespace(id=file_id, curator_id="different-user", file_path=str(file_path), filename="result.csv")
     db = SimpleNamespace(
-        query=lambda _model: SimpleNamespace(filter=lambda *_args, **_kwargs: SimpleNamespace(first=lambda: file_output))
+        query=lambda *_columns: SimpleNamespace(filter=lambda *_args, **_kwargs: SimpleNamespace(all=lambda: []))
     )
     monkeypatch.setattr(
-        "src.lib.file_outputs.storage.FileOutputStorageService",
+        "src.lib.batch.download.FileOutputStorageService",
         lambda: SimpleNamespace(base_path=tmp_path),
     )
 
+    monkeypatch.setattr(batch_download, "SessionLocal", lambda: nullcontext(db))
     with pytest.raises(HTTPException) as exc:
-        await batch_api.download_batch_zip(batch_id, request=_TEST_REQUEST, user={"sub": "u-1"}, db=db)
+        await batch_api.download_batch_zip(batch_id, user={"sub": "u-1"})
     assert exc.value.status_code == 400
     assert "No downloadable result files" in exc.value.detail
 
@@ -900,3 +900,15 @@ async def test_summary_persisted_data_failure_is_not_misreported_as_bad_request(
     monkeypatch.setattr(batch_api, 'BatchService', lambda db: service)
     with pytest.raises(ValueError, match="persisted data is corrupt"):
         await batch_api.list_batches({'sub': 'u'}, db=object())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claims,owner", [({"sub": "subject", "uid": "other"}, "subject"), ({"uid": "uid-subject"}, "uid-subject")])
+async def test_zip_dispatch_keeps_sql_user_and_file_subject_distinct(monkeypatch, claims, owner):
+    monkeypatch.setattr(batch_api, "principal_from_claims", lambda value: value)
+    monkeypatch.setattr(batch_api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=8)))
+    prepare = AsyncMock()
+    monkeypatch.setattr(batch_api, "prepare_batch_zip", prepare)
+    batch_id = uuid4()
+    assert await batch_api.download_batch_zip(batch_id, user=claims) is prepare.return_value
+    prepare.assert_awaited_once_with(batch_id, 8, owner)
