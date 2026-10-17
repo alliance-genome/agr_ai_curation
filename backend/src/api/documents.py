@@ -116,7 +116,7 @@ from ..services.processing_status_policy import (
 from ..services.processing_status_policy import (
     processing_status_for_pipeline_stage,
 )
-from ..services.user_service import principal_from_claims, provision_user
+from ..services.user_service import principal_from_claims, provision_user, provision_user_async
 from .auth import get_auth_dependency
 
 logger = logging.getLogger(__name__)
@@ -355,6 +355,7 @@ def verify_document_ownership(
     auth_user: dict[str, Any],
     *,
     for_update: bool = False,
+    provisioned_user_id: int | None = None,
 ) -> ViewerPDFDocument:
     """Verify document ownership and return document if authorized.
 
@@ -372,13 +373,16 @@ def verify_document_ownership(
     Requirements: FR-014 (cross-user access prevention with 403)
     """
     # Get database user
-    db_user = provision_user(db, principal_from_claims(auth_user))
+    owner_user_id = (
+        provision_user(db, principal_from_claims(auth_user)).id
+        if provisioned_user_id is None else provisioned_user_id
+    )
 
     document_uuid = _parse_document_uuid(document_id)
     return require_owned_document(
         db,
         document_uuid,
-        db_user.id,
+        owner_user_id,
         for_update=for_update,
     )
 
@@ -1281,8 +1285,8 @@ async def get_document_endpoint(
     # Returns 404 if not found, 403 if not owned by user
     session = SessionLocal()
     try:
-        pg_doc = verify_document_ownership(session, document_id, user)
-        db_user = provision_user(session, principal_from_claims(user))
+        db_user = await provision_user_async(principal_from_claims(user))
+        pg_doc = verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
     finally:
         session.close()
 
@@ -1368,11 +1372,13 @@ async def update_document_endpoint(
     # Verify ownership from PostgreSQL FIRST (FR-014)
     session = SessionLocal()
     try:
+        db_user = await provision_user_async(principal_from_claims(user))
         pg_doc = verify_document_ownership(
             session,
             document_id,
             user,
             for_update=True,
+            provisioned_user_id=db_user.id,
         )
         return await _update_owned_document_metadata(
             session=session,
@@ -1419,7 +1425,8 @@ async def delete_document_endpoint(
     # Returns 404 if not found, 403 if not owned by user
     session = SessionLocal()
     try:
-        pg_doc = verify_document_ownership(session, document_id, user)
+        db_user = await provision_user_async(principal_from_claims(user))
+        pg_doc = verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
     finally:
         session.close()
 
@@ -1819,8 +1826,8 @@ async def get_document_processing_status(
     # Returns 404 if not found, 403 if not owned by user
     session = SessionLocal()
     try:
-        pg_doc = verify_document_ownership(session, document_id, user)
-        db_user = provision_user(session, principal_from_claims(user))
+        db_user = await provision_user_async(principal_from_claims(user))
+        pg_doc = verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
     finally:
         session.close()
 
@@ -1902,14 +1909,14 @@ async def stream_document_progress(
     """
     session = SessionLocal()
     try:
+        db_user = await provision_user_async(principal_from_claims(user))
         try:
-            verify_document_ownership(session, document_id, user)
+            verify_document_ownership(session, document_id, user, provisioned_user_id=db_user.id)
         except HTTPException as exc:
             # Keep SSE behavior backward-compatible for malformed/missing IDs:
             # emit terminal stream events instead of failing the HTTP handshake.
             if exc.status_code not in {400, 404}:
                 raise
-        db_user = provision_user(session, principal_from_claims(user))
     finally:
         session.close()
 
@@ -2090,7 +2097,7 @@ async def get_download_info(
         session = SessionLocal()
         try:
             # T031: Get database user for ownership verification (FR-014)
-            db_user = provision_user(session, principal_from_claims(user))
+            db_user = await provision_user_async(principal_from_claims(user))
 
             doc = require_owned_document(session, document_uuid, db_user.id)
 
@@ -2211,7 +2218,7 @@ async def download_document_file(
         session = SessionLocal()
         try:
             # T031: Get database user for ownership verification (FR-014)
-            db_user = provision_user(session, principal_from_claims(user))
+            db_user = await provision_user_async(principal_from_claims(user))
 
             doc = require_owned_document(session, document_uuid, db_user.id)
 

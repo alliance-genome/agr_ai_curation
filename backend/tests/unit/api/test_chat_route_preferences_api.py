@@ -1,5 +1,6 @@
 """Thin authenticated API behavior for chat route preferences."""
 
+from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -20,8 +21,8 @@ def authenticated_user(monkeypatch):
     user = {"sub": "auth-user", "cognito:groups": ["group-alpha-raw"]}
     monkeypatch.setattr(
         users,
-        "set_global_user_from_cognito",
-        lambda db, claims: SimpleNamespace(id=37),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=37)),
     )
     monkeypatch.setattr(
         users,

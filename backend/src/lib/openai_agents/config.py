@@ -3744,3 +3744,21 @@ def get_agent_model_capacity_overrides() -> dict:
             for item in value.values()):
         raise ValueError("AGENT_MODEL_CAPACITY_OVERRIDES_JSON must map model IDs to positive capacity values")
     return value
+
+
+# --- Authenticated user provisioning ---
+
+
+def get_user_activity_write_interval_seconds() -> int:
+    """Sample activity at most once per interval; zero writes every request."""
+    return max(0, _get_env_int_with_fallback("USER_ACTIVITY_WRITE_INTERVAL_SECONDS", 300))
+
+
+def get_user_tenant_cache_ttl_seconds() -> int:
+    """Completed tenant success lifetime; zero disables retained successes."""
+    return max(0, _get_env_int_with_fallback("USER_TENANT_CACHE_TTL_SECONDS", 300))
+
+
+def get_user_tenant_cache_max_entries() -> int:
+    """Bound success entries and separately bound concurrent provisioning owners."""
+    return max(1, _get_env_int_with_fallback("USER_TENANT_CACHE_MAX_ENTRIES", 1024))

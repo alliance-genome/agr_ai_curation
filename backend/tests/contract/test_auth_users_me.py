@@ -132,7 +132,7 @@ class TestUsersMeEndpoint:
 
         try:
             with patch(
-                "src.api.users.set_global_user_from_cognito",
+                "src.api.users.provision_user_async",
                 return_value=_FakeUserModel(payload),
             ):
                 response = client.get(USERS_ME_PATH)
@@ -166,7 +166,7 @@ class TestUsersMeEndpoint:
 
         try:
             with patch(
-                "src.api.users.set_global_user_from_cognito",
+                "src.api.users.provision_user_async",
                 return_value=_FakeUserModel(payload),
             ):
                 response = client.get(USERS_ME_PATH)
@@ -196,7 +196,7 @@ class TestUsersMeEndpoint:
 
         try:
             with patch(
-                "src.api.users.set_global_user_from_cognito",
+                "src.api.users.provision_user_async",
                 return_value=_FakeUserModel(payload),
             ):
                 response = client.get(USERS_ME_PATH)
@@ -226,7 +226,7 @@ class TestUsersMeEndpoint:
 
         try:
             with patch(
-                "src.api.users.set_global_user_from_cognito",
+                "src.api.users.provision_user_async",
                 return_value=_FakeUserModel(payload),
             ):
                 response = client.get(USERS_ME_PATH)

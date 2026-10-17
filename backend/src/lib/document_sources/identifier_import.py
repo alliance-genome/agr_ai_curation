@@ -75,7 +75,7 @@ from src.models.document import (
 )
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
-from src.services.user_service import principal_from_claims, provision_user
+from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +582,7 @@ class IdentifierImportService:
         session_factory: Callable[[], Session] = SessionLocal,
         storage_path_provider: Callable[[], Path] = get_pdf_storage_path,
         principal_from_claims_fn: Callable[[dict[str, Any]], Any] = principal_from_claims,
-        provision_user_fn: Callable[[Session, Any], Any] = provision_user,
+        provision_user_fn: Callable[[Any], Awaitable[ProvisionedUser]] = provision_user_async,
         provider_factory: Callable[[], DocumentSourceProvider] = get_configured_document_source_provider,
         reference_import_selector: Callable[..., Awaitable[ReferenceImportDecision]] = select_reference_import_candidate,
         create_document_fn: Callable[[str, Any], Awaitable[dict[str, Any]]] = create_document,
@@ -624,11 +624,7 @@ class IdentifierImportService:
             identifiers,
             batch_limit=self._import_batch_limit_provider(),
         )
-        session = self._session_factory()
-        try:
-            db_user = self._provision_user(session, self._principal_from_claims(dict(user)))
-        finally:
-            session.close()
+        db_user = await self._provision_user(self._principal_from_claims(dict(user)))
 
         curator_token = (document_source_context.curator_token or "").strip()
         if not curator_token:
@@ -707,11 +703,7 @@ class IdentifierImportService:
             identifiers,
             batch_limit=self._import_batch_limit_provider(),
         )
-        session = self._session_factory()
-        try:
-            db_user = self._provision_user(session, self._principal_from_claims(dict(user)))
-        finally:
-            session.close()
+        db_user = await self._provision_user(self._principal_from_claims(dict(user)))
 
         curator_token = (document_source_context.curator_token or "").strip()
         if not curator_token:

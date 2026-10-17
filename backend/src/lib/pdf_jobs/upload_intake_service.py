@@ -78,7 +78,7 @@ from src.lib.weaviate_client.documents import (
 from src.lib.weaviate_helpers import get_tenant_name
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
-from src.services.user_service import principal_from_claims, provision_user
+from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 from . import service as pdf_job_service
 
@@ -239,7 +239,7 @@ class UploadIntakeService:
         storage_path_provider: Callable[[], Path] = get_pdf_storage_path,
         upload_handler_factory: Callable[[Path], PDFUploadHandler] | None = None,
         principal_from_claims_fn: Callable[[dict[str, Any]], Any] = principal_from_claims,
-        provision_user_fn: Callable[[Session, Any], Any] = provision_user,
+        provision_user_fn: Callable[[Any], Awaitable[ProvisionedUser]] = provision_user_async,
         create_document_fn: Callable[[str, Any], Any] = create_document,
         get_document_fn: Callable[[str, str], Any] = get_document,
         delete_document_fn: Callable[[str, str], Any] = delete_document,
@@ -306,16 +306,25 @@ class UploadIntakeService:
             max_page_count=self._max_page_count_provider(),
         )
 
+        try:
+            db_user = await self._provision_user(self._principal_from_claims(user))
+        except Exception:
+            # Provisioning owns a separate transaction. Its failures must not
+            # enter the PDF duplicate-row recovery path below.
+            await self._compensate_persistence_failure(
+                user_sub=user_sub,
+                document_id=str(document.id),
+                saved_path=saved_path,
+                weaviate_document_created=False,
+            )
+            raise
+
+        raw_checksum = document.metadata.checksum
+        scoped_file_hash = hashlib.sha256(f"{db_user.id}:{raw_checksum}".encode()).hexdigest()
         session = self._session_factory()
-        db_user = None
         weaviate_document_created = False
 
         try:
-            db_user = self._provision_user(session, self._principal_from_claims(user))
-
-            raw_checksum = document.metadata.checksum
-            scoped_file_hash = hashlib.sha256(f"{db_user.id}:{raw_checksum}".encode()).hexdigest()
-
             existing = (
                 session.execute(
                     select(ViewerPDFDocument).where(

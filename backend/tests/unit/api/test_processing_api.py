@@ -1,6 +1,7 @@
 """Unit tests for document processing API endpoints."""
 
 import logging
+from unittest.mock import AsyncMock
 
 from fastapi import BackgroundTasks, HTTPException
 import pytest
@@ -29,6 +30,7 @@ class _ClaimSession:
 
 
 def _patch_reprocess_claim(monkeypatch, file_path):
+    monkeypatch.setattr(processing, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
     claim_session = _ClaimSession()
     claim_calls = []
 
@@ -182,7 +184,7 @@ async def test_reprocess_document_success_schedules_background_task(monkeypatch,
     assert track_calls == [(document_id, ProcessingStage.PARSING)]
     assert claim_session.commits == 1
     assert claim_session.closed is True
-    assert claim_calls == [{"session": claim_session, "for_update": True}]
+    assert claim_calls == [{"session": claim_session, "for_update": True, "provisioned_user_id": 17}]
 
 
 @pytest.mark.asyncio

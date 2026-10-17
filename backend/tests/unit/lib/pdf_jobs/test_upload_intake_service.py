@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi import BackgroundTasks, UploadFile
 from pypdf import PdfWriter
@@ -336,7 +338,7 @@ async def test_intake_upload_happy_path_creates_job_and_dispatches(tmp_path):
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -380,7 +382,7 @@ async def test_intake_upload_normalizes_existing_user_storage_permissions(tmp_pa
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -457,7 +459,7 @@ async def test_intake_upload_rejects_pdf_larger_than_configured_limit_before_db_
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _OversizedUploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -500,7 +502,7 @@ async def test_intake_upload_accepts_page_counts_through_default_limit(
             page_count=page_count,
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -587,7 +589,7 @@ async def test_intake_upload_accepts_301_pages_with_350_page_override(
             page_count=301,
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -662,7 +664,7 @@ async def test_intake_upload_duplicate_keeps_existing_and_cleans_new_artifacts(t
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=_get_document,
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -719,7 +721,7 @@ async def test_intake_upload_enabled_provider_no_match_falls_back_to_local_pdf_p
             checksum="sha256-source",
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -808,7 +810,7 @@ async def test_intake_checksum_matched_supplement_processes_exact_uploaded_pdf(t
             checksum="sha256-source",
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -906,7 +908,7 @@ async def test_intake_upload_enabled_provider_ready_dispatches_markdown_import(t
             checksum="sha256-source",
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -1002,7 +1004,7 @@ async def test_intake_upload_provider_match_with_pending_conversion_does_not_dis
             checksum="sha256-source",
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -1102,7 +1104,7 @@ async def test_intake_upload_provider_source_only_ready_uses_presentation_label(
             checksum="sha256-source",
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -1189,7 +1191,7 @@ async def test_intake_upload_enabled_provider_ready_requires_curator_token(tmp_p
             checksum="sha256-source",
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -1245,7 +1247,7 @@ async def test_intake_upload_enabled_provider_duplicate_short_circuits_before_lo
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=_get_document,
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -1298,7 +1300,7 @@ async def test_intake_upload_phantom_duplicate_is_deleted_and_intake_continues(t
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=_raise_not_found,
         delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
@@ -1364,7 +1366,7 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=_create_document,
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=_delete_document,
@@ -1419,7 +1421,7 @@ async def test_intake_upload_file_size_constraint_error_is_not_misreported_as_li
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=_delete_document,
@@ -1460,7 +1462,7 @@ async def test_intake_upload_generic_commit_failure_rolls_back_and_cleans_up(tmp
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=_delete_document,
@@ -1502,7 +1504,7 @@ async def test_intake_upload_runtime_error_rolls_back_and_compensates_without_di
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=_delete_document,
@@ -1544,7 +1546,7 @@ async def test_intake_upload_runtime_error_preserves_original_exception_when_cle
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=_delete_document,
@@ -1586,7 +1588,7 @@ async def test_intake_upload_non_integrity_persistence_error_rolls_back_and_clea
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=_delete_document,
@@ -1631,7 +1633,7 @@ async def test_intake_upload_job_creation_failure_compensates_sql_weaviate_and_f
         storage_path_provider=lambda: tmp_path,
         upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda *_args, **_kwargs: _async_value(None),
         get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
         delete_document_fn=_delete_document,
@@ -1661,3 +1663,27 @@ def _async_value(value):
         return value
 
     return _coro()
+
+
+@pytest.mark.asyncio
+async def test_provisioning_integrity_failure_never_enters_pdf_duplicate_recovery(tmp_path):
+    from sqlalchemy.exc import IntegrityError
+    failure = IntegrityError('private-user-sql', {}, Exception('unique constraint private-user-constraint'))
+    dispatch = _DispatchRecorder()
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: pytest.fail('document Session opened before provisioning'),
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject='user-1'),
+        provision_user_fn=AsyncMock(side_effect=failure),
+    )
+    with pytest.raises(IntegrityError) as caught:
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename='paper.pdf', file=BytesIO(b'%PDF-1.7')),
+            user={'sub': 'user-1'},
+        )
+    assert caught.value is failure
+    assert not dispatch.calls
+    assert not any((tmp_path / 'user-1').iterdir())

@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
+from unittest.mock import AsyncMock
+
 import pytest
 import src.lib.document_sources.ingestion as ingestion_module
 from fastapi import BackgroundTasks, UploadFile
@@ -400,7 +402,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
             ),
         ),
         principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-provider"),
-        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         create_document_fn=lambda user_sub, document: _async_value(
             created_documents.append((user_sub, document))
         ),

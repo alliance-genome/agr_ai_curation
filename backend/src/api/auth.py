@@ -23,7 +23,6 @@ from jwt.exceptions import (
     PyJWKClientConnectionError,
     PyJWKClientError,
 )
-from sqlalchemy.orm import Session
 
 from auth_runtime.base import AuthProvider
 from auth_runtime.oidc import OIDCProviderResponseError
@@ -44,7 +43,7 @@ from src.lib.openai_agents.config import (
     get_auth_session_cookie_max_age_seconds,
 )
 from src.models.sql.database import get_db
-from src.services.user_service import provision_user
+from src.services.user_service import provision_user_async
 
 
 logger = logging.getLogger(__name__)
@@ -165,7 +164,6 @@ async def callback(
     response: Response,
     code: str,
     state: str,
-    db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Handle OAuth callback, provision user, and set auth cookie."""
     _ = response  # FastAPI injects this, kept for backward-compatible signature.
@@ -199,7 +197,7 @@ async def callback(
     if not principal.subject:
         raise HTTPException(status_code=400, detail="Authenticated principal missing subject")
 
-    db_user = provision_user(db, principal)
+    db_user = await provision_user_async(principal)
     logger.info("User authenticated and provisioned: %s", db_user.auth_sub)
 
     redirect_response = RedirectResponse(url="/cost/" if request.cookies.get("oauth_destination") == "cost" else "/", status_code=302)

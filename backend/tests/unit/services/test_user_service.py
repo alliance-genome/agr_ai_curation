@@ -1,47 +1,18 @@
 """Unit tests for user_service provisioning and claim mapping."""
 
 from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from src.models.sql.user import User
+
 
 import pytest
 
 from src.services import user_service
 
 
-class _DummyQuery:
-    def __init__(self, existing_user):
-        self._existing_user = existing_user
-
-    def filter_by(self, **_kwargs):
-        return self
-
-    def one_or_none(self):
-        return self._existing_user
-
-
-class _DummyDB:
-    def __init__(self, existing_user=None):
-        self.existing_user = existing_user
-        self.added = []
-        self.commit_calls = 0
-        self.refresh_calls = 0
-
-    def query(self, _model):
-        return _DummyQuery(self.existing_user)
-
-    def add(self, obj):
-        self.added.append(obj)
-        self.existing_user = obj
-
-    def commit(self):
-        self.commit_calls += 1
-
-    def refresh(self, obj):
-        self.refresh_calls += 1
-        if getattr(obj, "id", None) is None:
-            obj.id = 1
-
-
-def _principal(subject="sub-1", email="user@example.org", display_name="User"):
+def _principal(subject="sub-1", email="user@example.org", display_name: str | None="User"):
     return SimpleNamespace(subject=subject, email=email, display_name=display_name)
 
 
@@ -106,52 +77,95 @@ def test_provision_weaviate_tenants_failure(monkeypatch):
     assert user_service.provision_weaviate_tenants("abc") is False
 
 
-def test_provision_user_creates_new_user(monkeypatch):
-    class _FakeUser:
-        def __init__(self, **kwargs):
-            self.id = None
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-    db = _DummyDB(existing_user=None)
-    monkeypatch.setattr(user_service, "User", _FakeUser)
-    tenant_calls = []
-    monkeypatch.setattr(user_service, "provision_weaviate_tenants", lambda sub: tenant_calls.append(sub) or True)
-
-    result = user_service.provision_user(db, _principal(subject="sub-new", email="new@example.org", display_name="New"))
-
-    assert result.auth_sub == "sub-new"
-    assert result.email == "new@example.org"
-    assert db.commit_calls == 1
-    assert db.refresh_calls == 1
-    assert tenant_calls == ["sub-new"]
 
 
-def test_provision_user_updates_existing_user(monkeypatch):
-    existing = SimpleNamespace(
-        id=42,
-        auth_sub="sub-existing",
-        email="old@example.org",
-        display_name="Old Name",
-        last_login=None,
-    )
-    db = _DummyDB(existing_user=existing)
-    tenant_calls = []
-    monkeypatch.setattr(user_service, "provision_weaviate_tenants", lambda sub: tenant_calls.append(sub) or True)
+@pytest.fixture
+def db(monkeypatch):
+    engine = create_engine('sqlite://')
+    User.__table__.create(engine)
+    monkeypatch.delenv('DEFAULT_PROJECT_ID', raising=False)
+    monkeypatch.setattr(user_service, 'provision_weaviate_tenants', lambda _: True)
+    with Session(engine, expire_on_commit=False) as session:
+        yield session
+    engine.dispose()
 
-    result = user_service.provision_user(
-        db,
-        _principal(subject="sub-existing", email="new@example.org", display_name="New Name"),
-    )
 
-    assert result.id == 42
-    assert result.email == "new@example.org"
-    assert result.display_name == "New Name"
-    assert result.last_login is not None
-    assert db.commit_calls == 1
-    assert tenant_calls == ["sub-existing"]
+def test_first_login_and_warm_operation_counts(db, monkeypatch):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(user_service, '_utc_now', lambda: now)
+    user = user_service.provision_user(db, _principal())
+    assert user.id and user.created_at.replace(tzinfo=timezone.utc) == now
+    calls = []
+    monkeypatch.setattr(db, 'commit', lambda: calls.append('commit'))
+    monkeypatch.setattr(db, 'refresh', lambda _: calls.append('refresh'))
+    assert user_service.provision_user(db, _principal()).id == user.id
+    assert calls == []
+
+
+@pytest.mark.parametrize('age,expected', [(None, True), (299, False), (300, True), (301, True), (-60, False)])
+def test_activity_boundaries(db, monkeypatch, age, expected):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(user_service, '_utc_now', lambda: now)
+    monkeypatch.setenv('USER_ACTIVITY_WRITE_INTERVAL_SECONDS', '300')
+    user = user_service.provision_user(db, _principal())
+    user.last_login = None if age is None else now - timedelta(seconds=age)
+    db.commit()
+    original = user.last_login
+    user_service.provision_user(db, _principal())
+    assert user.last_login == (now.replace(tzinfo=None) if expected else original)
+
+
+def test_profile_clearing_is_immediate_and_preserves_account_fields(db, monkeypatch):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(user_service, '_utc_now', lambda: now)
+    user = user_service.provision_user(db, _principal())
+    created = user.created_at
+    user.is_active = False
+    db.commit()
+    monkeypatch.setattr(user_service, '_utc_now', lambda: now + timedelta(seconds=1))
+    user_service.provision_user(db, _principal(email='invalid', display_name=None))
+    assert user.email is None and user.display_name is None
+    assert user.is_active is False and user.created_at == created
+    assert user.last_login == (now + timedelta(seconds=1)).replace(tzinfo=None)
+
+
+def test_profile_write_preserves_future_timestamp(db, monkeypatch):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(user_service, '_utc_now', lambda: now)
+    user = user_service.provision_user(db, _principal())
+    user.last_login = now + timedelta(hours=1)
+    db.commit()
+    user_service.provision_user(db, _principal(email='new@example.org', display_name=None))
+    assert user.display_name == 'new@example.org'
+    assert user.last_login == (now + timedelta(hours=1)).replace(tzinfo=None)
 
 
 def test_provision_user_rejects_missing_subject():
-    with pytest.raises(ValueError):
-        user_service.provision_user(_DummyDB(), _principal(subject="", email="x@example.org", display_name="X"))
+    with pytest.raises(ValueError, match='missing subject'):
+        user_service.provision_user(object(), _principal(subject=''))
+
+
+def test_naive_and_aware_utc_interpretation():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for last in [now, now.replace(tzinfo=None), now.astimezone(timezone(timedelta(hours=3)))]:
+        assert not user_service._activity_due(last, now, 300)
+        assert user_service._activity_due(last, now + timedelta(seconds=300), 300)
+
+
+@pytest.mark.parametrize('raw,interval,ttl,capacity', [('bad', 300, 300, 1024), ('-1', 0, 0, 1), ('0', 0, 0, 1), ('12', 12, 12, 12)])
+def test_provisioning_settings(monkeypatch, raw, interval, ttl, capacity):
+    from src.lib.openai_agents import config
+    for name in ('USER_ACTIVITY_WRITE_INTERVAL_SECONDS', 'USER_TENANT_CACHE_TTL_SECONDS', 'USER_TENANT_CACHE_MAX_ENTRIES'):
+        monkeypatch.setenv(name, raw)
+    assert config.get_user_activity_write_interval_seconds() == interval
+    assert config.get_user_tenant_cache_ttl_seconds() == ttl
+    assert config.get_user_tenant_cache_max_entries() == capacity
+
+
+def test_warm_lookup_does_not_commit_unrelated_pending_work(db):
+    user_service.provision_user(db, _principal())
+    unrelated = User(auth_sub='pending', email=None, display_name=None)
+    db.add(unrelated)
+    user_service.provision_user(db, _principal())
+    assert unrelated in db.new and unrelated.id is None
+    db.rollback()
