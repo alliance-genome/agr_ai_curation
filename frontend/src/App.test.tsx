@@ -148,7 +148,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -171,7 +171,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -213,7 +213,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -255,7 +255,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -295,7 +295,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -338,7 +338,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -365,7 +365,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -402,7 +402,7 @@ describe('AppContent global notifications', () => {
         });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -440,7 +440,7 @@ describe('AppContent global notifications', () => {
         });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -482,7 +482,7 @@ describe('AppContent global notifications', () => {
         });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -504,6 +504,35 @@ describe('AppContent global notifications', () => {
     expect(screen.getByText('PDF processing cancelled: cancel-me.pdf')).toBeInTheDocument();
   });
 
+  it('retains terminal continuation after failure and seeds every initial page without old toasts', async () => {
+    vi.useFakeTimers();
+    const urls: string[] = [];
+    let terminalRequests = 0;
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.includes('/api/batches')) return jsonResponse({ jobs: [] });
+      urls.push(url);
+      terminalRequests += 1;
+      if (terminalRequests === 2) return new Response('', { status: 503 });
+      return jsonResponse({
+        batches: [{ id: terminalRequests === 1 ? 'old-1' : terminalRequests === 4 ? 'new' : 'old-2', status: 'completed',
+          flow_name: 'Historical', completed_documents: 1, total_documents: 1, failed_documents: 0 }],
+        next_cursor: terminalRequests === 1 ? 'page-two' : null,
+        coverage: 'recent_window', window_start: '2026-01-01T00:00:00Z', window_end: '2026-01-02T00:00:00Z',
+      });
+    });
+    renderAppContent('/');
+    await act(async () => { await Promise.resolve(); });
+    expect(urls).toEqual(['/api/batches/terminals']);
+    for (let tick = 0; tick < 2; tick += 1) {
+      await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); });
+    }
+    expect(urls).toEqual(['/api/batches/terminals', '/api/batches/terminals?cursor=page-two', '/api/batches/terminals?cursor=page-two']);
+    expect(screen.queryByText(/Batch completed/)).not.toBeInTheDocument();
+    await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); });
+    expect(screen.getByText('Batch completed (Historical): 1/1 succeeded, 0 failed')).toBeInTheDocument();
+  });
+
   it('skips PDF job polling on Add Literature and skips batch polling on batch route', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -511,7 +540,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -549,7 +578,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -567,7 +596,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -586,7 +615,7 @@ describe('AppContent global notifications', () => {
           return jsonResponse({ jobs: [] });
         }
         if (url.includes('/api/batches')) {
-          return jsonResponse({ batches: [] });
+          return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
         }
         return jsonResponse({});
       });
@@ -636,7 +665,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });
@@ -657,7 +686,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [] });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
       }
       return jsonResponse({});
     });

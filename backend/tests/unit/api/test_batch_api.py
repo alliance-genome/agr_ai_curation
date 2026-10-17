@@ -335,8 +335,7 @@ async def test_create_batch_rejects_missing_documents_with_truncation(monkeypatc
 async def test_running_count_endpoint(monkeypatch):
     _mock_auth(monkeypatch, user_id=8)
     service = SimpleNamespace(
-        count_running_batches=lambda user_id: 3 if user_id == 8 else 0,
-        get_pending_documents_count=lambda user_id: 12 if user_id == 8 else 0,
+        active_totals=lambda user_id: {"running_count": 3, "pending_documents": 12},
     )
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
@@ -353,8 +352,7 @@ async def test_list_batches_endpoint(monkeypatch):
     response_two = _make_batch_response(batch_id=batch_two.id)
 
     service = SimpleNamespace(
-        list_batches=lambda _user_id: [batch_one, batch_two],
-        batch_to_response=lambda batch: response_one if batch.id == batch_one.id else response_two,
+        list_batches=lambda *_args: batch_api.BatchListResponse(batches=[response_one, response_two], total=2),
     )
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
 
@@ -853,3 +851,47 @@ async def _read_streaming_response(response):
         else:
             chunks.append(chunk.encode("utf-8"))
     return b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_summary_routes_dispatch_owner_filters_and_validation(monkeypatch):
+    _mock_auth(monkeypatch, user_id=8)
+    from unittest.mock import Mock
+    from src.schemas.batch import BatchListResponse, BatchTerminalResponse, BatchLookupRequest, BatchLookupResponse
+    service = Mock()
+    service.list_batches.return_value = BatchListResponse(batches=[], total=42, next_cursor='next')
+    monkeypatch.setattr(batch_api, 'BatchService', lambda db: service)
+    result = await batch_api.list_batches({'sub': 'u'}, db=object(), limit=5, cursor='page', status='active')
+    service.list_batches.assert_called_once_with(8, 5, 'page', 'active')
+    assert result.total == 42 and result.next_cursor == 'next'
+    service.list_batches.side_effect = batch_api.BatchQueryError('Invalid batch cursor for this query')
+    with pytest.raises(HTTPException) as error:
+        await batch_api.list_batches({'sub': 'u'}, db=object(), cursor='bad')
+    assert error.value.status_code == 422
+    now = datetime.now(timezone.utc)
+    terminals = Mock(return_value=BatchTerminalResponse(batches=[], window_start=now, window_end=now, coverage='reset'))
+    monkeypatch.setattr(batch_api, 'terminal_summaries', terminals)
+    db = object()
+    result = await batch_api.list_terminal_batches({'sub': 'u'}, db=db, limit=2, since=now)
+    terminals.assert_called_once_with(db, 8, 2, None, now)
+    assert result.coverage == 'reset'
+    identity = uuid4()
+    lookup = Mock(return_value=BatchLookupResponse(batches=[], unavailable_ids=[identity]))
+    monkeypatch.setattr(batch_api, 'lookup_summaries', lookup)
+    result = await batch_api.lookup_batches(BatchLookupRequest(ids=[identity]), {'sub': 'u'}, db=db)
+    lookup.assert_called_once_with(db, 8, [identity])
+    assert result.unavailable_ids == [identity]
+    paths = [route.path for route in batch_api.router.routes]
+    assert paths.index('/api/batches/terminals') < paths.index('/api/batches/{batch_id}')
+    assert paths.index('/api/batches/lookup') < paths.index('/api/batches/{batch_id}')
+
+
+@pytest.mark.asyncio
+async def test_summary_persisted_data_failure_is_not_misreported_as_bad_request(monkeypatch):
+    _mock_auth(monkeypatch)
+    from unittest.mock import Mock
+    service = Mock()
+    service.list_batches.side_effect = ValueError("persisted data is corrupt")
+    monkeypatch.setattr(batch_api, 'BatchService', lambda db: service)
+    with pytest.raises(ValueError, match="persisted data is corrupt"):
+        await batch_api.list_batches({'sub': 'u'}, db=object())

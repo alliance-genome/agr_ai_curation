@@ -20,13 +20,15 @@ class TestBatchService:
     def test_list_batches_returns_empty_for_new_user(self):
         """List batches returns empty list for user with no batches."""
         mock_db = Mock()
-        mock_db.scalars.return_value.all.return_value = []
+        mock_db.execute.return_value.mappings.return_value.all.return_value = []
+        mock_db.scalar.return_value = 0
         service = BatchService(mock_db)
         user_id = 99999  # Non-existent user
 
         result = service.list_batches(user_id)
 
-        assert result == []
+        assert result.batches == []
+        assert result.total == 0
 
     def test_get_batch_returns_none_for_nonexistent(self):
         """Get batch returns None for non-existent batch."""
@@ -63,7 +65,7 @@ class TestBatchService:
     def test_get_flow_name_returns_none_for_nonexistent(self):
         """Get flow name returns None for non-existent flow."""
         mock_db = Mock()
-        mock_db.query.return_value.filter.return_value.first.return_value = None
+        mock_db.scalar.return_value = None
         service = BatchService(mock_db)
 
         result = service.get_flow_name(uuid4())
@@ -210,29 +212,11 @@ class TestBatchServiceMocked:
         assert mock_batch.started_at == started_at
         mock_db.commit.assert_called_once()
 
-    def test_count_running_batches_returns_scalar(self):
-        """Count running batches should return query scalar result."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        # Mock the query chain to return 0
-        mock_db.query.return_value.filter.return_value.scalar.return_value = 0
-
-        count = service.count_running_batches(user_id=123)
-
-        assert count == 0
-
-    def test_count_running_batches_handles_none(self):
-        """Count running batches should return 0 when scalar is None."""
-        mock_db = Mock()
-        service = BatchService(mock_db)
-
-        # Mock the query chain to return None
-        mock_db.query.return_value.filter.return_value.scalar.return_value = None
-
-        count = service.count_running_batches(user_id=123)
-
-        assert count == 0
+    @pytest.mark.parametrize("counts", [(0, 0), (3, 17)])
+    def test_active_totals(self, counts):
+        db = Mock()
+        db.execute.return_value.one.return_value = counts
+        assert BatchService(db).active_totals(123) == {"running_count": counts[0], "pending_documents": counts[1]}
 
     # CR-11: Test that PENDING batches can be cancelled
     def test_cancel_batch_works_for_pending_status(self):
@@ -337,7 +321,7 @@ class TestBatchToResponseMocked:
         second_review_session_id = uuid4()
         extraction_result_id = uuid4()
         mock_db = Mock()
-        mock_db.scalars.side_effect = [
+        mock_db.execute.side_effect = [
             SimpleNamespace(
                 all=lambda: [
                     SimpleNamespace(id=second_review_session_id, adapter_key="allele"),
@@ -348,6 +332,7 @@ class TestBatchToResponseMocked:
                 all=lambda: [
                     SimpleNamespace(
                         id=extraction_result_id,
+                        document_id=document.document_id,
                         adapter_key="gene",
                         agent_key="gene_extractor",
                         candidate_count=2,
@@ -404,7 +389,7 @@ class TestBatchToResponseMocked:
 
     def test_document_handoff_metadata_rejects_missing_review_session(self):
         mock_db = Mock()
-        mock_db.scalars.return_value = SimpleNamespace(all=lambda: [])
+        mock_db.execute.return_value = SimpleNamespace(all=lambda: [])
         service = BatchService(mock_db)
         batch = SimpleNamespace(id=uuid4())
         document = SimpleNamespace(
@@ -464,8 +449,8 @@ class TestBatchToResponseMocked:
         }
         with patch.object(service, 'get_document_titles', return_value={}), patch.object(
             service,
-            'get_document_handoff_metadata',
-            return_value=handoff_metadata,
+            'get_documents_handoff_metadata',
+            return_value={mock_doc1.id: handoff_metadata},
         ):
             result = service.batch_to_response(mock_batch, flow_name="Test Flow")
 
@@ -520,8 +505,8 @@ class TestBatchToResponseMocked:
 
         with patch.object(service, "get_document_titles", return_value={}), patch.object(
             service,
-            "get_document_handoff_metadata",
-            return_value={},
+            "get_documents_handoff_metadata",
+            return_value={document.id: {}},
         ), pytest.raises(ValueError, match="invalid canonical result_files manifest"):
             service.batch_to_response(batch, flow_name="Flow")
 
@@ -560,14 +545,14 @@ class TestBatchToResponseMocked:
         # Mock document titles lookup
         with patch.object(service, 'get_document_titles', return_value={doc_id: "My Document"}) as mock_titles, patch.object(
             service,
-            'get_document_handoff_metadata',
-            return_value={
+            'get_documents_handoff_metadata',
+            return_value={mock_doc.id: {
                 "adapter_keys": [],
                 "extraction_result_ids": [],
                 "extraction_result_refs": [],
                 "flow_run_id": str(mock_batch.id),
                 "origin_session_id": None,
-            },
+            }},
         ):
             result = service.batch_to_response(mock_batch, flow_name="Flow")
 

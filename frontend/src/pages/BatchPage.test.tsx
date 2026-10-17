@@ -117,7 +117,7 @@ describe('BatchPage', () => {
         )
       }
 
-      if (url === '/api/batches') {
+      if ((url === '/api/batches' || url === '/api/batches?status=active')) {
         return Promise.resolve(
           jsonResponse({
             batches: [],
@@ -190,7 +190,9 @@ describe('BatchPage', () => {
         }))
       }
 
-      if (url === '/api/batches') {
+      // History may contain only newer terminals; active discovery is independent.
+      if (url === '/api/batches') return Promise.resolve(jsonResponse({ batches: [] }));
+      if (url === '/api/batches?status=active') {
         return Promise.resolve(jsonResponse({
           batches: [{
             id: 'batch-live',
@@ -316,7 +318,7 @@ describe('BatchPage', () => {
         }))
       }
 
-      if (url === '/api/batches') {
+      if ((url === '/api/batches' || url === '/api/batches?status=active')) {
         return Promise.resolve(jsonResponse({
           batches: [{
             id: 'batch-live',
@@ -401,7 +403,7 @@ describe('BatchPage', () => {
         return Promise.resolve(new Response(null, { status: 401 }))
       }
 
-      if (url === '/api/batches') {
+      if ((url === '/api/batches' || url === '/api/batches?status=active')) {
         return Promise.resolve(
           jsonResponse({
             batches: [],
@@ -428,7 +430,7 @@ describe('BatchPage', () => {
       if (url.startsWith('/api/flows?')) {
         return Promise.resolve(jsonResponse({ flows: [], total: 0, page: 1, page_size: DEFAULT_FLOW_LIST_PAGE_SIZE }))
       }
-      if (url === '/api/batches') {
+      if ((url === '/api/batches' || url === '/api/batches?status=active')) {
         return Promise.resolve(jsonResponse({ batches: [{
           id: 'batch-empty', flow_id: 'flow-1', flow_name: 'Empty extraction flow', status,
           total_documents: 1, completed_documents: mode === 'history' ? 1 : 0,
@@ -507,7 +509,7 @@ describe('BatchPage', () => {
         )
       }
 
-      if (url === '/api/batches') {
+      if ((url === '/api/batches' || url === '/api/batches?status=active')) {
         return Promise.resolve(
           jsonResponse({
             batches: [

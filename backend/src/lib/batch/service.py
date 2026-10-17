@@ -1,7 +1,7 @@
 """Batch processing service layer."""
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List
+from typing import Any, Optional, List
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, update
@@ -15,8 +15,10 @@ from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord,
     CurationReviewSession,
 )
-from src.schemas.batch import BatchResponse, BatchDocumentResponse
+from src.schemas.batch import BatchResponse, BatchDocumentResponse, BatchListResponse
 from .result_files import canonical_result_files
+from .summaries import BatchFilter, list_summaries
+from src.lib.openai_agents.config import get_batch_metadata_chunk_size
 from .status import (
     require_batch_status_transition,
 )
@@ -30,49 +32,35 @@ class BatchService:
     def __init__(self, db: Session):
         self.db = db
 
-    def list_batches(self, user_id: int) -> List[Batch]:
-        """List all batches for a user, ordered by created_at desc."""
-        logger.debug("Listing batches for user_id=%s", user_id)
-        stmt = (
-            select(Batch)
-            .where(Batch.user_id == user_id)
-            .order_by(Batch.created_at.desc())
-            .options(selectinload(Batch.documents))
-        )
-        result = self.db.scalars(stmt).all()
-        batches = list(result)
-        logger.debug("Found %d batches for user_id=%s", len(batches), user_id)
-        return batches
+    def list_batches(
+        self,
+        user_id: int,
+        limit: int | None = None,
+        cursor: str | None = None,
+        status: BatchFilter | None = None,
+    ) -> BatchListResponse:
+        """Return bounded, column-only history summaries."""
+        return list_summaries(self.db, user_id, limit, cursor, status)
 
-    def count_running_batches(self, user_id: int) -> int:
-        """Count running/pending batches for a user.
-
-        Lightweight query for nav badge without loading documents.
-        """
-        # CR-9: func import moved to module top level
-        count = self.db.query(func.count(Batch.id)).filter(
-            Batch.user_id == user_id,
-            Batch.status.in_([BatchStatus.PENDING.value, BatchStatus.RUNNING.value])
-        ).scalar()
-        return count or 0
-
-    def get_pending_documents_count(self, user_id: int) -> int:
-        """Get count of documents remaining to process across all running batches.
-
-        Calculates: sum(total_documents - completed_documents - failed_documents)
-        for all PENDING or RUNNING batches owned by the user.
-
-        Lightweight query for nav badge polling.
-        """
-        result = self.db.query(
-            func.sum(
-                Batch.total_documents - Batch.completed_documents - Batch.failed_documents
+    def active_totals(self, user_id: int) -> dict[str, int]:
+        """Exact all-active totals, independent of displayed pages."""
+        running, pending = self.db.execute(
+            select(
+                func.count(Batch.id),
+                func.coalesce(
+                    func.sum(
+                        Batch.total_documents
+                        - Batch.completed_documents
+                        - Batch.failed_documents
+                    ),
+                    0,
+                ),
+            ).where(
+                Batch.user_id == user_id,
+                Batch.status.in_([BatchStatus.PENDING, BatchStatus.RUNNING]),
             )
-        ).filter(
-            Batch.user_id == user_id,
-            Batch.status.in_([BatchStatus.PENDING.value, BatchStatus.RUNNING.value])
-        ).scalar()
-        return result or 0
+        ).one()
+        return {"running_count": running, "pending_documents": pending}
 
     def get_batch(self, batch_id: UUID, user_id: int) -> Optional[Batch]:
         """Get a batch by ID, verifying ownership."""
@@ -419,8 +407,7 @@ class BatchService:
 
     def get_flow_name(self, flow_id: UUID) -> Optional[str]:
         """Get flow name by ID."""
-        flow = self.db.query(CurationFlow).filter(CurationFlow.id == flow_id).first()
-        return flow.name if flow else None
+        return self.db.scalar(select(CurationFlow.name).where(CurationFlow.id == flow_id))
 
     def get_document_titles(self, document_ids: List[UUID]) -> dict[UUID, str]:
         """Look up document titles by IDs.
@@ -434,14 +421,18 @@ class BatchService:
         if not document_ids:
             return {}
 
-        docs = self.db.query(PDFDocument).filter(
-            PDFDocument.id.in_(document_ids)
-        ).all()
+        docs = []
+        size = get_batch_metadata_chunk_size()
+        for offset in range(0, len(document_ids), size):
+            docs.extend(
+                self.db.execute(
+                    select(
+                        PDFDocument.id, PDFDocument.title, PDFDocument.filename
+                    ).where(PDFDocument.id.in_(document_ids[offset : offset + size]))
+                ).all()
+            )
 
-        return {
-            doc.id: doc.title or doc.filename
-            for doc in docs
-        }
+        return {doc.id: doc.title or doc.filename for doc in docs}
 
     def batch_to_response(self, batch: Batch, flow_name: Optional[str] = None) -> BatchResponse:
         """Convert Batch model to BatchResponse schema.
@@ -460,10 +451,12 @@ class BatchService:
         document_ids = [d.document_id for d in batch.documents]
         document_titles = self.get_document_titles(document_ids)
 
+        metadata = self.get_documents_handoff_metadata(batch, batch.documents)
+
         # Build document responses with titles
         document_responses = []
         for d in batch.documents:
-            handoff_metadata = self.get_document_handoff_metadata(batch, d)
+            handoff_metadata = metadata[d.id]
             stored_output_status = getattr(d, "output_status", None)
             stored_output_branches = getattr(d, "output_branches", None)
             doc_dict = {
@@ -507,85 +500,106 @@ class BatchService:
         self,
         batch: Batch,
         document: BatchDocument,
-    ) -> dict[str, object]:
-        """Return authoritative curation identities for one persisted batch result."""
+    ) -> dict[str, Any]:
+        """Single-document SSE enrichment uses the same bulk identity contract."""
+        return self.get_documents_handoff_metadata(batch, [document])[document.id]
 
-        if document.status != BatchDocumentStatus.COMPLETED:
-            return {
+    def get_documents_handoff_metadata(
+        self,
+        batch: Batch,
+        documents: list[BatchDocument],
+    ) -> dict[UUID, dict[str, Any]]:
+        """Resolve persisted identities in chunks; assembly performs no SQL.
+
+        These checks protect reference integrity, not scientific judgments.
+        Callers must authorize the batch before enrichment.
+        """
+        metadata: dict[UUID, dict[str, Any]] = {
+            d.id: {
                 "adapter_keys": [],
                 "extraction_result_ids": [],
                 "extraction_result_refs": [],
                 "flow_run_id": str(batch.id),
                 "origin_session_id": None,
             }
-
-        review_session_ids = list(document.review_session_ids or [])
-        try:
-            session_ids = [UUID(session_id) for session_id in review_session_ids]
-        except (TypeError, ValueError, AttributeError) as exc:
-            raise ValueError(
-                f"Batch document {document.id} has an invalid authoritative review-session ID"
-            ) from exc
-
-        sessions_by_id: dict[UUID, CurationReviewSession] = {}
-        if session_ids:
-            sessions_by_id = {
-                session.id: session
-                for session in self.db.scalars(
-                    select(CurationReviewSession).where(CurationReviewSession.id.in_(session_ids))
-                ).all()
-            }
-            missing_session_ids = [
-                str(session_id) for session_id in session_ids if session_id not in sessions_by_id
-            ]
-            if missing_session_ids:
-                raise ValueError(
-                    f"Batch document {document.id} references missing authoritative review "
-                    f"sessions: {', '.join(missing_session_ids)}"
-                )
-
-        extraction_results = list(
-            self.db.scalars(
-                select(CurationExtractionResultRecord)
-                .where(
-                    CurationExtractionResultRecord.document_id == document.document_id,
-                    CurationExtractionResultRecord.flow_run_id == str(batch.id),
-                    CurationExtractionResultRecord.agent_key != CURATION_PREP_AGENT_ID,
-                )
-                .order_by(
-                    CurationExtractionResultRecord.created_at.asc(),
-                    CurationExtractionResultRecord.id.asc(),
-                )
-            ).all()
-        )
-        extraction_result_refs = [
-            {
-                "result_ref": f"extraction-result:{record.id}",
-                "extraction_result_id": str(record.id),
-                "adapter_key": record.adapter_key,
-                "agent_key": record.agent_key,
-                "candidate_count": record.candidate_count,
-                "trace_id": record.trace_id,
-            }
-            for record in extraction_results
-        ]
-
-        return {
-            "adapter_keys": [
-                sessions_by_id[session_id].adapter_key
-                for session_id in session_ids
-            ],
-            "extraction_result_ids": [
-                ref["extraction_result_id"] for ref in extraction_result_refs
-            ],
-            "extraction_result_refs": extraction_result_refs,
-            "flow_run_id": str(batch.id),
-            "origin_session_id": next(
-                (
-                    record.origin_session_id
-                    for record in extraction_results
-                    if record.origin_session_id
-                ),
-                None,
-            ),
+            for d in documents
         }
+        completed = [d for d in documents if d.status == BatchDocumentStatus.COMPLETED]
+        session_ids_by_document = {}
+        for document in completed:
+            try:
+                session_ids_by_document[document.id] = [
+                    UUID(s) for s in (document.review_session_ids or [])
+                ]
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValueError(
+                    f"Batch document {document.id} has an invalid authoritative review-session ID"
+                ) from exc
+        all_session_ids = list(
+            dict.fromkeys(s for ids in session_ids_by_document.values() for s in ids)
+        )
+        size = get_batch_metadata_chunk_size()
+        sessions_by_id = {}
+        for offset in range(0, len(all_session_ids), size):
+            sessions_by_id.update(
+                {
+                    row.id: row
+                    for row in self.db.execute(
+                        select(
+                            CurationReviewSession.id, CurationReviewSession.adapter_key
+                        ).where(
+                            CurationReviewSession.id.in_(
+                                all_session_ids[offset : offset + size]
+                            )
+                        )
+                    ).all()
+                }
+            )
+        for document in completed:
+            ids = session_ids_by_document[document.id]
+            missing = [str(i) for i in ids if i not in sessions_by_id]
+            if missing:
+                raise ValueError(
+                    f"Batch document {document.id} references missing authoritative review sessions: {', '.join(missing)}"
+                )
+            metadata[document.id]["adapter_keys"] = [
+                sessions_by_id[i].adapter_key for i in ids
+            ]
+
+        by_document = {d.document_id: d.id for d in completed}
+        document_ids = list(by_document)
+        record = CurationExtractionResultRecord
+        for offset in range(0, len(document_ids), size):
+            rows = self.db.execute(
+                select(
+                    record.id,
+                    record.document_id,
+                    record.adapter_key,
+                    record.agent_key,
+                    record.candidate_count,
+                    record.trace_id,
+                    record.origin_session_id,
+                )
+                .where(
+                    record.document_id.in_(document_ids[offset : offset + size]),
+                    record.flow_run_id == str(batch.id),
+                    record.agent_key != CURATION_PREP_AGENT_ID,
+                )
+                .order_by(record.created_at.asc(), record.id.asc())
+            ).all()
+            for row in rows:
+                entry = metadata[by_document[row.document_id]]
+                entry["extraction_result_ids"].append(str(row.id))
+                entry["extraction_result_refs"].append(
+                    {
+                        "result_ref": f"extraction-result:{row.id}",
+                        "extraction_result_id": str(row.id),
+                        "adapter_key": row.adapter_key,
+                        "agent_key": row.agent_key,
+                        "candidate_count": row.candidate_count,
+                        "trace_id": row.trace_id,
+                    }
+                )
+                if entry["origin_session_id"] is None and row.origin_session_id:
+                    entry["origin_session_id"] = row.origin_session_id
+        return metadata
