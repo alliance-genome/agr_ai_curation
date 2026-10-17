@@ -174,7 +174,7 @@ async def test_open_asgi_viewers_release_one_connection_pool(harness):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("late_failure", [False, True])
-async def test_disconnect_during_worker_releases_eventually(harness, late_failure):
+async def test_disconnect_during_worker_releases_eventually(harness, late_failure, caplog):
     h = harness
     c = Connection(h)
     await until(lambda: c.bodies)
@@ -193,6 +193,12 @@ async def test_disconnect_during_worker_releases_eventually(harness, late_failur
     await asyncio.sleep(0.15)
     assert h.state.queries == queries
     assert len(h.state.reports) == int(late_failure)
+    records = [r for r in caplog.records if r.name == streaming.__name__]
+    assert len(records) == int(late_failure)
+    if late_failure:
+        assert records[0].sentry_skip_event is True
+        assert records[0].exc_info is None
+        assert "fake-password" not in caplog.text
     assert sum(h.balances) == 0
 
 
@@ -273,7 +279,7 @@ async def test_snapshot_delta_metadata_and_serialized_payload(harness):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["query", "metadata", "serialization"])
-async def test_worker_failures_close_and_report_sanitized(harness, failure):
+async def test_worker_failures_close_and_report_sanitized(harness, failure, caplog):
     h = harness
     c = Connection(h)
     await until(lambda: c.bodies)
@@ -291,8 +297,44 @@ async def test_worker_failures_close_and_report_sanitized(harness, failure):
     assert exc.__context__ is None and exc.__cause__ is None
     assert exc.__traceback__ is not None
     assert context == {"component": "batch_stream", "operation": "stream_failed"}
+    records = [r for r in caplog.records if r.name == streaming.__name__]
+    assert len(records) == 1
+    assert records[0].getMessage() == (
+        "Batch progress snapshot failed (TypeError)" if failure == "serialization"
+        else "Batch progress snapshot failed (RuntimeError)" if failure == "query"
+        else "Batch progress snapshot failed (ValueError)"
+    )
+    assert records[0].sentry_skip_event is True
+    assert records[0].exc_info is None
+    assert "fake-password" not in caplog.text
     assert h.engine.pool.checkedout() == 0
     assert not h.broadcaster._subscribers
+
+
+@pytest.mark.asyncio
+async def test_broadcaster_failure_logs_and_reports_once(harness, monkeypatch, caplog):
+    h = harness
+
+    async def fail_subscribe(_batch_id):
+        raise ValueError("fake-password curator content")
+
+    monkeypatch.setattr(h.broadcaster, "subscribe", fail_subscribe)
+    c = Connection(h, pause=False)
+    await asyncio.wait_for(c.task, 5)
+    assert b"internal error" in b"".join(c.bodies)
+    assert b"fake-password" not in b"".join(c.bodies)
+    assert len(h.state.reports) == 1
+    exc, _ = h.state.reports[0]
+    assert "fake-password" not in str(exc)
+    assert exc.__context__ is None and exc.__cause__ is None
+    records = [r for r in caplog.records if r.name == streaming.__name__]
+    assert len(records) == 1
+    assert records[0].getMessage() == "Batch progress stream failed (ValueError)"
+    assert records[0].sentry_skip_event is True
+    assert records[0].exc_info is None
+    assert "fake-password" not in caplog.text
+    assert not h.broadcaster._subscribers
+    assert h.engine.pool.checkedout() == 0
 
 
 @pytest.mark.asyncio

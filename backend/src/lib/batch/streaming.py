@@ -5,11 +5,13 @@ The broadcaster remains best-effort; periodic reads reconcile durable state.
 """
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict
 from uuid import UUID
 
 import anyio
+from anyio.to_thread import run_sync
 from starlette.responses import StreamingResponse
 
 from .events import get_batch_broadcaster
@@ -21,6 +23,7 @@ from ..observability.runtime import report_runtime_exception, sanitized_runtime_
 from ..openai_agents.config import get_batch_stream_poll_interval_seconds
 
 _BACKEND_ONLY_BATCH_EVENT_FIELDS = {"internal"}
+logger = logging.getLogger(__name__)
 
 
 def _sanitize_batch_stream_event(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -137,7 +140,11 @@ def read_snapshot(batch_id: UUID, user_id: int, previous: Snapshot) -> Snapshot:
                     "completed_at": batch.completed_at.isoformat() if batch.completed_at else None,
                 }))
             return Snapshot(tuple(events), statuses, counts, terminal)
-    except Exception:
+    except Exception as exc:
+        logger.error(
+            "Batch progress snapshot failed (%s)", type(exc).__name__,
+            extra={"sentry_skip_event": True},
+        )
         _report_failure()
         raise
 
@@ -157,7 +164,7 @@ async def generate_batch_stream(batch_id: UUID, user_id: int):
                 # Abandoning the await never closes a Session from another thread.
                 # AnyIO observes worker completion; its with block closes the
                 # Session and its exception handler reports even after disconnect.
-                previous = await anyio.to_thread.run_sync(
+                previous = await run_sync(
                     read_snapshot, batch_id, user_id, previous,
                     abandon_on_cancel=True,
                 )
@@ -179,8 +186,12 @@ async def generate_batch_stream(batch_id: UUID, user_id: int):
             # Keep nonblocking queue polling: producer threads do not provide
             # asyncio cross-thread wakeup guarantees.
             await asyncio.sleep(0.1)
-    except Exception:
+    except Exception as exc:
         if not snapshot_failed:
+            logger.error(
+                "Batch progress stream failed (%s)", type(exc).__name__,
+                extra={"sentry_skip_event": True},
+            )
             _report_failure()
         yield _encode({"type": "ERROR", "message": "Batch stream encountered an internal error"})
     finally:
