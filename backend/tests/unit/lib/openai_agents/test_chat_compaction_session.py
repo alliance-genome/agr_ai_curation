@@ -42,12 +42,14 @@ class _FakeDb:
         self.rollbacks = 0
         self.closed = False
         self.deleted = []
+        self.lock_statements = []
 
     def scalar(self, _stmt):
         return self.projection
 
     def execute(self, stmt):
-        self.deleted.append(stmt)
+        self.lock_statements.append(stmt)
+        return SimpleNamespace(scalar_one_or_none=lambda: "session-1")
 
     def delete(self, model):
         self.deleted.append(model)
@@ -73,7 +75,7 @@ class _FakeRepository:
         self.list_calls = []
 
     def get_session(self, **_kwargs):
-        return SimpleNamespace(session_id="session-1")
+        return SimpleNamespace(session_id="session-1", chat_kind=ASSISTANT_CHAT_KIND)
 
     def list_messages(self, **kwargs):
         self.list_calls.append(kwargs)
@@ -396,10 +398,11 @@ def test_durable_session_add_items_writes_projection_without_double_writing_curr
         session.add_items(
             [
                 {"role": "user", "content": "current prompt"},
+                {"type": "function_call", "call_id": "call-raw", "name": "lookup", "arguments": "{}"},
                 {
                     "type": "function_call_output",
                     "call_id": "call-raw",
-                    "output": {"large_raw_payload": "must not be replayed"},
+                    "output": "Exact result must survive.",
                 },
                 {"role": "assistant", "content": "current answer"},
             ]
@@ -415,6 +418,8 @@ def test_durable_session_add_items_writes_projection_without_double_writing_curr
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer"},
         {"role": "user", "content": "current prompt"},
+        {"type": "function_call", "call_id": "call-raw", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call-raw", "output": "Exact result must survive."},
         {"role": "assistant", "content": "current answer"},
     ]
 

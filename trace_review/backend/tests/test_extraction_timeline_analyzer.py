@@ -567,12 +567,40 @@ def test_evidence_revisions_summarizes_history_and_scope_refusals():
 
 def test_context_compaction_measurements_survive_timeline_extraction(tmp_path, monkeypatch):
     monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
-    metrics = {"policy": "exact_history_native_compaction_v2", "native_compactions": 2,
-               "compacted_prefix_items": 40, "above_soft_target": False,
-               "archive_healthy": True, "retrieval_call_count": 12,
-               "before": {"estimated_total_tokens": 61052}, "after": {"estimated_total_tokens": 39797}}
+    metrics = {"policy": "native_compaction", "native_compactions": 2,
+               "compacted_prefix_items": 40,
+               "archive_healthy": True, "input_item_count": 12}
     _write_event(tmp_path, "trace-context", _event("trace-context", 1, "runtime.context_view",
                  output_summary={"preview": metrics}, metadata={"agent": "extractor"}))
     timeline = ExtractionTimelineAnalyzer.analyze(trace_id="trace-context", raw_trace={}, observations=[], include_raw_outputs=True)
     assert timeline["event_type_counts"] == {"runtime.context_view": 1}
     assert timeline["timeline"][0]["output"]["preview"] == metrics
+
+
+def test_capacity_event_writer_and_timeline_keep_counts_and_redact_credentials(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+    from pathlib import Path
+    # Load the actual application writer without colliding with TraceReview's src package.
+    path = next((parent / "backend/src/lib/openai_agents/extraction_trace_events.py"
+        for parent in Path(__file__).resolve().parents
+        if (parent / "backend/src/lib/openai_agents/extraction_trace_events.py").exists()), Path("/missing"))
+    if not path.exists():
+        path = Path("/app/backend/src/lib/openai_agents/extraction_trace_events.py")
+    spec = importlib.util.spec_from_file_location("capacity_event_writer_fixture", path)
+    writer = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = writer
+    spec.loader.exec_module(writer)
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    monkeypatch.setattr(writer, "_mirror_to_langfuse", lambda event: None)
+    metrics = {"input_tokens_before": 950000, "input_tokens_after": 250000,
+        "token_count_requests": 9, "token_count_duration_ms": 42.5,
+        "standalone_compactions": 1, "capacity_ingress_payloads": 2, "pending_payloads": 1}
+    writer.start_extraction_trace_run(trace_id="capacity")
+    try:
+        writer.write_extraction_trace_event(event_type="runtime.context_capacity",
+            output_summary={**metrics, "access_token": "private"})
+    finally:
+        writer.clear_extraction_trace_run()
+    result = ExtractionTimelineAnalyzer.analyze(trace_id="capacity", raw_trace={}, observations=[], include_raw_outputs=True)
+    assert result["timeline"][0]["output"]["preview"] == {**metrics, "access_token": "<redacted>"}

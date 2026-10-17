@@ -92,9 +92,9 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "stage_gene_expression_observation" in content
     assert "metadata.evidence_records[]" in content
     assert "Do not stage `evidence_text`" in content
-    assert "read_chunk(chunk_id)" in content
-    assert "`evidence_spans[].span_id`" in content
-    assert "record_evidence(entity=..., span_ids=[...])" in content
+    assert "read_chunk(chunk_index)" in content
+    assert "`evidence_spans[].span_index`" in content
+    assert 'record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])' in content
     assert "reuse that `evidence_record_id`" in content
     assert "do not call `record_evidence` again for the" in content
     assert "list_recorded_evidence" in content
@@ -108,7 +108,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "discard_recorded_evidence" in content
     assert "update_recorded_evidence_metadata" in content
     assert "Source quote and provenance fields are backend-owned" in content
-    assert "Multiple `span_ids` in one `record_evidence` call produce one evidence record" in content
+    assert "Multiple `selections` in one `record_evidence` call produce one evidence record" in content
     assert "payload.evidence_text" not in content
     assert "claimed_quote" not in content
     assert "verbatim or lightly trimmed" not in content

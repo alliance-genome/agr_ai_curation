@@ -21,7 +21,7 @@ Each tool case defines one `record_evidence` invocation:
   "case_id": "verified_exact",
   "tool_input": {
     "entity": "crumb",
-    "span_ids": ["chunk-1:s0001:c0000-c0018:abcd1234"]
+    "selections": [{"chunk_index": 0, "span_index": 1}]
   },
   "expected_tool_result": {
     "status": "verified",
@@ -33,7 +33,13 @@ Each tool case defines one `record_evidence` invocation:
 }
 ```
 
-Use `status: "verified"` only when every selected span resolves against the current chunk text. Use `status: "not_found"` for stale span IDs, missing chunks, or otherwise unresolved span-backed evidence.
+The fixtures exercise downstream evidence transport with injected canonical results;
+they do not call the live source-selection tool. `canonical_source_span_ids` keeps
+the original source identity for these historical cases. Their `not_found` results
+remain historical failure examples for downstream gating. The current public tool
+raises a terminal document error for missing or stale source; its real SDK tests
+live in `test_document_references.py`. Public inputs use numeric selections;
+canonical results and saved provenance retain internal identifiers.
 
 ## `extraction`
 

@@ -764,7 +764,7 @@ describe('AgentStudioPage', () => {
     expect(message).toHaveTextContent('get_tool_inventory(agent_id=')
     expect(message).toHaveTextContent('truncated=false and no next_cursor remains')
     expect(message).toHaveTextContent('get_domain_pack_validation_plan')
-    expect(message).toHaveTextContent('compacted_tool_result')
+    expect(message).toHaveTextContent('required source content remains unread')
     expect(message).toHaveTextContent('not terminal control nodes')
     expect(message).toHaveTextContent('Duplicate output_key is HIGH')
   })

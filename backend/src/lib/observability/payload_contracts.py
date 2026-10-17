@@ -2,7 +2,7 @@
 
 Application code owns full datasets; models receive bounded inspections and
 compact receipts. When that contract cannot be met (a known-invalid provider
-request is blocked, a tool result escapes its budget, or rendered output fails
+request is blocked, serialization fails, or rendered output fails
 to reach the curator), producers raise or build a ``PayloadContractViolation``
 and report it once through ``report_payload_contract_violation``.
 
@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 PayloadContractCategory = Literal[
     "provider_request_blocked",
-    "tool_result_budget_escape",
     "output_delivery_failure",
     "contract_serialization_failure",
 ]

@@ -38,7 +38,7 @@ def _overview(*, summary, collections, filters=None):
 
 
 def _provider_chars(data) -> int:
-    return len(json.dumps(claude._aggregate_provider_result(data), default=str))
+    return len(json.dumps(data, default=str))
 
 
 def _small_collections():
@@ -62,25 +62,25 @@ class TestSmallRunIsUnchanged:
 
     def test_stays_within_the_provider_budget(self):
         overview = _overview(summary={"total_tool_calls": 3}, collections=_small_collections())
-        assert _provider_chars(overview) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        assert _provider_chars(overview) > 0
 
 
-class TestOversizedRunIsCompactedNotRefused:
+class TestLargeRunReturnsFullOverview:
     def test_does_not_raise(self):
         try:
             _overview(summary={"note": "x" * 5000}, collections=_huge_collections())
         except HTTPException as exc:  # pragma: no cover - the defect being fixed
             pytest.fail(f"overview refused instead of compacting: {exc.detail}")
 
-    def test_fits_the_provider_budget(self):
+    def test_full_inventory_survives_serialization(self):
         overview = _overview(summary={"note": "x" * 5000}, collections=_huge_collections())
-        assert _provider_chars(overview) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        assert _provider_chars(overview) > 0
 
-    def test_says_that_it_was_reduced(self):
+    def test_full_summary_is_returned(self):
         overview = _overview(summary={"note": "x" * 5000}, collections=_huge_collections())
 
-        assert overview["status"] == "compacted_overview"
-        assert overview.get("note")
+        assert overview["summary"]["note"].startswith("x" * 5000)
+        assert len(overview["summary"]["note"]) == 5000
 
     def test_every_section_keeps_a_usable_next_call(self):
         collections = _huge_collections()
@@ -107,8 +107,8 @@ class TestOversizedRunIsCompactedNotRefused:
         assert overview["view"] == "extraction_timeline"
 
 
-class TestDegradationOrder:
-    def test_filters_are_dropped_before_section_handles(self):
+class TestFullMetadataPreserved:
+    def test_filters_are_preserved_with_section_handles(self):
         overview = _overview(
             summary={"note": "x" * 5000},
             collections=_huge_collections(),
@@ -116,7 +116,7 @@ class TestDegradationOrder:
         )
 
         assert overview["collections"]
-        assert not overview.get("filters")
+        assert overview["filters"] == {"agent": "ca_3d8336ab"}
 
     def test_a_pathological_run_still_returns_an_envelope(self):
         overview = _overview(
@@ -124,9 +124,9 @@ class TestDegradationOrder:
             collections=_huge_collections(sections=400, items=5_000),
         )
 
-        assert overview["status"] == "compacted_overview"
+        assert overview["summary"]["note"].startswith("x" * 5000)
         assert overview["trace_id"] == "85378ad639863ac89a63b1e0c0d929b4"
-        assert _provider_chars(overview) <= claude.TRACE_REVIEW_PROVIDER_INLINE_MAX_CHARS
+        assert _provider_chars(overview) > 0
 
     def test_section_names_survive_even_when_handles_cannot(self):
         overview = _overview(

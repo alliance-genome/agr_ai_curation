@@ -197,7 +197,6 @@ def test_concurrent_builder_writers_cannot_publish_a_broken_history_chain(scope,
 
 @pytest.mark.asyncio
 async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope, monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
     value = {"findings": [{"quote": "NOT observed α😀 " * 500, "negated": True}]}
     ref = store.append(scope, "output", exact_json(value))
     tools = {tool.name: tool for tool in history_tools(RunHistory(scope, store))}
@@ -205,7 +204,7 @@ async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope
     while cursor is not None:
         result = await tools["read_run_history"].on_invoke_tool(SimpleNamespace(tool_name="read_run_history", tool_call_id="read", run_config=None), json.dumps({
             "event_id": ref, "detail_path": "payload.findings.0", "detail_cursor": cursor, "result_sha256": sha}))
-        assert len(exact_json(result).encode()) <= 2048
+        assert result["detail"]["complete"]
         detail = result["detail"]
         parts.append(detail["content"])
         cursor, sha = detail["next_cursor"], detail["sha256"]
@@ -371,3 +370,29 @@ async def test_model_checkpoint_survives_storage_restart_without_mutating_action
     assert recovered == items and checkpoint["instructions"] == "Preserve negation."
     with pytest.raises(ValueError, match="unavailable"):
         restarted.read(replace(scope, owner_id="other"), ref)
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.asyncio
+async def test_input_item_recovery_projects_source_output_without_changing_archive(store, scope, monkeypatch, legacy):
+    from unittest.mock import AsyncMock
+    from src.lib.openai_agents.document_references import project_history_source_result
+    chunk_id = "12345678-1234-1234-1234-123456789abc"
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(
+        return_value={"id": chunk_id, "document_id": "doc", "chunk_index": 7}))
+    items = [{"type": "function_call", "name": "record_evidence", "call_id": "one", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "one", "output": str({"chunk_id": chunk_id, "quote": "Not expressed."})}]
+    if legacy:
+        refs = {i: store.append(scope, "input_item", exact_json(item)) for i, item in enumerate(items)}
+    else:
+        refs = await RunHistory(scope, store).capture_input(items, None)
+    stored = store.read(scope, refs[1])
+    assert stored["event"]["tool_name"] == "record_evidence"
+    assert stored["payload"] == items[1]
+    projected = await project_history_source_result(stored, user_id="alice")
+    assert json.loads(projected["payload"]["output"]) == {"chunk_index": 7, "document_id": "doc", "quote": "Not expressed."}
+    assert store.read(scope, refs[1])["payload"] == items[1]
+    tool = next(tool for tool in history_tools(RunHistory(scope, store)) if tool.name == "read_run_history")
+    recovered = await tool.on_invoke_tool(SimpleNamespace(tool_name="read_run_history", tool_call_id="recover", run_config=None),
+        json.dumps({"event_id": refs[1], "detail_path": "payload.output"}))
+    assert json.loads(recovered["detail"]["content"]) == json.loads(projected["payload"]["output"])

@@ -888,6 +888,7 @@ def test_evidence_quote_bundle_selector_returns_record_id_field_and_quote(
                         {
                             "evidence_record_id": "evidence-1",
                             "verified_quote": "Verified value quote.",
+                            "chunk_id": "12345678-1234-1234-1234-123456789abc",
                             "envelope_targets": [
                                 {
                                     "pending_ref_id": "assertion-1",

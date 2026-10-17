@@ -31,7 +31,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingStatus,
 )
 from src.schemas.domain_pack_metadata import DomainPackMetadata, DomainPackObjectDefinition
-from src.lib.openai_agents.tool_result_bounds import content_sha256, serialized_size, tool_result_budget
+from src.lib.openai_agents.tool_result_bounds import content_sha256
 
 
 class ExtractionManifestError(ValueError):
@@ -100,23 +100,6 @@ def build_extraction_manifest_page(
             next_cursor=next_cursor,
         ),
     }
-    page["page"]["returned"] = len(page["objects"])
-    # Authored prose is deliberately full-upfront (ALL-1377), measured separately.
-    # Everything in the structured preview shares one serialized byte budget.
-    while serialized_size({key: value for key, value in page.items() if key != "specialist_explanation"}) > tool_result_budget():
-        if page["objects"]:
-            page["objects"].pop()
-            page["page"]["returned"] = len(page["objects"])
-            page["page"]["next_cursor"] = str(offset + len(page["objects"]))
-            page["next_actions"] = _next_actions(
-                result_ref=manifest_result_ref, has_objects=bool(manifest_objects),
-                next_cursor=page["page"]["next_cursor"],
-            )
-        elif page["validator_results"]["results"]:
-            page["validator_results"]["results"].pop()
-            _update_decision_coverage(page["validator_results"])
-        else:
-            raise ExtractionManifestError("Result metadata exceeds the configured tool-result budget; inspect the saved result.")
     page["page"]["returned"] = len(page["objects"])
     return page
 

@@ -13,11 +13,6 @@ from src.lib.agent_studio.studio_guide import (
     prepare_studio_prompt_template,
     render_studio_guide_index,
 )
-from src.lib.openai_agents.config import (
-    get_agent_studio_workshop_context_group_prompt_max_chars,
-    get_agent_studio_workshop_context_metadata_max_chars,
-    get_agent_studio_workshop_context_prompt_max_chars,
-)
 from src.lib.prompts.assembly import PromptLayerBundle
 
 
@@ -421,9 +416,10 @@ not the current unsaved editor; reading them never selects or restores them.
 For custom ca_ agents, use this saved-revision reader rather than built-in-only
 get_prompt/get_tool_inventory. Select prompt_manifest for complete frozen core/base
 prompt layers; instructions is only the editable text. Select tools, group_prompts (with
-the applicable group_id), output_profile or settings. Follow next_call until
-complete=true and concatenate JSON content pages to recover exact large sections.
-Do not repeat an oversized all-section read or substitute template defaults.
+the applicable group_id), output_profile or settings. Selected sections are
+returned whole; optional start/max_chars select an exact section range with
+content_hash verification. Follow next_call for explicit ranges or row listings.
+Do not substitute template defaults for saved curator instructions.
 When a curator reports a flow error or a flow that could not start, first call
 inspect_saved_studio_resource(action="recent_flow_runs") for the open flow (pass
 flow_id when no saved flow is open) and match the curator's run by time and
@@ -474,49 +470,7 @@ LinkML-aligned or submission-ready.
             workshop_draft_tools = workshop.draft_tool_ids or []
             draft_prompt = workshop.prompt_draft or ""
             selected_group_prompt = workshop.selected_group_prompt_draft or ""
-            draft_prompt_total_chars = len(draft_prompt)
-            selected_group_prompt_total_chars = len(selected_group_prompt)
-            truncated = ""
-            group_truncated = ""
-            max_prompt_chars = get_agent_studio_workshop_context_prompt_max_chars()
-            max_group_prompt_chars = (
-                get_agent_studio_workshop_context_group_prompt_max_chars()
-            )
-            if draft_prompt_total_chars > max_prompt_chars:
-                draft_prompt = draft_prompt[:max_prompt_chars]
-                truncated = (
-                    "\n\n[Incomplete preview: retained "
-                    f"{len(draft_prompt)} of {draft_prompt_total_chars} characters. "
-                    "Exact current main prompt content is available through callable "
-                    "`refresh_workshop_prompt` with `target_prompt=\"main\"`: read its "
-                    "content-free summary, then follow each `next_call` through ordered "
-                    "chunks until `complete=true`.]"
-                )
-            if selected_group_prompt_total_chars > max_group_prompt_chars:
-                selected_group_prompt = selected_group_prompt[:max_group_prompt_chars]
-                group_truncated = (
-                    "\n\n[Incomplete preview: retained "
-                    f"{len(selected_group_prompt)} of "
-                    f"{selected_group_prompt_total_chars} characters. Exact current "
-                    "selected-group prompt content is available through callable "
-                    "`refresh_workshop_prompt` with `target_prompt=\"group\"`: read its "
-                    "content-free summary, then follow each `next_call` through ordered "
-                    "chunks until `complete=true`.]"
-                )
-
             metadata_document = workshop_authoring_metadata_json(workshop)
-            metadata_total_chars = len(metadata_document)
-            metadata_max_chars = get_agent_studio_workshop_context_metadata_max_chars()
-            metadata_preview = metadata_document[:metadata_max_chars]
-            metadata_truncated = ""
-            if metadata_total_chars > metadata_max_chars:
-                metadata_truncated = (
-                    "\n[Incomplete metadata preview: retained "
-                    f"{len(metadata_preview)} of {metadata_total_chars} characters. "
-                    "Retrieve the exact metadata with `refresh_workshop_prompt` "
-                    "using `target_prompt=\"metadata\"` and follow every `next_call` "
-                    "until `complete=true`.]"
-                )
 
             selected_group_prompt_block = ""
             if workshop.selected_group_id and selected_group_prompt:
@@ -524,7 +478,7 @@ LinkML-aligned or submission-ready.
 
 <workshop_selected_group_prompt group="{workshop.selected_group_id}">
 {selected_group_prompt}
-</workshop_selected_group_prompt>{group_truncated}"""
+</workshop_selected_group_prompt>"""
 
             model_catalog_lines: List[str] = []
             try:
@@ -589,7 +543,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
      already available; skip fetching a prompt whose reported length is zero,
    - use `get_prompt` for the effective template/source prompt when it is not already in context,
    - inspect runtime tool schemas only when the requested change depends on their arguments; ordinary custom-field design does not require this.
-6. for PDF evidence extraction prompts, preserve the span workflow: `search_document` finds candidate chunks, `read_chunk` exposes deterministic `evidence_spans[].span_id`, and `record_evidence(span_ids=[...])` creates backend-copied evidence. Do not propose instructions that ask agents to generate quote strings, fuzzy-repair quotes, or confirm claims with a separate LLM.
+6. for PDF evidence extraction prompts, preserve the span workflow: `search_document` finds candidate chunks, `read_chunk` exposes deterministic `evidence_spans[].span_index`, and `record_evidence(selections=[{chunk_index, span_index}, ...])` creates backend-copied evidence. Do not propose instructions that ask agents to generate quote strings, fuzzy-repair quotes, or confirm claims with a separate LLM.
 7. For clear build/configure/edit requests, call `propose_workshop_draft_update` directly with
    the exact draft fingerprint and bounded semantic operations. Discover authorized capabilities
    through the live catalog. Include every required setting for new drafts, preserve unrelated
@@ -613,7 +567,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
 9. When in Workshop, use Workshop capabilities; flow editing resumes on the Flows tab.
 11. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; read the summary and follow every deterministic `next_call` until `complete=true`. Reconstruct the exact text from ordered chunk ranges, treat conversation history and older versions as historical, and never report text as present unless it appears in those refreshed chunks.
    - every ID listed in `group_prompt_override_ids` is callable with `target_prompt="group"` and `target_group_id`; inspect each relevant override rather than assuming only the selected group exists.
-   - if the metadata preview is incomplete, reconstruct it with `target_prompt="metadata"` before making metadata-dependent claims.
+   - inspect `target_prompt="metadata"` when you need to verify the current authoring fields before making metadata-dependent claims.
 12. before proposing, applying or reviewing prompt edits, read studio guide topic `prompt_playbook`.
 13. in reviews, explicitly check whether the updated prompt follows the `prompt_playbook` topic and call out any misses.
 14. choose the right target for edits:
@@ -627,8 +581,8 @@ Prompt injection note:
             runtime_additions.append(f"""
 <agent_workshop_current_draft>
 <workshop_authoring_metadata_preview>
-{metadata_preview}
-</workshop_authoring_metadata_preview>{metadata_truncated}
+{metadata_document}
+</workshop_authoring_metadata_preview>
 
 Configured model options (authoritative recommendation source):
 {model_catalog_text}
@@ -638,7 +592,7 @@ recommended uses, and default reasoning rather than relying on historical model 
 
 <workshop_prompt_draft>
 {draft_prompt}
-</workshop_prompt_draft>{truncated}
+</workshop_prompt_draft>
 {selected_group_prompt_block}
 </agent_workshop_current_draft>""")
 
@@ -653,7 +607,7 @@ recommended uses, and default reasoning rather than relying on historical model 
                 if context.active_tab == "agent_workshop" and workshop_draft_tools is not None:
                     tools_label = "Tools attached to current workshop draft"
                     tools_for_context = [
-                        "See workshop_authoring_metadata_preview (or its exact metadata continuation)"
+                        "See workshop_authoring_metadata_preview for the complete current metadata"
                     ]
 
                 runtime_additions.append(f"""
@@ -793,7 +747,7 @@ For Flow Builder authoring, guide a conversation one decision at a time:
 
 Before designing a new flow, configuring an output step, projection plan, fixed columns or export execution mode, or fixing a stale output layout, read studio guide topic `flow_design`. Before verifying a flow, auditing its configuration or reporting PASS or FAIL, read studio guide topic `flow_verification` and follow its protocol and checklist.
 
-**PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or any required response is `compacted_tool_result`. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
+**PASS gate:** NEVER report PASS when a required detail is incomplete, selected text or a section has another page, or required source content remains unread. Duplicate `output_key` is HIGH unless authoritative validation classifies it CRITICAL. Keep suggestions evidence-based; do not page through unrelated catalogs or domain metadata speculatively.
 
 Do not recommend standalone flow steps for validators that are absent from `get_available_agents`; those validators are attachment-only and run through validation attachments/default runtime dispatch.
 </critical_instruction>

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional, Dict, Any
 from dataclasses import dataclass, field
 import logging
+import asyncio
 import time
 
 from src.models.pipeline import ProcessingStage
@@ -480,6 +481,16 @@ class DocumentPipelineOrchestrator:
         status: str,
         error_message: Optional[str] = None,
     ) -> None:
+        # A source binding briefly locks the document generation row.
+        # Never wait on that row from the event-loop thread.
+        await asyncio.to_thread(
+            self._write_sql_document_status, document_id,
+            status=status, error_message=error_message,
+        )
+
+    def _write_sql_document_status(
+        self, document_id: str, *, status: str, error_message: Optional[str] = None,
+    ) -> None:
         """Persist pipeline status fields in PostgreSQL for PDF viewer and ops visibility."""
         from src.models.sql.database import SessionLocal
         from src.models.sql.pdf_document import PDFDocument
@@ -490,8 +501,7 @@ class DocumentPipelineOrchestrator:
         try:
             doc = session.query(PDFDocument).filter(PDFDocument.id == UUID(document_id)).first()
             if not doc:
-                logger.warning("Could not find SQL document row to update status: %s", document_id)
-                return
+                raise PipelineError("Document row is unavailable for source processing")
 
             doc.status = status
 
@@ -518,6 +528,10 @@ class DocumentPipelineOrchestrator:
         except Exception as e:
             logger.error("Error updating SQL status for document %s: %s", document_id, e)
             session.rollback()
+            # Processing/completion commits protect source generation. A failed
+            # status notification must not replace the original pipeline error.
+            if status != "failed":
+                raise
         finally:
             session.close()
 

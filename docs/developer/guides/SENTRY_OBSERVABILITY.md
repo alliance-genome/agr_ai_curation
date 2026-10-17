@@ -128,8 +128,7 @@ identity are not forwarded by the tool-failure facade.
 
 Model-facing payload size and delivery failures report through
 `observability/payload_contracts.py::report_payload_contract_violation`
-(categories `provider_request_blocked`, `tool_result_budget_escape`,
-`output_delivery_failure`, `contract_serialization_failure`), grouped by
+(categories `provider_request_blocked`, `output_delivery_failure`, `contract_serialization_failure`), grouped by
 category and component. Once an exception is captured it is marked, and
 `before_send` drops later events that re-report it through `raise ... from`,
 `exc_info`, or a log-message argument, so wrappers and retries do not add

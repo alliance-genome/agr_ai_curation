@@ -34,7 +34,12 @@ class ReusableCapability:
     unavailable_reason: str = ""
 
     def snapshot(self) -> dict[str, Any]:
-        return {"ref": self.ref.model_dump(mode="json"), "binding": self.binding.raw}
+        # Execution allowances are environment settings, not immutable mapping
+        # contracts. Changing the allowance must not invalidate saved profiles;
+        # the live binding still supplies the effective runtime limit.
+        binding = {key: value for key, value in self.binding.raw.items()
+                   if key != "max_tool_calls"}
+        return {"ref": self.ref.model_dump(mode="json"), "binding": binding}
 
     def fingerprint(self) -> str:
         return "sha256:" + hashlib.sha256(canonical_json(self.snapshot()).encode()).hexdigest()

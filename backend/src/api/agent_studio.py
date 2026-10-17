@@ -6,6 +6,8 @@ Provides endpoints for the Agent Studio feature:
 - GET /trace/{trace_id}/context - Get enriched trace context
 """
 
+from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
+
 import json
 import hashlib
 import logging
@@ -156,18 +158,14 @@ from src.lib.openai_agents.config import (
     PromptCacheIdentity,
     get_api_key,
     get_agent_studio_chat_history_page_size,
-    get_agent_studio_chat_recall_chunk_max_chars,
     get_agent_studio_chat_recall_page_size,
     get_agent_studio_openai_max_output_tokens,
     get_agent_studio_openai_max_turns,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_agent_studio_service_log_default_lines,
     get_agent_studio_suggestion_max_output_tokens,
     get_agent_studio_suggestion_max_turns,
     get_agent_studio_trace_review_aggregate_page_size,
-    get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
-    get_agent_studio_workshop_prompt_chunk_max_chars,
 )
 from src.lib.executable_runs import (
     ExecutableRunAccessError,
@@ -1953,263 +1951,12 @@ def _tool_call_audit_entry(
     }
 
 
-def _summarize_provider_tool_result_value(
-    value: Any,
-    *,
-    depth: int = 0,
-) -> Any:
-    """Return a compact structural summary safe for provider continuation."""
-
-    return _summarize_audit_value(value, depth=depth)
-
-
-def _collect_provider_payload_refs(
-    value: Any,
-    refs: set[str],
-    *,
-    key: str | None = None,
-) -> None:
-    if len(refs) >= _DOMAIN_REFERENCE_MAX_VALUES:
-        return
-    if key == "payload_id" and isinstance(value, str) and value.strip():
-        refs.add(value.strip())
-        return
-    if isinstance(value, dict):
-        for item_key, item_value in value.items():
-            _collect_provider_payload_refs(
-                item_value,
-                refs,
-                key=str(item_key),
-            )
-            if len(refs) >= _DOMAIN_REFERENCE_MAX_VALUES:
-                return
-        return
-    if isinstance(value, list):
-        for item in value:
-            _collect_provider_payload_refs(item, refs)
-            if len(refs) >= _DOMAIN_REFERENCE_MAX_VALUES:
-                return
-
-
-
-
-def _provider_content_identity(serialized: str) -> Dict[str, Any]:
-    """Return stable identity for provider content omitted by compaction."""
-
-    return {
-        "json_chars": len(serialized),
-        "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
-    }
-
-
-def _provider_tool_input_selectors(tool_input: Any) -> Dict[str, Any]:
-    """Keep shallow scalar selectors that can support a narrower repeat call."""
-
-    safe_input = _json_safe(tool_input)
-    if not isinstance(safe_input, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in sorted(safe_input.items(), key=lambda item: str(item[0]))
-        if value is None or isinstance(value, (bool, int, float, str))
-    }
-
-
-def _provider_cap_error_content(inline_max_chars: int) -> str:
-    """Return the smallest explicit JSON error that fits an unusable cap."""
-
-    error_payloads: tuple[Any, ...] = (
-        {
-            "error": "provider_tool_result_cap_too_small",
-            "configured_max_chars": inline_max_chars,
-        },
-        "provider_tool_result_cap_too_small",
-        "provider_cap_too_small",
-    )
-    for payload in error_payloads:
-        serialized = _serialize_provider_tool_result(payload)
-        if len(serialized) <= inline_max_chars:
-            return serialized
-    raise ValueError(
-        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS is too small to "
-        "hold a provider-safe JSON error"
-    )
-
-
-def _fit_provider_compact_payload(
-    *,
-    tool_name: str,
-    tool_input: Any,
-    tool_result: Any,
-    session_id: str,
-    turn_id: str,
-    inline_max_chars: int,
-) -> str:
-    """Fit one complete compact envelope using deterministic degradation."""
-
-    safe_input = _json_safe(tool_input)
-    input_content = _serialize_provider_tool_result(safe_input)
-    result_content = _serialize_provider_tool_result(tool_result)
-    payload: Dict[str, Any] = {
-        "status": "compacted_tool_result",
-        "tool": {
-            "name": tool_name,
-            "input": _provider_content_identity(input_content),
-            "result": _provider_content_identity(result_content),
-        },
-        "recall": {
-            "turn": {
-                "tool": "get_chat_turn",
-                "session_id": session_id,
-                "turn_id": turn_id,
-            },
-        },
-    }
-
-    def serialize_if_fits(candidate: Dict[str, Any]) -> str | None:
-        serialized = _serialize_provider_tool_result(candidate)
-        return serialized if len(serialized) <= inline_max_chars else None
-
-    if serialize_if_fits(payload) is None:
-        return _provider_cap_error_content(inline_max_chars)
-
-    if tool_name in {"propose_workshop_draft_update", "propose_flow_draft_update"}:
-        payload["recall"]["retained_proposal_input"] = {
-            "next_tool": "refresh_workshop_prompt" if tool_name == "propose_workshop_draft_update" else "get_current_flow",
-        }
-        if serialize_if_fits(payload) is None:
-            payload["recall"].pop("retained_proposal_input")
-    else:
-        exact_call = {"tool": tool_name, "input": safe_input}
-        payload["recall"]["next_call"] = exact_call
-        if serialize_if_fits(payload) is None:
-            payload["recall"].pop("next_call")
-            selectors = _provider_tool_input_selectors(safe_input)
-            required_inputs = opus_tools.get_builtin_tool_required_inputs(tool_name)
-            projected_input: Dict[str, Any] = {}
-            narrowing: Dict[str, Any] = {
-                "tool": tool_name,
-                "input": projected_input,
-            }
-
-            def omitted_input_fields() -> list[str]:
-                if not isinstance(safe_input, dict):
-                    return []
-                omitted_required = (
-                    [
-                        field
-                        for field in required_inputs
-                        if field not in projected_input
-                    ]
-                    if required_inputs is not None
-                    else []
-                )
-                omitted_other = sorted(
-                    str(field)
-                    for field in safe_input
-                    if str(field) not in projected_input
-                    and str(field) not in omitted_required
-                )
-                return omitted_required + omitted_other
-
-            def update_narrowing_guidance() -> None:
-                omitted = omitted_input_fields()
-                if omitted:
-                    narrowing["supply_bounded"] = omitted
-                else:
-                    narrowing.pop("supply_bounded", None)
-
-            update_narrowing_guidance()
-            payload["recall"]["narrow"] = narrowing
-            if serialize_if_fits(payload) is None:
-                payload["recall"].pop("narrow")
-            else:
-
-                def selector_priority(item: tuple[str, Any]) -> tuple[int, int, int, str]:
-                    key, value = item
-                    required_priority = (
-                        0
-                        if required_inputs is not None and key in required_inputs
-                        else 1
-                    )
-                    if key == "payload_id":
-                        identity_priority = 0
-                    elif key == "trace_id":
-                        identity_priority = 1
-                    elif key.endswith("_id"):
-                        identity_priority = 2
-                    else:
-                        identity_priority = 3
-                    return (
-                        required_priority,
-                        identity_priority,
-                        len(_serialize_provider_tool_result(value)),
-                        key,
-                    )
-
-                for key, value in sorted(selectors.items(), key=selector_priority):
-                    projected_input[key] = value
-                    update_narrowing_guidance()
-                    if serialize_if_fits(payload) is None:
-                        projected_input.pop(key)
-                        update_narrowing_guidance()
-
-                if not omitted_input_fields():
-                    payload["recall"].pop("narrow")
-                    payload["recall"]["next_call"] = {
-                        "tool": tool_name,
-                        "input": projected_input,
-                    }
-                    if serialize_if_fits(payload) is None:
-                        payload["recall"].pop("next_call")
-                        payload["recall"]["narrow"] = narrowing
-
-    payload_refs: set[str] = set()
-    _collect_provider_payload_refs(tool_result, payload_refs)
-    if payload_refs:
-        payload_recall = {
-            "tool": "get_trace_payload",
-            "payload_ids": [],
-        }
-        payload["recall"]["trace_payloads"] = payload_recall
-        for payload_id in sorted(payload_refs):
-            payload_recall["payload_ids"].append(payload_id)
-            if serialize_if_fits(payload) is None:
-                payload_recall["payload_ids"].pop()
-                break
-        if not payload_recall["payload_ids"]:
-            payload["recall"].pop("trace_payloads")
-
-    optional_fields = (
-        (
-            "summary",
-            _summarize_provider_tool_result_value(_json_safe(tool_result)),
-        ),
-        (
-            "instruction",
-            "Use the exact next call, bounded narrowing guidance, or durable turn recall before relying on omitted details.",
-        ),
-    )
-    for key, value in optional_fields:
-        payload[key] = value
-        if serialize_if_fits(payload) is None:
-            payload.pop(key)
-
-    serialized = _serialize_provider_tool_result(payload)
-    if len(serialized) > inline_max_chars:
-        raise AssertionError("provider compact payload exceeded its configured cap")
-    return serialized
-
-
 def _provider_tool_result_content(
     *,
     tool_name: str,
-    tool_input: Any,
     tool_result: Any,
-    session_id: str,
-    turn_id: str,
 ) -> str:
-    """Serialize a bounded tool result for provider continuation only."""
+    """Serialize complete tool data; request capacity is handled centrally."""
 
     provider_tool_result = tool_result
     if (
@@ -2249,19 +1996,7 @@ def _provider_tool_result_content(
                 " replacement columns or drop incompatible fields without curator choice."
             )
 
-    raw_content = _serialize_provider_tool_result(provider_tool_result)
-    inline_max_chars = get_agent_studio_provider_tool_result_inline_max_chars()
-    if len(raw_content) <= inline_max_chars:
-        return raw_content
-
-    return _fit_provider_compact_payload(
-        tool_name=tool_name,
-        tool_input=tool_input,
-        tool_result=_json_safe(tool_result),
-        session_id=session_id,
-        turn_id=turn_id,
-        inline_max_chars=inline_max_chars,
-    )
+    return _serialize_provider_tool_result(provider_tool_result)
 
 
 def _serialize_provider_tool_result(tool_result: Any) -> str:
@@ -2632,7 +2367,7 @@ def _build_refresh_workshop_prompt_result(
 
     prompt_hash = _prompt_hash(refreshed_prompt)
     prompt_length = len(refreshed_prompt)
-    chunk_cap = get_agent_studio_workshop_prompt_chunk_max_chars()
+    chunk_cap = prompt_length
     common_result = {
         "success": True,
         "contract_version": "workshop_prompt_refresh.v1",
@@ -2660,7 +2395,6 @@ def _build_refresh_workshop_prompt_result(
                 else None
             ),
         },
-        "chunk_max_chars": chunk_cap,
     }
 
     start = tool_input.get("start")
@@ -2730,7 +2464,7 @@ def _build_refresh_workshop_prompt_result(
             "error": "max_chars must be a positive integer when provided.",
         }
 
-    chunk_size = min(requested_max_chars or chunk_cap, chunk_cap)
+    chunk_size = requested_text_length(requested_max_chars, prompt_length)
 
     def build_chunk_result(end: int) -> Dict[str, Any]:
         complete = end == prompt_length
@@ -2764,38 +2498,7 @@ def _build_refresh_workshop_prompt_result(
         }
 
     requested_end = min(start + chunk_size, prompt_length)
-    result = build_chunk_result(requested_end)
-    provider_inline_cap = get_agent_studio_provider_tool_result_inline_max_chars()
-    if len(_serialize_provider_tool_result(result)) <= provider_inline_cap:
-        return result
-
-    # Prompt characters can expand substantially during JSON escaping. Find the
-    # largest exact range that fits the same serialization boundary enforced by
-    # _provider_tool_result_content(), rather than allowing generic compaction to
-    # discard the chunk content.
-    fitting_result: Dict[str, Any] | None = None
-    low = start + 1
-    high = requested_end - 1
-    while low <= high:
-        candidate_end = (low + high) // 2
-        candidate = build_chunk_result(candidate_end)
-        if len(_serialize_provider_tool_result(candidate)) <= provider_inline_cap:
-            fitting_result = candidate
-            low = candidate_end + 1
-        else:
-            high = candidate_end - 1
-
-    if fitting_result is not None:
-        return fitting_result
-
-    return {
-        "success": False,
-        "error": (
-            "The provider inline tool-result limit is too small to return even one "
-            "exact Workshop prompt character with its required identity metadata."
-        ),
-        "provider_inline_max_chars": provider_inline_cap,
-    }
+    return build_chunk_result(requested_end)
 
 
 _PROMPT_SENSITIVE_WORKSHOP_RE = re.compile(
@@ -3108,10 +2811,7 @@ async def _execute_tool_call(
             call_id=call_id,
             field=field,
             start=tool_input.get("start", 0),
-            max_chars=tool_input.get(
-                "max_chars",
-                get_agent_studio_trace_review_chunk_max_chars(),
-            ),
+            max_chars=tool_input.get("max_chars"),
         )
 
     elif tool_name == "get_trace_conversation":
@@ -3129,10 +2829,7 @@ async def _execute_tool_call(
             trace_id=trace_id,
             field=field,
             start=tool_input.get("start", 0),
-            max_chars=tool_input.get(
-                "max_chars",
-                get_agent_studio_trace_review_chunk_max_chars(),
-            ),
+            max_chars=tool_input.get("max_chars"),
         )
 
     elif tool_name == "get_extraction_diagnostic_report":
@@ -3307,10 +3004,7 @@ async def _execute_tool_call(
             observation_id=tool_input.get("observation_id"),
             field=tool_input.get("field"),
             start=tool_input.get("start", 0),
-            max_chars=tool_input.get(
-                "max_chars",
-                get_agent_studio_trace_review_chunk_max_chars(),
-            ),
+            max_chars=tool_input.get("max_chars"),
         )
 
     elif tool_name == "get_trace_costs":
@@ -3900,7 +3594,6 @@ def _get_chat_conversation_payload(
         user_auth_sub=user_auth_sub,
         cursor=cursor,
         limit=limit,
-        provider_inline_max_chars=get_agent_studio_provider_tool_result_inline_max_chars(),
         serialize_session=_serialize_chat_history_session,
     )
 
@@ -3921,7 +3614,6 @@ def _get_chat_session_page_payload(
         cursor=cursor,
         limit=limit,
         query=query,
-        provider_inline_max_chars=get_agent_studio_provider_tool_result_inline_max_chars(),
     )
 
 
@@ -3951,8 +3643,6 @@ def _get_chat_turn_payload(
         start=start,
         max_chars=max_chars,
         field_hash=field_hash,
-        chunk_max_chars=get_agent_studio_chat_recall_chunk_max_chars(),
-        provider_inline_max_chars=get_agent_studio_provider_tool_result_inline_max_chars(),
         serialize_session=_serialize_chat_history_session,
     )
 
@@ -4384,10 +4074,7 @@ async def chat_with_opus(
                 full_output=safe_result,
                 provider_output=_provider_tool_result_content(
                     tool_name=tool_name,
-                    tool_input=tool_input,
                     tool_result=safe_result,
-                    session_id=prepared_turn.session_id,
-                    turn_id=prepared_turn.turn_id,
                 ),
             )
 
@@ -4462,6 +4149,10 @@ async def chat_with_opus(
                 for definition in tool_definitions
                 if definition.get("name") not in initially_visible_tool_names
             ]
+            current_input_items = [{
+                "role": "developer" if request.application_event is not None else "user",
+                "content": prepared_turn.user_message,
+            }]
             preflight = provider_context_preflight(
                 surface="agent_studio",
                 operation="agents_sdk_run",
@@ -4469,7 +4160,7 @@ async def chat_with_opus(
                 model=AGENT_STUDIO_OPENAI_MODEL,
                 payload={
                     "instructions": system_prompt,
-                    "input": input_items,
+                    "input": current_input_items,
                     "initially_visible_tools": initially_visible_definitions,
                     "tool_search": {
                         "forced_tool_name": forced_tool_name,
@@ -4498,8 +4189,9 @@ async def chat_with_opus(
                 operation=preflight["operation"],
                 provider="openai",
                 model=AGENT_STUDIO_OPENAI_MODEL,
-                model_live=True,
+                model_live=False,
                 payload_summary={
+                    "scope": "application_turn_before_session_restore",
                     "json_chars": preflight["json_chars"],
                     "estimated_tokens": preflight["estimated_tokens"],
                     "threshold": preflight["threshold"],
@@ -4517,11 +4209,12 @@ async def chat_with_opus(
             )
             async for runtime_event in stream_agent_studio_run(
                 instructions=system_prompt,
-                input_items=input_items,
+                input_items=current_input_items,
                 tools=tools,
                 state=run_state,
                 session_id=prepared_turn.session_id,
                 user_id=user_id,
+                current_turn_id=prepared_turn.turn_id,
                 max_turns=get_agent_studio_openai_max_turns(),
                 model_settings=model_settings,
                 cancel_event=cancel_event,

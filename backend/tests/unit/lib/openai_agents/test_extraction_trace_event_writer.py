@@ -218,3 +218,18 @@ def test_write_failure_reports_safely_and_still_mirrors(tmp_path, monkeypatch):
         assert len(mirrored) == 2
     finally:
         events.clear_extraction_trace_run()
+
+
+def test_capacity_metrics_survive_secret_redaction(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    monkeypatch.setattr(events, "_mirror_to_langfuse", lambda event: None)
+    metrics = {"input_tokens_before": 950000, "input_tokens_after": 250000,
+        "token_count_requests": 7, "token_count_duration_ms": 142.5,
+        "standalone_compactions": 1, "pending_payloads": 2}
+    events.start_extraction_trace_run(trace_id="capacity")
+    try:
+        event = events.write_extraction_trace_event(event_type="runtime.context_capacity",
+            output_summary={**metrics, "access_token": "private"})
+    finally:
+        events.clear_extraction_trace_run()
+    assert event["output_summary"]["preview"] == {**metrics, "access_token": "<redacted>"}

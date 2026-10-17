@@ -70,18 +70,11 @@ def _agent_studio_session(*, session_id: str) -> ChatSessionRecord:
     )
 
 
-def test_large_tool_result_is_compacted_for_provider_continuation(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
+def test_large_tool_result_reaches_shared_context_boundary_complete(monkeypatch):
 
     large_value = "payload chunk " * 500
     content = api_module._provider_tool_result_content(
         tool_name="get_trace_payload",
-        tool_input={
-            "trace_id": "trace-1",
-            "payload_id": "observation:abc:output",
-            "start": 0,
-            "max_chars": 0,
-        },
         tool_result={
             "status": "success",
             "trace_id": "trace-1",
@@ -91,54 +84,28 @@ def test_large_tool_result_is_compacted_for_provider_continuation(monkeypatch):
                 "next_start": None,
             },
         },
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-4-abc123",
     )
 
-    compact = json.loads(content)
-
-    assert compact["status"] == "compacted_tool_result"
-    assert len(content) <= 500
-    assert compact["tool"]["name"] == "get_trace_payload"
-    assert compact["tool"]["result"]["json_chars"] > 500
-    assert len(compact["tool"]["result"]["sha256"]) == 64
-    assert len(compact["tool"]["input"]["sha256"]) == 64
-    assert len(content) < len(large_value)
-    assert large_value not in content
-    assert compact["recall"]["turn"] == {
-        "tool": "get_chat_turn",
-        "session_id": "agent-studio-session-1",
-        "turn_id": "opus-turn-4-abc123",
-    }
-    assert "next_call" not in compact["recall"]
-    assert compact["recall"]["trace_payloads"] == {
-        "tool": "get_trace_payload",
-        "payload_ids": ["observation:abc:output"],
-    }
+    result = json.loads(content)
+    assert result["data"]["value"] == large_value
+    assert result["data"]["next_start"] is None
 
 
 def test_small_tool_result_stays_inline_for_provider_continuation(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
 
     tool_result = {"success": True, "current_prompt": "Small refreshed prompt."}
 
     content = api_module._provider_tool_result_content(
         tool_name="refresh_workshop_prompt",
-        tool_input={"target_prompt": "main"},
         tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-1",
     )
 
     assert json.loads(content) == tool_result
 
 
-
-
 @pytest.mark.parametrize("artifact", ["flow", "workshop"])
 @pytest.mark.parametrize("valid", [False, True])
 def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypatch, artifact, valid):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     candidate = {
         "name": "Large candidate",
         "description": "Transient only",
@@ -168,10 +135,7 @@ def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypat
 
     content = api_module._provider_tool_result_content(
         tool_name=f"propose_{artifact}_draft_update",
-        tool_input={"operations": [{"operation": "add_agent_step"}]},
         tool_result={**tool_result, "valid": valid, "success": valid},
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-1",
     )
     provider_result = json.loads(content)
 
@@ -187,10 +151,7 @@ def test_flow_proposal_provider_projection_excludes_candidate_and_diff(monkeypat
         assert "without reset_candidate" in provider_result["instruction"]
 
 
-
-
 def test_default_exact_trace_chunk_stays_inline_with_metadata_headroom(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     serialized = "realistic exact TraceReview content " * 250
     serialized = serialized[:8000]
     tool_result = {
@@ -223,15 +184,7 @@ def test_default_exact_trace_chunk_stays_inline_with_metadata_headroom(monkeypat
 
     content = api_module._provider_tool_result_content(
         tool_name="get_trace_payload",
-        tool_input={
-            "trace_id": "856df16f1752cb53ee43dcb2f5ecfd16",
-            "payload_id": "observation:observation-123:output",
-            "start": 0,
-            "max_chars": 8000,
-        },
         tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-4-abc123",
     )
 
     assert len(content) < 12000
@@ -246,7 +199,6 @@ def test_default_exact_trace_chunk_stays_inline_with_metadata_headroom(monkeypat
     ],
 )
 def test_json_escape_aware_exact_trace_chunks_stay_inline(monkeypatch, serialized):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
     tool_result = {
         "status": "success",
         "data": {
@@ -278,205 +230,14 @@ def test_json_escape_aware_exact_trace_chunks_stay_inline(monkeypatch, serialize
 
     content = api_module._provider_tool_result_content(
         tool_name="get_trace_conversation",
-        tool_input={
-            "trace_id": "856df16f1752cb53ee43dcb2f5ecfd16",
-            "field": "assistant_response",
-        },
         tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-escape-aware",
     )
 
     assert len(content) < 12000
     assert json.loads(content) == tool_result
 
 
-def test_low_limit_escape_heavy_compaction_is_bounded_and_deterministic(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
-    oversized_query = 'find "escaped\\value" 😀 ' * 1000
-    tool_input = {
-        "query": oversized_query,
-        "chat_kind": "agent_studio",
-        "limit": 25,
-    }
-    tool_result = {"rows": [{"preview": '\\"😀' * 5000}]}
-
-    first = api_module._provider_tool_result_content(
-        tool_name="search_chat_history",
-        tool_input=tool_input,
-        tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-escape-low",
-    )
-    second = api_module._provider_tool_result_content(
-        tool_name="search_chat_history",
-        tool_input=tool_input,
-        tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-escape-low",
-    )
-    compact = json.loads(first)
-
-    assert first == second
-    assert len(first) <= 500
-    assert compact["status"] == "compacted_tool_result"
-    assert compact["tool"]["input"]["json_chars"] == len(
-        api_module._serialize_provider_tool_result(tool_input)
-    )
-    assert len(compact["tool"]["input"]["sha256"]) == 64
-    assert oversized_query not in first
-    assert "next_call" not in compact["recall"]
-    assert compact["recall"]["narrow"]["tool"] == "search_chat_history"
-    assert compact["recall"]["narrow"]["input"] == {"limit": 25}
-    assert compact["recall"]["narrow"]["supply_bounded"] == [
-        "query",
-        "chat_kind",
-    ]
-
-
-def test_default_limit_oversized_input_and_result_keep_summary_and_identity(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    oversized_query = 'query "escaped\\value" 😀 ' * 2000
-    oversized_preview = 'result "escaped\\value" 😀 ' * 2000
-    tool_input = {"query": oversized_query, "page": 3}
-    tool_result = {"rows": [{"preview": oversized_preview, "record_id": "record-1"}]}
-
-    content = api_module._provider_tool_result_content(
-        tool_name="search_records",
-        tool_input=tool_input,
-        tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-escape-default",
-    )
-    compact = json.loads(content)
-
-    assert len(content) <= 12000
-    assert compact["status"] == "compacted_tool_result"
-    assert "next_call" not in compact["recall"]
-    assert compact["recall"]["narrow"]["input"] == {"page": 3}
-    assert compact["recall"]["narrow"]["supply_bounded"] == ["query"]
-    assert compact["summary"]["fields"]["rows"]["type"] == "array"
-    assert compact["tool"]["input"]["json_chars"] == len(
-        api_module._serialize_provider_tool_result(tool_input)
-    )
-    assert compact["tool"]["result"]["json_chars"] == len(
-        api_module._serialize_provider_tool_result(tool_result)
-    )
-    assert oversized_query not in content
-    assert oversized_preview not in content
-
-
-def test_default_limit_lossy_non_scalar_input_stays_narrowing_guidance(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    candidate_ids = [f"candidate-{index}" for index in range(2000)]
-    expected_revisions = {
-        candidate_id: index
-        for index, candidate_id in enumerate(candidate_ids[:300])
-    }
-    tool_input = {
-        "session_id": "session-1",
-        "candidate_ids": candidate_ids,
-        "expected_envelope_revisions": expected_revisions,
-        "section": "candidates",
-    }
-    tool_result = {"candidates": [{"details": "oversized result" * 2000}]}
-
-    content = api_module._provider_tool_result_content(
-        tool_name="get_export_submission_readiness",
-        tool_input=tool_input,
-        tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-non-scalar-input",
-    )
-    compact = json.loads(content)
-
-    assert len(content) <= 12000
-    assert "next_call" not in compact["recall"]
-    assert compact["recall"]["narrow"]["input"] == {
-        "section": "candidates",
-        "session_id": "session-1",
-    }
-    assert compact["recall"]["narrow"]["supply_bounded"] == [
-        "candidate_ids",
-        "expected_envelope_revisions",
-    ]
-    assert candidate_ids[1000] not in content
-
-
-def test_default_limit_compaction_preserves_exact_small_input_and_payload_recall(
-    monkeypatch,
-):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    tool_input = {"trace_id": "trace-1", "scope": "agent"}
-    tool_result = {
-        "status": "success",
-        "data": {
-            "payload_id": "observation:abc:output",
-            "value": "exact payload" * 2000,
-        },
-    }
-
-    content = api_module._provider_tool_result_content(
-        tool_name="get_trace_reconstruction",
-        tool_input=tool_input,
-        tool_result=tool_result,
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-default-compact",
-    )
-    compact = json.loads(content)
-
-    assert len(content) <= 12000
-    assert compact["recall"]["next_call"] == {
-        "tool": "get_trace_reconstruction",
-        "input": tool_input,
-    }
-    assert compact["recall"]["trace_payloads"] == {
-        "tool": "get_trace_payload",
-        "payload_ids": ["observation:abc:output"],
-    }
-    assert compact["summary"]["fields"]["data"]["type"] == "object"
-    assert "instruction" in compact
-
-
-@pytest.mark.parametrize(
-    ("inline_max_chars", "expected_error"),
-    [
-        (
-            300,
-            {
-                "configured_max_chars": 300,
-                "error": "provider_tool_result_cap_too_small",
-            },
-        ),
-        (36, "provider_tool_result_cap_too_small"),
-        (24, "provider_cap_too_small"),
-    ],
-)
-def test_unusable_provider_cap_returns_bounded_explicit_json_error(
-    monkeypatch,
-    inline_max_chars,
-    expected_error,
-):
-    monkeypatch.setenv(
-        "AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS",
-        str(inline_max_chars),
-    )
-
-    content = api_module._provider_tool_result_content(
-        tool_name="get_trace_payload",
-        tool_input={"payload_id": "payload-1"},
-        tool_result={"value": "large" * 1000},
-        session_id="agent-studio-session-1",
-        turn_id="opus-turn-too-small",
-    )
-
-    assert len(content) <= inline_max_chars
-    assert json.loads(content) == expected_error
-
-
 def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    monkeypatch.setenv("AGENT_STUDIO_FLOW_INSPECTION_CHUNK_MAX_CHARS", "1000")
     flow_tools.set_current_flow_context(
         {
             "flow_name": "Disease Extraction and Export",
@@ -588,10 +349,7 @@ def test_current_flow_manifest_and_bounded_details_stay_under_provider_cap(monke
     for tool_name, tool_input, result in results:
         content = api_module._provider_tool_result_content(
             tool_name=tool_name,
-            tool_input=tool_input,
             tool_result=result,
-            session_id="agent-studio-session-flow",
-            turn_id="flow-turn",
         )
         assert len(content) < 12000
         assert json.loads(content).get("status") != "compacted_tool_result"
@@ -618,12 +376,11 @@ def authorized_compaction_tools(monkeypatch):
     )
 
 
-def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch, authorized_compaction_tools):
+def test_streaming_tool_loop_sends_complete_large_result_to_provider(monkeypatch, authorized_compaction_tools):
     captured: dict[str, Any] = {}
     large_value = "payload chunk " * 500
 
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(
@@ -723,20 +480,11 @@ def test_streaming_tool_loop_sends_compact_large_result_to_provider(monkeypatch,
     tool_result_content = captured["provider_result"]
     compact = json.loads(tool_result_content)
 
-    assert compact["status"] == "compacted_tool_result"
-    assert len(tool_result_content) <= 500
-    assert compact["recall"]["turn"]["turn_id"] == "opus-turn-4-abc123"
-    assert compact["recall"]["next_call"] == {
-        "tool": "get_trace_payload",
-        "input": {
-            "trace_id": "trace-1",
-            "payload_id": "observation:abc:output",
-        },
-    }
-    assert large_value not in tool_result_content
+    assert compact["data"]["value"] == large_value
+    assert compact == tool_result_events[0]["result"]
 
 
-def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
+def test_repeated_tool_loop_continuations_keep_exact_results(
     monkeypatch, authorized_compaction_tools,
 ):
     captured: dict[str, Any] = {}
@@ -744,7 +492,6 @@ def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
     exact_payload_value = "exact TraceReview payload " * 500
 
     monkeypatch.setattr(api_module, "get_api_key", lambda _provider: "test-key")
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
     monkeypatch.setattr(api_module, "_build_opus_system_prompt", lambda **_kwargs: "system prompt")
     monkeypatch.setattr(api_module, "_load_agent_studio_system_prompt_template", lambda: "system prompt template")
     monkeypatch.setattr(
@@ -893,38 +640,19 @@ def test_repeated_tool_loop_continuations_stay_compact_and_keep_exact_results(
     first_compact = json.loads(first_provider_result)
     second_compact = json.loads(second_provider_result)
 
-    assert first_compact["status"] == "compacted_tool_result"
-    assert len(first_provider_result) <= 500
-    assert first_compact["recall"]["next_call"]["input"] == {
-        "trace_id": "trace-1"
-    }
-    assert second_compact["status"] == "compacted_tool_result"
-    assert len(second_provider_result) <= 500
-    assert second_compact["recall"]["turn"]["turn_id"] == (
-        "opus-turn-repeat-abc123"
-    )
-    assert "next_call" not in second_compact["recall"]
-    assert second_compact["recall"]["narrow"]["tool"] == "get_trace_payload"
-    assert "payload_id" in second_compact["recall"]["narrow"]["supply_bounded"]
-    assert inventory_value not in first_provider_result
-    assert exact_payload_value not in second_provider_result
+    assert first_compact["data"]["payloads"][0]["preview"] == inventory_value
+    assert second_compact["data"]["value"] == exact_payload_value
 
 
-def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
+def test_exact_results_and_authorized_history_recall_agree(
     monkeypatch,
 ):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "500")
 
     exact_turn_phrase = "Early Agent Studio note: preserve record-alpha-6789 exactly."
     exact_payload_value = "TraceReview exact payload body " * 300
     compact = json.loads(
         api_module._provider_tool_result_content(
             tool_name="get_trace_payload",
-            tool_input={
-                "trace_id": "trace-1",
-                "payload_id": "observation:abc:output",
-                "max_chars": 0,
-            },
             tool_result={
                 "status": "success",
                 "trace_id": "trace-1",
@@ -933,8 +661,6 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
                     "value": exact_payload_value,
                 },
             },
-            session_id="agent-studio-session-1",
-            turn_id="opus-turn-early-abc123",
         )
     )
     durable_turn_messages = [
@@ -991,12 +717,11 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
 
     monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(api_module, "ChatHistoryRepository", _FakeRepository)
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
 
     turn_result = asyncio.run(
         api_module._handle_tool_call(
-            tool_name=compact["recall"]["turn"]["tool"],
-            tool_input=compact["recall"]["turn"],
+            tool_name="get_chat_turn",
+            tool_input={"session_id": "agent-studio-session-1", "turn_id": "opus-turn-early-abc123"},
             context=None,
             user_email="dev@example.org",
             user_auth_sub="auth-sub-1",
@@ -1021,9 +746,8 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
     monkeypatch.setattr(tools_module, "get_trace_payload", _fake_get_trace_payload)
     payload_result = asyncio.run(
         api_module._handle_tool_call(
-            tool_name=compact["recall"]["narrow"]["tool"],
+            tool_name="get_trace_payload",
             tool_input={
-                **compact["recall"]["narrow"]["input"],
                 "trace_id": "trace-1",
                 "payload_id": "observation:abc:output",
                 "max_chars": 0,
@@ -1035,13 +759,7 @@ def test_compact_tool_result_recall_hints_fetch_exact_turn_and_trace_payload(
         )
     )
 
-    assert exact_payload_value not in json.dumps(compact, sort_keys=True)
-    assert "next_call" not in compact["recall"]
-    assert compact["recall"]["narrow"]["input"] == {"max_chars": 0}
-    assert compact["recall"]["narrow"]["supply_bounded"] == [
-        "trace_id",
-        "payload_id",
-    ]
+    assert compact["data"]["value"] == exact_payload_value
     assert turn_result["success"] is True
     exact_turn_next_call = turn_result["messages"][0]["fields"]["content"]["next_call"]
     exact_turn_result = asyncio.run(

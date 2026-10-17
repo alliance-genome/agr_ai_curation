@@ -729,7 +729,7 @@ async def _execute_flow_for_document(
             "document_id": document_id,
             "session_id": session_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "details": {"error": str(e)},
+            "details": {"error": _batch_failure_message(e)},
         }
         broadcaster.publish_sync(batch_uuid, error_event)
         raise

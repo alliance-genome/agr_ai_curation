@@ -193,8 +193,8 @@ A field that is defined but cannot be resolved from the available paper/database
 evidence stays open with an explanation of what curator evidence or action is needed.
 # SUP-44 evidence from backend-owned PDF spans (read_chunk -> span_id -> record_evidence)
 specialists call
-`read_chunk`, select `evidence_spans[].span_id` values, then call
-`record_evidence(span_ids=[...])`
+`read_chunk`, select `evidence_spans[].span_index` values, then call
+`record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])`
 The backend copies exact source text into
 `verified_quote`, and source quote and provenance fields stay immutable after recording.
 

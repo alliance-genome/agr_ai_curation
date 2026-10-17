@@ -18,16 +18,12 @@ def compaction_key(item: dict[str, Any]) -> str | None:
     return None
 
 
-def native_compaction_settings(model: Any, agent: Any, settings: Any) -> Any:
-    """Enable compaction only for native OpenAI Responses and durable runs."""
+def native_compaction_settings(model: Any, settings: Any, *, provider_hint=None) -> Any:
+    """Apply the native policy at the actual provider boundary, not Agent metadata."""
     from .model_request_measurement import describe_model
 
-    history = getattr(agent, "run_history", None)
     if (
-        describe_model(model)[:2] != ("openai", "responses")
-        or history is None
-        or not history.healthy
-        or not config.get_agent_context_view_enabled()
+        describe_model(model, provider_hint=provider_hint)[:2] != ("openai", "responses")
         or not config.get_agent_context_compaction_enabled()
     ):
         return settings

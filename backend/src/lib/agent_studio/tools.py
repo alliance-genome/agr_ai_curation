@@ -46,7 +46,6 @@ from src.lib.openai_agents.config import (
     get_agent_studio_service_log_page_max_chars,
     get_agent_studio_service_log_timeout_seconds,
     get_agent_studio_trace_review_aggregate_page_size,
-    get_agent_studio_trace_review_chunk_max_chars,
     get_agent_studio_trace_review_page_size,
     get_agent_studio_trace_search_default_limit,
     get_agent_studio_trace_search_max_limit,
@@ -305,8 +304,7 @@ async def get_trace_summary(trace_id: str) -> Dict[str, Any]:
             },
             "token_info": {
                 "estimated_tokens": int,
-                "within_budget": bool,
-                "warning": str | None
+                "serialized_chars": int
             },
             "error": str | None
         }
@@ -641,7 +639,7 @@ async def get_tool_call_detail(
                  Prefer call_id when available (from tool_calls_summary).
         field: Exact field to retrieve: input, tool_result, thought, or metadata.
         start: Start character in the serialized exact field.
-        max_chars: Requested exact characters, capped by configuration.
+        max_chars: Optional exact character count; omitted means the complete remainder.
 
     Returns:
         {
@@ -678,10 +676,7 @@ async def get_tool_call_detail(
                     "source": get_trace_source(),
                     "field": field,
                     "start": max(0, start),
-                    "max_chars": max(1, min(
-                        max_chars or get_agent_studio_trace_review_chunk_max_chars(),
-                        get_agent_studio_trace_review_chunk_max_chars(),
-                    )),
+                    **({"max_chars": max_chars} if max_chars is not None else {}),
                 },
                 headers=_trace_review_request_headers(),
             )
@@ -754,7 +749,7 @@ async def get_trace_conversation(
         trace_id: Langfuse trace ID
         field: Exact field to retrieve: user_query or assistant_response.
         start: Start character in the selected field.
-        max_chars: Requested exact characters, capped by configuration.
+        max_chars: Optional exact character count; omitted means the complete remainder.
 
     Returns:
         {
@@ -788,10 +783,7 @@ async def get_trace_conversation(
                     "source": get_trace_source(),
                     "field": field,
                     "start": max(0, start),
-                    "max_chars": max(1, min(
-                        max_chars or get_agent_studio_trace_review_chunk_max_chars(),
-                        get_agent_studio_trace_review_chunk_max_chars(),
-                    )),
+                    **({"max_chars": max_chars} if max_chars is not None else {}),
                 },
                 headers=_trace_review_request_headers(),
             )
@@ -864,7 +856,7 @@ async def get_trace_view(
         trace_id: Langfuse trace ID
         view_name: One of: token_analysis, agent_context, pdf_citations,
                    document_hierarchy, agent_configs, group_context, trace_summary
-        item_start: Exact JSON character cursor for one oversized aggregate item
+        item_start: Optional JSON character offset for an exact aggregate-item suffix
 
     Returns:
         {
@@ -1315,10 +1307,7 @@ async def get_trace_payload(
             "observation_id": observation_id,
             "field": field,
             "start": max(0, start),
-            "max_chars": max(1, min(
-                max_chars or get_agent_studio_trace_review_chunk_max_chars(),
-                get_agent_studio_trace_review_chunk_max_chars(),
-            )),
+            **({"max_chars": max_chars} if max_chars is not None else {}),
         },
         # Env-configurable via AGENT_STUDIO_TRACE_TOOL_TIMEOUT_SECONDS (default 45).
         timeout_seconds=get_agent_studio_trace_tool_timeout_seconds(),

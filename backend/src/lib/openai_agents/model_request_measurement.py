@@ -1132,7 +1132,11 @@ class MeasuredModel(Model):
         *,
         agent: Any | None,
         provider_hint: str | None = None,
+        history: Any = None,
+        context_policy: Any = None,
     ) -> None:
+        self._history = history if history is not None else getattr(agent, "run_history", None)
+        self._context_policy = context_policy
         self._inner = inner
         self._agent = agent
         self._provider_hint = provider_hint
@@ -1200,8 +1204,10 @@ class MeasuredModel(Model):
             prompt_cache_tool_surface=prompt_cache_tool_surface,
             output_reserve_tokens=getattr(model_settings, "max_tokens", None),
         )
-        history = getattr(self._agent, "run_history", None)
+        history = self._history
         measurement["context_management"] = getattr(model_settings, "context_management", None)
+        if self._context_policy is not None:
+            measurement["context_capacity"] = dict(self._context_policy.metrics)
         if history is not None and history.model_view is not None:
             if (previous_response_id or conversation_id) and history.model_view.last_metrics.get("enabled"):
                 from .model_context_view import ContextRecoveryError
@@ -1229,6 +1235,45 @@ class MeasuredModel(Model):
             surface.observe_response_output(getattr(response, "output", None))
         measurement["tool_surface"] = surface.summary()
 
+    async def _prepare_context(self, instructions, input, settings, tools, output_schema, handoffs,
+                               previous_response_id, conversation_id, prompt):
+        from .context_capacity import NativeCapacityRequest
+        from .context_compaction import native_compaction_settings
+        from .model_context_view import ContextRecoveryError
+        settings = native_compaction_settings(self._inner, settings, provider_hint=self._provider_hint)
+        if self._context_policy is None or describe_model(self._inner, provider_hint=self._provider_hint)[:2] != ("openai", "responses"):
+            return input, settings
+        if previous_response_id or conversation_id:
+            raise ContextRecoveryError("Use application-owned working context without server-managed conversation chaining.")
+        if self._history is not None and not self._history.healthy:
+            from .model_context_view import HistoryStorageUnavailable
+            raise HistoryStorageUnavailable("Exact context could not be saved; stopping before compaction can discard its working copy.")
+        async def compact(items, *, model, instructions):
+            return await call_measured_direct_request(
+                surface="context_compaction", provider="openai", api="responses.compact",
+                kwargs={"model": model, "input": items, "instructions": instructions},
+                call=self._inner._get_client().responses.compact,
+            )
+        request = NativeCapacityRequest(self._inner, settings, instructions=instructions, tools=tools,
+            output_schema=output_schema, handoffs=handoffs, previous_response_id=previous_response_id,
+            conversation_id=conversation_id, prompt=prompt, compact_call=compact)
+        items = [{"role": "user", "content": input}] if isinstance(input, str) else input
+        from .extraction_trace_events import write_extraction_trace_event
+        try:
+            prepared = await self._context_policy.prepare(request, items, settings)
+        except BaseException as exc:
+            from .run_history import record_model_history
+            await record_model_history(self._history, "model_error",
+                {"error_type": type(exc).__name__, "phase": "context_preflight"}, outcome="raised")
+            write_extraction_trace_event(event_type="runtime.context_capacity", output_summary={
+                "outcome": "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed_before_generation",
+                "error_type": type(exc).__name__, "token_count_requests": request.count_calls,
+                "token_count_duration_ms": request.count_duration_ms})
+            raise
+        write_extraction_trace_event(event_type="runtime.context_capacity", output_summary={
+            **self._context_policy.metrics, "outcome": "prepared"})
+        return prepared
+
     async def get_response(
         self,
         system_instructions,
@@ -1243,8 +1288,8 @@ class MeasuredModel(Model):
         conversation_id=None,
         prompt=None,
     ):
-        from .context_compaction import native_compaction_settings
-        model_settings = native_compaction_settings(self._inner, self._agent, model_settings)
+        input, model_settings = await self._prepare_context(system_instructions, input, model_settings,
+            tools, output_schema, handoffs, previous_response_id, conversation_id, prompt)
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
@@ -1277,12 +1322,11 @@ class MeasuredModel(Model):
                 )
         except BaseException as exc:
             from .run_history import record_model_history
-            await record_model_history(self._agent, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
+            await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
             self._observe_tool_surface(measurement, None)
             record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
             raise
         from .run_history import record_model_history
-        await record_model_history(self._agent, "model_output", getattr(response, "output", None), outcome="completed")
         self._observe_tool_surface(measurement, response)
         record_outcome(
             measurement,
@@ -1293,6 +1337,9 @@ class MeasuredModel(Model):
             response_id=getattr(response, "response_id", None),
             provider_request_id=getattr(response, "request_id", None),
         )
+        # Provider usage remains billable even if durable history fails. Record it
+        # before enforcing the archive barrier; never return unsaved output to the SDK.
+        await record_model_history(self._history, "model_output", getattr(response, "output", None), outcome="completed")
         return response
 
     async def stream_response(
@@ -1309,8 +1356,8 @@ class MeasuredModel(Model):
         conversation_id=None,
         prompt=None,
     ) -> AsyncIterator[Any]:
-        from .context_compaction import native_compaction_settings
-        model_settings = native_compaction_settings(self._inner, self._agent, model_settings)
+        input, model_settings = await self._prepare_context(system_instructions, input, model_settings,
+            tools, output_schema, handoffs, previous_response_id, conversation_id, prompt)
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
@@ -1351,7 +1398,7 @@ class MeasuredModel(Model):
                     terminal_response = getattr(event, "response", None)
                     terminal_type = event_type
                     from .run_history import record_model_history
-                    await record_model_history(self._agent, "model_output", getattr(terminal_response, "output", None), outcome=event_type)
+                    await record_model_history(self._history, "model_output", getattr(terminal_response, "output", None), outcome=event_type)
                     if measurement.get("api") == "responses":
                         _observe_service_tier(measurement, event)
                 yield event
@@ -1359,7 +1406,7 @@ class MeasuredModel(Model):
                     event = await anext(stream, _STREAM_END)
         except BaseException as exc:
             from .run_history import record_model_history
-            await record_model_history(self._agent, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
+            await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
             if terminal_response is None:
                 self._observe_tool_surface(measurement, None)
                 record_outcome(
@@ -1420,7 +1467,11 @@ def measure_resolved_model(
     if isinstance(model, MeasuredModel):
         return model
     provider_hint = getattr(getattr(run_config, "model_provider", None), "_agr_provider_id", None)
-    return MeasuredModel(model, agent=agent, provider_hint=provider_hint)
+    # Sentry clones Agent with dataclasses.replace, which drops dynamic attrs.
+    # The invocation's input-filter closure survives unchanged and owns history.
+    history = getattr(getattr(run_config, "call_model_input_filter", None), "_run_history", None)
+    policy = getattr(getattr(run_config, "call_model_input_filter", None), "_context_policy", None)
+    return MeasuredModel(model, agent=agent, provider_hint=provider_hint, history=history, context_policy=policy)
 
 
 def install_model_request_measurement() -> None:
@@ -1567,6 +1618,34 @@ class _SchemaSize:
         return self._schema
 
 
+async def _call_direct_compaction_with_telemetry(call, kwargs, measurement):
+    """One paid compact call participates in existing tracing and call budgets."""
+    from time import monotonic
+    from agents.tracing import generation_span
+    from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
+    from .benchmark_routing import current_benchmark_invocation_route
+    from .provider_usage import begin_provider_invocation, complete_generic_provider_invocation, fail_provider_invocation
+
+    started = monotonic()
+    active = current_benchmark_invocation_route()
+    with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")):
+        pending = begin_provider_invocation(requested_provider="openai", requested_model=kwargs["model"],
+            route_slot=active[0] if active else None,
+            reasoning_effort=active[1].reasoning_effort if active else None, started_at=started)
+        with generation_span(model=kwargs["model"], model_config={"operation": "responses.compact"}) as span:
+            try:
+                response = await call(**kwargs)
+            except BaseException as exc:
+                span.set_error({"message": type(exc).__name__, "data": {"operation": "responses.compact"}})
+                fail_provider_invocation(pending, exc, latency_ms=round((monotonic() - started) * 1000))
+                raise
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                span.span_data.usage = usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
+            complete_generic_provider_invocation(pending, response, latency_ms=round((monotonic() - started) * 1000))
+            return response
+
+
 async def call_measured_direct_request(
     *,
     surface: str,
@@ -1584,7 +1663,8 @@ async def call_measured_direct_request(
         kwargs=kwargs,
     )
     try:
-        response = await call(**kwargs)
+        response = (await _call_direct_compaction_with_telemetry(call, kwargs, measurement)
+            if api == "responses.compact" else await call(**kwargs))
     except BaseException as exc:
         record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
         raise

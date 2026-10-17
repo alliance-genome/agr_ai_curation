@@ -267,7 +267,8 @@ def test_pdf_evidence_tools_document_span_contract():
     ]["summary"]
 
     assert "snippets" in read_chunk_summary
-    assert "span_ids" in record_parameters
+    assert "selections" in record_parameters
+    assert "span_ids" not in record_parameters
     assert "claimed_quote" not in record_parameters
     assert "to correct the quote or source provenance" in workspace_summary.lower()
 
@@ -603,55 +604,60 @@ def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
         catalog_service.validate_active_agent_output_schemas(db)
 
 
-def test_import_package_binding_target_adds_runtime_helper_paths(monkeypatch):
-    repo_root = catalog_service._HOST_RUNTIME_ROOT_DIR.parent
-    package_path = repo_root / "packages" / "alliance"
-    python_package_root = (
-        package_path / "python" / "src" / "agr_ai_curation_alliance"
-    ).resolve(strict=False)
-    binding = SimpleNamespace(
-        tool_id="search_document",
-        import_path=(
-            "agr_ai_curation_alliance.tools.documents:create_search_document_tool"
-        ),
-        source=SimpleNamespace(package_id="agr.alliance"),
-    )
-    package = SimpleNamespace(
-        package_path=package_path,
-        manifest=SimpleNamespace(python_package_root="python/src/agr_ai_curation_alliance"),
-    )
-    blocked_paths = {
-        catalog_service._HOST_RUNTIME_ROOT_DIR.resolve(strict=False),
-        catalog_service._HOST_RUNTIME_SRC_DIR.resolve(strict=False),
-        package_path.resolve(strict=False),
-        python_package_root.resolve(strict=False),
-        python_package_root.parent.resolve(strict=False),
-    }
+def test_import_package_binding_target_adds_runtime_helper_paths():
+    # Reimport in a child interpreter: restoring sys.modules in-process cannot
+    # restore exception-class aliases held by already imported package modules.
+    import subprocess
 
-    monkeypatch.setattr(catalog_service, "_get_loaded_package_for_binding", lambda _binding: package)
-    monkeypatch.setattr(
-        sys,
-        "path",
-        [
-            entry
-            for entry in sys.path
-            if entry
-            and Path(entry).resolve(strict=False) not in blocked_paths
-        ],
+    script = """
+from pathlib import Path
+from types import SimpleNamespace
+import sys
+from src.lib.agent_studio import catalog_service
+repo_root = catalog_service._HOST_RUNTIME_ROOT_DIR.parent
+package_path = repo_root / "packages" / "alliance"
+python_package_root = (
+    package_path / "python" / "src" / "agr_ai_curation_alliance"
+).resolve(strict=False)
+binding = SimpleNamespace(
+    tool_id="search_document",
+    import_path=(
+        "agr_ai_curation_alliance.tools.documents:create_search_document_tool"
+    ),
+    source=SimpleNamespace(package_id="agr.alliance"),
+)
+package = SimpleNamespace(
+    package_path=package_path,
+    manifest=SimpleNamespace(python_package_root="python/src/agr_ai_curation_alliance"),
+)
+blocked_paths = {
+    catalog_service._HOST_RUNTIME_ROOT_DIR.resolve(strict=False),
+    catalog_service._HOST_RUNTIME_SRC_DIR.resolve(strict=False),
+    package_path.resolve(strict=False),
+    python_package_root.resolve(strict=False),
+    python_package_root.parent.resolve(strict=False),
+}
+
+catalog_service._get_loaded_package_for_binding = lambda _binding: package
+sys.path = [entry for entry in sys.path if entry and Path(entry).resolve(strict=False) not in blocked_paths]
+for module_name in list(sys.modules):
+    if module_name == "agr_ai_curation_runtime" or module_name.startswith(
+        ("agr_ai_curation_runtime.", "agr_ai_curation_alliance.")
+    ):
+        sys.modules.pop(module_name, None)
+
+imported = catalog_service._import_package_binding_target(binding)
+
+assert callable(imported)
+assert str(catalog_service._HOST_RUNTIME_SRC_DIR) in sys.path
+assert str(catalog_service._HOST_RUNTIME_ROOT_DIR) in sys.path
+assert str(package_path) in sys.path
+assert str(python_package_root.parent) in sys.path
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False,
     )
-    for module_name in list(sys.modules):
-        if module_name == "agr_ai_curation_runtime" or module_name.startswith(
-            ("agr_ai_curation_runtime.", "agr_ai_curation_alliance.")
-        ):
-            monkeypatch.delitem(sys.modules, module_name, raising=False)
-
-    imported = catalog_service._import_package_binding_target(binding)
-
-    assert callable(imported)
-    assert str(catalog_service._HOST_RUNTIME_SRC_DIR) in sys.path
-    assert str(catalog_service._HOST_RUNTIME_ROOT_DIR) in sys.path
-    assert str(package_path) in sys.path
-    assert str(python_package_root.parent) in sys.path
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 @pytest.mark.asyncio
@@ -875,7 +881,7 @@ async def test_resolve_package_tool_falls_back_when_thread_creation_is_unavailab
     "tool_id,input_payload",
     [
         ("search_document", '{"query":"genes"}'),
-        ("read_chunk", '{"chunk_id":"chunk-1"}'),
+        ("read_chunk", '{"chunk_index":42}'),
         ("read_section", '{"section_title":"Results"}'),
         ("read_subsection", '{"section_title":"Results","subsection":"Expression"}'),
     ],
@@ -895,6 +901,7 @@ async def test_resolve_package_tool_executes_document_tools_inline(
         calls.append(("invoke", input_str))
         return {
             "summary": "Found 1 chunks",
+            "chunk": {"chunk_id": "chunk-1", "chunk_index": 42},
             "input": input_str,
         }
 
@@ -934,6 +941,7 @@ async def test_resolve_package_tool_executes_document_tools_inline(
 
     assert result == {
         "summary": "Found 1 chunks",
+        "chunk": {"chunk_index": 42} if tool_id == "read_chunk" else {"chunk_id": "chunk-1", "chunk_index": 42},
         "input": input_payload,
     }
     assert calls == [

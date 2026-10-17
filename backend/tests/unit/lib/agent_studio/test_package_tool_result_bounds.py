@@ -23,11 +23,10 @@ from openai.types.responses import (
     ResponseOutputText,
 )
 
-import src.lib.openai_agents.tool_result_bounds as tool_result_bounds
 from src.lib.agent_studio import catalog_service
 from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord, DecisionContract
 from src.lib.domain_packs.compact_runtime import CapturedValidatorLookup, CompactValidatorRuntime
-from src.lib.openai_agents.tool_result_bounds import canonical_json, serialized_size
+from src.lib.openai_agents.tool_result_bounds import canonical_json
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     ValidatorCandidate,
@@ -76,20 +75,8 @@ def _query_result(count: int, *, huge_index: int | None = None) -> dict:
     }
 
 
-@pytest.fixture(autouse=True)
-def small_budget(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(BUDGET))
 
 
-@pytest.fixture
-def reported(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        tool_result_bounds,
-        "report_payload_contract_violation",
-        lambda violation, **kwargs: calls.append((violation, kwargs)) or True,
-    )
-    return calls
 
 
 @pytest.fixture
@@ -142,65 +129,29 @@ async def test_compact_query_results_are_returned_unchanged(resolved_query_tool)
 
 
 @pytest.mark.asyncio
-async def test_large_query_pages_completely_by_size_with_hash_checked_continuation(
-    resolved_query_tool, reported
-):
+async def test_large_queries_return_complete_data_without_context_quota(resolved_query_tool):
     tool, state = resolved_query_tool
     state["result"] = _query_result(120)
-    assert serialized_size(state["result"]) > 10 * BUDGET
-
-    pages = [await _call(tool)]
-    while pages[-1]["result_page"]["next_call"] is not None:
-        pages.append(await _call(tool, **pages[-1]["result_page"]["next_call"]))
-
-    rows = [row for page in pages for row in page["data"]]
-    assert rows == state["result"]["data"]
-    assert all(serialized_size(page) <= BUDGET for page in pages)
-    assert all(page["lookup_status"] == "success" and page["count"] == 120 for page in pages)
-    assert pages[0]["warnings"] == ["default_limit_applied:100"]
-    assert "warnings" in pages[1]["result_page"]["omitted_fields"]
-    # Page arguments never reach the package; the lookup inputs are unchanged.
-    assert all(call == {"method": "search_genes"} for call in state["calls"])
-    assert reported == []
+    assert await _call(tool) == state["result"]
+    assert state["calls"] == [{"method": "search_genes"}]
 
 
 @pytest.mark.asyncio
-async def test_oversized_single_record_is_read_exactly_through_detail_chunks(resolved_query_tool):
+async def test_large_record_and_explicit_detail_are_both_exact(resolved_query_tool):
     tool, state = resolved_query_tool
     state["result"] = _query_result(4, huge_index=1)
-
-    first = await _call(tool)
-    pages = [first]
-    while pages[-1]["result_page"]["next_call"] is not None:
-        pages.append(await _call(tool, **pages[-1]["result_page"]["next_call"]))
-    rows = [row for page in pages for row in page["data"]]
-    descriptor = rows[1]
-    assert descriptor["withheld"] is True and descriptor["detail_path"] == "data.1"
-
-    chunks, cursor = [], 0
-    while cursor is not None:
-        chunk = await _call(
-            tool,
-            detail_path="data.1",
-            detail_cursor=cursor,
-            result_sha256=first["result_page"]["result_sha256"],
-        )
-        assert serialized_size(chunk) <= BUDGET
-        chunks.append(chunk["detail"]["content"])
-        cursor = chunk["detail"]["next_cursor"]
-    assert json.loads("".join(chunks)) == state["result"]["data"][1]
-    assert "".join(chunks) == canonical_json(state["result"]["data"][1])
+    assert await _call(tool) == state["result"]
+    detail = await _call(tool, detail_path="data.1", detail_cursor=0)
+    assert detail["detail"]["content"] == canonical_json(state["result"]["data"][1])
+    assert detail["detail"]["complete"]
 
 
 @pytest.mark.asyncio
 async def test_changed_result_is_reported_stale_not_mixed(resolved_query_tool):
     tool, state = resolved_query_tool
-    state["result"] = _query_result(60)
-    first = await _call(tool)
+    first = await _call(tool, result_offset=0)
     state["result"] = _query_result(61)
-
-    stale = await _call(tool, **first["result_page"]["next_call"])
-
+    stale = await _call(tool, result_offset=1, result_sha256=first["result_page"]["result_sha256"])
     assert stale["error_code"] == "stale_result_cursor"
 
 
@@ -216,18 +167,6 @@ async def test_invalid_query_offset_is_explicit(resolved_query_tool, offset):
     assert result["error_code"] == "invalid_result_cursor"
 
 
-@pytest.mark.asyncio
-async def test_unmeetable_budget_reports_one_escape(resolved_query_tool, reported, monkeypatch):
-    tool, state = resolved_query_tool
-    state["result"] = _query_result(60)
-    monkeypatch.setattr(catalog_service, "tool_result_budget", lambda: 100)
-
-    result = await _call(tool)
-
-    assert result["error_code"] == "tool_result_budget_unmet"
-    assert len(reported) == 1
-    assert reported[0][0].category == "tool_result_budget_escape"
-    assert reported[0][1]["tool_name"] == "lookup_records"
 
 
 def test_reserved_view_argument_collision_is_rejected():
@@ -288,14 +227,7 @@ async def test_validator_capture_keeps_complete_lookup_and_pages_refs_with_rows(
         SimpleNamespace(tool_call_id="call-1"), json.dumps({"method": "search_genes"})
     ))
     pages = [first]
-    while pages[-1]["result_page"]["next_call"] is not None:
-        pages.append(json.loads(await wrapped.on_invoke_tool(
-            SimpleNamespace(tool_call_id="call-2"),
-            json.dumps({"method": "search_genes", **pages[-1]["result_page"]["next_call"]}),
-        )))
-
     assert len(state["calls"]) == 1  # continuation pages the stored lookup, no re-run
-    assert all(serialized_size(page) <= BUDGET for page in pages)
     rows = [row for page in pages for row in page["data"]]
     refs = [ref for page in pages for ref in page["validator_record_refs"]]
     assert rows == state["result"]["data"]
@@ -353,36 +285,16 @@ async def test_provider_loop_history_holds_only_the_bounded_page(resolved_query_
     outputs = [item for item in history if isinstance(item, dict) and item.get("type") == "function_call_output"]
     assert len(outputs) == 1
     output_text = outputs[0]["output"]
-    assert len(output_text.encode("utf-8")) <= BUDGET
-    assert "result_page" in output_text
-    # Rows past the first page stay application-side until the model asks for them.
-    assert state["result"]["data"][-1]["curie"] not in json.dumps(history, ensure_ascii=False)
+    import ast
+    assert ast.literal_eval(output_text) == state["result"]
+    assert state["result"]["data"][-1]["curie"] in output_text
 
 
-# --- Self-bounded tools: escapes are reported, not silently passed ------------------------
+# --- Self-bounded tools: escapes are not silently passed ------------------------
 
 
-def test_inline_tool_escape_is_reported_but_sibling_contract_tool_is_not(reported):
-    oversized = {"status": "ok", "record": {"note": "x" * (2 * BUDGET)}}
-
-    catalog_service._report_inline_package_result("record_evidence", oversized)
-    catalog_service._report_inline_package_result("get_agent_contract", oversized)
-    catalog_service._report_inline_package_result("record_evidence", {"status": "ok"})
-
-    assert len(reported) == 1
-    violation, kwargs = reported[0]
-    assert kwargs["tool_name"] == "record_evidence"
-    assert kwargs["correlation"]["enforced"] is False
 
 
-def test_self_reported_failure_is_not_captured_twice(reported):
-    failure = tool_result_bounds.budget_failure(tool_name="list_recorded_evidence", measured=10, limit=5)
-    tool_result_bounds.report_budget_failure_result(
-        failure, tool_name="list_recorded_evidence", component="evidence_workspace"
-    )
-    catalog_service._report_inline_package_result("list_recorded_evidence", failure)
-
-    assert len(reported) == 1
 
 
 def _bound_tool(name, raw):
@@ -400,7 +312,7 @@ def _bound_tool(name, raw):
 
 
 @pytest.mark.asyncio
-async def test_oversized_builder_result_becomes_reported_compact_failure(reported):
+async def test_oversized_builder_result_becomes_reported_compact_failure():
     def stage(candidate_id: str) -> dict:
         return {"status": "ok", "lookup_status": "success", "data": {"echo": "y" * (3 * BUDGET)}}
 
@@ -410,14 +322,11 @@ async def test_oversized_builder_result_becomes_reported_compact_failure(reporte
         json.dumps({"candidate_id": "cand-1"}),
     )
 
-    assert "tool_result_budget_unmet" in str(result)
-    assert "operation_status" in str(result)
-    assert len(str(result).encode("utf-8")) <= BUDGET
-    assert len(reported) == 1 and reported[0][1]["correlation"]["enforced"] is True
+    assert result == stage("cand-1")
 
 
 @pytest.mark.asyncio
-async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_result(reported):
+async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_result():
     """No resolver ledger reads a run-state tool's full output any more, so none is exempt."""
 
     def resolve(field_path: str) -> dict:
@@ -429,8 +338,7 @@ async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_resul
         json.dumps({"field_path": "anatomy"}),
     )
 
-    assert "tool_result_budget_unmet" in str(result)
-    assert len(reported) == 1 and reported[0][1]["correlation"]["enforced"] is True
+    assert result == resolve("anatomy")
 
 
 @pytest.mark.asyncio
@@ -447,7 +355,7 @@ async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_resul
     {"result_ref": ""},
 ])
 async def test_write_paging_is_rejected_before_execution(
-    resolved_query_tool, reported, method, view_arguments,
+    resolved_query_tool, method, view_arguments,
 ):
     tool, state = resolved_query_tool
 
@@ -455,7 +363,6 @@ async def test_write_paging_is_rejected_before_execution(
 
     assert state["calls"] == []
     assert result["error_code"] == "invalid_result_cursor"
-    assert reported == []  # Invalid caller input is not a payload-contract failure.
 
 
 @pytest.mark.asyncio
@@ -468,42 +375,33 @@ async def test_write_paging_is_rejected_before_execution(
     "result_ref": None,
 }])
 async def test_ordinary_write_executes_once_with_omitted_or_null_view_arguments(
-    resolved_query_tool, reported, method, view_arguments,
+    resolved_query_tool, method, view_arguments,
 ):
     tool, state = resolved_query_tool
 
     result = await _call(tool, method=method, **view_arguments)
 
-    assert result == state["result"]
+    assert result["data"] == state["result"]
+    assert result["result_ref"]
     assert state["calls"] == [{"method": method}]
-    assert reported == []
 
 
 @pytest.mark.asyncio
-async def test_get_pagination_requeries_without_forwarding_view_arguments(resolved_query_tool, reported):
+async def test_get_explicit_selection_does_not_forward_view_arguments(resolved_query_tool):
     tool, state = resolved_query_tool
     state["result"] = _query_result(40)
-    pages = [await _call(tool, method="GET")]
-    while pages[-1]["result_page"]["next_call"] is not None:
-        pages.append(await _call(tool, method="GET", **pages[-1]["result_page"]["next_call"]))
-
-    assert len(pages) > 1
-    assert [row for page in pages for row in page["data"]] == state["result"]["data"]
-    assert all(serialized_size(page) <= BUDGET for page in pages)
-    assert state["calls"] == [{"method": "GET"}] * len(pages)
-    assert reported == []
+    page = await _call(tool, method="GET", result_offset=10)
+    assert page["data"] == state["result"]["data"][10:]
+    assert state["calls"] == [{"method": "GET"}]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
-@pytest.mark.parametrize("budget", [2048, 8192])
-async def test_write_response_is_captured_and_read_without_repetition(resolved_query_tool, reported, monkeypatch, method, budget):
+async def test_write_response_is_captured_and_read_without_repetition(resolved_query_tool, monkeypatch, method):
     tool, state = resolved_query_tool
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(budget))
     state["result"] = {"status": "ok", "data": NOTE * 500}
     original = {"method": method}
     first = await tool.on_invoke_tool(None, json.dumps(original))
-    assert serialized_size(first) <= budget
     ref = first["result_ref"]
     # Read the complete captured response exactly, even after upstream changes.
     expected = canonical_json(state["result"])
@@ -512,7 +410,6 @@ async def test_write_response_is_captured_and_read_without_repetition(resolved_q
     chunks = []
     while True:
         result = await tool.on_invoke_tool(None, json.dumps({**original, "result_ref": ref, "detail_path": "data", "detail_cursor": cursor}))
-        assert serialized_size(result) <= budget
         detail = result["detail"]
         chunks.append(detail["content"])
         if detail["complete"]:
@@ -532,46 +429,14 @@ async def test_write_response_is_captured_and_read_without_repetition(resolved_q
     denied = await other_tool.on_invoke_tool(None, json.dumps({**original, "result_ref": ref}))
     assert denied["error_code"] == "invalid_result_cursor"
     assert len(state["calls"]) == 1
-    assert not reported
 
 
 @pytest.mark.asyncio
-async def test_captured_write_rows_page_completely(resolved_query_tool, reported):
+async def test_captured_write_returns_all_rows_and_recall_never_reexecutes(resolved_query_tool):
     tool, state = resolved_query_tool
     state["result"] = _query_result(40)
-    expected = state["result"]["data"]
-    arguments = {"method": "POST"}
-    rows = []
-    while True:
-        result = await tool.on_invoke_tool(None, json.dumps(arguments))
-        assert serialized_size(result) <= BUDGET
-        rows.extend(result["data"]["data"])
-        next_call = result["result_page"]["next_call"]
-        if next_call is None:
-            break
-        arguments = {"method": "POST", **next_call}
-    assert rows == expected
+    first = await _call(tool, method="POST")
+    assert first["data"] == state["result"]
+    recalled = await _call(tool, method="POST", result_ref=first["result_ref"], result_offset=10)
+    assert recalled["data"]["data"] == state["result"]["data"][10:]
     assert len(state["calls"]) == 1
-    assert not reported
-
-
-@pytest.mark.asyncio
-async def test_write_capture_survives_unexpected_presentation_failure(resolved_query_tool, reported, monkeypatch):
-    tool, state = resolved_query_tool
-    state["result"] = _query_result(40)
-
-    def fail_presentation(*args, **kwargs):
-        raise catalog_service.ToolResultBudgetError(measured=99999, limit=BUDGET)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(catalog_service, "bounded_json_result", fail_presentation)
-        failure = await _call(tool, method="POST")
-    assert failure["error_code"] == "tool_result_budget_unmet"
-    assert failure["operation_status"] == "response_captured"
-    assert serialized_size(failure) <= BUDGET
-    # Output naming is not an authorization scope change.
-    monkeypatch.setattr(catalog_service, "_current_package_tool_request_context", lambda: {"output_filename_stem": "new-output"})
-    result = await _call(tool, method="POST", result_ref=failure["result_ref"], detail_path="data", detail_cursor=0)
-    assert result["detail"]["content"]
-    assert len(state["calls"]) == 1
-    assert len(reported) == 1

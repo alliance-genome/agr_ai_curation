@@ -4,6 +4,10 @@
 !backend/cost_pricing/**
 !backend/auth_runtime/
 !backend/auth_runtime/**
+!backend/src/
+!backend/src/lib/
+!backend/src/lib/openai_agents/
+!backend/src/lib/openai_agents/extraction_trace_events.py
 !trace_review/
 !trace_review/backend/
 !trace_review/backend/**

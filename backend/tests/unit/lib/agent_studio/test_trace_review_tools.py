@@ -424,7 +424,7 @@ async def test_get_trace_payloads_and_payload_build_expected_requests(monkeypatc
     assert capture["url"].endswith("/langfuse_payload")
     assert capture["params"]["payload_id"] == "observation:obs-1:output"
     assert capture["params"]["start"] == 10
-    assert capture["params"]["max_chars"] == tools.get_agent_studio_trace_review_chunk_max_chars()
+    assert capture["params"]["max_chars"] == 999999
 
 
 @pytest.mark.asyncio

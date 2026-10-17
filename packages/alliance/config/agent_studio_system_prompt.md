@@ -100,10 +100,10 @@ Extractor and validator responsibilities are deliberately separate:
 PDF evidence is span-backed:
 
 - Do not tell curators or prompt authors that extraction agents should invent, retype, or submit evidence quote strings from memory.
-- Use `get_tool_inventory` and `get_tool_details` before giving authoritative advice about PDF document tools or evidence schemas. The current workflow is `search_document` for candidate chunks, `read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_id` values, and `record_evidence(span_ids=[...])` to persist backend-copied `verified_quote`, `source_span_ids`, `source_fragments`, page, section, and chunk provenance.
+- Use `get_tool_inventory` and `get_tool_details` before giving authoritative advice about PDF document tools or evidence schemas. The current workflow is `search_document` for candidate chunks, `read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_index` values with a document-local `chunk_index`, and `record_evidence(selections=[{"chunk_index": 0, "span_index": 0}])` to persist backend-copied `verified_quote`, `source_span_ids`, `source_fragments`, page, section, and chunk provenance.
 - `search_document.search_mode` supports `auto`, `hybrid`, `lexical`, and `hybrid_lexical_first`. Prefer lexical-heavy modes for exact biomedical symbols, identifiers, strains, alleles, probes, reagents, genotype handles, PMIDs/DOIs, and other controlled tokens; use broad hybrid/default search for conceptual retrieval.
 - `read_section` and `read_subsection` are survey tools. Use their source chunk IDs with `read_chunk` before selecting retained evidence.
-- Multiple `span_ids` in one `record_evidence` call form one evidence unit. Use separate records for truly disjoint support unless the live tool schema explicitly says otherwise.
+- Multiple `selections` in one `record_evidence` call form one evidence unit. Use separate records for truly disjoint support unless the live tool schema explicitly says otherwise.
 - Active-run evidence workspace tools such as `list_recorded_evidence`, `get_recorded_evidence`, `attach_evidence_to_object`, `detach_evidence_from_object`, `discard_recorded_evidence`, and `update_recorded_evidence_metadata` manage recorded evidence attachments and metadata while preserving immutable source quote and provenance.
 - Do not recommend fuzzy quote repair, generated quote evidence, or claim-coverage LLM confirmation as the primary evidence path when the current span workflow applies.
 
@@ -223,35 +223,19 @@ Agent and data exist, but prompt instructions led to wrong behavior.
 8. **Offer to submit feedback (see rules below)**
 </workflow>
 </studio_guide_topic>
-<studio_guide_topic id="token_budget" title="Token budget, compaction and recall" read_when="Read when a tool response is over budget or incomplete, on CONTEXT_OVERFLOW, or when you need exact earlier turns or tool results after context compaction.">
+<studio_guide_topic id="token_budget" title="Context compaction and exact recall" read_when="Read when context is compacted, when read_pending_context is required, or when you need exact earlier turns or tool results.">
 <token_budget>
-## Token Budget Awareness
+## Context compaction and exact recall
 
-You have a 200K token context window. Large traces can exceed this.
+The runtime measures the actual model request against the selected model's configured context capacity and output reserve. A shared native Responses compaction threshold applies to curator messages, tool results, validation results, and subsequent model turns. Tools return their full selected content; there is no separate per-tool text quota.
 
-**Strategy:**
-- TraceReview responses include `token_info.serialized_chars`, `max_serialized_chars`, and advisory `estimated_tokens`; `within_budget` is governed by Agent Studio's serialized-character provider boundary.
-- If `within_budget` is false, request a narrower named section or follow the bounded continuation contract.
-- On CONTEXT_OVERFLOW error, use lighter-weight tool calls
-- Agent Studio may compact stale tool results and earlier turns out of your live provider context. This is expected, not evidence that the conversation was lost.
-- When you need a completed prior turn after compaction, call `get_chat_turn(session_id, turn_id)`, page its row metadata, and follow a selected field's deterministic `next_call` for exact chunks. If you only know the topic or session, use `search_chat_history(chat_kind="agent_studio", query=...)` and page `get_chat_conversation(session_id=...)` summaries first.
-- During an in-flight current turn, raw tool results exist only in the current provider tool continuation. They are not durable chat recall until the assistant turn completes; rerun or narrow the original lookup when exact current-turn details are no longer live.
-- Compact tool-result summaries include recall hints. Use exact lookup tools such as `get_trace_payloads` and `get_trace_payload` for raw TraceReview payload chunks instead of relying on omitted inline blobs.
-
-**Tool Token Costs (approximate):**
-- `get_trace_summary`: ~500 tokens (ALWAYS safe, start here)
-- `get_extraction_diagnostic_report`: compact authoritative summary/inventory, then bounded named sections
-- `get_trace_reconstruction`: compact summary, then bounded `events` pages with payload references only
-- `get_trace_payloads`: compact summary, then bounded `payloads` inventory pages; use largest sort for prompt/context bloat
-- `get_trace_payload`: exact payload chunks bounded below the provider result envelope
-- `get_trace_costs`: compact totals, then bounded named collection pages
-- `get_trace_duplicates`: compact counts, then bounded group or payload-reference pages
-- `get_tool_calls_summary`: one bounded page of compact summaries (~100 tokens per call)
-- `get_trace_conversation`: one exact `user_query` or `assistant_response` chunk
-- `get_tool_calls_page`: bounded metadata and exact-field references
-- `get_tool_call_detail`: one exact `input` or `tool_result` chunk
-
-**If you hit limits:** Start from the authoritative summary/inventory, request one named section, and follow `next_call`; fetch exact payload chunks with `start`/`max_chars`; preserve `tool_name`, `event_type`, `candidate_id`, level, and time filters while paging.
+- Native compaction can replace earlier live context while the exact authorized archive remains available. Main chat and Studio maintain separate sessions.
+- If a single new payload cannot fit after compaction, the runtime retains its complete text and supplies an exact-read descriptor. Use `read_pending_context` as instructed to consume contiguous ranges and resume the task. Do not rerun a completed write or invent missing source text.
+- TraceReview `token_info.serialized_chars` and `estimated_tokens` describe returned content. The estimate is advisory; request admission uses the provider's token count.
+- Use summaries and inventories to locate relevant evidence. Explicit filters and row pages select which records to inspect; follow their `next_call` when more selected records remain.
+- For completed chat turns, use `get_chat_turn(session_id, turn_id)` and exact field reads. Use `search_chat_history` and `get_chat_conversation` when locating a prior session.
+- For exact trace material, use `get_trace_payloads` / `get_trace_payload`, `get_tool_calls_page` / `get_tool_call_detail`, or `get_trace_conversation`. Preserve owner/session scope, hashes and filters while following any explicit continuation.
+- Compaction is not a PDF read failure. A required source read or stale selection failure stops extraction with the PDF reading error; do not continue with partial evidence.
 </token_budget>
 </studio_guide_topic>
 
@@ -342,10 +326,10 @@ Use these when the user refers to prior conversations, recent sessions, or asks 
   - Do not use for user input mistakes (bad IDs, invalid symbols)
 </tools>
 </studio_guide_topic>
-<studio_guide_topic id="trace_and_log_tools" title="TraceReview and service-log tool reference" read_when="Read before choosing among trace tools or service logs, or when a trace response is over budget or incomplete.">
+<studio_guide_topic id="trace_and_log_tools" title="TraceReview and service-log tool reference" read_when="Read before choosing among trace tools or service logs, or when a selected trace section needs further inspection.">
 <tools>
 ### Token-Aware Trace Analysis Tools (RECOMMENDED)
-Include `token_info` in responses for budget management:
+Use advisory `token_info` to understand response size:
 
 - **`get_trace_summary(trace_id)`** - Start here for the bounded summary. Returns timing, cost, tool counts and errors; size depends on the trace, so follow any continuation rather than assuming a fixed token size.
 - **`search_traces(session_id, user_id, name, document_id, run_id, extraction_id, from_timestamp, to_timestamp, limit)`** - Find trace IDs when the curator gives a session, document, run, extraction, name, or time window instead of a trace ID.
@@ -362,10 +346,10 @@ Include `token_info` in responses for budget management:
 - **`get_trace_conversation(trace_id, field, start, max_chars)`** - One exact `user_query` or `assistant_response` chunk. Follow `next_call` until `complete=true`.
 - **`get_tool_calls_page(trace_id, page, page_size, tool_name)`** - Paginated call metadata and exact-field references.
 - **`get_tool_call_detail(trace_id, call_id, field, start, max_chars)`** - One exact `input` or `tool_result` chunk. Follow `next_call` until `complete=true`.
-- **`get_trace_view(trace_id, view_name, section, offset, limit, item_start)`** - Specialized summary/inventory views. Request one inventory-named section and follow `next_call`. When `item_chunk` is present, concatenate its JSON `content` in `start` order and verify `sha256` before decoding the item.
+- **`get_trace_view(trace_id, view_name, section, offset, limit, item_start)`** - Specialized summary/inventory views. Request one inventory-named section and follow `next_call`. Optional `item_start` selects a complete JSON suffix in `item_chunk`; its `sha256` identifies the whole source item. Omit `item_start` to read complete structured rows.
 
 ### System Tools
-- **`get_service_logs(container, lines, level, since, line_cursor, line_cursor_offset, char_cursor)`** - Summary-first Loki log pages. Use only for failed calls or reported errors. Preserve narrowing filters and follow `next_call`; the timestamp offset retains equal-timestamp entries and the exact character cursor reconstructs an oversized line without exceeding the provider boundary.
+- **`get_service_logs(container, lines, level, since, line_cursor, line_cursor_offset, char_cursor)`** - Summary-first Loki log pages. Use only for failed calls or reported errors. Preserve narrowing filters and follow `next_call`; the timestamp offset retains equal-timestamp entries and the exact character cursor reconstructs the exact selected line.
 
 </tools>
 </studio_guide_topic>
@@ -376,7 +360,7 @@ Include `token_info` in responses for budget management:
 Use these tools for current domain-envelope, flow validation, curator review, projection, export, and submission facts. Do not answer from prompt memory when the curator asks about a specific envelope, object, finding, validator, flow, review decision, or blocker.
 
 - **`list_domain_envelopes(session_id, document_id, flow_run_id, domain_pack_id, limit, cursor)`** - Find visible envelope IDs before inspecting state and follow `next_request` until complete.
-- **`get_domain_envelope_state(envelope_id, revision, section, object_id, field_path, query, include_object_payload, limit, cursor, reference_locator, reference_sha256, char_cursor)`** - Omit `section` for a compact runtime summary, then inspect bounded objects, field paths, validation findings, bounded validator request/result summaries, lookup attempts, materialization paths, history, or projection-ref pages. Persisted references are compact manifests; execute their revision-pinned `detail_request`, concatenate exact chunks, and verify `sha256`. Keep `revision` unchanged and follow `next_request` until complete.
+- **`get_domain_envelope_state(envelope_id, revision, section, object_id, field_path, query, include_object_payload, limit, cursor, reference_locator, reference_sha256, char_cursor)`** - Omit `section` for a compact runtime summary, then inspect bounded objects, field paths, validation findings, bounded validator request/result summaries, lookup attempts, materialization paths, history, or projection-ref pages. Persisted references are compact manifests; execute their revision-pinned `detail_request` to read the complete exact reference. Optional `char_cursor` selects a suffix; `sha256` identifies the whole source. Keep `revision` unchanged and follow `next_request` for selected row pages.
 - **`get_domain_pack_validation_plan(agent_id, domain_pack_id, section, object_type, field_path, validator_id, binding_id, state, query, limit, cursor)`** - Omit `section` for a compact summary, then inspect bounded `object_definitions`, `fields`, `validators`, `validator_bindings`, `field_policies`, or `validation_attachments` pages relevant to the evidence. Provide `agent_id` or `domain_pack_id` and follow `next_cursor` until complete.
 - **`get_domain_envelope_review_rows(envelope_id, revision, section, object_id, query, limit, cursor)`** - Omit `section` for a compact runtime summary, then explain bounded review-row pages as materialized projections from envelope objects. Keep `revision` unchanged and follow `next_request` until complete.
 - **`get_export_submission_readiness(session_id, candidate_ids, expected_envelope_revisions, readiness_token, mode, section, candidate_id, envelope_id, object_id, field_path, code, query, limit, cursor)`** - Omit `section` for a compact runtime summary, then inspect bounded candidate or blocker pages tied to envelope/object/field references. Use the bounded `readiness_token` from each advertised request instead of repeating candidate IDs or revision maps, and follow `next_request` until complete.
@@ -386,7 +370,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 ### Tool Inventory And Details
 - **`get_tool_inventory(agent_id, category, include_method_tools, query, limit, cursor)`** - Inspect the runtime tool catalog or one agent's raw and expanded tool IDs. Preserve the focused filters and execute each returned `next_call` (including `query` and `cursor`) until the required inventory is complete.
-- **`get_tool_details(tool_id, agent_id, section, cursor, max_chars)`** - Inspect parameter schemas, source files, method-level helpers, and agent-specific allowlists for one tool. For oversized metadata, execute each returned section continuation with the same `section` and its `cursor`/`max_chars`, concatenate ranges in order, and verify the section hash.
+- **`get_tool_details(tool_id, agent_id, section, cursor, max_chars)`** - Inspect parameter schemas, source files, method-level helpers, and agent-specific allowlists for one tool. The default call returns complete metadata. Optional `section`, `cursor` and `max_chars` select exact ranges; follow any requested-range continuation and verify the section hash.
   - Use these before answering what a specialist, extractor, or validator can do. Report attached tools, deliberately unavailable tools, paper-reading ability, validation/data-source ability, and authoritatively materialized versus proposed fields from actual metadata rather than memory.
 
 ### Prompt Inspection (Category 3 Investigation)

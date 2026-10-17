@@ -1208,3 +1208,39 @@ def test_unexpected_batch_failure_is_safe_and_has_batch_recovery_guidance():
     assert "private provider" not in message
     assert "batch results" in message
     assert "restore" not in message.lower()
+
+
+def test_batch_required_pdf_read_failure_has_safe_message():
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    error = RuntimeError("PRIVATE SDK PAYLOAD")
+    error.__cause__ = DocumentReadError("read_chunk")
+    assert processor._batch_failure_message(error) == "There was an error reading the PDF. We couldn't continue the extraction."
+
+
+
+def test_batch_pdf_read_failure_marks_document_failed_and_publishes_safe_error(monkeypatch):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    db = Mock()
+    batch, batch_doc, flow = _build_batch_context()
+    published = []
+    error = RuntimeError("PRIVATE PDF SOURCE")
+    error.__cause__ = DocumentReadError("read_chunk")
+    async def failed(**kwargs):
+        if False:
+            yield {}
+        raise error
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", failed)
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _: None)
+    monkeypatch.setattr(processor, "get_batch_broadcaster", lambda: SimpleNamespace(
+        publish_sync=lambda _batch, event: published.append(event)))
+    with pytest.raises(RuntimeError) as caught:
+        processor._process_single_document(db, batch, batch_doc, flow, "auth-sub")
+    assert caught.value is error
+    assert batch_doc.status == BatchDocumentStatus.FAILED
+    assert batch.failed_documents == 1
+    assert batch.completed_documents == 0
+    errors = [event for event in published if event["type"] == "BATCH_DOCUMENT_ERROR"]
+    assert errors
+    assert errors[0]["details"]["error"] == processor._batch_failure_message(error)
+    assert "PRIVATE" not in str(errors)

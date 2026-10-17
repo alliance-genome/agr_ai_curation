@@ -165,8 +165,8 @@ def _generic_attribute_key_notices(
 def _generic_candidate_decorator(workspace: Any) -> Any:
     """Return a per-candidate decorator adding generic shape hints to page rows.
 
-    The shared builder page helper applies it before measuring each row, so
-    the attribute keys and drift notices count toward the page's size budget.
+    The shared builder page helper includes these hints with each selected row;
+    model-context capacity is handled by the shared compaction policy.
     """
 
     candidates = workspace.snapshot(redact_payload=False).get("candidates", [])
@@ -1049,7 +1049,8 @@ def _find_staged_generic_objects_impl(
     """Search drafts and return a versioned index. For complete original fields,
     refs and errors, pass a row's detail_read arguments. For a nested value use
     detail_path='candidate.staged_fields.<field>' and result_sha256=null on the
-    first chunk, then retain the returned detail.sha256 and advance detail_cursor.
+    first read; the selected value is returned whole. Optional detail_cursor reads
+    an exact suffix and result_sha256 verifies the whole source value.
     Retain workspace_revision across list pages and detail reads; restart if stale.
     """
 

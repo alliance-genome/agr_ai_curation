@@ -350,8 +350,8 @@ assistant only sometimes needs (tool catalogs, long workflows, playbooks) goes
 in `<studio_guide_topic id="..." title="..." read_when="...">` blocks, each
 closed by `</studio_guide_topic>` on its own line. Those blocks are removed
 from the system prompt, listed in a short topic index, and served exactly
-through the bounded `read_studio_guide` tool (`AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS`
-per chunk). Topic ids must be unique across the package template and the
+through `read_studio_guide`, which returns complete selected topic text under
+the shared context policy. Topic ids must be unique across the package template and the
 backend core guide.
 
 ```yaml

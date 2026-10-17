@@ -92,15 +92,14 @@ one-decision-at-a-time authoring.
 Validated Flow/Workshop proposals terminate the SDK turn at curator review,
 without requiring an extra model response. Invalid proposals remain repairable
 within the same turn. This prevents a valid last-turn proposal from being lost
-to the model-turn limit. Small authorized capability details are returned whole
-within the existing provider size bound; larger details retain hash-addressed
-pagination. Draft design should reuse existing settings and avoid fetching empty
+to the model-turn limit. Authorized capability details are returned whole under the shared model
+context policy; explicit detail selections retain source hashes. Draft design should reuse existing settings and avoid fetching empty
 prompts or runtime tool schemas that are irrelevant to the requested fields.
 
 
 ## Flow verification and trace correlation (0.9.8)
 
-Verification can read all topology sections with `get_current_flow_topology(section="all")` and a saved export plan with `get_current_flow_projection_plan(node_id, view="complete_plan")`. Both retain bounded responses and exact continuation calls. Prefer these views over retrieving individual scalar fields. Consult the Output catalog only when the current flow metadata leaves output capability or placement uncertain. Direct-export output-node prompts do not execute; extraction prompts still do. Missing required evidence means verification is incomplete, never PASS. The existing `AGENT_STUDIO_OPENAI_MAX_TURNS` setting still governs the run.
+Verification can read all topology sections with `get_current_flow_topology(section="all")` and a saved export plan with `get_current_flow_projection_plan(node_id, view="complete_plan")`. Both return complete selected content under the shared context policy. Prefer these views over retrieving individual scalar fields. Consult the Output catalog only when the current flow metadata leaves output capability or placement uncertain. Direct-export output-node prompts do not execute; extraction prompts still do. Missing required evidence means verification is incomplete, never PASS. The existing `AGENT_STUDIO_OPENAI_MAX_TURNS` setting still governs the run.
 
 Authoring and suggestion turns allocate 32-character lowercase hexadecimal trace IDs. An active Langfuse parent observation carries that ID, and propagated session/user attributes connect SDK child observations to the conversation. SDK metadata alone does not establish this relationship. Explicit Stop unwinds the trace scope before closing owned provider resources.
 
@@ -112,11 +111,10 @@ Supervisor extraction manifests include bounded canonical validator decisions, i
 `group_prompts`, `output_profile`, `settings`, or `all`). `group_id` selects one saved
 prompt group. Full prompt verification reads `prompt_manifest`, including frozen
 core/static/generated and base layers, plus applicable saved group layers;
-`instructions` alone is only editable text. Large values are lossless JSON text pages with a content hash and
-`next_call`; every continuation reauthorizes and fits the existing provider result
-character cap, including JSON escaping and metadata. Concatenate content ranges
-before parsing. A changed hash, revoked access or unusably small cap fails explicitly.
-Small `all` reads preserve their structured fields. Built-in prompt/inventory tools
+`instructions` alone is only editable text. Selected sections are returned whole.
+Explicit detail selections retain source hashes and reauthorize every read;
+a changed hash or revoked access fails explicitly. `all` reads preserve their
+structured fields. Built-in prompt/inventory tools
 must not be used to infer a custom agent's pinned settings.
 
 For stale selected-field export layouts, both validation and AI guidance name the

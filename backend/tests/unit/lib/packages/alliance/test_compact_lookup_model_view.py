@@ -269,23 +269,17 @@ async def test_assembled_results_are_identical_to_assembly_from_the_captured_rec
 
 @pytest.mark.asyncio
 async def test_paged_lean_view_keeps_refs_with_rows_and_exact_detail_reads(schemas, query, monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     payload = query(method="search_alleles", allele_symbol="H2-Ab1", data_provider="MGI", limit=20)
     runtime = _runtime(schemas, [_request("allele-1", "H2-Ab1")])
     first, wrapped = await _call(runtime, payload, {"method": "search_alleles", "allele_symbol": "H2-Ab1"})
     pages = [first]
-    while pages[-1]["result_page"]["next_call"] is not None:
-        pages.append(json.loads(await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id="page"), json.dumps(
-            {"method": "search_alleles", **pages[-1]["result_page"]["next_call"]}))))
-
-    assert len(pages) > 1
-    assert all(serialized_size(page) <= 4096 for page in pages)
+    assert len(pages) == 1
     assert [row for page in pages for row in page["data"]] == payload["data"]
     for page in pages:
         assert not set(DERIVED_KEYS) & set(page)
         assert [ref["value"] for ref in page["validator_record_refs"]] == [row["curie"] for row in page["data"]]
     detail = json.loads(await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id="detail"), json.dumps(
-        {"method": "search_alleles", **first["result_page"]["detail_call"], "detail_path": "data.3"})))
+        {"method": "search_alleles", "lookup_ref": first["validator_lookup_refs"][0]["lookup_ref"], "detail_path": "data.3"})))
     assert json.loads(detail["detail"]["content"]) == payload["data"][3]
 
 
@@ -378,7 +372,6 @@ async def test_bulk_lookup_lists_available_fields_once_across_requests(schemas, 
 
 @pytest.mark.asyncio
 async def test_every_paged_lookup_page_carries_the_shared_field_list(schemas, query, monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     payload = query(method="search_alleles", allele_symbol="H2-Ab1", data_provider="MGI", limit=20)
     del payload["data"][5]["mutation_types"]
     arguments = {"method": "search_alleles", "allele_symbol": "H2-Ab1"}
@@ -386,11 +379,7 @@ async def test_every_paged_lookup_page_carries_the_shared_field_list(schemas, qu
     first, wrapped = await _call(runtime, payload, arguments)
     records = _captured(runtime, "allele-1", payload, arguments).records
     pages = [first]
-    while pages[-1]["result_page"]["next_call"] is not None:
-        pages.append(json.loads(await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id="page"), json.dumps(
-            {"method": "search_alleles", **pages[-1]["result_page"]["next_call"]}))))
-
-    assert len(pages) > 1 and all(serialized_size(page) <= 4096 for page in pages)
+    assert len(pages) == 1
     resolved = []
     for page in pages:
         # Each page is self-describing: its refs resolve without an earlier page.

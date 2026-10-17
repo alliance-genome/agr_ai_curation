@@ -228,8 +228,8 @@ def test_langfuse_trace_tools_are_available_without_preselected_trace():
     ]
     payload_chunk_schema = tools_by_name["get_trace_payload"]["input_schema"]["properties"]["max_chars"]
     assert payload_chunk_schema["minimum"] == 1
-    assert payload_chunk_schema["default"] == payload_chunk_schema["maximum"]
-    assert payload_chunk_schema["default"] < api_module.get_agent_studio_provider_tool_result_inline_max_chars()
+    assert "maximum" not in payload_chunk_schema
+    assert "default" not in payload_chunk_schema
     assert (
         tools_by_name["get_trace_payloads"]["input_schema"]["properties"]["limit"]["maximum"]
         == api_module.get_agent_studio_trace_review_aggregate_page_size()

@@ -5,7 +5,7 @@ agent (``ca_*``) asking for its own contract got "Agent ... was not found." and
 could not see its saved tools, profile fields or validator bindings. The
 contract now resolves the running agent's pinned revision, and any other custom
 agent under the existing custom-agent visibility rules, with the same scoping,
-paging and budgets as packaged agents.
+complete selected pages as packaged agents.
 """
 
 from __future__ import annotations
@@ -40,7 +40,6 @@ from .test_agent_contract_scoping import (  # noqa: F401
     VALIDATOR_AGENT,
     _agent_registry,
     _chars,
-    _default_budget,
     _tool_details,
     _wide_registries,
     _wide_schema,
@@ -347,7 +346,6 @@ async def test_running_custom_agent_reads_its_own_contract_through_the_tool(
     assert answer["success"] is True
     mapping = custom.profile.contract.validator_mappings[0]
     assert answer["bindings"] == [profile_mapping_binding_id(custom.profile, mapping)]
-    assert all(len(output) <= _default_budget() for output in model.tool_outputs)
     # The saved profile overlay is the whole scope: no packaged pack leaks in.
     assert "fixture.expression" not in model.tool_outputs[-1]
     assert reported == []
@@ -360,13 +358,12 @@ async def test_running_custom_agent_reads_its_own_contract_through_the_tool(
 
 @pytest.mark.parametrize("topic", sorted(AGENT_CONTRACT_TOPICS - {"field"}))
 @pytest.mark.parametrize("detail_level", ["summary", "detail"])
-def test_profile_custom_agent_pages_every_topic_within_budget(custom, topic, detail_level, reported):
+def test_profile_custom_agent_pages_every_topic_completely(custom, topic, detail_level, reported):
     responses, items = _all_pages(
         custom, custom.profile_agent, topic=topic, detail_level=detail_level
     )
 
     for response in responses:
-        assert _chars(response) <= _default_budget()
         identity = response["custom_agent"]
         assert identity["agent_id"] == custom.profile_agent.agent_key
         assert identity["revision_source"] == "running_agent"
@@ -506,7 +503,6 @@ def test_custom_validator_contract_uses_parent_bindings_and_its_own_schema(custo
     targeted = [item for item in bindings["items"] if item["kind"] == "validator_binding"]
     assert targeted and all(item["targeted_to_agent"] for item in targeted)
     assert all(item["field_paths"] == [STAGE_FIELD] for item in targeted)
-    assert _chars(bindings) <= _default_budget()
     assert schema["output_schema"] == VALIDATOR_SCHEMA
     assert schema["items"][0]["field_path"] == "validator_binding_id"
     assert unrelated["success"] is False and "is not in scope" in unrelated["error"]

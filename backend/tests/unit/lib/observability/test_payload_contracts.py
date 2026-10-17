@@ -140,18 +140,15 @@ def test_diagnostic_is_compact_and_actionable():
     }
 
 
-def test_caught_tool_result_budget_escape_reports_once_with_bounded_context(monkeypatch):
-    """A tool that turns its budget escape into a tool-result error still reports it once."""
+def test_caught_serialization_failure_reports_once_with_bounded_context(monkeypatch):
+    """A caught serialization failure still reports once with bounded telemetry."""
     from src.lib.observability import sentry as sentry_module
 
     calls = _fake_sentry(monkeypatch)
     violation = payload_contracts.PayloadContractViolation(
-        category="tool_result_budget_escape",
+        category="contract_serialization_failure",
         component="inspect_output_rows",
-        message="tool result exceeds its response budget",
-        measured=1_276_154,
-        limit=60_000,
-        setting="EXAMPLE_TOOL_RESULT_MAX_CHARS",
+        message="tool result cannot be serialized",
     )
 
     def tool():
@@ -167,7 +164,7 @@ def test_caught_tool_result_budget_escape_reports_once_with_bounded_context(monk
             return {"success": False, "error": exc.diagnostic()}
 
     result = tool()
-    assert result["error"]["category"] == "tool_result_budget_escape"
+    assert result["error"]["category"] == "contract_serialization_failure"
     assert calls["exceptions"] == [violation]
     context = dict(calls["contexts"])["runtime_exception"]
     # Oversized correlation values are bounded, never a second dataset copy.

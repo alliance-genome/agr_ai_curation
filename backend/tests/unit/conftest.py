@@ -4,6 +4,31 @@ import httpx
 import pytest
 
 
+@pytest.fixture
+def isolated_agent_history(monkeypatch, tmp_path):
+    """Keep real history/projection behavior without an external unit-test DB."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from src.lib.openai_agents.run_history import HistoryStore
+    from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayload
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'agent-history.sqlite'}")
+    AgentHistoryPayload.__table__.create(engine)
+    AgentHistoryEvent.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    original_init = HistoryStore.__init__
+
+    def initialize_store(store):
+        original_init(store, session_factory=session_factory)
+
+    monkeypatch.setattr(HistoryStore, "__init__", initialize_store)
+    try:
+        yield session_factory
+    finally:
+        engine.dispose()
+
+
 class _FakeAsyncClient:
     def __init__(self, *, response=None, exc=None, capture=None, timeout=None):
         self._response = response

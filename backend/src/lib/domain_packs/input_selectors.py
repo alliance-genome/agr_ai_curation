@@ -453,9 +453,11 @@ def _quote_bundle_for_evidence_record(
     field_path = selected_field_path or _first_evidence_record_field_path(record)
     if field_path:
         bundle["field_path"] = field_path
-    # Keep each quote's locator on that record, never in parallel value lists.
+    # Keep human-readable provenance on each quote. Canonical UUIDs stay in
+    # the evidence workspace; validators rediscover missing local indexes via
+    # search_document before reading/selecting source in this conversation.
     for key in (
-        "chunk_id", "section", "subsection", "page", "document_id",
+        "chunk_index", "section", "subsection", "page", "document_id",
         "source_document_id", "figure_reference",
     ):
         if record.get(key) is not None:

@@ -1,4 +1,4 @@
-"""ALL-1278: builder acknowledgments and candidate pages stay inside result budgets."""
+"""Builder acknowledgments, selected pages and exact revision-bound reads."""
 
 from __future__ import annotations
 
@@ -99,8 +99,7 @@ def test_huge_page_limit_clamps_to_builder_maximum(monkeypatch):
         assert result["next_offset"] == result["returned_candidate_count"]
 
 
-def test_wide_candidates_page_by_size_completely_without_duplicates(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "8192")
+def test_wide_candidates_preserve_requested_page_without_duplicates(monkeypatch):
     workspace = _workspace(90, wide=True)
     expected = [f"cand-{index:04d}" for index in range(90)]
 
@@ -113,13 +112,11 @@ def test_wide_candidates_page_by_size_completely_without_duplicates(monkeypatch)
 
     assert listed == expected
     assert found == expected
-    for page in [*list_pages, *find_pages]:
-        assert serialized_size(page) <= 8192
-    assert list_pages[0]["page_ended_by"] == "size_budget"
+    assert len(list_pages) == len(find_pages) == 1
+    assert list_pages[0]["returned_candidate_count"] == 90
 
 
-def test_per_row_decorations_count_toward_the_page_budget(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
+def test_per_row_decorations_remain_complete(monkeypatch):
     workspace = _workspace(40)
     notice = {"code": "generic_attribute_key_drift", "message": UNICODE_NOTE * 20}
 
@@ -134,12 +131,11 @@ def test_per_row_decorations_count_toward_the_page_budget(monkeypatch):
 
     assert listed == [f"cand-{index:04d}" for index in range(40)]
     for page in pages:
-        assert serialized_size(page) <= 4096
+
         assert all(candidate["attribute_key_notices"] for candidate in page["candidates"])
 
 
 def test_large_validation_list_stays_out_of_index_with_exact_read_reference(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "4096")
     workspace = _workspace(2)
     workspace.get_candidate("cand-0000").validation_errors = [
         {"field_path": f"field_{index}", "message": UNICODE_NOTE * 10} for index in range(40)
@@ -147,7 +143,6 @@ def test_large_validation_list_stays_out_of_index_with_exact_read_reference(monk
 
     page = agr_curation._builder_candidate_list(workspace, limit=10, offset=0)
 
-    assert serialized_size(page) <= 4096
     withheld = page["candidates"][0]
     assert withheld["candidate_id"] == "cand-0000"
     assert "validation_errors" not in withheld
@@ -177,12 +172,10 @@ def test_invalid_builder_offset_is_explicit(offset):
     ("go_builder_tools", "find_staged_go_recommendations"),
     ("generic_builder_tools", "find_staged_generic_objects"),
 ])
-@pytest.mark.parametrize("budget", [2048, 8192])
-def test_all_find_tools_read_exact_fields_and_reject_stale_or_other_workspace(monkeypatch, module_name, tool_name, budget):
+def test_all_find_tools_read_exact_fields_and_reject_stale_or_other_workspace(monkeypatch, module_name, tool_name):
     import importlib
     import json
 
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(budget))
     module = importlib.import_module(f"agr_ai_curation_alliance.tools.{module_name}")
     for name in vars(module):
         if name.startswith("_emit_") and name.endswith("_builder_event"):
@@ -194,12 +187,12 @@ def test_all_find_tools_read_exact_fields_and_reject_stale_or_other_workspace(mo
     token = builder.set_active_extraction_builder_workspace(workspace)
     try:
         result = invoke(candidate_id="cand-0000")
-        assert serialized_size(result) <= budget
+
         descriptor = result.data["candidates"][0]["detail_read"]
         parts = []
         while True:
             result = invoke(**descriptor)
-            assert serialized_size(result) <= budget
+
             detail = result.data["detail"]
             parts.append(detail["content"])
             if detail["complete"]:
@@ -236,15 +229,12 @@ def _generic_staged(index: int) -> dict[str, Any]:
     ("agr_curation", "gene_expression_observations", None),
 ])
 @pytest.mark.parametrize("tool_kind", ["list", "find"])
-@pytest.mark.parametrize("budget", [8192, 32768])
-def test_size_truncated_pages_keep_the_whole_tool_result_within_budget(
-    monkeypatch, module_name, tool_suffix, staged_fields, tool_kind, budget
+def test_requested_pages_keep_every_candidate_through_tool_envelope(
+    monkeypatch, module_name, tool_suffix, staged_fields, tool_kind
 ):
-    """PROD-23: a page cut by the size budget must still fit once wrapped in the
-    tool's result envelope, the size the agent runtime enforces."""
+    """Requested database page counts are preserved regardless of serialized size."""
     import importlib
 
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(budget))
     module = importlib.import_module(f"agr_ai_curation_alliance.tools.{module_name}")
     for name in vars(module):
         if name.startswith("_emit_") and name.endswith("_builder_event"):
@@ -270,7 +260,7 @@ def test_size_truncated_pages_keep_the_whole_tool_result_within_budget(
             kwargs = {"include_discarded": False} if tool_kind == "list" else {}
             result = invoke(limit=100, offset=offset, workspace_revision=workspace.revision, **kwargs)
             assert result.status == "ok"
-            assert serialized_size(result) <= budget
+
             size_truncated += result.data["page_ended_by"] == "size_budget"
             seen.extend(candidate["candidate_id"] for candidate in result.data["candidates"])
             if result.data["next_offset"] is None:
@@ -280,13 +270,11 @@ def test_size_truncated_pages_keep_the_whole_tool_result_within_budget(
         builder.reset_active_extraction_builder_workspace(token)
 
     assert seen == [f"cand-{index:04d}" for index in range(count)]
-    assert size_truncated
+    assert size_truncated == 0
 
 
-def test_filtered_find_reserves_the_envelope_the_tool_returns(monkeypatch):
-    """The reserve must match the returned envelope even when a find matches
-    fewer candidates (fewer count digits) than the workspace holds."""
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "8192")
+def test_filtered_find_preserves_complete_selected_page(monkeypatch):
+    """A filtered query must preserve every matching row in the selected page."""
     monkeypatch.setattr(agr_curation, "_emit_gene_expression_builder_event", lambda *a, **k: None)
     workspace = _workspace(150)
     for index in range(80):
@@ -302,16 +290,12 @@ def test_filtered_find_reserves_the_envelope_the_tool_returns(monkeypatch):
     assert result.status == "ok"
     assert result.data["matched_candidate_count"] == 80
     assert result.data["candidate_count"] == 150
-    envelope = agr_curation._ok(
-        data={}, count=result.count, lookup_status=agr_curation.LOOKUP_STATUS_SUCCESS
-    )
-    assert result.data["budget_bytes"] + serialized_size(envelope) <= 8192
-    assert serialized_size(result) <= 8192
+    assert result.data["returned_candidate_count"] == 80
+
 
 
 def test_nested_exact_fields_survive_unicode_and_reject_a_revision_change(monkeypatch):
     import json
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", "2048")
     workspace = _workspace(0)
     expected = {"negative": False, "note": "Not expressed β😀. " * 200, "empty": None}
     workspace.upsert_candidate(candidate_id="c", staged_fields={"attributes": expected})

@@ -47,7 +47,6 @@ from src.lib.openai_agents.config import (
     get_domain_envelope_max_lookup_attempts,
     get_domain_envelope_max_summary_json_chars,
     get_domain_envelope_max_validator_summaries,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_domain_pack_validation_plan_default_limit,
     get_domain_pack_validation_plan_max_limit,
     get_domain_runtime_inspection_default_limit,
@@ -74,7 +73,6 @@ _DOMAIN_PLAN_DEFAULT_LIMIT = get_domain_pack_validation_plan_default_limit()
 _DOMAIN_PLAN_MAX_LIMIT = get_domain_pack_validation_plan_max_limit()
 _RUNTIME_DEFAULT_LIMIT = get_domain_runtime_inspection_default_limit()
 _RUNTIME_MAX_LIMIT = get_domain_runtime_inspection_max_limit()
-_PROVIDER_INLINE_MAX_CHARS = get_agent_studio_provider_tool_result_inline_max_chars()
 
 _ENVELOPE_STATE_SECTIONS = (
     "objects",
@@ -277,13 +275,7 @@ def list_domain_envelopes(
                 ),
             }
 
-        for row_count in range(len(candidate_rows), 0, -1):
-            result = build_result(candidate_rows[:row_count])
-            if _provider_chars(result) <= _PROVIDER_INLINE_MAX_CHARS:
-                return result
-        if not candidate_rows:
-            return build_result([])
-        return _error("Envelope list identity exceeds the provider inline result limit.")
+        return build_result(candidate_rows)
     except ValueError as exc:
         return _error(str(exc))
     finally:
@@ -330,7 +322,6 @@ def get_domain_envelope_state(
             return _reference_chunk_result(
                 envelope_id=normalized_envelope_id,
                 revision=row.revision,
-                locator=locator_text,
                 expected_sha256=_required_text(reference_sha256, "reference_sha256"),
                 value=value,
                 char_cursor=char_cursor,
@@ -1099,13 +1090,7 @@ def _runtime_page_result(
             ),
         }
 
-    for item_count in range(len(page_items), 0, -1):
-        result = build(page_items[:item_count])
-        if _provider_chars(result) <= (_PROVIDER_INLINE_MAX_CHARS * 3) // 4:
-            return result
-    if not page_items:
-        return build([])
-    raise ValueError("One runtime record identity exceeds the provider inline result limit.")
+    return build(page_items)
 
 
 def _filter_runtime_items(
@@ -1678,8 +1663,6 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, default=str, sort_keys=True, separators=(",", ":"))
 
 
-def _provider_chars(value: Any) -> int:
-    return len(json.dumps(value, default=str))
 
 
 def _encode_reference_locator(locator: Mapping[str, str]) -> str:
@@ -1866,7 +1849,6 @@ def _reference_chunk_result(
     *,
     envelope_id: str,
     revision: int,
-    locator: str,
     expected_sha256: str,
     value: Any,
     char_cursor: int | None,
@@ -1882,7 +1864,6 @@ def _reference_chunk_result(
         raise ValueError(f"char_cursor {start} exceeds reference length {len(serialized)}")
 
     def build(end: int) -> dict[str, Any]:
-        complete = end >= len(serialized)
         return {
             "success": True,
             "envelope_id": envelope_id,
@@ -1893,38 +1874,12 @@ def _reference_chunk_result(
             "total_chars": len(serialized),
             "returned_range": {"start": start, "end": end},
             "content": serialized[start:end],
-            "complete": complete,
-            "next_request": (
-                None
-                if complete
-                else {
-                    "envelope_id": envelope_id,
-                    "revision": revision,
-                    "section": "reference",
-                    "reference_locator": locator,
-                    "reference_sha256": digest,
-                    "char_cursor": end,
-                }
-            ),
-            "instruction": "Concatenate content in returned_range order and verify sha256.",
+            "complete": True,
+            "next_request": None,
+            "instruction": "Content is the exact selected suffix; sha256 identifies the whole source value.",
         }
 
-    if start == len(serialized):
-        return build(start)
-    low = start + 1
-    high = len(serialized)
-    fitting: dict[str, Any] | None = None
-    while low <= high:
-        end = (low + high) // 2
-        candidate = build(end)
-        if _provider_chars(candidate) <= _PROVIDER_INLINE_MAX_CHARS:
-            fitting = candidate
-            low = end + 1
-        else:
-            high = end - 1
-    if fitting is None:
-        raise ValueError("Reference chunk identity exceeds the provider inline result limit.")
-    return fitting
+    return build(len(serialized))
 
 
 def _envelope_row_summary(row: DomainEnvelopeModel) -> dict[str, Any]:

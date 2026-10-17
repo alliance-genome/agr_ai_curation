@@ -20,12 +20,9 @@ def _provider_visible(tool_name: str, result: dict) -> dict:
 
     content = agent_studio._provider_tool_result_content(
         tool_name=tool_name,
-        tool_input={},
         tool_result=result,
-        session_id="diagnostic-session",
-        turn_id="diagnostic-turn",
     )
-    assert len(content) <= 12_000
+    assert json.loads(content) == result
     provider_result = json.loads(content)
     assert provider_result.get("status") != "compacted_tool_result"
     return provider_result
@@ -33,9 +30,6 @@ def _provider_visible(tool_name: str, result: dict) -> dict:
 
 @pytest.fixture(autouse=True)
 def _diagnostic_limits(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "3000")
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_CHUNK_MAX_CHARS", "1000")
     monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_SCALAR_PREVIEW_MAX_CHARS", "80")
     monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_PAGE_DEFAULT_ITEMS", "10")
     monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_PAGE_MAX_ITEMS", "25")
@@ -132,7 +126,8 @@ def test_structured_maximum_results_are_summary_page_and_detail_addressable(
     }
     handler = result_contracts.create_bounded_result_handler(lambda: result, contract)
 
-    summary = handler()
+    assert handler() == result
+    summary = handler(result_view="summary", result_limit=25)
     page = handler(result_view="page", result_path=page_path, result_limit=25)
 
     assert summary["result_view"] == "summary"
@@ -160,7 +155,6 @@ def test_structured_maximum_results_are_summary_page_and_detail_addressable(
 
 
 def test_go_summary_exposes_source_truncation_fields_by_default(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "8000")
     result = {
         "status": "ok",
         "gene_id": "RGD:620474",
@@ -183,7 +177,8 @@ def test_go_summary_exposes_source_truncation_fields_by_default(monkeypatch):
         {"kind": "structured", "page_paths": ["annotations"]},
     )
 
-    summary = handler()
+    assert handler() == result
+    summary = handler(result_view="summary", result_limit=25)
 
     assert summary["fields_complete"] is True
     assert summary["fields_truncated"] is False
@@ -217,7 +212,8 @@ def test_rest_success_and_error_bodies_reconstruct_from_exact_chunks(
         lambda: result,
         {"kind": "raw", "page_paths": []},
     )
-    summary = handler()
+    assert handler() == result
+    summary = handler(result_view="summary", result_limit=25)
     expected = result[detail_path] if isinstance(result[detail_path], str) else _canonical(result[detail_path])
     chunks = []
     cursor = 0
@@ -251,10 +247,7 @@ def test_rest_success_and_error_bodies_reconstruct_from_exact_chunks(
     ],
     ids=["escaped-controls", "slashes-and-quotes", "non-ascii"],
 )
-def test_chunks_budget_against_provider_json_serialization(monkeypatch, payload):
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "1000")
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "20000")
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_CHUNK_MAX_CHARS", "6000")
+def test_complete_details_survive_provider_json_serialization(monkeypatch, payload):
     handler = result_contracts.create_bounded_result_handler(
         lambda: {"status": "ok", "message": payload},
         {"kind": "raw", "page_paths": []},
@@ -269,7 +262,7 @@ def test_chunks_budget_against_provider_json_serialization(monkeypatch, payload)
             detail_cursor=cursor,
         )
         content = json.dumps(detail, default=str)
-        assert len(content) <= 1000
+        assert json.loads(content)["content"] == payload
         provider_result = _provider_visible("quickgo_api_call", detail)
         chunks.append(provider_result["content"])
         if detail["complete"]:
@@ -281,7 +274,7 @@ def test_chunks_budget_against_provider_json_serialization(monkeypatch, payload)
 
 
 @pytest.mark.parametrize("payload", ["\0" * 2_500, '\\"' * 2_500, "é" * 2_500])
-def test_structured_pages_budget_escaped_items_for_provider(payload):
+def test_structured_pages_preserve_escaped_items_for_provider(payload):
     handler = result_contracts.create_bounded_result_handler(
         lambda: {"status": "ok", "data": [{"payload": payload}]},
         {"kind": "structured", "page_paths": ["data"]},
@@ -290,14 +283,13 @@ def test_structured_pages_budget_escaped_items_for_provider(payload):
     page = handler(result_view="page", result_path="data")
 
     assert page["returned_count"] == 1
-    assert page["items"][0]["detail_path"] == "data.0"
+    assert page["items"] == [{"payload": payload}]
     _provider_visible("agr_curation_query", page)
 
 
-def test_structured_summary_drops_previews_to_stay_within_provider_budget(
+def test_explicit_summary_preserves_preview_and_exact_read_address(
     monkeypatch,
 ):
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "1400")
     result = {
         "status": "ok",
         **{f"scalar_{index}": f"value-{index}-" + "x" * 500 for index in range(4)},
@@ -307,11 +299,11 @@ def test_structured_summary_drops_previews_to_stay_within_provider_budget(
         {"kind": "structured", "page_paths": []},
     )
 
-    summary = handler()
+    assert handler() == result
+    summary = handler(result_view="summary", result_limit=25)
 
-    assert len(json.dumps(summary, default=str)) <= 1400
-    assert any(
-        "preview" not in summary["fields"][f"scalar_{index}"]
+    assert all(
+        "preview" in summary["fields"][f"scalar_{index}"]
         for index in range(4)
     )
     assert all(
@@ -322,10 +314,9 @@ def test_structured_summary_drops_previews_to_stay_within_provider_budget(
     _provider_visible("agr_curation_query", summary)
 
 
-def test_many_field_summary_metadata_is_bounded_and_exactly_recoverable(
+def test_explicit_summary_paginates_metadata_with_exact_recovery(
     monkeypatch,
 ):
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "1400")
     oversized_name = "field.name." + "n" * 2000
     result = {
         "status": "ok",
@@ -346,7 +337,6 @@ def test_many_field_summary_metadata_is_bounded_and_exactly_recoverable(
     }
     while True:
         summary = handler(**next_call)
-        assert len(json.dumps(summary, default=str)) <= 1400
         _provider_visible("agr_curation_query", summary)
         assert summary["returned_field_count"] > 0
 
@@ -360,7 +350,7 @@ def test_many_field_summary_metadata_is_bounded_and_exactly_recoverable(
                         detail_path=descriptor["metadata_detail_path"],
                         detail_cursor=detail_cursor,
                     )
-                    assert len(json.dumps(detail, default=str)) <= 1400
+
                     metadata_chunks.append(detail["content"])
                     if detail["complete"]:
                         break
@@ -382,7 +372,7 @@ def test_many_field_summary_metadata_is_bounded_and_exactly_recoverable(
                         detail_path=descriptor["detail_path"],
                         detail_cursor=detail_cursor,
                     )
-                    assert len(json.dumps(detail, default=str)) <= 1400
+
                     value_chunks.append(detail["content"])
                     if detail["complete"]:
                         break
@@ -552,7 +542,7 @@ def test_registered_rest_diagnostic_preserves_package_domain_allowlist(monkeypat
     result = chebi_tool.handler(url="https://example.org/unbounded")
 
     assert result["status"] == "error", result
-    assert "Domain not allowed" in result["fields"]["message"]
+    assert "Domain not allowed" in result["message"]
     _provider_visible("chebi_api_call", result)
 
 
@@ -589,7 +579,7 @@ def test_registered_schemas_advertise_bounded_continuation(monkeypatch):
             ]
         assert properties["result_limit"]["maximum"] == 25
         assert properties["result_cursor"]["minimum"] == 0
-        assert properties["detail_max_chars"]["maximum"] == 1000
+        assert "maximum" not in properties["detail_max_chars"]
         assert "Result contract:" in tool.description
 
 
@@ -599,8 +589,6 @@ def test_package_diagnostic_limits_share_documented_environment(monkeypatch):
 
     monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_PAGE_DEFAULT_ITEMS", "4")
     monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_PAGE_MAX_ITEMS", "7")
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_RESULT_MAX_CHARS", "2222")
-    monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_CHUNK_MAX_CHARS", "1111")
     monkeypatch.setenv("AGENT_STUDIO_PACKAGE_DIAGNOSTIC_SCALAR_PREVIEW_MAX_CHARS", "33")
     monkeypatch.setenv("AGR_DEFAULT_LIMIT", "6")
     monkeypatch.setenv("AGR_HARD_MAX", "9")
@@ -608,8 +596,6 @@ def test_package_diagnostic_limits_share_documented_environment(monkeypatch):
 
     assert config.get_agent_studio_package_diagnostic_page_default_items() == 4
     assert config.get_agent_studio_package_diagnostic_page_max_items() == 7
-    assert config.get_agent_studio_package_diagnostic_result_max_chars() == 2222
-    assert config.get_agent_studio_package_diagnostic_chunk_max_chars() == 1111
     assert config.get_agent_studio_package_diagnostic_scalar_preview_max_chars() == 33
     assert agr_curation._normalize_limit(None) == (6, ["default_limit_applied:6"])
     assert agr_curation._normalize_limit(20) == (9, ["limit_capped_at:9"])

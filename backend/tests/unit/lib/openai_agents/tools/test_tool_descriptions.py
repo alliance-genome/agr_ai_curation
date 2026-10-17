@@ -38,6 +38,7 @@ def _assert_clean_doc(tool_name: str, doc: str) -> None:
 
 def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch):
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_tool)
+    monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
     context = {"document_id": "doc-1", "user_id": "user-1"}
 
     docs = {
@@ -49,12 +50,12 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
 
     assert "Discovery tool" in docs["search_document"]
     assert "read_chunk" in docs["search_document"]
-    assert "evidence_spans[].span_id" in docs["read_chunk"]
-    assert "record_evidence(span_ids=[...])" in docs["read_chunk"]
+    assert "evidence_spans[].span_index" in docs["read_chunk"]
+    assert "record_evidence(selections=[...])" in docs["read_chunk"]
     assert "Survey" in docs["read_section"]
     assert "read_chunk" in docs["read_section"]
     assert "Survey" in docs["read_subsection"]
-    assert "evidence_spans[].span_id" in docs["read_subsection"]
+    assert "evidence_spans[].span_index" in docs["read_subsection"]
 
     # Document-search guidance relocated from the gene_expression prompt's
     # <search_infrastructure> block must now live in the tool docstrings so a
@@ -89,7 +90,7 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
 
     # read_chunk is the evidence-selection step: full text + span ids.
     assert "evidence_spans" in docs["read_chunk"]
-    assert "span_id" in docs["read_chunk"]
+    assert "span_index" in docs["read_chunk"]
 
     for tool_name, doc in docs.items():
         _assert_clean_doc(tool_name, doc)
@@ -97,16 +98,17 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
 
 def test_record_evidence_description_exposes_span_ids_not_quote_text(monkeypatch):
     monkeypatch.setattr(record_evidence, "function_tool", _identity_tool)
+    monkeypatch.setattr(record_evidence, "scoped_document_tool", lambda tool, **kwargs: tool)
 
     tool = record_evidence.create_record_evidence_tool("doc-1", "user-1")
     doc = _tool_doc(tool)
     signature = inspect.signature(tool)
 
-    assert "span_ids" in signature.parameters
+    assert "selections" in signature.parameters
     assert "claimed_quote" not in signature.parameters
-    assert "read_chunk evidence span IDs" in doc
-    assert "span_ids" in doc
-    assert "verified_quote" in doc
+    assert "chunk_index" in doc and "span_index" in doc
+    assert "selections" in doc
+    assert "Backend verification" in doc
     assert "one evidence record" in doc
     _assert_clean_doc("record_evidence", doc)
 

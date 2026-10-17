@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
+
 import hashlib
 import json
 import logging
@@ -11,12 +13,9 @@ from typing import Any, Callable, Mapping
 import sqlalchemy as sa
 
 from src.lib.openai_agents.config import (
-    get_agent_studio_package_diagnostic_chunk_max_chars,
     get_agent_studio_package_diagnostic_page_default_items,
     get_agent_studio_package_diagnostic_page_max_items,
-    get_agent_studio_package_diagnostic_result_max_chars,
     get_agent_studio_package_diagnostic_scalar_preview_max_chars,
-    get_agent_studio_provider_tool_result_inline_max_chars,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,18 +43,6 @@ def _canonical_json(value: Any) -> str:
 
 def _json_safe(value: Any) -> Any:
     return json.loads(_canonical_json(value))
-
-
-def _provider_json_chars(value: Any) -> int:
-    """Measure the exact JSON representation used for provider continuation."""
-    return len(json.dumps(value, default=str))
-
-
-def _result_max_chars() -> int:
-    return min(
-        get_agent_studio_package_diagnostic_result_max_chars(),
-        get_agent_studio_provider_tool_result_inline_max_chars(),
-    )
 
 
 def _hash(content: str) -> str:
@@ -169,8 +156,6 @@ def _field_descriptor(
         > get_agent_studio_package_diagnostic_scalar_preview_max_chars()
     ):
         descriptor = _detail_descriptor(value, detail_path, include_preview=True)
-        if _provider_json_chars(descriptor) > _result_max_chars():
-            return _detail_descriptor(value, detail_path)
         return descriptor
     return value
 
@@ -204,13 +189,6 @@ def _summary(
         "field_cursor": cursor,
         "returned_field_count": 0,
         "next_field_cursor": None,
-        # Reserve the largest cursor representation while fitting fields so the
-        # final provider-visible continuation cannot push the summary over budget.
-        "next_call": {
-            "result_view": "summary",
-            "result_cursor": len(field_items),
-            "result_limit": limit,
-        },
         "fields_complete": False,
         "fields_truncated": True,
         "available_page_paths": sorted(available_page_paths),
@@ -225,7 +203,6 @@ def _summary(
             )
         ),
     }
-    result_max = _result_max_chars()
     stop = min(len(field_items), cursor + limit)
     next_cursor = cursor
     for index in range(cursor, stop):
@@ -239,29 +216,6 @@ def _summary(
             page_paths=page_paths,
         )
         summary["fields"][path] = descriptor
-        if _provider_json_chars(summary) > result_max:
-            for prior_index in range(cursor, index + 1):
-                prior_key, prior_value = field_items[prior_index]
-                prior_path = str(prior_key)
-                prior_descriptor = summary["fields"].get(prior_path)
-                if not isinstance(prior_descriptor, dict) or "preview" not in prior_descriptor:
-                    continue
-                summary["fields"][prior_path] = _detail_descriptor(
-                    prior_value, f"@field.{prior_index}.value"
-                )
-                if _provider_json_chars(summary) <= result_max:
-                    break
-        if _provider_json_chars(summary) > result_max:
-            summary["fields"].pop(path)
-            metadata = _canonical_json(_field_metadata(key, value, index=index))
-            summary["fields"][f"@field.{index}"] = {
-                "metadata_detail_path": f"@field.{index}.metadata",
-                "metadata_total_chars": len(metadata),
-                "metadata_sha256": _hash(metadata),
-            }
-        if _provider_json_chars(summary) > result_max:
-            summary["fields"].pop(f"@field.{index}", None)
-            break
         next_cursor = index + 1
 
     returned = next_cursor - cursor
@@ -280,12 +234,6 @@ def _summary(
         fields_complete=next_cursor >= len(field_items),
         fields_truncated=next_cursor < len(field_items),
     )
-    if returned == 0 and cursor < len(field_items):
-        raise ValueError(
-            "provider inline limit is too small for diagnostic summary metadata"
-        )
-    if _provider_json_chars(summary) > result_max:
-        raise ValueError("diagnostic summary exceeds the provider inline limit")
     return summary
 
 
@@ -296,7 +244,6 @@ def _page(
     cursor: int,
     limit: int,
     page_paths: set[str],
-    path_index_offset: int = 0,
 ) -> dict[str, Any]:
     if path not in page_paths:
         raise ValueError(f"result_path must be one of: {', '.join(sorted(page_paths))}")
@@ -314,21 +261,11 @@ def _page(
         "cursor": cursor,
         "items": [],
     }
-    result_max = _result_max_chars()
     stop = min(len(items), cursor + limit)
     for index in range(cursor, stop):
         item = items[index]
         candidate = _json_safe(item)
         output["items"].append(candidate)
-        if _provider_json_chars(output) > result_max:
-            output["items"].pop()
-            output["items"].append(
-                _detail_descriptor(item, f"{path}.{index + path_index_offset}")
-            )
-        if _provider_json_chars(output) > result_max:
-            output["items"].pop()
-            break
-
     returned = len(output["items"])
     next_cursor = cursor + returned
     output.update(
@@ -337,16 +274,6 @@ def _page(
         complete=next_cursor >= len(items),
         truncated=next_cursor < len(items),
     )
-    while output["items"] and _provider_json_chars(output) > result_max:
-        output["items"].pop()
-        returned = len(output["items"])
-        next_cursor = cursor + returned
-        output.update(
-            returned_count=returned,
-            next_cursor=next_cursor if next_cursor < len(items) else None,
-            complete=next_cursor >= len(items),
-            truncated=next_cursor < len(items),
-        )
     return output
 
 
@@ -355,7 +282,7 @@ def _detail(
     *,
     path: str,
     cursor: int,
-    max_chars: int,
+    max_chars: int | None,
     output_path: str | None = None,
 ) -> dict[str, Any]:
     value = _resolve_detail_path(result, path)
@@ -363,7 +290,7 @@ def _detail(
     content = value if is_text else _canonical_json(value)
     if cursor < 0 or cursor > len(content):
         raise ValueError(f"detail_cursor {cursor} is outside the 0..{len(content)} range")
-    requested_end = min(len(content), cursor + max_chars)
+    requested_end = min(len(content), cursor + requested_text_length(max_chars, len(content)))
 
     def render(end: int) -> dict[str, Any]:
         complete = end >= len(content)
@@ -380,20 +307,7 @@ def _detail(
             "complete": complete,
         }
 
-    low = cursor
-    high = requested_end
-    while low < high:
-        candidate_end = (low + high + 1) // 2
-        if _provider_json_chars(render(candidate_end)) <= _result_max_chars():
-            low = candidate_end
-        else:
-            high = candidate_end - 1
-    detail = render(low)
-    if low == cursor and requested_end > cursor:
-        raise ValueError(
-            "provider inline limit is too small for diagnostic detail metadata"
-        )
-    return detail
+    return render(requested_end)
 
 
 def _normalized_limit(value: Any) -> int:
@@ -403,15 +317,6 @@ def _normalized_limit(value: Any) -> int:
         return min(default, maximum)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError("result_limit must be a positive integer")
-    return min(value, maximum)
-
-
-def _normalized_chunk_size(value: Any) -> int:
-    maximum = get_agent_studio_package_diagnostic_chunk_max_chars()
-    if value is None:
-        return maximum
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError("detail_max_chars must be a positive integer")
     return min(value, maximum)
 
 
@@ -426,6 +331,8 @@ def _render_result(
     contract: Mapping[str, Any],
     controls: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if not controls:
+        return dict(result)
     view = controls.get("result_view", "summary")
     page_paths = set(contract.get("page_paths") or [])
     if view == "summary":
@@ -465,7 +372,7 @@ def _render_result(
             cursor=_normalized_cursor(
                 controls.get("detail_cursor", 0), name="detail_cursor"
             ),
-            max_chars=_normalized_chunk_size(controls.get("detail_max_chars")),
+            max_chars=controls.get("detail_max_chars"),
         )
     raise ValueError("result_view must be one of: summary, page, detail")
 
@@ -535,7 +442,7 @@ def create_sql_query_handler(
                         },
                     },
                     "available_page_paths": ["rows"],
-                    "continuation": "Use result_view='page' with result_path='rows'; oversized cells expose exact detail paths.",
+                    "continuation": "Use result_view='page' with result_path='rows' for complete selected rows, or an explicit detail path for one exact value.",
                 }
 
             path = (
@@ -583,7 +490,7 @@ def create_sql_query_handler(
                     cursor=_normalized_cursor(
                         controls.get("detail_cursor", 0), name="detail_cursor"
                     ),
-                    max_chars=_normalized_chunk_size(controls.get("detail_max_chars")),
+                    max_chars=controls.get("detail_max_chars"),
                     output_path=path,
                 )
                 return detail
@@ -593,7 +500,6 @@ def create_sql_query_handler(
                 cursor=0,
                 limit=limit,
                 page_paths={"rows"},
-                path_index_offset=cursor,
             )
             returned = page["returned_count"]
             count_query = sa.text(
@@ -639,7 +545,6 @@ def diagnostic_input_schema(
     properties = schema.setdefault("properties", {})
     page_paths = list(contract.get("page_paths") or [])
     page_max = get_agent_studio_package_diagnostic_page_max_items()
-    chunk_max = get_agent_studio_package_diagnostic_chunk_max_chars()
     result_views = ["summary", "page", "detail"] if page_paths else ["summary", "detail"]
     properties.update(
         {
@@ -657,7 +562,7 @@ def diagnostic_input_schema(
                 "description": "Dot-separated result path for exact hash-addressed content chunks.",
             },
             "detail_cursor": {"type": "integer", "minimum": 0},
-            "detail_max_chars": {"type": "integer", "minimum": 1, "maximum": chunk_max},
+            "detail_max_chars": {"type": "integer", "minimum": 1},
         }
     )
     properties.update(

@@ -11,8 +11,7 @@ from agr_ai_curation_runtime.tool_result_bounds import detail_chunk
 
 
 @pytest.mark.parametrize("surface", ["builder", "groq", "captured_write"])
-@pytest.mark.parametrize("budget", [2048, 8192])
-def test_sdk_bounded_details_survive_trace_analysis(monkeypatch, surface, budget):
+def test_sdk_bounded_details_survive_trace_analysis(monkeypatch, surface):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5]))
     monkeypatch.syspath_prepend(str(
         Path(__file__).resolve().parents[5] / "packages/alliance/python/src"
@@ -27,7 +26,7 @@ def test_sdk_bounded_details_survive_trace_analysis(monkeypatch, surface, budget
     chunks = []
     while True:
         page = detail_chunk(
-            {"candidate": content}, path="candidate", cursor=cursor, budget=budget,
+            {"candidate": content}, path="candidate", cursor=cursor,
             extra={"result_ref": "opaque-ref", "page": {"next_cursor": None}},
         )
         if surface == "builder":
@@ -54,5 +53,5 @@ def test_sdk_bounded_details_survive_trace_analysis(monkeypatch, surface, budget
         cursor = detail["next_cursor"]
         if detail["complete"]:
             break
-    assert len(chunks) > 1
+    assert len(chunks) == 1
     assert "".join(chunks) == content

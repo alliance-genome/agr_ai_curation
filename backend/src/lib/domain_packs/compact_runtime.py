@@ -23,11 +23,7 @@ from agr_ai_curation_runtime.agr_lookup import lookup_model_view
 from src.lib.domain_packs.compact_decisions import (
     CanonicalValidatorRecord, DecisionContract, ValidatorDecisionWorkspace,
 )
-from src.lib.openai_agents.tool_result_bounds import (
-    ToolResultBudgetError, bounded_json_result, budget_failure, full_tool_results_requested,
-    json_pointer_for_row, report_budget_failure_result, result_view_schema_properties,
-    serialized_size, tool_result_budget,
-)
+from src.lib.openai_agents.tool_result_bounds import bounded_json_result, full_tool_results_requested, json_pointer_for_row, result_view_schema_properties
 from src.schemas.domain_validator import DomainValidatorResultBase, ValidatorLookupAttempt
 
 # Page/detail arguments a validator lookup accepts; continuation always names
@@ -136,7 +132,7 @@ class CompactValidatorRuntime:
                 stored = self._lookup_views.get(view.pop("lookup_ref"))
                 if stored is None:
                     raise ValueError("Unknown lookup_ref for this validator run")
-                return json.dumps(self._bounded_lookup_view(tool.name, stored, view))
+                return json.dumps(self._bounded_lookup_view(stored, view))
             if view:
                 raise ValueError("Continue a paged lookup with the lookup_ref from its result")
             with full_tool_results_requested():
@@ -184,24 +180,23 @@ class CompactValidatorRuntime:
                                 for request_id in request_ids],
             }
             self._lookup_views[call_id] = stored
-            return json.dumps(self._bounded_lookup_view(tool.name, stored, {}))
+            return json.dumps(self._bounded_lookup_view(stored, {}))
 
         wrapped.on_invoke_tool = invoke
         return wrapped
 
-    def _bounded_lookup_view(self, tool_name: str, stored: Mapping[str, Any],
+    def _bounded_lookup_view(self, stored: Mapping[str, Any],
                              view: Mapping[str, Any]) -> dict[str, Any]:
-        """Serve a captured lookup's model view whole when it fits, else as bounded pages.
+        """Serve a captured lookup's model view whole for the requested selection.
 
         Capture already holds the complete provider response application-side;
-        the model sees each page's rows with exactly the record refs for those
-        rows, and reads withheld values through exact detail chunks.
+        the model sees all selected rows with exactly their record references.
+        Explicit offsets and detail paths select exact subsets.
         """
         model_view, catalog = stored["view"], stored["catalog"]
         complete = {**model_view, **_record_refs_view(catalog),
                     "validator_lookup_refs": stored["lookup_refs"]}
-        budget = tool_result_budget()
-        if not view and serialized_size(complete) <= budget:
+        if not view:
             return complete
 
         def refs_for_page(keys, mode, start, returned):
@@ -219,23 +214,16 @@ class CompactValidatorRuntime:
                             if not (entry.get("source_path") or "").startswith(root + "/"))
             return _record_refs_view(rows)
 
-        try:
-            return bounded_json_result(
-                {**model_view, "validator_lookup_refs": stored["lookup_refs"]},
-                budget=budget,
-                offset=view.get("result_offset", 0),
-                detail_path=view.get("detail_path"),
-                detail_cursor=view.get("detail_cursor"),
-                continuation_args={"lookup_ref": stored["call_id"]},
-                stateless=False,
-                page_extras=refs_for_page,
-            )
-        except ToolResultBudgetError as exc:
-            failure = budget_failure(tool_name=tool_name, measured=exc.measured, limit=exc.limit,
-                                     field=view.get("detail_path"))
-            report_budget_failure_result(failure, tool_name=tool_name,
-                                         component="validator_lookup_capture")
-            return failure
+        return bounded_json_result(
+            {**model_view, "validator_lookup_refs": stored["lookup_refs"]},
+
+            offset=view.get("result_offset", 0),
+            detail_path=view.get("detail_path"),
+            detail_cursor=view.get("detail_cursor"),
+            continuation_args={"lookup_ref": stored["call_id"]},
+            stateless=False,
+            page_extras=refs_for_page,
+        )
 
     def assemble(self, raw_decision: Mapping[str, Any]) -> DomainValidatorResultBase:
         request_id = raw_decision.get("request_id")

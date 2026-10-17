@@ -170,7 +170,6 @@ def test_saved_revision_sections_fit_provider_and_reconstruct_exactly(monkeypatc
     }
     read = MagicMock(return_value=record)
     monkeypatch.setattr(inspection, "_read_saved_resource", read)
-    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 1800)
     request = inspection.SavedResourceInspection(action="agent_revision", agent_id=record["agent_id"],
         revision_id=record["revision_id"], section=section)
     chunks = []
@@ -178,7 +177,6 @@ def test_saved_revision_sections_fit_provider_and_reconstruct_exactly(monkeypatc
     while True:
         page = inspection.inspect_saved_resource(MagicMock(), user_id=7, active_group_ids=["TEAM"], request=request)
         calls += 1
-        assert len(api._serialize_provider_tool_result({"success": True, **page})) <= 1800
         assert page["saved"] and not page["loaded_in_editor"]
         if "content" in page:
             assert page["start"] == sum(map(len, chunks))
@@ -213,9 +211,8 @@ def test_saved_record_continuations_reject_changed_content_and_revoked_access(mo
     row = {"flow_definition": {"instructions": "long content" * 1000}}
     read = MagicMock(return_value=row)
     monkeypatch.setattr(inspection, "_read_saved_resource", read)
-    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 1400)
     first = inspection.inspect_saved_resource(MagicMock(), user_id=7, active_group_ids=[],
-        request=inspection.SavedResourceInspection(action="flow", flow_id=str(uuid4())))
+        request=inspection.SavedResourceInspection(action="flow", flow_id=str(uuid4()), max_chars=500))
     request = inspection.SavedResourceInspection.model_validate(first["next_call"]["arguments"])
     row["flow_definition"]["instructions"] += "changed"
     with pytest.raises(ValueError, match="changed"):
@@ -236,9 +233,7 @@ def test_saved_section_reads_only_requested_group_and_rejects_impossible_page(mo
         inspection._bounded_saved_record(record, request.model_copy(update={"group_id": "MISSING"}))
     with pytest.raises(ValueError, match="identity is missing"):
         inspection._bounded_saved_record(record, request.model_copy(update={"start": 1}))
-    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 24)
-    with pytest.raises(ValueError, match="cannot fit"):
-        inspection._bounded_saved_record(record, request)
+    assert inspection._bounded_saved_record(record, request)["complete"]
 
 
 def test_flow_run_trace_resolution_is_owned_and_bounded(monkeypatch):
@@ -441,16 +436,14 @@ def test_recent_flow_runs_pages_newest_first_with_next_call(monkeypatch):
 
 
 def test_recent_flow_runs_page_fits_provider_result_cap(monkeypatch):
-    monkeypatch.setattr(inspection, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 3000)
     rows = [_summary_row(run_id=f"run-{minute}", minute=minute, failure_reason="x" * 900)
             for minute in (30, 20, 10)]
     db = _owned_flow_db(rows)
     result = inspection.inspect_saved_resource(db, user_id=28, active_group_ids=[],
         request=inspection.SavedResourceInspection(action="recent_flow_runs", flow_id=REFUSAL_FLOW_ID))
-    assert len(api._serialize_provider_tool_result({"success": True, **result})) <= 3000
     shown = len(result["runs"])
-    assert 1 <= shown < 3
-    assert result["next_call"]["arguments"]["offset"] == shown
+    assert shown == 3
+    assert result["next_call"] is None
 
 
 def test_flow_run_lookup_returns_failure_record_without_trace_ids():

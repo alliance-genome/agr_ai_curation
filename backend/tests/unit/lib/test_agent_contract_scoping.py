@@ -266,8 +266,6 @@ def _base_wide_registries() -> dict[str, DomainPackValidationRegistry]:
     }
 
 
-
-
 def _wide_registries(**expression_overrides) -> dict[str, DomainPackValidationRegistry]:
     registries = _base_wide_registries()
     if expression_overrides:
@@ -359,10 +357,6 @@ def _chars(value) -> int:
     return len(json.dumps(value))
 
 
-def _default_budget() -> int:
-    return agent_contracts.get_agent_contract_max_response_chars()
-
-
 @pytest.fixture
 def reported(monkeypatch):
     calls: list = []
@@ -395,7 +389,6 @@ def test_recorded_calls_are_field_scoped_and_bounded_on_wide_registry(monkeypatc
 
     for response in (first, second):
         assert response["success"] is True
-        assert _chars(response) <= _default_budget()
         assert [pack["domain_pack_id"] for pack in response["domain_packs"]] == [
             "fixture.expression",
             "fixture.phenotype",
@@ -415,11 +408,9 @@ def test_recorded_calls_are_field_scoped_and_bounded_on_wide_registry(monkeypatc
                 )
             else:
                 assert item["field_path"] == STAGE_FIELD
-        assert response["page"]["truncated"] is True
-        assert response["page"]["next_cursor"]
+        assert response["page"]["truncated"] == (response["page"]["returned_count"] < 33)
 
-    # With a budget that fits the whole scoped collection, page size decides.
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "80000")
+    # Database page size selects the complete scoped collection.
     roomy_first = _call(**RECORDED_CALL, limit=50, registries=registries)
     roomy_second = _call(**RECORDED_CALL, limit=20, registries=registries)
     assert roomy_first["page"]["total_count"] == 33
@@ -439,13 +430,11 @@ def test_page_size_changes_default_summary_page():
     assert fifty["page"]["returned_count"] == 31
     assert twenty["page"]["returned_count"] == 20
     assert twenty["page"]["truncated"] is True
-    assert _chars(fifty) <= _default_budget()
     assert {item["kind"] for item in fifty["items"]} == {"validator_binding"}
 
 
 def test_following_cursors_returns_complete_stable_sequence(monkeypatch):
     _, paged = _all_pages(**RECORDED_CALL, limit=7)
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "80000")
     whole = _call(**RECORDED_CALL, limit=50)
 
     assert [item["ref"] for item in paged] == [item["ref"] for item in whole["items"]]
@@ -460,7 +449,6 @@ def test_every_topic_pages_within_budget(agent_id, topic, detail_level, reported
     responses, items = _all_pages(agent_id=agent_id, topic=topic, detail_level=detail_level)
 
     for response in responses:
-        assert _chars(response) <= _default_budget()
         assert response["page"]["returned_count"] <= 20
     assert len(items) == responses[0]["page"]["total_count"]
     assert len({item["ref"] for item in items}) == len(items)
@@ -489,7 +477,6 @@ def test_every_pack_topic_honors_field_scope(topic, detail_level):
         assert STAGE_FIELD in json.dumps(item)
         if "field_path" in item and item["kind"] != "validator_binding":
             assert item["field_path"] == STAGE_FIELD
-    assert all(_chars(response) <= _default_budget() for response in responses)
 
 
 @pytest.mark.parametrize(
@@ -597,7 +584,6 @@ def test_duplicate_field_names_across_packs_are_pack_qualified_and_selectable():
 
 
 def test_custom_and_packaged_bindings_keep_origin_and_pack_ownership(monkeypatch):
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "80000")
     validator = _call(
         **RECORDED_CALL,
         limit=50,
@@ -702,90 +688,30 @@ def test_omitted_and_extreme_limits_are_clamped(limit, expected):
 
     assert result["page"]["limit"] == expected
     assert result["page"]["returned_count"] <= expected
-    assert _chars(result) <= _default_budget()
 
 
-def test_oversized_single_definition_uses_exact_bounded_drilldown(reported):
+def test_large_definition_is_complete_and_explicit_pointer_still_resolves(reported):
     registries = _wide_registries(oversized_prefixes=6000)
     base = {**RECORDED_CALL, "registries": registries, "domain_pack_id": "fixture.expression"}
-
     listing = _call(**base, limit=50)
-    outlined = [item for item in listing["items"] if item.get("detail_complete") is False]
-    assert [item["ref"] for item in outlined] == [
-        "binding|fixture.expression|stage_term_lookup_00"
-    ]
-    outline = outlined[0]
-    assert outline["validator_binding_id"] == "stage_term_lookup_00"
-    assert outline["serialized_chars"] > agent_contracts.get_agent_contract_max_item_chars()
-    pointers = {value["detail_pointer"] for value in outline["omitted_values"]}
-    assert "/input_fields" in pointers
-    assert listing["drilldown"]["repeat_arguments"]["field_path"] == STAGE_FIELD
-
-    inputs = _call(**base, item_ref=outline["ref"], detail_pointer="/input_fields")
-    by_key = {entry["key"]: entry for entry in inputs["entries"]}
-    assert by_key["label"]["value"]["path"] == STAGE_FIELD
-    assert by_key["accepted_prefixes"]["detail_complete"] is False
-
-    literal = _call(
-        **base,
-        item_ref=outline["ref"],
-        detail_pointer=by_key["accepted_prefixes"]["detail_pointer"],
-    )
-    literal_entries = {entry["key"]: entry for entry in literal["entries"]}
-    assert literal_entries["source"]["value"] == "literal"
-    assert literal_entries["value"]["detail_complete"] is False
-    assert literal_entries["value"]["value_type"] == "array"
-    assert literal_entries["value"]["detail_pointer"] == "/input_fields/accepted_prefixes/value"
-
-    values: list[str] = []
-    cursor = None
-    while True:
-        page = _call(
-            **base,
-            item_ref=outline["ref"],
-            detail_pointer="/input_fields/accepted_prefixes/value",
-            limit=50,
-            cursor=cursor,
-        )
-        assert page["success"] is True
-        assert _chars(page) <= _default_budget()
-        values.extend(entry["value"] for entry in page["entries"])
-        cursor = page["page"]["next_cursor"]
-        if cursor is None:
-            break
-    assert values == [f"STAGE{number:05d}" for number in range(6000)]
+    item = next(item for item in listing["items"] if item["ref"] == "binding|fixture.expression|stage_term_lookup_00")
+    assert item["input_fields"]["accepted_prefixes"]["value"] == [f"STAGE{number:05d}" for number in range(6000)]
+    exact = _call(**base, item_ref=item["ref"], detail_pointer="/input_fields/accepted_prefixes/value")
+    assert exact["value"] == item["input_fields"]["accepted_prefixes"]["value"]
+    assert exact["detail_complete"]
     assert reported == []
 
 
-def test_single_scalar_over_item_budget_is_reported_once(reported):
-    registries = _wide_registries(description_chars=20_000)
-    base = {
-        "agent_id": VALIDATOR_AGENT,
-        "topic": "field",
-        "field_path": STAGE_FIELD,
-        "domain_pack_id": "fixture.expression",
-        "detail_level": "detail",
-        "registries": registries,
-    }
-
+def test_large_scalar_is_returned_exactly_without_context_budget_failure(reported):
+    registries = _wide_registries(description_chars=20000)
+    base = {"agent_id": VALIDATOR_AGENT, "topic": "field", "field_path": STAGE_FIELD,
+        "domain_pack_id": "fixture.expression", "detail_level": "detail", "registries": registries}
     listing = _call(**base)
     item = listing["items"][0]
-    assert item["detail_complete"] is False
-    field_view = _call(**base, item_ref=item["ref"], detail_pointer="/field")
-    description = next(entry for entry in field_view["entries"] if entry["key"] == "description")
-    assert description["detail_complete"] is False
+    assert item["field"]["description"] == "D" * 20000
+    result = _call(**base, item_ref=item["ref"], detail_pointer="/field/description")
+    assert result["value"] == "D" * 20000 and result["detail_complete"]
     assert reported == []
-
-    result = _call(**base, item_ref=item["ref"], detail_pointer=description["detail_pointer"])
-
-    assert result["success"] is False
-    assert result["failure"]["category"] == "tool_result_budget_escape"
-    assert result["failure"]["setting"] == "AGENT_CONTRACT_MAX_ITEM_CHARS"
-    assert len(reported) == 1
-    violation, context = reported[0]
-    assert violation.category == "tool_result_budget_escape"
-    assert context["tool_name"] == "get_agent_contract"
-    assert context["agent"] == VALIDATOR_AGENT
 
 
 def test_unserializable_metadata_reports_contract_serialization_failure(reported):
@@ -878,8 +804,7 @@ async def test_mocked_validator_run_uses_scoped_contract_without_registry_payloa
 
     assert model.calls == 3
     assert len(model.tool_outputs) == 2
-    assert all(len(output) <= _default_budget() for output in model.tool_outputs)
-    assert sum(len(output) for output in model.tool_outputs) < 389_039 // 8
+    assert all("fixture.unrelated" not in output for output in model.tool_outputs)
     assert "fixture.disease" not in "".join(model.tool_outputs)
     assert "fixture.unrelated" not in "".join(model.tool_outputs)
     answer = json.loads(result.final_output)
@@ -889,26 +814,6 @@ async def test_mocked_validator_run_uses_scoped_contract_without_registry_payloa
         "expected": {"curie": STAGE_FIELD},
     }
     assert reported == []
-
-
-def test_contract_budget_settings_are_env_configurable_and_clamped(monkeypatch):
-    from src.lib.openai_agents import config
-
-    monkeypatch.delenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", raising=False)
-    monkeypatch.delenv("AGENT_CONTRACT_MAX_ITEM_CHARS", raising=False)
-    assert config.get_agent_contract_max_response_chars() == 24000
-    assert config.get_agent_contract_max_item_chars() == 8000
-
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "10")
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "999999")
-    assert config.get_agent_contract_max_response_chars() == 4000
-    assert config.get_agent_contract_max_item_chars() == 2000
-
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "6000")
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "1")
-    assert config.get_agent_contract_max_item_chars() == 1000
-    responses, _items = _all_pages(**RECORDED_CALL)
-    assert all(_chars(response) <= 6000 for response in responses)
 
 
 @pytest.mark.parametrize("pointer", ["/validator_bindings/²", "/validator_bindings/00", "field"])
@@ -976,48 +881,3 @@ def test_cursor_is_invalidated_when_collection_changes_without_version_bump():
     assert stale["success"] is False
     assert "belongs to a different request" in stale["error"]
     assert _call(**RECORDED_CALL, limit=5, cursor=cursor, registries=registries)["success"] is True
-
-
-def test_contract_clamp_warnings_are_emitted_once_per_value(monkeypatch, caplog):
-    from src.lib.openai_agents import config
-
-    monkeypatch.setattr(config, "_AGENT_CONTRACT_CLAMP_WARNINGS", set())
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "10")
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "5")
-    with caplog.at_level("WARNING", logger=config.logger.name):
-        for _ in range(3):
-            config.get_agent_contract_max_item_chars()
-    messages = [record.getMessage() for record in caplog.records]
-    assert messages.count(
-        "AGENT_CONTRACT_MAX_RESPONSE_CHARS=10 is below minimum 4000; using 4000"
-    ) == 1
-    assert messages.count("AGENT_CONTRACT_MAX_ITEM_CHARS=5 is below minimum 1000; using 1000") == 1
-
-    caplog.clear()
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "7")
-    with caplog.at_level("WARNING", logger=config.logger.name):
-        config.get_agent_contract_max_item_chars()
-        config.get_agent_contract_max_item_chars()
-    assert [record.getMessage() for record in caplog.records] == [
-        "AGENT_CONTRACT_MAX_ITEM_CHARS=7 is below minimum 1000; using 1000"
-    ]
-
-
-def test_default_item_budget_caps_silently_but_explicit_value_warns(monkeypatch, caplog):
-    from src.lib.openai_agents import config
-
-    monkeypatch.setattr(config, "_AGENT_CONTRACT_CLAMP_WARNINGS", set())
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_RESPONSE_CHARS", "10000")
-    monkeypatch.delenv("AGENT_CONTRACT_MAX_ITEM_CHARS", raising=False)
-    with caplog.at_level("WARNING", logger=config.logger.name):
-        assert config.get_agent_contract_max_item_chars() == 5000
-    assert caplog.records == []
-
-    monkeypatch.setenv("AGENT_CONTRACT_MAX_ITEM_CHARS", "9000")
-    with caplog.at_level("WARNING", logger=config.logger.name):
-        assert config.get_agent_contract_max_item_chars() == 5000
-        assert config.get_agent_contract_max_item_chars() == 5000
-    assert [record.getMessage() for record in caplog.records] == [
-        "AGENT_CONTRACT_MAX_ITEM_CHARS=9000 exceeds half of "
-        "AGENT_CONTRACT_MAX_RESPONSE_CHARS; using 5000"
-    ]

@@ -206,14 +206,11 @@ async def test_inspection_dispatcher_requires_active_authenticated_workshop(monk
 
 def test_profile_inspection_uses_existing_bounded_provider_result_and_recall(monkeypatch):
     import src.api.agent_studio as api
-    monkeypatch.setattr(api, "get_agent_studio_provider_tool_result_inline_max_chars", lambda: 1500)
     result = {"success": True, "output": {"profileContract": {"description": "private draft " * 1000}}}
-    content = api._provider_tool_result_content(tool_name="inspect_workshop_profile", tool_input={"action": "current"},
-                                               tool_result=result, session_id="session", turn_id="turn")
-    assert len(content) <= 1500
+    content = api._provider_tool_result_content(tool_name="inspect_workshop_profile",
+                                               tool_result=result,  )
     payload = json.loads(content)
-    assert payload["status"] == "compacted_tool_result"
-    assert payload["recall"]["turn"]["tool"] == "get_chat_turn"
+    assert payload == result
 
 
 def test_targeted_settings_preserve_keys_siblings_prompts_and_source_pin():

@@ -170,14 +170,13 @@ content: |
     `validation_state` ("open", "resolved", "none", "any"), `severity`, `query`
     (terms found in the object's fields), `field_path` (limit `query` to one field, or
     require that field), and `fields` (only these manifest fields in each row).
-  - Use `action="explanation"` to read the saved specialist explanation exactly, following
-    `next_call` for long text.
+  - Use `action="explanation"` to read the complete saved specialist explanation exactly.
   - Use `action="object"` for one object, and `action="field"` for one exact field value.
   - Use `action="validation"` (same filters plus `finding_ref` for one finding) and
     `action="validator_results"` (`validator_result_key` for one) for validation details.
-  - Every response is size-bounded. To continue a page or a long value, call again with
-    the returned `next_call` arguments exactly; take `cursor`, `limit` and `result_sha256`
-    only from a `next_call`. A value marked `withheld` is not missing
+  - Continue explicit row pages with the returned `next_call` arguments exactly.
+    Exact value reads return the complete selected value; an optional `cursor`
+    selects a suffix and `result_sha256` verifies the source. A value marked `withheld` is not missing
     or shortened: read it with its `read` call before quoting it. `stale_result_cursor`
     means the result changed; start the listing again.
   Evidence text is intentionally absent from default manifests; read it with
@@ -225,8 +224,8 @@ content: |
     evidence stays open with an explanation of what curator evidence or action is needed.
 
   Retained extraction evidence comes from backend-owned PDF spans: specialists call
-  `read_chunk`, select `evidence_spans[].span_id` values, then call
-  `record_evidence(span_ids=[...])`. The backend copies exact source text into
+  `read_chunk`, select `evidence_spans[].span_index` values, then call
+  `record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])`. The backend copies exact source text into
   `verified_quote`, and source quote and provenance fields stay immutable after recording.
 
   ## Curation prep checkpoint

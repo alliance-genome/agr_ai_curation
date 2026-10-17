@@ -142,8 +142,8 @@ This document has the following hierarchical structure:
 ### How to use this hierarchy:
 - Use `read_section("Methods")` to survey an entire top-level section
 - Use `read_subsection("Methods", "Fly Strains")` to survey a specific subsection
-- Use `read_chunk(chunk_id)` on relevant source chunks for final evidence selection
-- Select `read_chunk.evidence_spans[].span_id` values before calling `record_evidence`
+- Use `read_chunk(chunk_index)` on relevant source chunks for final evidence selection
+- Select `read_chunk.evidence_spans[].span_index` values before calling `record_evidence`
 - The subsections are nested under their parent sections above
 """
 
@@ -155,8 +155,8 @@ This document has the following sections available:
 {section_list}
 
 Use this information to choose the right tool and target your searches effectively.
-For retained evidence, use `read_chunk(chunk_id)` and select
-`evidence_spans[].span_id` values before calling `record_evidence`.
+For retained evidence, use `read_chunk(chunk_index)` and select
+`evidence_spans[].span_index` values before calling `record_evidence`.
 """
 
 # Template for abstract injection

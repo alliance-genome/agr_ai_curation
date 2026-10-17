@@ -37,6 +37,8 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from src.lib.domain_packs.profile_validation import ProfileValidationContext
 
+from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
+
 from agents import Agent, RunContextWrapper, function_tool
 from sqlalchemy.orm import Session
 from src.lib.curation_workspace.execution_provenance import capture_source_document
@@ -1860,6 +1862,7 @@ async def _collect_flow_validator_materialization_inputs(
                         request=request,
                     )
                 except Exception as exc:
+                    raise_if_document_read_failed(exc)
                     record_handled_stage_failure(exc)
                     logger.warning(
                         "[Flow Executor] Validator group '%s' failed for binding %s",
@@ -4301,8 +4304,8 @@ def create_flow_supervisor(
                 "supervisor instructions. This tool cannot browse or authorize any "
                 "other result. Start with action=\"summary\" (counts), then filter "
                 "action=\"objects\", \"validation\" or \"validator_results\"; "
-                "responses are size-bounded, so pass next_call exactly to continue "
-                "and use each withheld value's read call for its exact content."
+                "use next_call to continue requested row pages and each previewed "
+                "value's read call for its complete exact content."
             ),
         )
         async def inspect_bound_preferred_flow_result(
@@ -5188,6 +5191,7 @@ async def execute_flow(
             except BenchmarkInvocationBudgetExceeded:
                 raise
             except Exception as exc:
+                raise_if_document_read_failed(exc)
                 raise_if_provider_budget_exhausted()
                 terminal_output_ready = bool(pending_output_events) and not (
                     _missing_consumed_tool_completions()

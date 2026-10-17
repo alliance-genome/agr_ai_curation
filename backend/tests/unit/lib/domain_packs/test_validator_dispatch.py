@@ -3757,7 +3757,7 @@ def test_package_scoped_validator_agent_sets_max_turns_when_max_tool_calls_unset
 
     # max_tool_calls unset must still pin max_turns rather than fall to the
     # Agents SDK default of 10: default tool-call budget (8) + finalization (2).
-    assert captured["kwargs"]["max_turns"] == 10
+    assert captured["kwargs"]["max_turns"] == 66
 
 
 def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls_unset(
@@ -3819,7 +3819,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
     # Single-job batch with max_tool_calls unset: default budget (8) + 2 still
     # wins over the len(jobs)-derived floor, so max_turns is pinned at 10 rather
     # than silently inheriting the SDK default.
-    assert captured["kwargs"]["max_turns"] == 10
+    assert captured["kwargs"]["max_turns"] == 66
 
 
 @pytest.mark.parametrize(
@@ -3829,7 +3829,7 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
         # (2) == 26. A composite validator (experimental_condition) makes several
         # per-component lookups per job, so the budget must scale with the number
         # of jobs in the batch rather than a flat per-run cap.
-        (None, 3 * 8 + 2),
+        (None, 3 * 64 + 2),
         # 3 jobs * configured per-job budget (4) + finalization (2) == 14.
         (4, 3 * 4 + 2),
     ],
@@ -4622,3 +4622,25 @@ def test_batch_exhaustion_returns_safe_judgments_across_partial_compact_retries(
     assert [result.explanation for result in results] == [decision["explanation"] for decision in decisions]
     assert all(result.status == "unresolved" and result.resolved_values == {} for result in results)
     assert all(not result.lookup_attempts for result in results)
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_required_document_failure_cannot_become_validator_finding(tmp_path, monkeypatch, batch):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    pack = _loaded_pack(tmp_path, batch_enabled=batch)
+    reports = []
+    calls = []
+    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.report_runtime_exception", lambda *a, **k: reports.append(a))
+    error = RuntimeError("SDK wrapper")
+    error.__cause__ = DocumentReadError("read_chunk")
+    def failed(*args, **kwargs):
+        calls.append(1)
+        raise error
+    with pytest.raises(RuntimeError) as caught:
+        dispatch_active_validator_bindings(
+            _multi_object_envelope(["BAD:0001", "BAD:0002"]), pack,
+            runner=failed, batch_runner=failed, max_parallel_validators=1,
+        )
+    assert caught.value is error
+    assert len(calls) == 1
+    assert reports == []  # Terminal entry point owns reporting, not validator recovery.

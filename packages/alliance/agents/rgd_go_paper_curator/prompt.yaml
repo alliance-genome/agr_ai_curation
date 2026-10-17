@@ -81,8 +81,9 @@ content: |
 
   <evidence_workflow>
   Search or read the positively scoped document sections before staging. For
-  every retained recommendation, call `read_chunk`, select backend-generated
-  evidence span IDs, and call `record_evidence`. Use only verified evidence
+  every retained recommendation, call `read_chunk(chunk_index)`, select backend-generated
+  `evidence_spans[].span_index` values, and call `record_evidence` with
+  `selections` containing the corresponding `chunk_index`/`span_index` pairs. Use only verified evidence
   record IDs. Attach every retained record to the recommendation's stable
   `pending_ref_id` and at least one concrete field path such as `gene_product`,
   `go_term`, `evidence_code`, or `rationale`. Exact quote, page, section,

@@ -157,7 +157,7 @@ def test_moved_reference_material_is_reachable_through_the_guide():
     always_sent, _topics = studio_guide.prepare_studio_prompt_template(template)
     moved_phrases = {
         "trace_investigation": "execute this workflow AUTOMATICALLY",
-        "token_budget": "You have a 200K token context window.",
+        "token_budget": "The runtime measures the actual model request",
         "domain_envelopes": "PDF evidence is span-backed:",
         "inspection_tools": "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
         "model_selection": "Agent Workshop Model Recommendation Playbook",
@@ -176,6 +176,13 @@ def test_moved_reference_material_is_reachable_through_the_guide():
             assert DIAGNOSTIC_TOOLS_TEXT in text
         else:
             assert phrase in text
+
+    context_guide = _read_topic(template, "token_budget")
+    assert "read_pending_context" in context_guide
+    assert "Do not rerun a completed write" in context_guide
+    assert "200K" not in context_guide
+    assert "within_budget" not in context_guide
+    assert "max_serialized_chars" not in context_guide
 
 
 def test_static_instructions_precede_per_user_and_per_run_context(build_prompt):
@@ -204,26 +211,19 @@ def test_template_with_user_greeting_placeholder_fails_explicitly(monkeypatch):
 
 
 def _read_topic(template: str, topic_id: str) -> str:
-    chunks = []
-    call = {"topic": topic_id}
-    while True:
-        result = studio_guide.read_studio_guide(
-            template=template,
-            render_diagnostic_tools=lambda: DIAGNOSTIC_TOOLS_TEXT,
-            **call,
-        )
-        assert result["success"] is True, result
-        assert result["start"] == sum(len(chunk) for chunk in chunks)
-        chunks.append(result["content"])
-        if result["complete"]:
-            assert result["next_call"] is None
-            assert len("".join(chunks)) == result["total_chars"]
-            return "".join(chunks)
-        call = result["next_call"]["arguments"]
+    result = studio_guide.read_studio_guide(
+        template=template,
+        render_diagnostic_tools=lambda: DIAGNOSTIC_TOOLS_TEXT,
+        topic=topic_id,
+    )
+    assert result["success"] is True, result
+    assert result["start"] == 0
+    assert result["complete"] is True and result["next_call"] is None
+    assert len(result["content"]) == result["total_chars"]
+    return result["content"]
 
 
 def test_guide_reads_are_bounded_and_hash_pinned(monkeypatch):
-    monkeypatch.setenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", "1000")
     template = _alliance_template()
     text = _read_topic(template, "trace_investigation")
     assert len(text) > 1000
@@ -231,7 +231,8 @@ def test_guide_reads_are_bounded_and_hash_pinned(monkeypatch):
     first = studio_guide.read_studio_guide(
         template=template, render_diagnostic_tools=str, topic="trace_investigation"
     )
-    assert len(first["content"]) == 1000
+    assert first["content"] == text
+    assert first["complete"]
     stale = studio_guide.read_studio_guide(
         template=template,
         render_diagnostic_tools=str,
@@ -339,17 +340,6 @@ def test_guide_requests_with_invalid_arguments_fail_explicitly():
     assert _read(topic="flow_design", start="10")["code"] == "guide_start_invalid"
     assert _read(topic="flow_design", start=10**9)["code"] == "guide_start_out_of_range"
     assert _read(topic="flow_design", query="projection")["code"] == "guide_query_with_topic"
-
-
-def test_guide_chunk_must_stay_below_provider_inline_boundary(monkeypatch):
-    from src.lib.openai_agents.config import get_agent_studio_guide_chunk_max_chars
-
-    monkeypatch.setenv("AGENT_STUDIO_PROVIDER_TOOL_RESULT_INLINE_MAX_CHARS", "12000")
-    monkeypatch.setenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS", "12000")
-    with pytest.raises(ValueError, match="AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS"):
-        get_agent_studio_guide_chunk_max_chars()
-    monkeypatch.delenv("AGENT_STUDIO_GUIDE_CHUNK_MAX_CHARS")
-    assert get_agent_studio_guide_chunk_max_chars() == 8_000
 
 
 def test_verification_pass_gate_and_credential_rule_survive_off_the_flows_tab(build_prompt):

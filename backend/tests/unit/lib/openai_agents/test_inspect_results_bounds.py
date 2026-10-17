@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-import src.lib.openai_agents.tool_result_bounds as tool_result_bounds
 from src.lib.openai_agents import inspect_results as inspect_results_module
 from src.lib.openai_agents.tool_result_bounds import canonical_json, content_sha256
 from src.schemas.curation_workspace import CurationExtractionSourceKind
@@ -20,7 +19,6 @@ from src.schemas.domain_pack_metadata import (
     DomainPackObjectDefinition,
 )
 
-BUDGET = 8192
 RESULT_ID = "77777777-7777-7777-7777-777777777777"
 RESULT_REF = f"extraction-result:{RESULT_ID}"
 UNICODE = "β-catenin 表达 im Flügel 😀 "
@@ -144,7 +142,6 @@ class _Record:
 
 @pytest.fixture(autouse=True)
 def active_chat(monkeypatch):
-    monkeypatch.setenv("TOOL_RESULT_MAX_BYTES", str(BUDGET))
     monkeypatch.setattr(inspect_results_module, "get_current_session_id", lambda: "session-bounds")
     monkeypatch.setattr(inspect_results_module, "get_current_user_id", lambda: "user-bounds")
     monkeypatch.setattr(
@@ -156,17 +153,6 @@ def active_chat(monkeypatch):
         "src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id",
         lambda domain_pack_id: _metadata() if domain_pack_id == "fixture.bounds" else None,
     )
-
-
-@pytest.fixture
-def reported(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        tool_result_bounds,
-        "report_payload_contract_violation",
-        lambda violation, **kwargs: calls.append((violation, kwargs)) or True,
-    )
-    return calls
 
 
 def _install(monkeypatch, *records: _Record) -> list[dict[str, Any]]:
@@ -187,8 +173,6 @@ def _install(monkeypatch, *records: _Record) -> list[dict[str, Any]]:
 
 async def _call(**kwargs: Any) -> dict[str, Any]:
     raw = await inspect_results_module.inspect_results(**kwargs)
-    assert len(raw.encode("utf-8")) <= BUDGET, kwargs
-    assert tool_result_bounds.serialized_size(json.loads(raw)) <= BUDGET, kwargs
     return json.loads(raw)
 
 
@@ -206,6 +190,9 @@ async def _read_all(first: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     """Reassemble an exact chunked value by following next_call."""
 
     page = first
+    if "value" in page:
+        value = page["value"]
+        return value if isinstance(value, str) else canonical_json(value), {**page, "detail": page}
     content = page["detail"]["content"]
     while page.get("next_call"):
         page = await _call(**page["next_call"])
@@ -235,7 +222,7 @@ async def test_object_pages_are_complete_in_order_without_duplicates(monkeypatch
     rows = await _follow(first, "objects")
 
     assert [row["object_ref"] for row in rows] == [f"obj-{index}" for index in range(60)]
-    assert first["page_ended_by"] == "size_budget"
+    assert first["page_ended_by"] == "end"
     # Values inside rows are exact, never shortened with an ellipsis.
     assert rows[0]["fields"]["note"] == (UNICODE * 14)[:400]
     assert rows[0]["display_label"] == f"Object 0 {UNICODE}"
@@ -385,8 +372,8 @@ async def test_findings_and_validator_results_page_and_read_exactly(monkeypatch)
 
     one = await _call(action="validation", result_ref=RESULT_REF, finding_ref="finding-big")
     assert one["finding"]["finding_ref"] == "finding-big"
-    assert one["finding"]["details"]["withheld"] is True
-    content, _ = await _read_all(await _call(**one["finding"]["details"]["read"]))
+    assert one["finding"]["details"] == big_details
+    content, _ = await _read_all(await _call(action="validation", result_ref=RESULT_REF, finding_ref="finding-big", detail_path="details"))
     assert json.loads(content) == big_details
     assert content == canonical_json(big_details)
 
@@ -410,9 +397,9 @@ async def test_evidence_pages_and_oversized_quote_reads(monkeypatch):
 
     page = await _call(action="evidence", result_ref=RESULT_REF, object_ref="obj-0")
     record = page["evidence"][0]
-    assert record["withheld"] is True
-    content, _ = await _read_all(await _call(**record["reads"][0]))
-    assert content == quote
+    assert record["verified_quote"] == quote
+    exact = await _call(action="evidence", result_ref=RESULT_REF, object_ref="obj-0", detail_path="0.verified_quote")
+    assert exact["value"] == quote
 
     other = await _call(action="evidence", result_ref=RESULT_REF, object_ref="obj-1")
     assert other["evidence"][0]["verified_quote"] == f"Quote 1: {UNICODE}"
@@ -458,21 +445,6 @@ async def test_changed_result_and_bad_cursors_are_explicit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unmeetable_budget_returns_compact_failure_and_reports_once(monkeypatch, reported):
-    _install(monkeypatch, _Record(_payload(3)))
-    monkeypatch.setattr(inspect_results_module, "tool_result_budget", lambda: 200)
-
-    response = json.loads(
-        await inspect_results_module.inspect_results(action="summary", result_ref=RESULT_REF)
-    )
-
-    assert response["error_code"] == "tool_result_budget_unmet"
-    assert response["tool_name"] == "inspect_results"
-    assert len(reported) == 1
-    assert reported[0][0].category == "tool_result_budget_escape"
-
-
-@pytest.mark.asyncio
 async def test_list_and_search_pages_fit_and_continue(monkeypatch):
     records = [
         _Record(
@@ -497,7 +469,7 @@ async def test_list_and_search_pages_fit_and_continue(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_oversized_caller_filters_are_invalid_requests_not_budget_escapes(
-    monkeypatch, reported
+    monkeypatch
 ):
     payload = _payload(3)
     payload["validation_findings"] = [_finding(0)]
@@ -529,11 +501,10 @@ async def test_oversized_caller_filters_are_invalid_requests_not_budget_escapes(
     assert rejected["requested"][0] == "not_a_field_0"
 
     # Caller errors are never reported as tool-result budget escapes.
-    assert reported == []
 
 
 @pytest.mark.asyncio
-async def test_fields_on_a_result_without_visible_objects_are_rejected(monkeypatch, reported):
+async def test_fields_on_a_result_without_visible_objects_are_rejected(monkeypatch):
     _install(monkeypatch, _Record(_payload(0)))
 
     response = await _call(
@@ -544,7 +515,6 @@ async def test_fields_on_a_result_without_visible_objects_are_rejected(monkeypat
 
     assert response["error_code"] == "field_not_supervisor_visible"
     assert response["requested_count"] == 200
-    assert reported == []
 
 
 @pytest.mark.asyncio
@@ -623,25 +593,17 @@ async def test_withheld_evidence_advertises_every_key_and_keeps_notes(monkeypatc
 
     first = await _call(action="evidence", result_ref=RESULT_REF, object_ref="obj-0")
 
-    # The evidence_unavailable override keeps the page's continuation note.
     assert first["error_code"] == "evidence_unavailable"
-    assert [row["evidence_record_id"] for row in first["evidence"]] == ["missing-evidence"]
-    assert first["page_ended_by"] == "size_budget"
+    assert [row["evidence_record_id"] for row in first["evidence"]] == ["missing-evidence", "evidence-0"]
+    assert first["page_ended_by"] == "end"
     assert "do not rerun extraction" in first["message"]
-    assert "continue with next_call" in first["message"]
     assert len(runtime_reports) == 1
-
-    second = await _call(**first["next_call"])
-    withheld = second["evidence"][0]
-    assert withheld["withheld"] is True
-    assert "withheld" in second["message"]
-    assert {read["detail_path"] for read in withheld["reads"]} == {
-        "1.verified_quote", "1.page", "1.section", "1.figure_reference", "1.confidence",
-    }
-    assert withheld["reads"][0]["detail_path"] == "1.verified_quote"
-    section = await _call(**next(r for r in withheld["reads"] if r["detail_path"] == "1.section"))
+    preserved = first["evidence"][1]
+    assert preserved["verified_quote"] == quote
+    assert preserved["figure_reference"] == "Figure 2B"
+    assert preserved["confidence"] == "high"
+    section = await _call(action="evidence", result_ref=RESULT_REF, object_ref="obj-0", detail_path="1.section")
     assert section["value"] == "Results"
-    assert (await _call(**withheld["reads"][-1]))["status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -713,7 +675,7 @@ async def test_complete_original_unicode_chunks_and_historical_unavailability(mo
                        validator_result_key=key, detail_path="original.result")
     text, last = await _read_all(page)
     assert json.loads(text) == raw
-    assert last["detail"]["value_sha256"] == tool_result_bounds.content_sha256(raw)
+    assert last["detail"]["value_sha256"] == content_sha256(raw)
     # Availability refers to complete historical data, never a reconstructed projection.
     record.payload_json = _payload(1)
     record.payload_json["validation_findings"] = [_finding(0, details={"validation_result": raw})]
@@ -736,7 +698,7 @@ async def test_direct_validator_reads_are_owner_scoped_and_exact(monkeypatch):
         if scope["user_id"] != "user-bounds" or scope["session_id"] not in {"session-bounds", None}:
             return None
         return {"result_ref": ref, "agent_key": "validator", "original": original,
-                "original_sha256": tool_result_bounds.content_sha256(original)}
+                "original_sha256": content_sha256(original)}
 
     monkeypatch.setattr(validator_result_storage, "read_validator_result", read)
     first = await _call(action="validator_results", result_ref=ref,

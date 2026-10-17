@@ -364,8 +364,7 @@ def test_tool_details_diagnostic_reports_agent_specific_metadata(monkeypatch):
     assert result["success"] is True
     assert result["tool_id"] == "agr_curation_query"
     assert result["agent_id"] == "disease_validation"
-    assert result["detail_mode"] == "sections"
-    assert "name" in {item["section"] for item in result["sections"]}
+    assert result["tool"]["name"]
 
     name_section = details_tool.handler(
         tool_id="agr_curation_query",

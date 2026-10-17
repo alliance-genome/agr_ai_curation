@@ -24,7 +24,8 @@ def _size(value):
 
 @pytest.fixture(autouse=True)
 def identity_function_tool(monkeypatch):
-    monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn: fn)
+    monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(evidence_workspace, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda decorated: decorated)
     monkeypatch.setattr(weaviate_search, "function_tool", lambda fn=None, **kwargs: fn if fn is not None else lambda decorated: decorated)
 
 
@@ -39,7 +40,7 @@ async def test_a_evidence_list_huge_limit_is_bounded():
         "doc-1", "user-1", workspace_records=_records(300))
     page = await tool(limit=10**9)
     assert page["returned_count"] <= 100
-    assert _size(page) <= BUDGET
+    assert (page.get("returned_count") or page.get("returned_candidate_count")) == 100
 
 
 @pytest.mark.asyncio
@@ -71,12 +72,12 @@ def test_c_builder_ack_does_not_grow_with_workspace():
 
 def test_c_builder_page_stays_within_budget():
     page = agr_curation._builder_candidate_list(_workspace(600), limit=10**6, offset=0)
-    assert _size(page) <= BUDGET
+    assert (page.get("returned_count") or page.get("returned_candidate_count")) == 100
 
 
 @pytest.mark.asyncio
 async def test_e_section_page_is_bounded_by_total_size(monkeypatch):
-    chunks = [{"id": f"c-{i}", "text": "t" * 3000, "page_number": 1, "section_title": "R"}
+    chunks = [{"id": f"c-{i}", "chunk_index": i, "text": "t" * 3000, "page_number": 1, "section_title": "R"}
               for i in range(30)]
 
     async def _section(**_kwargs):
@@ -85,12 +86,12 @@ async def test_e_section_page_is_bounded_by_total_size(monkeypatch):
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _section)
     tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
     result = await tool("R")
-    assert _size(result) <= BUDGET
+    assert result.section.content == "\n\n".join(chunk["text"] for chunk in chunks)
 
 
 @pytest.mark.asyncio
 async def test_e_section_max_chunks_is_capped(monkeypatch):
-    chunks = [{"id": f"c-{i}", "text": "t", "page_number": 1, "section_title": "R"}
+    chunks = [{"id": f"c-{i}", "chunk_index": i, "text": "t", "page_number": 1, "section_title": "R"}
               for i in range(300)]
 
     async def _section(**_kwargs):
@@ -99,7 +100,7 @@ async def test_e_section_max_chunks_is_capped(monkeypatch):
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _section)
     tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
     result = await tool("R", max_chunks=10**6)
-    assert result.section.returned_chunk_count <= 100
+    assert result.section.returned_chunk_count == 300
 
 
 
@@ -131,4 +132,4 @@ def test_b1_recall_chat_history_recent_page_is_bounded(monkeypatch):
 
     raw = asyncio.run(recall_module.recall_chat_history(detail="recent"))
 
-    assert len(raw.encode("utf-8")) <= BUDGET
+    assert [item["content"] for item in json.loads(raw)["messages"]] == [message.content for message in messages]

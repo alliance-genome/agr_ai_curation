@@ -129,6 +129,11 @@ def generate_deterministic_uuid(document_id: str, chunk_index: int, content: str
     Returns:
         Deterministic UUID string
     """
+    # UUIDs identify Weaviate objects and canonical evidence internally. Model
+    # tools select existing zero-based document-local chunk/span indexes instead:
+    # reproducing a long UUID caused a malformed production tool argument. The
+    # backend binds source generation and issued spans, and verifies offsets and
+    # hashes; numeric references do not remove those provenance requirements.
     unique_string = f"{document_id}:{chunk_index}:{content[:100]}"
     hash_obj = hashlib.sha256(unique_string.encode())
     # Convert first 16 bytes of hash to UUID format

@@ -276,7 +276,7 @@ async def test_record_evidence_aggregates_only_one_safe_reference(
         "function_tool",
         lambda function: function,
     )
-    tool = record_evidence_module.create_record_evidence_tool(
+    tool = record_evidence_module._create_canonical_evidence_recorder(
         "doc-aggregate",
         "user-1",
     )

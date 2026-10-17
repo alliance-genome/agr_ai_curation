@@ -358,28 +358,24 @@ return {
 
 ### Result Size
 
-Every model-facing result must fit `TOOL_RESULT_MAX_BYTES` (measured as UTF-8
-bytes of its serialized form, metadata and errors included). Row limits alone
-are not enough: one wide record or long text value can exceed it.
+Return the complete selected result. The shared model-context boundary counts
+actual requests, applies native Responses compaction, and handles oversized
+payloads through exact durable ingestion. Do not add per-tool byte/character
+quotas, last-N eviction, or silent scientific-text truncation.
 
-- Read-only tools that run in the package runner (most lookups and REST/SQL
-  tools) are served by the backend adapter: results that fit reach the model
-  unchanged, larger ones become pages with `result_page.next_call` and exact
-  `detail_path` chunks. Do not declare `result_offset`, `result_sha256`,
-  `detail_path` or `detail_cursor` yourself; the adapter reserves them.
-- Inline tools and tools that change run state (builders, evidence) must bound
-  their own results with `agr_ai_curation_runtime.tool_result_bounds`
-  (`clamp_page_limit`, `parse_offset`, `fit_page`, `detail_chunk`) and return
-  `budget_failure(...)` when even a compact result cannot fit.
-- Never truncate scientific text. Withhold a large value behind an exact
-  detail read, or end the page with an explicit continuation.
+Explicit query filters and row pagination remain useful selection controls.
+Return truthful counts and continuations. Archive a write's result before
+presentation; exact continuation must never repeat the write. Expose operational
+selection limits through environment settings and document their defaults.
 
-See [TOOL_RESULT_BOUNDS_INVENTORY.md](./TOOL_RESULT_BOUNDS_INVENTORY.md) for
-every tool's disposition.
+See [AGENT_CONTEXT_CONTINUATION.md](./AGENT_CONTEXT_CONTINUATION.md) for capacity,
+compaction and exact-ingestion behavior, and
+[TOOL_RESULT_BOUNDS_INVENTORY.md](./TOOL_RESULT_BOUNDS_INVENTORY.md) for retained
+query, preview, transport and business-contract boundaries.
 
 ### Error Handling
 
-**Never raise exceptions** -- return error information in the response:
+Return structured recoverable request errors when the tool contract permits them. Required PDF/source read failures must raise the typed terminal document error so the entire extraction stops. Do not convert that failure into successful empty content. Other dependency failures follow the runtime exception boundary.
 
 ```python
 try:
@@ -569,8 +565,8 @@ def test_my_tool_empty_query():
 - [ ] Tool function created in your package's `python/src/.../tools/`
 - [ ] `@function_tool` decorator applied
 - [ ] Clear docstring for LLM tool selection
-- [ ] Error handling returns dict (not raises)
-- [ ] Model-facing result fits `TOOL_RESULT_MAX_BYTES` with explicit continuation (see Result Size) and the tool is listed in `TOOL_RESULT_BOUNDS_INVENTORY.md`
+- [ ] Recoverable request errors and terminal source/dependency failures follow their runtime contracts
+- [ ] Complete selected results use the shared context policy; explicit selection limits and write-safe continuation are documented (see Result Size)
 - [ ] `tools/bindings.yaml` export added with correct `binding_kind` and `required_context`
 - [ ] Tool added to a package-owned agent `tools` list in `agent.yaml` or to `tool_ids` in DB
 - [ ] Upstream dependencies are merged/released or pinned before agent use

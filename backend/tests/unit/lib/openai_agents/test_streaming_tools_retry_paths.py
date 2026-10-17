@@ -621,9 +621,7 @@ async def test_run_specialist_retry_succeeds_when_initial_output_missing(monkeyp
     )
 
     assert calls["count"] == 2
-    assert "structured result accepted" in result
-    assert "Full validated payload is retained by the specialist runtime" in result
-    assert "value=ok" in result
+    assert json.loads(result) == {"value": "ok"}
     assert any(e.get("type") == "SPECIALIST_RETRY" for e in captured_events)
     assert any(e.get("type") == "SPECIALIST_RETRY_SUCCESS" for e in captured_events)
 

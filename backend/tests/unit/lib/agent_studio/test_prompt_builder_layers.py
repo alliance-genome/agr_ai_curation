@@ -191,12 +191,12 @@ def test_flow_context_requires_complete_targeted_verification_evidence(monkeypat
 
     assert "read studio guide topic `flow_verification`" in prompt
     assert "Duplicate `output_key` is HIGH unless authoritative validation" in prompt
-    assert '`compacted_tool_result`' in prompt
+    assert 'required source content remains unread' in prompt
     prompt = prompt + _guide_topic("flow_verification") + _guide_topic("flow_design")
     assert 'get_available_agents(category="Output")' in prompt
     assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
     assert 'view="effective_prompt"' in prompt
-    assert '`compacted_tool_result`' in prompt
+    assert 'required source content remains unread' in prompt
     assert "every nonempty active `custom_instructions`" in prompt
     assert 'get_current_flow_topology(section="all")' in prompt
     assert 'view="complete_plan"' in prompt

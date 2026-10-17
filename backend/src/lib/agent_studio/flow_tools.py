@@ -17,6 +17,8 @@ User Context:
     See set_workflow_user_context() and get_current_user_id().
 """
 
+from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
+
 import hashlib
 import json
 import logging
@@ -46,20 +48,16 @@ from src.lib.openai_agents.bounded_list import (
     substring_match,
 )
 from src.lib.openai_agents.config import (
-    get_agent_studio_flow_catalog_chunk_max_chars,
-    get_agent_studio_flow_catalog_result_max_chars,
     get_agent_studio_flow_custom_instructions_max_chars,
     get_agent_studio_flow_description_max_chars,
     get_agent_studio_flow_max_steps,
     get_agent_studio_flow_name_max_chars,
     get_agent_studio_flow_output_filename_template_max_chars,
     get_agent_studio_flow_proposal_max_operations,
-    get_agent_studio_flow_inspection_chunk_max_chars,
     get_agent_studio_flow_inspection_page_limit,
     get_agent_studio_flow_step_goal_max_chars,
     get_agent_studio_flow_template_default_items,
     get_agent_studio_flow_template_max_items,
-    get_agent_studio_provider_tool_result_inline_max_chars,
     get_tool_page_default_limit,
     get_tool_page_max_limit,
 )
@@ -84,11 +82,6 @@ logger = logging.getLogger(__name__)
 
 _FLOW_TEMPLATE_DEFAULT_ITEMS = get_agent_studio_flow_template_default_items()
 _FLOW_TEMPLATE_MAX_ITEMS = get_agent_studio_flow_template_max_items()
-_FLOW_CATALOG_RESULT_MAX_CHARS = min(
-    get_agent_studio_flow_catalog_result_max_chars(),
-    get_agent_studio_provider_tool_result_inline_max_chars(),
-)
-_FLOW_CATALOG_CHUNK_MAX_CHARS = get_agent_studio_flow_catalog_chunk_max_chars()
 
 
 def _flow_catalog_json(value: Any) -> str:
@@ -101,10 +94,6 @@ def _flow_catalog_json(value: Any) -> str:
         separators=(",", ":"),
     )
 
-
-def _flow_catalog_provider_chars(value: Any) -> int:
-    """Measure the exact JSON representation used for provider continuation."""
-    return len(json.dumps(value, default=str))
 
 if TYPE_CHECKING:
     from src.schemas.flows import FlowDefinition
@@ -2203,11 +2192,7 @@ def _get_flow_templates_handler():
             start = parse_offset_cursor(detail_cursor)
             if start > len(record_json):
                 raise ValueError("detail_cursor is beyond the selected record")
-            requested_chars = normalize_page_limit(
-                detail_max_chars,
-                default=_FLOW_CATALOG_CHUNK_MAX_CHARS,
-                maximum=_FLOW_CATALOG_CHUNK_MAX_CHARS,
-            )
+            requested_chars = requested_text_length(detail_max_chars, len(record_json))
 
             def build_detail(end: int) -> Dict[str, Any]:
                 complete = end >= len(record_json)
@@ -2287,29 +2272,7 @@ def _get_flow_templates_handler():
                     ),
                 }
 
-            low = start + 1
-            high = min(len(record_json), start + requested_chars)
-            fitting_end: Optional[int] = start if start == len(record_json) else None
-            while low <= high:
-                end = (low + high) // 2
-                if _flow_catalog_provider_chars(build_detail(end)) <= _FLOW_CATALOG_RESULT_MAX_CHARS:
-                    fitting_end, low = end, end + 1
-                else:
-                    high = end - 1
-            if fitting_end is None:
-                return {
-                    "success": False,
-                    "error": "metadata_too_large",
-                    "message": (
-                        "Flow catalog record identity exceeds "
-                        "AGENT_STUDIO_FLOW_CATALOG_RESULT_MAX_CHARS before one exact "
-                        "character can be returned."
-                    ),
-                    "detail_kind": detail_kind,
-                    "detail_index": detail_index,
-                    "sha256": record_hash,
-                }
-            return build_detail(fitting_end)
+            return build_detail(min(len(record_json), start + requested_chars))
 
         total_count = len(matched_agents)
         offset = parse_offset_cursor(cursor)
@@ -2349,8 +2312,6 @@ def _get_flow_templates_handler():
             kind: Literal["template", "agent"],
             next_offset: Optional[str],
             other_next_offset: Optional[str],
-            record_was_attempted: bool,
-            returned_count: int,
         ) -> Optional[Dict[str, Any]]:
             if next_offset is None:
                 return None
@@ -2367,15 +2328,7 @@ def _get_flow_templates_handler():
                     if kind == "template"
                     else "pending_template_cursor"
                 ] = other_next_offset
-            if returned_count or not record_was_attempted:
-                arguments["template_cursor" if kind == "template" else "cursor"] = next_offset
-            else:
-                arguments.update(
-                    {
-                        "detail_kind": kind,
-                        "detail_index": int(next_offset),
-                    }
-                )
+            arguments["template_cursor" if kind == "template" else "cursor"] = next_offset
             return {"tool": "get_flow_templates", "arguments": arguments}
 
         def build_response() -> Dict[str, Any]:
@@ -2402,15 +2355,11 @@ def _get_flow_templates_handler():
                 kind="template",
                 next_offset=actual_template_next,
                 other_next_offset=actual_agent_next,
-                record_was_attempted=section != "agents",
-                returned_count=len(template_page),
             )
             agent_call = continuation_call(
                 kind="agent",
                 next_offset=actual_agent_next,
                 other_next_offset=actual_template_next,
-                record_was_attempted=section != "templates",
-                returned_count=len(page),
             )
             return {
                 "templates": template_page,
@@ -2437,23 +2386,7 @@ def _get_flow_templates_handler():
                 "message": message,
             }
 
-        response = build_response()
-        while _flow_catalog_provider_chars(response) > _FLOW_CATALOG_RESULT_MAX_CHARS:
-            if template_page:
-                template_page.pop()
-            elif page:
-                page.pop()
-            else:
-                return {
-                    "success": False,
-                    "error": "metadata_too_large",
-                    "message": (
-                        "Flow catalog continuation metadata exceeds "
-                        "AGENT_STUDIO_FLOW_CATALOG_RESULT_MAX_CHARS."
-                    ),
-                }
-            response = build_response()
-        return response
+        return build_response()
 
     return handler
 
@@ -2539,11 +2472,7 @@ def _get_available_agents_handler():
             start = parse_offset_cursor(detail_cursor)
             if start > len(record_json):
                 raise ValueError("detail_cursor is beyond the selected agent record")
-            requested_chars = normalize_page_limit(
-                detail_max_chars,
-                default=_FLOW_CATALOG_CHUNK_MAX_CHARS,
-                maximum=_FLOW_CATALOG_CHUNK_MAX_CHARS,
-            )
+            requested_chars = requested_text_length(detail_max_chars, len(record_json))
 
             def build_detail(end: int) -> Dict[str, Any]:
                 record_complete = end >= len(record_json)
@@ -2586,35 +2515,7 @@ def _get_available_agents_handler():
                 }
 
             requested_end = min(len(record_json), start + requested_chars)
-            fitting_end: Optional[int] = None
-            if (
-                _flow_catalog_provider_chars(build_detail(requested_end))
-                <= _FLOW_CATALOG_RESULT_MAX_CHARS
-            ):
-                fitting_end = requested_end
-            low = start + 1
-            high = requested_end - 1
-            if fitting_end is None:
-                while low <= high:
-                    candidate_end = (low + high) // 2
-                    if (
-                        _flow_catalog_provider_chars(build_detail(candidate_end))
-                        <= _FLOW_CATALOG_RESULT_MAX_CHARS
-                    ):
-                        fitting_end = candidate_end
-                        low = candidate_end + 1
-                    else:
-                        high = candidate_end - 1
-            if fitting_end is None:
-                return {
-                    "success": False,
-                    "error": "provider_limit_too_small",
-                    "message": (
-                        "The configured provider result envelope cannot hold agent "
-                        "record metadata plus one exact character."
-                    ),
-                }
-            return build_detail(fitting_end)
+            return build_detail(requested_end)
 
         page, _, _ = offset_page(
             matched,
@@ -2703,17 +2604,7 @@ def _get_available_agents_handler():
                 "message": message,
             }
 
-        response = build_response()
-        while page and _flow_catalog_provider_chars(response) > _FLOW_CATALOG_RESULT_MAX_CHARS:
-            page.pop()
-            response = build_response()
-        if _flow_catalog_provider_chars(response) > _FLOW_CATALOG_RESULT_MAX_CHARS:
-            return {
-                "success": False,
-                "error": "provider_limit_too_small",
-                "message": "The configured provider result envelope cannot hold agent catalog metadata.",
-            }
-        return response
+        return build_response()
 
     return handler
 
@@ -2733,11 +2624,6 @@ _FLOW_SCHEDULE_SECTIONS = (
 
 def _inspection_limit(limit: Optional[int]) -> int:
     maximum = get_agent_studio_flow_inspection_page_limit()
-    return normalize_page_limit(limit, default=maximum, maximum=maximum)
-
-
-def _inspection_chunk_limit(limit: Optional[int]) -> int:
-    maximum = get_agent_studio_flow_inspection_chunk_max_chars()
     return normalize_page_limit(limit, default=maximum, maximum=maximum)
 
 
@@ -3214,7 +3100,7 @@ def _exact_chunk_response(
     cursor: Optional[str],
     response_metadata: Mapping[str, Any],
 ) -> Dict[str, Any]:
-    bounded_limit = _inspection_chunk_limit(limit)
+    bounded_limit = requested_text_length(limit, len(text))
     start = parse_offset_cursor(cursor)
     if start > len(text):
         raise ValueError("cursor is beyond the selected content")
@@ -3246,33 +3132,7 @@ def _exact_chunk_response(
             ),
         }
 
-    provider_limit = get_agent_studio_provider_tool_result_inline_max_chars()
-    fitting_end: Optional[int] = None
-    if _flow_catalog_provider_chars(render(requested_end)) <= provider_limit:
-        fitting_end = requested_end
-    low = start + 1
-    high = requested_end - 1
-    if fitting_end is None:
-        while low <= high:
-            candidate_end = (low + high) // 2
-            if _flow_catalog_provider_chars(render(candidate_end)) <= provider_limit:
-                fitting_end = candidate_end
-                low = candidate_end + 1
-            else:
-                high = candidate_end - 1
-    if fitting_end is None and requested_end == start:
-        if _flow_catalog_provider_chars(render(start)) <= provider_limit:
-            fitting_end = start
-    if fitting_end is None:
-        return {
-            "success": False,
-            "error": "provider_limit_too_small",
-            "message": (
-                "The configured provider result envelope cannot hold flow detail "
-                "metadata plus one exact character."
-            ),
-        }
-    return render(fitting_end)
+    return render(requested_end)
 
 
 def _get_current_flow_instructions_handler():
@@ -3812,9 +3672,8 @@ continuation calls so paging one collection does not repeat the other.
 Pass query to search agents by id, name, or description, category to keep
 one kind (Extraction, Validation, Output), and limit/cursor to page through
 large agent catalogs. Use template_query and template_limit/template_cursor to
-search and page compatible templates independently. When a single template or
-agent is too large for an inline page, follow the returned detail call and its
-hash-addressed character chunks, then follow its final next_call to resume paging.
+search and page compatible templates independently. Detail calls read the exact
+selected template or agent, retaining its source hash for consistency checks.
 Always copy returned next_call arguments exactly; pending cursors retain the other
 collection's frontier while a section-specific page or detail chunk is retrieved.
 
@@ -3856,15 +3715,13 @@ Use this as a starting point when helping users design flows.""",
                     "description": "Agent frontier retained by a returned template continuation. Copy only from next_call.",
                 },
                 "detail_kind": {"type": "string", "enum": ["template", "agent"],
-                                "description": "Record collection selector copied from an oversized-record continuation."},
+                                "description": "Optional record collection to inspect in detail."},
                 "detail_index": {"type": "integer", "minimum": 0,
-                                 "description": "Stable filtered-record index copied from an oversized-record continuation."},
+                                 "description": "Stable index selecting a record from the filtered collection."},
                 "detail_cursor": {"type": "integer", "minimum": 0,
-                                  "description": "Exact canonical-JSON character offset returned by a detail chunk."},
+                                  "description": "Optional character offset within the selected canonical JSON record."},
                 "detail_max_chars": {"type": "integer", "minimum": 1,
-                                     "maximum": _FLOW_CATALOG_CHUNK_MAX_CHARS,
-                                     "default": _FLOW_CATALOG_CHUNK_MAX_CHARS,
-                                     "description": "Requested exact record characters, capped by runtime configuration."},
+                                     "description": "Optional exact record character count; omit for the complete remainder."},
             },
         },
         handler=_get_flow_templates_handler(),
@@ -3906,7 +3763,6 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     logger.debug("Registered: get_current_flow")
 
     page_max = get_agent_studio_flow_inspection_page_limit()
-    chunk_max = get_agent_studio_flow_inspection_chunk_max_chars()
     page_properties = {
         "limit": {
             "type": "integer",
@@ -3923,8 +3779,7 @@ Do not infer omitted details; use the returned bounded detail calls.""",
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": chunk_max,
-            "description": f"Maximum exact characters to return (default/max: {chunk_max}).",
+            "description": "Optional exact character count; omitted returns the complete value.",
         },
         "cursor": {
             "type": "string",
@@ -3976,8 +3831,9 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     registry.register(
         name="get_current_flow_instructions",
         description=(
-            "Retrieve exact bounded task_instructions, custom_instructions, or step_goal "
-            "text for one stable node_id. Follow next_call to reconstruct long text."
+            "Retrieve complete exact task_instructions, custom_instructions, or step_goal "
+            "text for one stable node_id. Optional cursor/limit selects a range; "
+            "follow next_call when using that explicit range."
         ),
         input_schema={
             "type": "object",
@@ -3998,11 +3854,11 @@ Do not infer omitted details; use the returned bounded detail calls.""",
     registry.register(
         name="get_current_flow_projection_plan",
         description=(
-            "Use view=complete_plan for bounded full-plan inspection in one call when small. "
+            "Use view=complete_plan to inspect the complete plan in one call. "
             "List projection_plan fields or retrieve one explicit field/JSON-Pointer "
-            "section as exact bounded canonical JSON. Use view=source_fields to discover "
+            "section as exact canonical JSON. Use view=source_fields to discover "
             "authorized exact saved-profile formatter refs before authoring a plan, even "
-            "when no plan exists. Follow next_call to reconstruct the complete result."
+            "when no plan exists. Follow next_call for explicitly selected ranges or row pages."
             " Use draft=candidate after a repair_required proposal to inspect its revised "
             "sources and plan; default draft=current inspects the captured editor draft. "
             "Copy next_call exactly, including draft_fingerprint. Repair with another "
@@ -4117,19 +3973,17 @@ Output catalog without treating attachment branches as terminal control nodes.""
                 "detail_index": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Stable filtered-agent index copied from an oversized-record continuation.",
+                    "description": "Stable index selecting an agent from the filtered collection.",
                 },
                 "detail_cursor": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "Exact canonical-JSON character offset returned by a detail chunk.",
+                    "description": "Optional character offset within the selected canonical JSON record.",
                 },
                 "detail_max_chars": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": _FLOW_CATALOG_CHUNK_MAX_CHARS,
-                    "default": _FLOW_CATALOG_CHUNK_MAX_CHARS,
-                    "description": "Requested exact agent-record characters, capped by runtime configuration.",
+                    "description": "Optional exact agent-record character count; omit for the complete remainder.",
                 },
             },
         },

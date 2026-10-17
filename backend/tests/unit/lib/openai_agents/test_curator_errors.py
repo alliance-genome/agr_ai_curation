@@ -65,3 +65,25 @@ def test_history_checkpoint_failure_survives_sdk_wrapping_without_exposing_paylo
         assert failure.retryable is retryable
         assert "private" not in failure.message
         assert "Completed actions were not repeated" in failure.message
+
+
+def test_pdf_read_event_has_clear_terminal_message_without_payload():
+    failure = failure_for_event({"error_type": "DocumentReadError", "message": "PRIVATE PDF"})
+    assert failure.category == "pdf_read_failed"
+    assert failure.retryable is False
+    assert failure.message == "There was an error reading the PDF. We couldn't continue the extraction."
+
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_pdf_read_failure_survives_wrappers_and_timeout_causes(wrapped):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    error = DocumentReadError("read_chunk")
+    error.__cause__ = TimeoutError("PRIVATE SOURCE")
+    if wrapped:
+        outer = RuntimeError("SDK wrapper")
+        outer.__cause__ = error
+        error = outer
+    failure = classify_failure(error)
+    assert failure.category == "pdf_read_failed"
+    assert "PRIVATE" not in failure.message

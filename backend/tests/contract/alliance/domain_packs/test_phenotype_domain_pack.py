@@ -522,9 +522,7 @@ def test_pending_phenotype_term_without_curie_dispatches_with_context():
     assert selector_result.selected_inputs["evidence_quotes"][0]["verified_quote"] == (
         "daf-2(e1370) adults produced 40% fewer progeny than wild type."
     )
-    assert selector_result.selected_inputs["evidence_quotes"][0]["chunk_id"] == (
-        "chunk-phenotype-count"
-    )
+    assert "chunk_id" not in selector_result.selected_inputs["evidence_quotes"][0]
     assert selector_result.evidence[0]["evidence_record_id"] == "verified_exact"
     assert selector_result.selected_inputs["provider_taxon_ontology_mappings"][1] == {
         "data_provider": "MGI",
