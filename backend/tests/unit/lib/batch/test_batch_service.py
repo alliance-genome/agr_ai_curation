@@ -351,10 +351,10 @@ class TestBatchToResponseMocked:
             review_session_ids=[str(review_session_id), str(second_review_session_id)],
         )
 
-        result = service.get_document_handoff_metadata(
+        result = service.get_documents_handoff_metadata(
             cast("Batch", batch),
-            cast(BatchDocument, document),
-        )
+            [cast(BatchDocument, document)],
+        )[document.id]
 
         assert result["adapter_keys"] == ["gene", "allele"]
         assert result["extraction_result_ids"] == [str(extraction_result_id)]
@@ -382,9 +382,9 @@ class TestBatchToResponseMocked:
         )
 
         with pytest.raises(ValueError, match="invalid authoritative review-session ID"):
-            service.get_document_handoff_metadata(
+            service.get_documents_handoff_metadata(
                 cast("Batch", batch),
-                cast(BatchDocument, document),
+                [cast(BatchDocument, document)],
             )
 
     def test_document_handoff_metadata_rejects_missing_review_session(self):
@@ -400,9 +400,9 @@ class TestBatchToResponseMocked:
         )
 
         with pytest.raises(ValueError, match="references missing authoritative review sessions"):
-            service.get_document_handoff_metadata(
+            service.get_documents_handoff_metadata(
                 cast("Batch", batch),
-                cast(BatchDocument, document),
+                [cast(BatchDocument, document)],
             )
 
     def test_batch_to_response_converts_batch_model(self):

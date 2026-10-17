@@ -1,6 +1,6 @@
 """Unit tests for batch API endpoints."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import asyncio
 from datetime import datetime, timezone
@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from src.api import batch as batch_api
+from src.lib.batch import streaming as batch_stream
 from src.models.sql.batch import BatchDocumentStatus, BatchStatus
 from src.schemas.batch import (
     BatchCreateRequest,
@@ -89,7 +90,7 @@ def test_batch_document_status_event_includes_review_session_ids():
         processing_time_ms=1200,
     )
 
-    event = batch_api._batch_document_status_event(
+    event = batch_stream._batch_document_status_event(
         batch,
         doc,
         {
@@ -124,7 +125,7 @@ def test_batch_partial_document_count_is_subset_of_completed_documents():
         ]
     )
 
-    assert batch_api._batch_partial_document_count(batch) == 1
+    assert batch_stream._batch_partial_document_count(batch) == 1
 
 
 @pytest.mark.parametrize("result_files", [{"file_id": "not-a-list"}, ["not-a-dict"]])
@@ -657,17 +658,19 @@ async def test_download_batch_zip_400_when_completed_docs_exist_but_none_downloa
 @pytest.mark.asyncio
 async def test_stream_batch_progress_404_when_batch_missing(monkeypatch):
     _mock_auth(monkeypatch, user_id=8)
+    monkeypatch.setattr(batch_stream, "SessionLocal", MagicMock())
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_stream, "BatchService", lambda _db: service)
 
     with pytest.raises(HTTPException) as exc:
-        await batch_api.stream_batch_progress(uuid4(), {"sub": "u-1"}, db=object())
+        await batch_api.stream_batch_progress(uuid4(), {"sub": "u-1"})
     assert exc.value.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_stream_batch_progress_sanitizes_internal_errors(monkeypatch):
     _mock_auth(monkeypatch, user_id=8)
+    monkeypatch.setattr(batch_stream, "SessionLocal", MagicMock())
     batch_id = uuid4()
     batch = SimpleNamespace(
         id=batch_id,
@@ -678,7 +681,7 @@ async def test_stream_batch_progress_sanitizes_internal_errors(monkeypatch):
         documents=[],
     )
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_stream, "BatchService", lambda _db: service)
 
     class _BrokenBroadcaster:
         async def subscribe(self, _batch_id):
@@ -687,9 +690,9 @@ async def test_stream_batch_progress_sanitizes_internal_errors(monkeypatch):
         async def unsubscribe(self, _batch_id, _queue):
             return None
 
-    monkeypatch.setattr(batch_api, "get_batch_broadcaster", lambda: _BrokenBroadcaster())
+    monkeypatch.setattr(batch_stream, "get_batch_broadcaster", lambda: _BrokenBroadcaster())
 
-    response = await batch_api.stream_batch_progress(batch_id, {"sub": "u-1"}, db=object())
+    response = await batch_api.stream_batch_progress(batch_id, {"sub": "u-1"})
     body = await _read_streaming_response(response)
     assert b"Batch stream encountered an internal error" in body
     assert b"db credentials leaked" not in body
@@ -708,16 +711,19 @@ async def test_stream_batch_progress_strips_internal_event_fields(monkeypatch):
         documents=[],
     )
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_stream, "BatchService", lambda _db: service)
 
     class _StreamDB:
-        def expire_all(self):
-            return None
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
 
         def close(self):
             return None
 
-    monkeypatch.setattr(batch_api, "SessionLocal", lambda: _StreamDB())
+    monkeypatch.setattr(batch_stream, "SessionLocal", lambda: _StreamDB())
 
     class _Broadcaster:
         async def subscribe(self, _batch_id):
@@ -735,9 +741,9 @@ async def test_stream_batch_progress_strips_internal_event_fields(monkeypatch):
         async def unsubscribe(self, _batch_id, _queue):
             return None
 
-    monkeypatch.setattr(batch_api, "get_batch_broadcaster", lambda: _Broadcaster())
+    monkeypatch.setattr(batch_stream, "get_batch_broadcaster", lambda: _Broadcaster())
 
-    response = await batch_api.stream_batch_progress(batch_id, {"sub": "u-1"}, db=object())
+    response = await batch_api.stream_batch_progress(batch_id, {"sub": "u-1"})
     body = await _read_streaming_response(response)
 
     assert b'"type": "TOOL_COMPLETE"' in body
@@ -787,18 +793,21 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
     }
     service = SimpleNamespace(
         get_batch=lambda *_args, **_kwargs: batch,
-        get_document_handoff_metadata=lambda *_args, **_kwargs: handoff_metadata,
+        get_documents_handoff_metadata=lambda _batch, docs: {doc.id: handoff_metadata for doc in docs},
     )
-    monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    monkeypatch.setattr(batch_stream, "BatchService", lambda _db: service)
 
     class _StreamDB:
-        def expire_all(self):
-            return None
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
 
         def close(self):
             return None
 
-    monkeypatch.setattr(batch_api, "SessionLocal", lambda: _StreamDB())
+    monkeypatch.setattr(batch_stream, "SessionLocal", lambda: _StreamDB())
 
     class _Broadcaster:
         async def subscribe(self, _batch_id):
@@ -807,14 +816,12 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
         async def unsubscribe(self, _batch_id, _queue):
             return None
 
-    monkeypatch.setattr(batch_api, "get_batch_broadcaster", lambda: _Broadcaster())
-    monkeypatch.setattr(batch_api.asyncio, "sleep", lambda _seconds: _async_noop())
+    monkeypatch.setattr(batch_stream, "get_batch_broadcaster", lambda: _Broadcaster())
 
     for _connection in range(2):
         response = await batch_api.stream_batch_progress(
             batch_id,
             {"sub": "u-1"},
-            db=object(),
         )
         body = await _read_streaming_response(response)
         events = [
@@ -839,10 +846,6 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
             "error_message": None,
             "processing_time_ms": 1200,
         }
-
-
-async def _async_noop():
-    return None
 
 
 async def _read_streaming_response(response):

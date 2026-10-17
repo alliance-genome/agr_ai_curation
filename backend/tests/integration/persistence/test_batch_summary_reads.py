@@ -260,7 +260,7 @@ def test_detail_real_sql_chunking_order_and_corruption(db, sql, monkeypatch, cou
         assert entry["origin_session_id"] == "origin"
     print(f"detail_documents={count} metadata_queries={len(sql)} chunk_size=3")
     assert (
-        BatchService(db).get_document_handoff_metadata(row, docs[0])
+        BatchService(db).get_documents_handoff_metadata(row, [docs[0]])[docs[0].id]
         == result[docs[0].id]
     )
     detail = BatchService(db).batch_to_response(row)
@@ -276,7 +276,7 @@ def test_detail_real_sql_chunking_order_and_corruption(db, sql, monkeypatch, cou
         BatchService(db).get_documents_handoff_metadata(row, docs)
     docs[0].status = BatchDocumentStatus.FAILED
     assert (
-        BatchService(db).get_document_handoff_metadata(row, docs[0])[
+        BatchService(db).get_documents_handoff_metadata(row, [docs[0]])[docs[0].id][
             "extraction_result_ids"
         ]
         == []
@@ -405,3 +405,44 @@ def test_terminal_cursor_expiration_and_summary_only_paths(db, sql, monkeypatch)
     assert len(list_summaries(db, 1).batches) == 2
     with pytest.raises(ValueError):
         lookup_summaries(db, 1, [uuid4() for _ in range(3)])
+
+
+def test_stream_snapshots_real_sql_delta_ownership_and_corruption(db, sql, monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from src.lib.batch import streaming
+
+    row = batch(db, status="running")
+    doc = BatchDocument(
+        id=uuid4(), batch_id=row.id, document_id=uuid4(), position=0,
+        status=BatchDocumentStatus.COMPLETED, result_files=[], review_session_ids=[],
+    )
+    db.add(doc)
+    db.flush()
+    monkeypatch.setattr(streaming, "SessionLocal", sessionmaker(bind=db.bind))
+    reports = []
+    monkeypatch.setattr(streaming, "report_runtime_exception", lambda *a, **kw: reports.append(a))
+    previous = streaming.Snapshot()
+    for expected_queries in (3, 2):
+        sql.clear()
+        previous = streaming.read_snapshot(row.id, row.user_id, previous)
+        # Batch + selectin documents; only initial adds extraction projection.
+        assert len(sql) == expected_queries
+    doc.status = BatchDocumentStatus.FAILED
+    db.flush()
+    sql.clear()
+    previous = streaming.read_snapshot(row.id, row.user_id, previous)
+    assert len(sql) == 2
+    assert len(previous.events) == 1
+    assert '"status": "failed"' in previous.events[0]
+    sql.clear()
+    assert not streaming.verify_batch_owner(row.id, row.user_id + 1)
+    assert len(sql) == 1  # No document or handoff read for unauthorized owner.
+    missing = streaming.read_snapshot(row.id, row.user_id + 1, streaming.Snapshot())
+    assert missing.terminal and "Batch not found" in missing.events[0]
+    doc.status = BatchDocumentStatus.COMPLETED
+    for references in (["malformed"], [str(uuid4())]):
+        doc.review_session_ids = references
+        db.flush()
+        with pytest.raises(ValueError, match="authoritative"):
+            streaming.read_snapshot(row.id, row.user_id, previous)
+    assert len(reports) == 2
