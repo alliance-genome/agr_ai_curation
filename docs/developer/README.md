@@ -100,6 +100,7 @@ For configuration files, see:
 | [config/models.yaml](../../config/models.yaml) | Model catalog (curator-selectable LLMs) |
 | [config/groups.yaml.example](../../config/groups.yaml.example) | Group/Cognito mapping template |
 | [config/connections.yaml.example](../../config/connections.yaml.example) | External connections template |
+| [Connection health monitoring](guides/CONNECTION_HEALTH_MONITORING.md) | Aggregate freshness, process ownership, invalidation, and fresh diagnostic routes |
 
 ## Common Tasks
 

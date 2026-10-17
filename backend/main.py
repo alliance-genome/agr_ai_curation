@@ -571,9 +571,13 @@ async def lifespan(app: FastAPI):
     schedule_submission_attempt_cleanup()
     logger.info("Submission attempt retention cleanup scheduled")
 
+    from src.lib.config.connections_monitor import ConnectionsHealthMonitor
+
+    app.state.connections_health_monitor = ConnectionsHealthMonitor()
     try:
         yield
     finally:
+        await app.state.connections_health_monitor.close()
         await stop_pdf_job_recovery()
         await stop_submission_attempt_cleanup()
         logger.info("Shutting down Weaviate Control Panel API...")

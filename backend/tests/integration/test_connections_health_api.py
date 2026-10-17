@@ -76,12 +76,19 @@ def mock_connections_loaded():
 async def test_client():
     """Create async test client for the FastAPI app."""
     from main import app
+    from src.lib.config.connections_monitor import ConnectionsHealthMonitor
+
+    owner = ConnectionsHealthMonitor()
+    app.state.connections_health_monitor = owner
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test"
     ) as client:
-        yield client
+        try:
+            yield client
+        finally:
+            await owner.close()
 
 
 class TestConnectionsHealthEndpointSecurity:
@@ -167,6 +174,7 @@ class TestConnectionsHealthEndpointSecurity:
             data = response.json()
 
             # Check top-level structure
+            assert "observed_at" in data
             assert "status" in data
             assert "total_services" in data
             assert "healthy_count" in data

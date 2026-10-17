@@ -3782,3 +3782,13 @@ def get_pdf_job_recovery_batch_size() -> int:
 def get_pdf_job_recovery_timeout_seconds() -> int:
     """Bound individual recovery SQL statements, including lock waits."""
     return max(1, _get_env_int_with_fallback("PDF_JOB_RECOVERY_TIMEOUT_SECONDS", 30))
+
+
+def get_connections_health_snapshot_ttl_seconds() -> float:
+    """Maximum aggregate observation age; default matches dashboard stale time."""
+    import math
+
+    value = float(_get_env("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", "30"))
+    if value is None or not math.isfinite(value) or value <= 0:
+        raise ValueError("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS must be finite and positive")
+    return value
