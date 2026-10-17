@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir -r requirements-test.txt
 
 COPY trace_review/backend/src/ ./src/
 COPY trace_review/backend/tests/ ./tests/
+# The writer-to-analyzer contract test imports the real application event writer.
+COPY backend/src/lib/openai_agents/extraction_trace_events.py ./backend/src/lib/openai_agents/extraction_trace_events.py
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
