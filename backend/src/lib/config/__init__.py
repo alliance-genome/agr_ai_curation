@@ -71,7 +71,6 @@ from .connections_loader import (
     get_required_connections,
     get_optional_connections,
     get_connection_status,
-    update_health_status,
     is_initialized as is_connections_initialized,
     reset_cache as reset_connections_cache,
 )
@@ -163,7 +162,6 @@ __all__ = [
     "get_required_connections",
     "get_optional_connections",
     "get_connection_status",
-    "update_health_status",
     "is_connections_initialized",
     "reset_connections_cache",
     # Models loader

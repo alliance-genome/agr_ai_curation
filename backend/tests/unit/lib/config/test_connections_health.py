@@ -573,8 +573,8 @@ class TestCheckAllHealth:
 
         connections_loader.load_connections()
 
-        with patch.object(connections_loader, "check_service_health", new=AsyncMock(return_value=True)):
-            result = await connections_loader.check_all_health()
+        with patch.object(connections_loader, "probe_monitoring_connection", new=AsyncMock(side_effect=lambda conn: connections_loader.connection_status(conn))):
+            result = await connections_loader.check_all_health(connections_loader.copy_connection_generation()[1])
 
         assert isinstance(result, dict)
         # Should have entries for configured services
@@ -593,8 +593,8 @@ class TestCheckAllHealth:
 
         connections_loader.load_connections()
 
-        with patch.object(connections_loader, "check_service_health", new=AsyncMock(return_value=True)):
-            result = await connections_loader.check_all_health()
+        with patch.object(connections_loader, "probe_monitoring_connection", new=AsyncMock(side_effect=lambda conn: connections_loader.connection_status(conn))):
+            result = await connections_loader.check_all_health(connections_loader.copy_connection_generation()[1])
 
         # The overall status is returned separately, check any service has expected structure
         for status in result.values():
@@ -629,7 +629,7 @@ services:
         connections_loader.load_connections(connections_yaml, force_reload=True)
 
         with patch.object(connections_loader, "_check_http_health", new=AsyncMock()) as check_http:
-            result = await connections_loader.check_all_health()
+            result = await connections_loader.check_all_health(connections_loader.copy_connection_generation()[1])
 
         check_http.assert_not_called()
         assert result["reranker"]["required"] is False
@@ -918,3 +918,378 @@ class TestSanitizeErrorMessage:
         assert password not in result
         assert "***" in result
         assert host in result
+
+
+class TestMonitoringSnapshots:
+    @pytest.fixture
+    def monitoring(self, monkeypatch, sample_http_connection):
+        import src.lib.config.connections_loader as loader
+        import src.lib.config.connections_monitor as monitor
+        loader.reset_cache()
+        monkeypatch.setattr(loader, "_initialized", True)
+        monkeypatch.setattr(loader, "_connection_registry", {"test_http": sample_http_connection})
+        monkeypatch.setattr(monitor, "get_connections_health_snapshot_ttl_seconds", lambda: 30)
+        yield loader, monitor
+        loader.reset_cache()
+
+    @pytest.mark.asyncio
+    async def test_bursts_expiry_outage_recovery_and_isolation(self, monitoring, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace
+        loader, module = monitoring
+        clock = [100.0]
+        monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+        barrier = asyncio.Event()
+        started = asyncio.Event()
+        calls = []
+        healthy = [True]
+        scheme, user, password, host = "postgresql", "user", "secret", "host"
+        secret_url = f"{scheme}://{user}:{password}@{host}/db"
+
+        async def probe(conn):
+            calls.append(conn)
+            started.set()
+            await barrier.wait()
+            return healthy[0], None if healthy[0] else secret_url
+
+        monkeypatch.setattr(loader, "_check_http_health", probe)
+        owner = module.ConnectionsHealthMonitor()
+        async def burst():
+            return await asyncio.gather(*(owner.get() for _ in range(20)))
+
+        pending = asyncio.create_task(burst())
+        await started.wait()
+        assert len(calls) == 1
+        barrier.set()
+        results = await pending
+        assert all(row.observed_at == results[0].observed_at for row in results)
+        assert len(calls) == 1
+        results[0].services["test_http"]["is_healthy"] = False
+        clock[0] = 129.999
+        cached = await owner.get()
+        assert cached.services["test_http"]["is_healthy"] is True
+        assert len(calls) == 1
+        # Direct diagnostics are fresh and cannot mutate the aggregate.
+        healthy[0] = False
+        await loader.check_service_health("test_http")
+        assert len(calls) == 2
+        assert (await owner.get()).services["test_http"]["is_healthy"] is True
+        clock[0] = 130
+        failed = await burst()
+        assert len(calls) == 3
+        assert failed[0].services["test_http"]["is_healthy"] is False
+        assert "secret" not in str(failed)
+        assert "secret" not in str(await owner.get())
+        healthy[0] = True
+        clock[0] = 160
+        assert (await owner.get()).services["test_http"]["is_healthy"] is True
+        assert len(calls) == 4
+        await owner.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel_all", [False, True])
+    async def test_waiter_cancellation_leaves_owned_sweep(self, monitoring, monkeypatch, cancel_all):
+        import asyncio
+        loader, module = monitoring
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def probe(conn):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            return True, None
+
+        monkeypatch.setattr(loader, "_check_http_health", probe)
+        owner = module.ConnectionsHealthMonitor()
+        first = asyncio.create_task(owner.get())
+        second = asyncio.create_task(owner.get())
+        await entered.wait()
+        first.cancel()
+        if cancel_all:
+            second.cancel()
+        await asyncio.gather(first, *([second] if cancel_all else []), return_exceptions=True)
+        assert len(owner._tasks) == 1
+        release.set()
+        snapshot = await owner.get()
+        if not cancel_all:
+            assert (await second).observed_at == snapshot.observed_at
+        assert calls == 1
+        await owner.close()
+        assert not owner._tasks
+
+    @pytest.mark.asyncio
+    async def test_reset_and_reload_reject_late_results(self, monitoring, monkeypatch, tmp_path):
+        import asyncio
+        loader, module = monitoring
+        entered, release = asyncio.Event(), asyncio.Event()
+        old = loader.get_connection("test_http")
+
+        async def probe(conn):
+            entered.set()
+            await release.wait()
+            return True, None
+
+        monkeypatch.setattr(loader, "_check_http_health", probe)
+        owner = module.ConnectionsHealthMonitor()
+        pending = asyncio.create_task(owner.get())
+        await entered.wait()
+        loader.reset_cache()
+        config = tmp_path / "connections.yaml"
+        config.write_text("services:\n  test_http:\n    url: http://replacement\n  added:\n    url: http://added\n")
+        loader.load_connections(config, force_reload=True)
+        fresh = await owner.get()
+        assert set(fresh.services) == {"test_http", "added"}
+        release.set()
+        with pytest.raises(module.SnapshotUnavailable):
+            await pending
+        assert loader.get_connection("test_http").is_healthy is None
+        assert old.is_healthy is None
+        assert (await owner.get()).observed_at == fresh.observed_at
+        await owner.close()
+
+    @pytest.mark.asyncio
+    async def test_timeout_retry_and_shutdown(self, monitoring, monkeypatch):
+        import asyncio
+        loader, module = monitoring
+        loader.get_connection("test_http").timeout_seconds = 0.01
+        entered, cleaned = asyncio.Event(), asyncio.Event()
+
+        async def stuck(conn):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaned.set()
+
+        monkeypatch.setattr(loader, "_check_http_health", stuck)
+        report = MagicMock()
+        monkeypatch.setattr(module, "report_runtime_exception", report)
+        owner = module.ConnectionsHealthMonitor()
+        with pytest.raises(module.SnapshotUnavailable):
+            await owner.get()
+        assert cleaned.is_set()
+        assert owner._snapshot is None
+        assert not owner._pending
+        report.assert_called_once()
+        monkeypatch.setattr(loader, "_check_http_health", AsyncMock(return_value=(True, None)))
+        assert (await owner.get()).services["test_http"]["is_healthy"] is True
+        await owner.close()
+
+        owner = module.ConnectionsHealthMonitor()
+        monkeypatch.setattr(loader, "_check_http_health", stuck)
+        entered.clear()
+        cleaned.clear()
+        waiter = asyncio.create_task(owner.get())
+        await entered.wait()
+        await owner.close()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert cleaned.is_set()
+        assert not owner._pending
+        assert not owner._tasks
+
+    @pytest.mark.asyncio
+    async def test_unobserved_failure_is_retrieved_and_sanitized(self, monitoring, monkeypatch):
+        import asyncio
+        loader, module = monitoring
+        entered, release = asyncio.Event(), asyncio.Event()
+        scheme, user, password, host = "postgresql", "user", "secret", "host"
+        secret_url = f"{scheme}://{user}:{password}@{host}/private"
+        async def fail(conn):
+            entered.set()
+            await release.wait()
+            raise RuntimeError(secret_url)
+        monkeypatch.setattr(loader, "probe_monitoring_connection", fail)
+        report = MagicMock()
+        monkeypatch.setattr(module, "report_runtime_exception", report)
+        owner = module.ConnectionsHealthMonitor()
+        waiter = asyncio.create_task(owner.get())
+        await entered.wait()
+        task = next(iter(owner._tasks))
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+        assert not owner._tasks
+        assert not owner._pending
+        error = report.call_args.args[0]
+        assert "secret" not in str(error)
+        assert error.__context__ is None
+        assert error.__cause__ is None
+        assert owner._snapshot is None
+        await owner.close()
+
+    def test_reset_without_event_loop_and_distinct_lifecycles(self, monitoring, monkeypatch):
+        import asyncio
+        loader, module = monitoring
+        monkeypatch.setattr(loader, "_check_http_health", AsyncMock(return_value=(True, None)))
+        async def run():
+            owner = module.ConnectionsHealthMonitor()
+            await owner.get()
+            await owner.close()
+        asyncio.run(run())
+        loader.reset_cache()
+        asyncio.run(run())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["http", "redis", "postgres"])
+async def test_probe_cancellation_closes_resources(kind, sample_http_connection, sample_redis_connection, sample_postgres_connection, monkeypatch):
+    import asyncio
+    entered = asyncio.Event()
+    async def pending(*args, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+    client = AsyncMock()
+    client.request.side_effect = pending
+    client.ping.side_effect = pending
+    client.execute.side_effect = pending
+    if kind == "http":
+        target = "httpx.AsyncClient"
+        probe, conn = _check_http_health, sample_http_connection
+        factory = MagicMock(return_value=client)
+    elif kind == "redis":
+        target = "redis.asyncio.from_url"
+        probe, conn = _check_redis_health, sample_redis_connection
+        factory = MagicMock(return_value=client)
+    else:
+        import sys
+        monkeypatch.setitem(sys.modules, "asyncpg", MagicMock())
+        target = "asyncpg.connect"
+        probe, conn = _check_postgres_health, sample_postgres_connection
+        factory = AsyncMock(return_value=client)
+    with patch(target, new=factory):
+        task = asyncio.create_task(probe(conn))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    if kind == "postgres":
+        client.close.assert_awaited_once()
+    else:
+        client.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_postgres_failed_query_closes_connection(sample_postgres_connection, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "asyncpg", MagicMock())
+    client = AsyncMock()
+    client.execute.side_effect = RuntimeError("failed")
+    with patch("asyncpg.connect", AsyncMock(return_value=client)):
+        assert (await _check_postgres_health(sample_postgres_connection))[0] is False
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_isolated_probe_cancellation_kills_and_reaps(sample_postgres_connection, monkeypatch):
+    import asyncio
+    from src.lib.config import connection_probe_process as process_module
+    entered = asyncio.Event()
+    process = AsyncMock()
+    process.pid = 123456
+    async def pending(*args):
+        entered.set()
+        await asyncio.Event().wait()
+    process.communicate.side_effect = pending
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    kill = MagicMock()
+    monkeypatch.setattr(process_module.os, "killpg", kill)
+    task = asyncio.create_task(process_module.probe_in_process(sample_postgres_connection))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    kill.assert_called_once_with(process.pid, process_module.signal.SIGKILL)
+    process.wait.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_isolated_probe_uses_captured_inactive_configuration():
+    from src.lib.config.connection_probe_process import probe_in_process
+    conn = ConnectionDefinition(service_id="isolated", active=False, required=False)
+    result = await probe_in_process(conn)
+    assert result["service_id"] == "isolated"
+    assert result["is_healthy"] is None
+
+
+@pytest.mark.asyncio
+async def test_forced_reload_invalidates_snapshot_and_failed_reload_preserves_generation(tmp_path, monkeypatch):
+    from src.lib.config import connections_loader as loader
+    from src.lib.config.connections_monitor import ConnectionsHealthMonitor
+    path = tmp_path / "connections.yaml"
+    path.write_text("services:\n  original:\n    url: http://original\n")
+    loader.reset_cache()
+    loader.load_connections(path)
+    owner = ConnectionsHealthMonitor()
+    try:
+        first = await owner.get()
+        generation = loader.connection_generation()
+        path.write_text("services:\n  invalid:\n    timeout_seconds: -1\n")
+        with pytest.raises(ValueError):
+            loader.load_connections(path, force_reload=True)
+        assert loader.connection_generation() == generation
+        assert set(loader.get_connection_status()) == {"original"}
+        assert (await owner.get()).observed_at == first.observed_at
+        path.write_text("services:\n  replacement:\n    url: http://replacement\n")
+        loader.load_connections(path, force_reload=True)
+        assert set((await owner.get()).services) == {"replacement"}
+        path.write_text("services: {}\n")
+        loader.load_connections(path, force_reload=True)
+        assert (await owner.get()).services == {}
+    finally:
+        await owner.close()
+        loader.reset_cache()
+
+
+@pytest.mark.asyncio
+async def test_startup_required_check_remains_fresh_after_snapshot(monkeypatch):
+    from src.lib.config import connections_loader as loader
+    from src.lib.config.connections_monitor import ConnectionsHealthMonitor
+    loader.reset_cache()
+    conn = ConnectionDefinition(
+        service_id="required", required=True, url="http://required",
+        health_check=HealthCheck(endpoint="/health"),
+    )
+    monkeypatch.setattr(loader, "_connection_registry", {"required": conn})
+    monkeypatch.setattr(loader, "_initialized", True)
+    probe = AsyncMock(return_value=(True, None))
+    monkeypatch.setattr(loader, "_check_http_health", probe)
+    owner = ConnectionsHealthMonitor()
+    try:
+        await owner.get()
+        probe.return_value = (False, "unavailable")
+        assert await loader.check_required_services_healthy() == (False, ["required"])
+        assert probe.await_count == 2
+        assert (await owner.get()).services["required"]["is_healthy"] is True
+    finally:
+        await owner.close()
+        loader.reset_cache()
+
+
+@pytest.mark.asyncio
+async def test_postgres_close_timeout_terminates_connection(sample_postgres_connection, monkeypatch):
+    import asyncio
+    import sys
+    client = MagicMock()
+    client.execute = AsyncMock()
+    client.close = AsyncMock(side_effect=lambda: None)
+    async def stuck_close():
+        await asyncio.Event().wait()
+    client.close.side_effect = stuck_close
+    monkeypatch.setitem(sys.modules, "asyncpg", MagicMock(connect=AsyncMock(return_value=client)))
+    sample_postgres_connection.timeout_seconds = 0.01
+    with pytest.raises(TimeoutError):
+        await _check_postgres_health(sample_postgres_connection)
+    client.terminate.assert_called_once()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "invalid"])
+def test_monitoring_ttl_rejects_invalid_settings(monkeypatch, value):
+    from src.lib.openai_agents.config import get_connections_health_snapshot_ttl_seconds
+    monkeypatch.setenv("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", value)
+    with pytest.raises(ValueError):
+        get_connections_health_snapshot_ttl_seconds()

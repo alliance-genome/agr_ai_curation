@@ -1754,33 +1754,6 @@ class TestConnectionsLoader:
         assert "url" in status["weaviate"]
         assert "is_healthy" in status["weaviate"]
 
-    def test_update_health_status(self):
-        """Test updating health status of a connection."""
-        from src.lib.config.connections_loader import (
-            load_connections,
-            get_connection,
-            update_health_status,
-        )
-
-        connections_yaml = CONFIG_PATH / "connections.yaml"
-        load_connections(connections_yaml)
-
-        # Initially health status should be None
-        weaviate = get_connection("weaviate")
-        assert weaviate.is_healthy is None
-
-        # Update to healthy
-        update_health_status("weaviate", True)
-        weaviate = get_connection("weaviate")
-        assert weaviate.is_healthy is True
-        assert weaviate.last_error is None
-
-        # Update to unhealthy with error
-        update_health_status("weaviate", False, "Connection timeout")
-        weaviate = get_connection("weaviate")
-        assert weaviate.is_healthy is False
-        assert weaviate.last_error == "Connection timeout"
-
     def test_env_var_substitution_in_url(self, monkeypatch):
         """Test environment variable substitution in connection URLs."""
         from src.lib.config.connections_loader import load_connections, get_connection

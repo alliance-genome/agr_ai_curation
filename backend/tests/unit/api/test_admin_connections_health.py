@@ -14,16 +14,18 @@ from src.lib.config.connections_loader import (
 )
 
 
-def test_check_all_connections_requires_initialized(monkeypatch):
+def test_check_all_connections_requires_initialized(monkeypatch, request_stub):
+    request = request_stub
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: False)
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(admin_connections.check_all_connections())
+        asyncio.run(admin_connections.check_all_connections(request))
 
     assert exc.value.status_code == 503
 
 
-def test_check_all_connections_stays_healthy_when_optional_service_is_not_configured(monkeypatch):
+def test_check_all_connections_stays_healthy_when_optional_service_is_not_configured(monkeypatch, request_stub):
+    request = request_stub
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
 
     async def _check_all_health():
@@ -46,9 +48,12 @@ def test_check_all_connections_stays_healthy_when_optional_service_is_not_config
             },
         }
 
-    monkeypatch.setattr("src.lib.config.connections_loader.check_all_health", _check_all_health)
+    async def snapshot():
+        return SimpleNamespace(services=await _check_all_health(), observed_at="2026-10-17T00:00:00+00:00")
 
-    result = asyncio.run(admin_connections.check_all_connections())
+    request.app.state.connections_health_monitor.get = snapshot
+
+    result = asyncio.run(admin_connections.check_all_connections(request))
     assert result.status == "healthy"
     assert result.total_services == 2
     assert result.healthy_count == 1
@@ -57,7 +62,8 @@ def test_check_all_connections_stays_healthy_when_optional_service_is_not_config
     assert result.required_healthy is True
 
 
-def test_check_all_connections_reports_degraded_when_optional_service_is_configured_but_fails(monkeypatch):
+def test_check_all_connections_reports_degraded_when_optional_service_is_configured_but_fails(monkeypatch, request_stub):
+    request = request_stub
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
 
     async def _check_all_health():
@@ -80,9 +86,12 @@ def test_check_all_connections_reports_degraded_when_optional_service_is_configu
             },
         }
 
-    monkeypatch.setattr("src.lib.config.connections_loader.check_all_health", _check_all_health)
+    async def snapshot():
+        return SimpleNamespace(services=await _check_all_health(), observed_at="2026-10-17T00:00:00+00:00")
 
-    result = asyncio.run(admin_connections.check_all_connections())
+    request.app.state.connections_health_monitor.get = snapshot
+
+    result = asyncio.run(admin_connections.check_all_connections(request))
     assert result.status == "degraded"
     assert result.total_services == 2
     assert result.healthy_count == 1
@@ -90,7 +99,8 @@ def test_check_all_connections_reports_degraded_when_optional_service_is_configu
     assert result.required_healthy is True
 
 
-def test_check_all_connections_reports_unhealthy_when_required_service_fails(monkeypatch):
+def test_check_all_connections_reports_unhealthy_when_required_service_fails(monkeypatch, request_stub):
+    request = request_stub
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
 
     async def _check_all_health():
@@ -113,9 +123,12 @@ def test_check_all_connections_reports_unhealthy_when_required_service_fails(mon
             },
         }
 
-    monkeypatch.setattr("src.lib.config.connections_loader.check_all_health", _check_all_health)
+    async def snapshot():
+        return SimpleNamespace(services=await _check_all_health(), observed_at="2026-10-17T00:00:00+00:00")
 
-    result = asyncio.run(admin_connections.check_all_connections())
+    request.app.state.connections_health_monitor.get = snapshot
+
+    result = asyncio.run(admin_connections.check_all_connections(request))
     assert result.status == "unhealthy"
     assert result.required_healthy is False
 
@@ -200,3 +213,83 @@ def test_check_single_connection_uses_effective_redacted_url(monkeypatch):
     result = asyncio.run(admin_connections.check_single_connection("curation_db"))
 
     assert result.url == "testdb://***:***@db.example:5432/curation"
+
+
+@pytest.fixture
+def request_stub():
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        connections_health_monitor=SimpleNamespace()
+    )))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "required_health,optional_health,expected",
+    [(True, None, "healthy"), (True, False, "degraded"), (False, True, "unhealthy"), (None, True, "unhealthy")],
+)
+async def test_public_http_snapshots_keep_status_counts_and_timestamp(
+    monkeypatch, required_health, optional_health, expected
+):
+    import httpx
+    from fastapi import FastAPI
+    from unittest.mock import AsyncMock
+    from src.lib.config import connections_loader as loader
+    from src.lib.config.connections_monitor import ConnectionsHealthMonitor
+
+    loader.reset_cache()
+    monkeypatch.setattr(loader, "_initialized", True)
+    scheme, user, password, host = "postgresql", "user", "secret", "host"
+    secret_url = f"{scheme}://{user}:{password}@{host}"
+    connections = {
+        "required": ConnectionDefinition(
+            service_id="required", required=True, url=secret_url,
+            health_check=HealthCheck(endpoint="/health"),
+        ),
+        "optional": ConnectionDefinition(
+            service_id="optional", required=False, url="http://optional",
+            health_check=HealthCheck(endpoint="/health"),
+        ),
+    }
+    monkeypatch.setattr(loader, "_connection_registry", connections)
+    async def probe(conn):
+        state = required_health if conn.required else optional_health
+        return state, secret_url if state is False else None
+    probe_mock = AsyncMock(side_effect=probe)
+    monkeypatch.setattr(loader, "_check_http_health", probe_mock)
+    app = FastAPI()
+    app.include_router(admin_connections.router)
+    owner = ConnectionsHealthMonitor()
+    app.state.connections_health_monitor = owner
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            first = await client.get("/api/admin/health/connections")
+            second = await client.get("/api/admin/health/connections")
+            assert first.status_code == second.status_code == 200
+            data = first.json()
+            assert data == second.json()
+            assert data["status"] == expected
+            assert data["total_services"] == 2
+            assert data["healthy_count"] + data["unhealthy_count"] + data["unknown_count"] == 2
+            assert "secret" not in first.text
+            assert data["observed_at"]
+            assert probe_mock.await_count == 2
+            direct = await client.get("/api/admin/health/connections/required")
+            assert direct.status_code == 200
+            assert probe_mock.await_count == 3
+            assert (await client.get("/api/admin/health/connections")).json() == data
+    finally:
+        await owner.close()
+        loader.reset_cache()
+
+
+@pytest.mark.asyncio
+async def test_aborted_snapshot_returns_sanitized_503(monkeypatch, request_stub):
+    from src.lib.config.connections_monitor import SnapshotUnavailable
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
+    request_stub.app.state.connections_health_monitor.get = AsyncMock(
+        side_effect=SnapshotUnavailable("Connection monitoring sweep did not complete")
+    )
+    with pytest.raises(HTTPException) as exc:
+        await admin_connections.check_all_connections(request_stub)
+    assert exc.value.status_code == 503

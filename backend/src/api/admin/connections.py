@@ -11,7 +11,7 @@ This allows load balancers and monitoring systems to check service health.
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ class ServiceHealthResponse(BaseModel):
 class ConnectionsHealthResponse(BaseModel):
     """Health status for all services."""
 
+    observed_at: str  # UTC sweep start; unchanged on cache hits
     status: str  # "healthy", "degraded", "unhealthy"
     total_services: int
     healthy_count: int
@@ -153,7 +154,9 @@ class PackagesHealthResponse(BaseModel):
     response_model=ConnectionsHealthResponse,
     summary="Check health of all configured services",
     description="""
-    Performs health checks on all services defined in config/connections.yaml.
+    Shares a bounded-age, per-worker observation of configured services.
+    observed_at is the UTC sweep start, preserved on cache hits.
+    Direct single-service diagnostics always probe freshly.
 
     Health checks are performed based on each service's configuration:
     - HTTP endpoints: Makes request to configured endpoint
@@ -167,10 +170,9 @@ class PackagesHealthResponse(BaseModel):
     - Detailed status for each service
     """,
 )
-async def check_all_connections() -> ConnectionsHealthResponse:
+async def check_all_connections(request: Request) -> ConnectionsHealthResponse:
     """Check health of all configured external services."""
     from src.lib.config.connections_loader import (
-        check_all_health,
         is_initialized,
     )
 
@@ -180,8 +182,13 @@ async def check_all_connections() -> ConnectionsHealthResponse:
             detail="Connections not loaded. Service may still be starting up.",
         )
 
-    # Perform health checks
-    status_dict = await check_all_health()
+    from src.lib.config.connections_monitor import SnapshotUnavailable
+
+    try:
+        snapshot = await request.app.state.connections_health_monitor.get()
+    except SnapshotUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    status_dict = snapshot.services
 
     # Calculate summary statistics
     total = len(status_dict)
@@ -215,6 +222,7 @@ async def check_all_connections() -> ConnectionsHealthResponse:
     }
 
     return ConnectionsHealthResponse(
+        observed_at=snapshot.observed_at,
         status=overall_status,
         total_services=total,
         healthy_count=healthy,

@@ -18,6 +18,8 @@ Usage:
     is_healthy = check_service_health("weaviate")
 """
 
+import asyncio
+import copy
 import logging
 import os
 import re
@@ -417,6 +419,7 @@ class ConnectionDefinition:
 # Module-level cache for loaded connections
 _connection_registry: Dict[str, ConnectionDefinition] = {}
 _initialized: bool = False
+_configuration_generation: int = 0
 
 
 def load_connections(
@@ -443,7 +446,7 @@ def load_connections(
         FileNotFoundError: If connections_path doesn't exist
         yaml.YAMLError: If YAML parsing fails
     """
-    global _connection_registry, _initialized
+    global _connection_registry, _initialized, _configuration_generation
 
     # Thread-safe initialization
     with _init_lock:
@@ -472,15 +475,16 @@ def load_connections(
             logger.warning('No services defined in %s', connections_path)
             _connection_registry = {}
             _initialized = True
+            _configuration_generation += 1
             return _connection_registry
 
-        _connection_registry = {}
+        replacement = {}
 
         services_data = data.get("services", {})
         for service_id, service_data in services_data.items():
             try:
                 connection = ConnectionDefinition.from_yaml(service_id, service_data)
-                _connection_registry[service_id] = connection
+                replacement[service_id] = connection
 
                 logger.info(
                     f"Loaded connection: {service_id} "
@@ -491,6 +495,8 @@ def load_connections(
                 logger.error('Failed to load connection %s: %s', service_id, e)
                 raise
 
+        _connection_registry = replacement
+        _configuration_generation += 1
         _initialized = True
         logger.info('Loaded %s connection definitions', len(_connection_registry))
 
@@ -572,39 +578,9 @@ def get_connection_status() -> Dict[str, Dict[str, Any]]:
 
     status = {}
     for service_id, conn in _connection_registry.items():
-        status[service_id] = {
-            "service_id": service_id,
-            "description": conn.description,
-            "url": get_connection_display_url(conn),
-            "required": conn.required,
-            "is_healthy": conn.is_healthy,
-            "last_error": sanitize_error_message(conn.last_error),  # Sanitize error messages
-        }
+        status[service_id] = connection_status(conn)
 
     return status
-
-
-def update_health_status(
-    service_id: str,
-    is_healthy: Optional[bool],
-    error_message: Optional[str] = None
-) -> None:
-    """
-    Update the health status of a connection.
-
-    Args:
-        service_id: The service identifier
-        is_healthy: Whether the service is healthy. None means intentionally
-            not configured.
-        error_message: Error message if not healthy
-    """
-    if not _initialized:
-        load_connections()
-
-    conn = _connection_registry.get(service_id)
-    if conn:
-        conn.is_healthy = is_healthy
-        conn.last_error = error_message
 
 
 def is_initialized() -> bool:
@@ -614,9 +590,11 @@ def is_initialized() -> bool:
 
 def reset_cache() -> None:
     """Reset the connections cache (for testing)."""
-    global _connection_registry, _initialized
-    _connection_registry = {}
-    _initialized = False
+    global _connection_registry, _initialized, _configuration_generation
+    with _init_lock:
+        _connection_registry = {}
+        _initialized = False
+        _configuration_generation += 1
 
 
 async def check_service_health(service_id: str) -> Optional[bool]:
@@ -646,10 +624,17 @@ async def check_service_health(service_id: str) -> Optional[bool]:
         logger.warning('Unknown service: %s', service_id)
         return False
 
+    return await _check_connection_health(conn)
+
+
+async def _check_connection_health(conn: ConnectionDefinition) -> Optional[bool]:
+    """Probe this definition, never a replacement registered under the same ID."""
+    service_id = conn.service_id
     if not conn.active:
         if conn.credentials and conn.health_check.method == "CONNECT":
             conn.effective_display_url = ""
-        update_health_status(service_id, None, None)
+        conn.is_healthy = None
+        conn.last_error = None
         return None
 
     health = conn.health_check
@@ -682,7 +667,8 @@ async def check_service_health(service_id: str) -> Optional[bool]:
         logger.error('Health check failed for %s: %s', service_id, e)
 
     # Update cached status
-    update_health_status(service_id, is_healthy, error_message)
+    conn.is_healthy = is_healthy
+    conn.last_error = error_message
 
     return is_healthy
 
@@ -694,18 +680,16 @@ async def _check_http_health(conn: ConnectionDefinition) -> tuple[bool, Optional
     health = conn.health_check
     url = f"{conn.url.rstrip('/')}{health.endpoint}"
 
+    client = httpx.AsyncClient(timeout=conn.timeout_seconds)
     try:
-        async with httpx.AsyncClient(timeout=conn.timeout_seconds) as client:
-            response = await client.request(
-                method=health.method,
-                url=url,
-                headers=health.headers
-            )
-
-            if response.status_code == health.expected_status:
-                return True, None
-            else:
-                return False, f"Expected status {health.expected_status}, got {response.status_code}"
+        response = await client.request(
+            method=health.method,
+            url=url,
+            headers=health.headers,
+        )
+        if response.status_code == health.expected_status:
+            return True, None
+        return False, f"Expected status {health.expected_status}, got {response.status_code}"
 
     except httpx.TimeoutException:
         return False, f"Connection timeout after {conn.timeout_seconds}s"
@@ -713,6 +697,8 @@ async def _check_http_health(conn: ConnectionDefinition) -> tuple[bool, Optional
         return False, f"Connection failed: {e}"
     except Exception as e:
         return False, str(e)
+    finally:
+        await asyncio.wait_for(client.aclose(), timeout=conn.timeout_seconds)
 
 
 async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optional[str]]:
@@ -750,7 +736,7 @@ async def _check_redis_health(conn: ConnectionDefinition) -> tuple[bool, Optiona
         return False, str(e)
     finally:
         if client:
-            await client.aclose()
+            await asyncio.wait_for(client.aclose(), timeout=conn.timeout_seconds)
 
 
 async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[bool], Optional[str]]:
@@ -785,13 +771,21 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[b
         # asyncpg can handle postgres:// URLs
         url = url.replace("postgresql://", "postgres://")
 
+        conn_pg = None
         try:
-            conn_pg = await asyncpg.connect(url, timeout=conn.timeout_seconds)
-            await conn_pg.execute("SELECT 1")
-            await conn_pg.close()
+            async with asyncio.timeout(conn.timeout_seconds):
+                conn_pg = await asyncpg.connect(url, timeout=conn.timeout_seconds)
+                await conn_pg.execute("SELECT 1")
             return True, None
         except Exception as e:
             return False, str(e)
+        finally:
+            if conn_pg is not None:
+                try:
+                    await asyncio.wait_for(conn_pg.close(), timeout=conn.timeout_seconds)
+                except BaseException:
+                    conn_pg.terminate()
+                    raise
 
     except ImportError:
         # Fall back to psycopg2 sync check if asyncpg not available
@@ -835,38 +829,19 @@ async def _check_bedrock_reranker_health(
     return False, reason
 
 
-async def check_all_health() -> Dict[str, Dict[str, Any]]:
-    """
-    Check health of all configured services.
-
-    Returns:
-        Dictionary with service_id keys and health status info:
-        {
-            "weaviate": {
-                "service_id": "weaviate",
-                "description": "Vector database",
-                "required": True,
-                "is_healthy": True,
-                "last_error": None,
-                "url": "http://***@..."  # URL is redacted for security
-            },
-            ...
-        }
-
-    Note:
-        The URL in the response is redacted (credentials replaced with ***)
-        to prevent credential exposure in API responses and logs.
-    """
-    if not _initialized:
-        load_connections()
-
-    # Check all services concurrently
-    import asyncio
-    service_ids = list(_connection_registry.keys())
-
-    await asyncio.gather(*[check_service_health(sid) for sid in service_ids])
-
-    return get_connection_status()
+async def check_all_health(
+    connections: List[ConnectionDefinition],
+) -> Dict[str, Dict[str, Any]]:
+    """Complete one isolated monitoring sweep, or fail without partial output."""
+    probes = [asyncio.create_task(probe_monitoring_connection(conn)) for conn in connections]
+    try:
+        results = await asyncio.gather(*probes)
+        return {row["service_id"]: row for row in results}
+    finally:
+        for probe in probes:
+            if not probe.done():
+                probe.cancel()
+        await asyncio.gather(*probes, return_exceptions=True)
 
 
 async def check_required_services_healthy() -> tuple[bool, List[str]]:
@@ -893,3 +868,41 @@ async def check_required_services_healthy() -> tuple[bool, List[str]]:
             failed.append(conn.service_id)
 
     return len(failed) == 0, failed
+
+
+def copy_connection_generation() -> tuple[int, List[ConnectionDefinition]]:
+    """Capture definitions atomically with their generation; no mutable aliases."""
+    with _init_lock:
+        return _configuration_generation, copy.deepcopy(list(_connection_registry.values()))
+
+
+def connection_generation() -> int:
+    return _configuration_generation
+
+
+async def probe_monitoring_connection(conn: ConnectionDefinition) -> Dict[str, Any]:
+    """Probe a private definition with a total execution deadline.
+
+    Blocking credential providers and the supported psycopg2 recovery path run
+    in a killable child process. No executor threads outlive their sweep.
+    """
+    from src.lib.config.connection_probe_process import probe_in_process
+
+    async with asyncio.timeout(conn.timeout_seconds):
+        if conn.active and conn.health_check.method in {"CONNECT", "BEDROCK_RERANKER"}:
+            result = await probe_in_process(conn)
+            return result
+        await _check_connection_health(conn)
+    return connection_status(conn)
+
+
+def connection_status(conn: ConnectionDefinition) -> Dict[str, Any]:
+    """Copy the public, sanitized fields of one observed definition."""
+    return {
+        "service_id": conn.service_id,
+        "description": conn.description,
+        "url": get_connection_display_url(conn),
+        "required": conn.required,
+        "is_healthy": conn.is_healthy,
+        "last_error": sanitize_error_message(conn.last_error),
+    }
