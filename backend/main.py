@@ -565,12 +565,16 @@ async def lifespan(app: FastAPI):
         stop_submission_attempt_cleanup,
     )
 
+    from src.lib.pdf_jobs.recovery import schedule_pdf_job_recovery, stop_pdf_job_recovery
+
+    schedule_pdf_job_recovery()
     schedule_submission_attempt_cleanup()
     logger.info("Submission attempt retention cleanup scheduled")
 
     try:
         yield
     finally:
+        await stop_pdf_job_recovery()
         await stop_submission_attempt_cleanup()
         logger.info("Shutting down Weaviate Control Panel API...")
         try:

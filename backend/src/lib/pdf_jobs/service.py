@@ -194,6 +194,15 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     }:
         return False
 
+    # Lock the document before checking the latest job. Inserting another job
+    # takes a foreign-key key-share lock on this row, so the latest-job decision
+    # remains valid through the document mutation.
+    document = session.execute(
+        select(PDFDocument).where(PDFDocument.id == job.document_id).with_for_update()
+    ).scalar_one_or_none()
+    if document is None:
+        return False
+
     latest_job = session.execute(
         select(PdfProcessingJob)
         .where(PdfProcessingJob.document_id == job.document_id)
@@ -203,11 +212,6 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     if latest_job is None or latest_job.id != job.id:
         return False
 
-    document = session.execute(
-        select(PDFDocument).where(PDFDocument.id == job.document_id)
-    ).scalar_one_or_none()
-    if document is None:
-        return False
     if document.status in TERMINAL_PROCESSING_STATUSES:
         return False
 
@@ -457,12 +461,15 @@ def get_job(*, job_id: UUID | str, user_id: int, reconcile_stale: bool = True) -
     """Return a single job owned by a user."""
     session = SessionLocal()
     try:
-        job = session.execute(
+        statement = (
             select(PdfProcessingJob).where(
                 PdfProcessingJob.id == _to_uuid(job_id),
                 PdfProcessingJob.user_id == user_id,
             )
-        ).scalar_one_or_none()
+        )
+        if reconcile_stale:
+            statement = statement.with_for_update()
+        job = session.execute(statement).scalar_one_or_none()
         if job and reconcile_stale:
             now = datetime.now(timezone.utc)
             if _reconcile_stale_job(
@@ -485,9 +492,12 @@ def get_job_by_id(*, job_id: UUID | str, reconcile_stale: bool = True) -> Option
     """Return a single job by ID for internal orchestration checks only."""
     session = SessionLocal()
     try:
-        job = session.execute(
+        statement = (
             select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
-        ).scalar_one_or_none()
+        )
+        if reconcile_stale:
+            statement = statement.with_for_update()
+        job = session.execute(statement).scalar_one_or_none()
         if job and reconcile_stale:
             now = datetime.now(timezone.utc)
             if _reconcile_stale_job(
@@ -515,7 +525,7 @@ def get_latest_job_for_document(
     """Return most recent job for a document owned by user."""
     session = SessionLocal()
     try:
-        job = session.execute(
+        statement = (
             select(PdfProcessingJob)
             .where(
                 PdfProcessingJob.document_id == _to_uuid(document_id),
@@ -523,7 +533,10 @@ def get_latest_job_for_document(
             )
             .order_by(*_JOB_CREATION_ORDERING)
             .limit(1)
-        ).scalar_one_or_none()
+        )
+        if reconcile_stale:
+            statement = statement.with_for_update()
+        job = session.execute(statement).scalar_one_or_none()
         if job and reconcile_stale:
             now = datetime.now(timezone.utc)
             if _reconcile_stale_job(
@@ -538,6 +551,26 @@ def get_latest_job_for_document(
     except Exception:
         session.rollback()
         raise
+    finally:
+        session.close()
+
+
+def snapshot_jobs(*, user_id: int, window_days: int = 7, limit: int = 50) -> list[PdfJobResponse]:
+    """Read one bounded page without counts, reconciliation, or writes.
+
+    The caller runs this entire operation in a worker: no session or ORM row
+    escapes, including when querying or DTO conversion fails.
+    """
+    session = SessionLocal()
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=max(1, min(window_days, 90)))
+        rows = session.execute(
+            select(PdfProcessingJob).where(
+                PdfProcessingJob.user_id == user_id,
+                PdfProcessingJob.created_at >= since,
+            ).order_by(*_JOB_CREATION_ORDERING).limit(max(1, min(limit, 200)))
+        ).scalars().all()
+        return [_to_response(row) for row in rows]
     finally:
         session.close()
 
@@ -565,7 +598,7 @@ def list_jobs(
                     PdfProcessingJob.user_id == user_id,
                     PdfProcessingJob.created_at >= since,
                     PdfProcessingJob.status.in_(tuple(_ACTIVE_STATUSES)),
-                )
+                ).with_for_update()
             ).scalars().all()
             changed = False
             for row in active_rows:
@@ -632,7 +665,7 @@ def request_cancel(*, job_id: UUID | str, user_id: int) -> Optional[PdfJobRespon
             select(PdfProcessingJob).where(
                 PdfProcessingJob.id == _to_uuid(job_id),
                 PdfProcessingJob.user_id == user_id,
-            )
+            ).with_for_update()
         ).scalar_one_or_none()
         if not job:
             return None
@@ -656,7 +689,7 @@ def set_process_id(*, job_id: UUID | str, process_id: str) -> Optional[PdfJobRes
     session = SessionLocal()
     try:
         job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
             return None
@@ -684,7 +717,7 @@ def update_progress(
     session = SessionLocal()
     try:
         job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
             return None
@@ -730,7 +763,7 @@ def mark_completed(
     session = SessionLocal()
     try:
         job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
             return None
@@ -771,7 +804,7 @@ def mark_failed(
     session = SessionLocal()
     try:
         job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
             return None
@@ -819,7 +852,7 @@ def mark_cancelled(
     session = SessionLocal()
     try:
         job = session.execute(
-            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id))
+            select(PdfProcessingJob).where(PdfProcessingJob.id == _to_uuid(job_id)).with_for_update()
         ).scalar_one_or_none()
         if not job:
             return None

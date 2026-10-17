@@ -26,6 +26,16 @@ def set_pdf_extraction_timeout(monkeypatch):
     monkeypatch.delenv("AGR_PACKAGE_ENVS_PREPARED", raising=False)
 
 
+
+@pytest.fixture(autouse=True)
+def pdf_recovery_lifecycle(monkeypatch):
+    from src.lib.pdf_jobs import recovery
+    start, stop = MagicMock(), AsyncMock()
+    monkeypatch.setattr(recovery, "schedule_pdf_job_recovery", start)
+    monkeypatch.setattr(recovery, "stop_pdf_job_recovery", stop)
+    return start, stop
+
+
 def make_connection(list_all_return=None):
     connection = MagicMock()
     connection.connect_to_weaviate = AsyncMock()
@@ -365,15 +375,18 @@ class TestLifespan:
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
     @patch("main.initialize_weaviate_collections")
-    async def test_starts_and_stops_submission_cleanup(self, mock_init, mock_conn_cls, mock_subsystems):
+    async def test_starts_and_stops_submission_cleanup(self, mock_init, mock_conn_cls, mock_subsystems, pdf_recovery_lifecycle):
         connection, _ = make_connection()
         mock_conn_cls.return_value = connection
 
         async with _main_module().lifespan(FastAPI()):
+            pdf_recovery_lifecycle[0].assert_called_once_with()
+            pdf_recovery_lifecycle[1].assert_not_awaited()
             mock_subsystems["schedule_submission_cleanup"].assert_called_once_with()
             mock_subsystems["stop_submission_cleanup"].assert_not_awaited()
 
         mock_subsystems["stop_submission_cleanup"].assert_awaited_once_with()
+        pdf_recovery_lifecycle[1].assert_awaited_once_with()
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
