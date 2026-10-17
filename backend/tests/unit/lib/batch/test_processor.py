@@ -198,7 +198,7 @@ def test_batch_finalized_empty_outcome_requires_successful_terminal_contract(mon
         assert batch_doc.output_branches == branches
         assert batch_doc.error_message is None
         # Successful status events are built by the API from committed rows.
-        from src.api.batch import _batch_document_status_event
+        from src.lib.batch.streaming import _batch_document_status_event
 
         status = _batch_document_status_event(batch, batch_doc)
         assert status["status"] == "completed"

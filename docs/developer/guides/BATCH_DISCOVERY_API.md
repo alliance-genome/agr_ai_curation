@@ -141,3 +141,24 @@ use 2 and 11 metadata queries respectively. Counts and database scan work can
 still grow with history; these are query/payload measurements, not production
 speedup claims. Composite owner/time/ID indexes support history, active, and
 terminal keysets; tests inspect PostgreSQL plans over 10000 synthetic rows.
+
+## Progress stream database lifetime
+
+Batch SSE verifies ownership before headers without a request-scoped database
+dependency. Provisioning and ownership reads complete in worker-owned sessions.
+Each reconciliation worker loads an owner-filtered batch, resolves canonical bulk
+handoff metadata only for changed documents, serializes events, and closes its
+session before the response yields any payload. Reconnects include all documents.
+The interval is `BATCH_STREAM_POLL_INTERVAL_SECONDS` (default 1 second).
+
+Subscribers are registered before the initial snapshot and removed when the
+response exits, including disconnects during a paused send or a database query.
+Cancellation abandons the worker await, not the synchronous query. The worker
+closes its own session when the query finishes and reports sanitized failures
+even after disconnect; immediate connection release during a blocked query is
+not guaranteed.
+
+The existing bounded broadcaster queue and nonblocking queue polling remain.
+Dropped document/terminal events converge through database reconciliation.
+Dropped audit events are not replayed, and cross-source events are not exactly
+once. Cross-thread broadcaster wakeup improvements remain separate work.

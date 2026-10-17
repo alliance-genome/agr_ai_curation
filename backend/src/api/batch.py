@@ -8,8 +8,6 @@ Batch ownership is enforced - users can only access their own batches.
 """
 
 from datetime import datetime
-import asyncio
-import json
 import logging
 from pathlib import Path
 from typing import Any, Dict
@@ -19,23 +17,23 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from .auth import get_auth_dependency
 from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.batch.service import BatchService
-from ..lib.batch.summaries import BatchFilter, BatchQueryError, terminal_summaries, lookup_summaries
 from ..lib.batch.result_files import canonical_result_files as _batch_document_result_files
+from ..lib.batch.summaries import BatchFilter, BatchQueryError, terminal_summaries, lookup_summaries
 from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
-from ..lib.batch.events import get_batch_broadcaster
+from ..lib.batch.streaming import BatchProgressResponse, verify_batch_owner
 from ..models.sql import get_db, CurationFlow, PDFDocument
 from ..lib.observability.background_tasks import add_observed_background_task
 from ..lib.group_rules import get_groups_from_provider_groups
 from ..lib.agent_studio.agent_service import inaccessible_flow_agent_keys
 from ..lib.flows.execution_revisions import flow_execution_revision_findings, resolve_flow_execution_revisions
 from ..schemas.flows import FlowDefinition
-from ..models.sql.batch import BatchStatus, BatchDocumentStatus
-from ..models.sql.database import SessionLocal
+from ..models.sql.batch import BatchDocumentStatus
 from ..schemas.batch import (
     BatchCreateRequest,
     BatchResponse,
@@ -47,57 +45,12 @@ from ..services.user_service import principal_from_claims, provision_user_async
 
 
 logger = logging.getLogger(__name__)
-_BACKEND_ONLY_BATCH_EVENT_FIELDS = {"internal"}
 
 # Main batch router - handles /api/batches endpoints
 router = APIRouter(prefix="/api/batches")
 
 # Secondary router for flow validation - handles /api/flows/{id}/validate-batch
 flow_validation_router = APIRouter(prefix="/api/flows")
-
-
-def _sanitize_batch_stream_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Remove backend-only fields before streaming SSE payloads to clients."""
-    return {
-        key: value
-        for key, value in event.items()
-        if key not in _BACKEND_ONLY_BATCH_EVENT_FIELDS
-    }
-
-
-def _batch_document_status_event(
-    batch: Any,
-    doc: Any,
-    handoff_metadata: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    stored_output_branches = getattr(doc, "output_branches", None)
-    return {
-        "type": "DOCUMENT_STATUS",
-        "batch_id": str(batch.id),
-        "document_id": str(doc.document_id),
-        "batch_document_id": str(doc.id),
-        "position": doc.position,
-        "status": doc.status.value,
-        "result_files": _batch_document_result_files(doc),
-        "output_status": getattr(doc, "output_status", None),
-        "output_branches": (
-            stored_output_branches if isinstance(stored_output_branches, list) else []
-        ),
-        "review_session_ids": doc.review_session_ids,
-        **(handoff_metadata or {}),
-        "error_message": doc.error_message,
-        "processing_time_ms": doc.processing_time_ms,
-    }
-
-
-def _batch_partial_document_count(batch: Any) -> int:
-    """Count completed documents whose configured output branches were partial."""
-
-    return sum(
-        1
-        for doc in (getattr(batch, "documents", None) or [])
-        if getattr(doc, "output_status", None) == "partial"
-    )
 
 
 def _unique_zip_member_name(filename: str, used_names: set[str]) -> str:
@@ -536,197 +489,14 @@ async def download_batch_zip(
 async def stream_batch_progress(
     batch_id: UUID,
     user: Dict[str, Any] = get_auth_dependency(),
-    db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    """Stream batch processing progress via Server-Sent Events.
-
-    Streams real-time audit events from the batch processor, plus
-    document/batch status updates from database polling.
-
-    Event types (from processor):
-    - All flow execution events (TOOL_COMPLETE, SPECIALIST_SUMMARY, etc.)
-    - BATCH_DOCUMENT_ERROR: Document processing error
-
-    Event types (from database polling):
-    - BATCH_STATUS: Overall batch status update
-    - DOCUMENT_STATUS: Individual document status change
-    - BATCH_COMPLETE: Batch finished (completed or cancelled)
-    - ERROR: Stream error
-
-    Args:
-        batch_id: UUID of the batch to stream
-        user: Authenticated user from Cognito JWT
-        db: Database session
-
-    Returns:
-        StreamingResponse with SSE events
-    """
+    """Stream authorized audit events and durable batch/document snapshots."""
     db_user = await provision_user_async(principal_from_claims(user))
-    user_id = db_user.id  # Capture user_id for use in generator
-    service = BatchService(db)
-
-    # Verify batch exists and user owns it (using request session)
-    batch = service.get_batch(batch_id, user_id)
-    if not batch:
+    user_id = db_user.id
+    if not await run_in_threadpool(verify_batch_owner, batch_id, user_id):
         raise HTTPException(status_code=404, detail="Batch not found")
 
-    async def generate_stream():
-        """Generate SSE events from broadcaster and database polling.
-
-        Combines real-time audit events from the batch processor with
-        database polling for status changes.
-        """
-        # Get broadcaster and subscribe to events
-        broadcaster = get_batch_broadcaster()
-        event_queue = None
-        # Create a new session for the generator to avoid request session issues
-        stream_db = None
-        try:
-            event_queue = await broadcaster.subscribe(batch_id)
-            stream_db = SessionLocal()
-            stream_service = BatchService(stream_db)
-
-            # Track last known state to detect changes
-            last_completed = -1
-            last_failed = -1
-            last_doc_statuses = {}
-            last_poll_at = 0.0
-
-            # Send initial batch status
-            batch = stream_service.get_batch(batch_id, user_id)
-            if batch:
-                event = {
-                    "type": "BATCH_STATUS",
-                    "batch_id": str(batch.id),
-                    "status": batch.status.value,
-                    "total_documents": batch.total_documents,
-                    "completed_documents": batch.completed_documents,
-                    "failed_documents": batch.failed_documents,
-                    "partial_documents": _batch_partial_document_count(batch),
-                }
-                yield f"data: {json.dumps(event)}\n\n"
-                last_completed = batch.completed_documents
-                last_failed = batch.failed_documents
-                for doc in batch.documents:
-                    doc_event = _batch_document_status_event(
-                        batch,
-                        doc,
-                        stream_service.get_document_handoff_metadata(batch, doc),
-                    )
-                    yield f"data: {json.dumps(doc_event)}\n\n"
-                    last_doc_statuses[str(doc.id)] = doc.status.value
-
-            batch_complete = False
-
-            # Main event loop: check broadcaster queue and poll DB
-            while not batch_complete:
-                # First, drain all events from the broadcaster queue (non-blocking)
-                while True:
-                    try:
-                        event = event_queue.get_nowait()
-                        safe_event = _sanitize_batch_stream_event(event)
-                        # Stream event directly to frontend (already enriched)
-                        yield f"data: {json.dumps(safe_event, default=str)}\n\n"
-
-                        # Check for stream completion marker
-                        if safe_event.get("type") == "BATCH_STREAM_COMPLETE":
-                            batch_complete = True
-                            break
-                    except asyncio.QueueEmpty:
-                        break
-
-                if batch_complete:
-                    break
-
-                # Small sleep to avoid busy-waiting
-                await asyncio.sleep(0.1)
-
-                # Poll database for status changes approximately once per second.
-                # This catches status changes even if events are missed.
-                now = asyncio.get_running_loop().time()
-                if now - last_poll_at < 1.0:
-                    continue
-                last_poll_at = now
-
-                stream_db.expire_all()  # Clear SQLAlchemy cache
-                batch = stream_service.get_batch(batch_id, user_id)
-
-                if not batch:
-                    error_event = {
-                        "type": "ERROR",
-                        "message": "Batch not found"
-                    }
-                    yield f"data: {json.dumps(error_event)}\n\n"
-                    break
-
-                # Check for document status changes
-                for doc in batch.documents:
-                    doc_id = str(doc.id)
-                    current_status = doc.status.value
-
-                    if doc_id not in last_doc_statuses or last_doc_statuses[doc_id] != current_status:
-                        doc_event = _batch_document_status_event(
-                            batch,
-                            doc,
-                            stream_service.get_document_handoff_metadata(batch, doc),
-                        )
-                        yield f"data: {json.dumps(doc_event)}\n\n"
-                        last_doc_statuses[doc_id] = current_status
-
-                # Check for overall progress changes
-                if batch.completed_documents != last_completed or batch.failed_documents != last_failed:
-                    status_event = {
-                        "type": "BATCH_STATUS",
-                        "batch_id": str(batch.id),
-                        "status": batch.status.value,
-                        "total_documents": batch.total_documents,
-                        "completed_documents": batch.completed_documents,
-                        "failed_documents": batch.failed_documents,
-                        "partial_documents": _batch_partial_document_count(batch),
-                    }
-                    yield f"data: {json.dumps(status_event)}\n\n"
-                    last_completed = batch.completed_documents
-                    last_failed = batch.failed_documents
-
-                # Check if batch is complete
-                if batch.status in (BatchStatus.COMPLETED, BatchStatus.CANCELLED):
-                    complete_event = {
-                        "type": "BATCH_COMPLETE",
-                        "batch_id": str(batch.id),
-                        "status": batch.status.value,
-                        "total_documents": batch.total_documents,
-                        "completed_documents": batch.completed_documents,
-                        "failed_documents": batch.failed_documents,
-                        "partial_documents": _batch_partial_document_count(batch),
-                        "started_at": batch.started_at.isoformat() if batch.started_at else None,
-                        "completed_at": batch.completed_at.isoformat() if batch.completed_at else None,
-                    }
-                    yield f"data: {json.dumps(complete_event)}\n\n"
-                    batch_complete = True
-
-        except Exception:
-            logger.exception("Error streaming batch progress: batch_id=%s", batch_id)
-            error_event = {
-                "type": "ERROR",
-                "message": "Batch stream encountered an internal error"
-            }
-            yield f"data: {json.dumps(error_event)}\n\n"
-        finally:
-            # Cleanup: unsubscribe and close session
-            if event_queue is not None:
-                await broadcaster.unsubscribe(batch_id, event_queue)
-            if stream_db is not None:
-                stream_db.close()
-
-    return StreamingResponse(
-        generate_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
-    )
+    return BatchProgressResponse(batch_id, user_id)
 
 
 @router.post("/{batch_id}/cancel", response_model=BatchResponse)

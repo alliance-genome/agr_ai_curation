@@ -496,14 +496,6 @@ class BatchService:
             documents=document_responses,
         )
 
-    def get_document_handoff_metadata(
-        self,
-        batch: Batch,
-        document: BatchDocument,
-    ) -> dict[str, Any]:
-        """Single-document SSE enrichment uses the same bulk identity contract."""
-        return self.get_documents_handoff_metadata(batch, [document])[document.id]
-
     def get_documents_handoff_metadata(
         self,
         batch: Batch,

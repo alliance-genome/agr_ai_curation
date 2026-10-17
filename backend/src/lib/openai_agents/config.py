@@ -3310,6 +3310,11 @@ def get_loki_query_limit() -> int:
 
 # --- Batch / queues / file sizes ---
 
+def get_batch_stream_poll_interval_seconds() -> float:
+    """Durable batch SSE reconciliation cadence."""
+    return max(0.1, _get_env_float_with_fallback("BATCH_STREAM_POLL_INTERVAL_SECONDS", 1.0))
+
+
 def get_batch_event_queue_maxsize() -> int:
     """Bounded size of a per-batch event queue (BATCH_EVENT_QUEUE_MAXSIZE).
 
