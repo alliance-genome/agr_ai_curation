@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from src.lib.openai_agents.config import (
+    get_batch_zip_metadata_chunk_size,
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
 )
@@ -54,6 +55,20 @@ spec.loader.exec_module(production_preflight)
 
 def _load_compose() -> dict:
     return yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("configured,expected", [(None, 500), ("73", 73)])
+def test_production_forwards_batch_zip_metadata_chunk_size(monkeypatch, configured, expected):
+    key = "BATCH_ZIP_METADATA_CHUNK_SIZE"
+    environment = _load_compose()["services"]["backend"]["environment"]
+    # Assert the actual Compose substitution contract, including its source key.
+    assert environment[key] == "${BATCH_ZIP_METADATA_CHUNK_SIZE:-500}"
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "500"
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
+    assert get_batch_zip_metadata_chunk_size() == expected
 
 
 def _load_dev_compose() -> dict:
