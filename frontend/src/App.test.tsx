@@ -148,7 +148,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -171,7 +171,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -213,7 +213,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -255,7 +255,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -295,7 +295,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -338,7 +338,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -365,7 +365,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -402,7 +402,7 @@ describe('AppContent global notifications', () => {
         });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -410,12 +410,12 @@ describe('AppContent global notifications', () => {
     renderAppContent('/');
 
     await act(async () => {
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(global.fetch).toHaveBeenCalled();
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/weaviate/pdf-jobs?window_days=7&limit=50&offset=0',
-      { credentials: 'include' },
+      expect.objectContaining({ credentials: 'include', signal: expect.any(AbortSignal) }),
     );
     expect(screen.queryByText('PDF processing completed: seed.pdf')).not.toBeInTheDocument();
 
@@ -440,7 +440,7 @@ describe('AppContent global notifications', () => {
         });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -482,7 +482,7 @@ describe('AppContent global notifications', () => {
         });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -490,7 +490,7 @@ describe('AppContent global notifications', () => {
     renderAppContent('/');
 
     await act(async () => {
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(global.fetch).toHaveBeenCalled();
     expect(screen.queryByText('PDF processing failed: cancel-me.pdf')).not.toBeInTheDocument();
@@ -510,7 +510,7 @@ describe('AppContent global notifications', () => {
     let terminalRequests = 0;
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (!url.includes('/api/batches')) return jsonResponse({ jobs: [] });
+      if (!url.includes('/api/batches/terminals')) return jsonResponse({ jobs: [], batches: [], next_cursor: null });
       urls.push(url);
       terminalRequests += 1;
       if (terminalRequests === 2) return new Response('', { status: 503 });
@@ -522,25 +522,25 @@ describe('AppContent global notifications', () => {
       });
     });
     renderAppContent('/');
-    await act(async () => { await Promise.resolve(); });
-    expect(urls).toEqual(['/api/batches/terminals']);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(urls).toEqual(['/api/batches/terminals?limit=20']);
     for (let tick = 0; tick < 2; tick += 1) {
       await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); });
     }
-    expect(urls).toEqual(['/api/batches/terminals', '/api/batches/terminals?cursor=page-two', '/api/batches/terminals?cursor=page-two']);
+    expect(urls).toEqual(['/api/batches/terminals?limit=20', '/api/batches/terminals?limit=20&cursor=page-two', '/api/batches/terminals?limit=20&cursor=page-two']);
     expect(screen.queryByText(/Batch completed/)).not.toBeInTheDocument();
     await act(async () => { vi.advanceTimersByTime(10000); await Promise.resolve(); });
     expect(screen.getByText('Batch completed (Historical): 1/1 succeeded, 0 failed')).toBeInTheDocument();
   });
 
-  it('skips PDF job polling on Add Literature and skips batch polling on batch route', async () => {
+  it('skips PDF job polling on Add Literature and keeps batch polling on batch routes', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/weaviate/pdf-jobs')) {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -567,7 +567,7 @@ describe('AppContent global notifications', () => {
     await waitFor(() => {
       const urls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url));
       expect(urls.some((url) => url.includes('/api/weaviate/pdf-jobs'))).toBe(true);
-      expect(urls.some((url) => url.includes('/api/batches'))).toBe(false);
+      expect(urls.some((url) => url.includes('/api/batches'))).toBe(true);
     });
   });
 
@@ -578,7 +578,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -596,7 +596,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -615,7 +615,7 @@ describe('AppContent global notifications', () => {
           return jsonResponse({ jobs: [] });
         }
         if (url.includes('/api/batches')) {
-          return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+          return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
         }
         return jsonResponse({});
       });
@@ -665,7 +665,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -686,7 +686,7 @@ describe('AppContent global notifications', () => {
         return jsonResponse({ jobs: [] });
       }
       if (url.includes('/api/batches')) {
-        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window' });
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
       }
       return jsonResponse({});
     });
@@ -696,6 +696,10 @@ describe('AppContent global notifications', () => {
       expect(screen.getByText('Test User')).toBeInTheDocument();
     });
 
+    act(() => window.dispatchEvent(new CustomEvent(GLOBAL_TOAST_EVENT, {
+      detail: { message: 'Private previous-user notification', severity: 'info' },
+    })));
+    expect(screen.getByText('Private previous-user notification')).toBeInTheDocument();
     queryClient.setQueryData(['documents'], { id: 'doc-1' });
     expect(queryClient.getQueryData(['documents'])).toEqual({ id: 'doc-1' });
 
@@ -717,6 +721,7 @@ describe('AppContent global notifications', () => {
     });
 
     expect(queryClient.getQueryData(['documents'])).toBeUndefined();
+    expect(screen.queryByText('Private previous-user notification')).not.toBeInTheDocument();
   });
 });
 

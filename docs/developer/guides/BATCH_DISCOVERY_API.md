@@ -162,3 +162,31 @@ The existing bounded broadcaster queue and nonblocking queue polling remain.
 Dropped document/terminal events converge through database reconciliation.
 Dropped audit events are not replayed, and cross-source events are not exactly
 once. Cross-thread broadcaster wakeup improvements remain separate work.
+
+## Application polling owner
+
+`useGlobalPolling` owns global batch counts and batch/PDF notifications within
+one authenticated application instance. Each visible cadence issues at most one
+request each for exact counts, an active page, a terminal page, an observed-ID
+chunk, and the existing bounded PDF query. Empty observed sets skip lookup;
+the PDF page owns its own discovery. Navigation does not restart the schedule.
+Each task has an independent lock and request timeout. Failures preserve the
+last same-user counts and unread cursors and retry on the ordinary cadence.
+
+Active and terminal cursors persist independently. Lookup rotates observed IDs,
+including after failures, and removes them only on terminal/unavailable results.
+Initial terminal traversal seeds silently across all pages; known active work
+can still notify through reconciliation. Completed windows overlap by the
+configured duration. A server reset replaces expired traversal coverage; it
+never resolves observed IDs or establishes complete offline delivery. Unknown
+outcomes outside coverage remain in history. Terminal keys remain in memory for
+the authenticated generation to avoid replay; there is no retention eviction
+that could discard unresolved work or replay old terminals.
+
+Hidden tabs initiate no requests. Results already in flight may update state,
+but eligible notifications wait until visible; publication uses the current
+route and consumes suppressed observations. Logout, account switch, and unmount
+abort work and invalidate all late results, even if a fetch ignores abort.
+The four `VITE_GLOBAL_POLL_*` settings in `.env.example` are build inputs in the
+frontend Dockerfile and development Compose build. Production images use those
+build values; changing them requires rebuilding the image.
