@@ -52,7 +52,7 @@ def historical_migration_database(monkeypatch):
     from alembic.config import Config
     from sqlalchemy import create_engine, event, text
     from sqlalchemy.engine import make_url
-    from src.models.sql.database import engine, feedback_engine
+    from src.models.sql.database import engine
 
     database = f"migration_test_{uuid4().hex}"
     url = make_url(os.environ["DATABASE_URL"])
@@ -64,9 +64,7 @@ def historical_migration_database(monkeypatch):
         kwargs["dbname"] = database
 
     engine.dispose()
-    feedback_engine.dispose()
     event.listen(engine, "do_connect", use_test_database)
-    event.listen(feedback_engine, "do_connect", use_test_database)
     try:
         with monkeypatch.context() as scoped:
             scoped.setenv("DATABASE_URL", url.set(database=database).render_as_string(hide_password=False))
@@ -74,9 +72,7 @@ def historical_migration_database(monkeypatch):
             yield
     finally:
         engine.dispose()
-        feedback_engine.dispose()
         event.remove(engine, "do_connect", use_test_database)
-        event.remove(feedback_engine, "do_connect", use_test_database)
         with admin.connect() as connection:
             connection.execute(text(f'DROP DATABASE "{database}"'))
         admin.dispose()

@@ -1,6 +1,6 @@
 """Database configuration and session management for all services.
 
-This module provides the application database engine and session factories.
+This module provides the application database engine and session factory.
 All application data is stored in the unified 'ai_curation' database:
 - PDF document metadata
 - User accounts
@@ -15,6 +15,7 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from src.config import get_app_database_url
+from src.lib.openai_agents.config import get_app_db_pool_size, get_app_db_max_overflow
 
 
 class Base(DeclarativeBase):
@@ -31,8 +32,8 @@ engine = create_engine(
     DATABASE_URL,
     future=True,
     poolclass=QueuePool,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=get_app_db_pool_size(),
+    max_overflow=get_app_db_max_overflow(),
     pool_pre_ping=True,  # Verify connections before using
 )
 
@@ -45,10 +46,7 @@ SessionLocal = sessionmaker(
 
 
 def get_db():
-    """Yield a database session for PDF viewer operations.
-
-    Used for PDF document metadata management.
-    """
+    """Yield an independent application session, closing it after the request."""
     db = SessionLocal()
     try:
         yield db
@@ -56,38 +54,12 @@ def get_db():
         db.close()
 
 
-
-
-# ============================================================================
-# Feedback Engine (User Feedback Reports)
-# Uses the same application database (ai_curation)
-# ============================================================================
-
-FEEDBACK_DATABASE_URL = get_app_database_url()
-
-feedback_engine = create_engine(
-    FEEDBACK_DATABASE_URL,
-    future=True,
-    poolclass=QueuePool,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
-)
-
-FeedbackSessionLocal = sessionmaker(
-    bind=feedback_engine,
-    autocommit=False,
-    autoflush=False,
-    expire_on_commit=False,
-)
-
-
 def get_feedback_db():
     """Yield a database session for feedback operations.
 
     Used for storing curator feedback reports with trace data.
     """
-    db = FeedbackSessionLocal()
+    db = SessionLocal()
     try:
         yield db
     finally:
