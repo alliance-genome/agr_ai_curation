@@ -67,6 +67,7 @@ Start here for new developers:
 | [LANGFUSE_V4_MIGRATION.md](guides/LANGFUSE_V4_MIGRATION.md) | One-time operator procedure for rehearsing and migrating the controlled dev and production Langfuse deployments to v4 |
 | [WEAVIATE_BACKUPS.md](guides/WEAVIATE_BACKUPS.md) | Native filesystem backup configuration, create/status workflow, isolated restore requirements, legacy non-multitenant collection migration, and disaster-recovery limitations |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |
+| [BATCH_DISCOVERY_API.md](guides/BATCH_DISCOVERY_API.md) | Bounded history/terminal summaries, observed-ID reconciliation, cursor coverage, and detail query evidence |
 | [BATCH_CRASH_RECOVERY.md](guides/BATCH_CRASH_RECOVERY.md) | Durable batch worker leases, startup scan behavior, stale processing policy, and counter invariants |
 | [BENCHMARK_HARNESS.md](guides/BENCHMARK_HARNESS.md) | Execution-only suite v2, frozen sources, asynchronous lifecycle API, worker telemetry, and CLI |
 | [BENCHMARK_SUITE_V2.md](guides/BENCHMARK_SUITE_V2.md) | Strict execution-only suite v2 schema, route slots, frozen plans, and stable digests |

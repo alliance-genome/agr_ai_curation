@@ -74,8 +74,8 @@ class BatchDocumentResponse(BaseModel):
     processed_at: Optional[datetime] = None
 
 
-class BatchResponse(BaseModel):
-    """Batch details response."""
+class BatchSummary(BaseModel):
+    """Column-only batch status, counters, timestamps, and nullable flow name."""
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -88,13 +88,36 @@ class BatchResponse(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    documents: List[BatchDocumentResponse] = []
+
+
+class BatchResponse(BatchSummary):
+    """Full detail, loaded only on demand."""
+
+    documents: List[BatchDocumentResponse] = Field(default_factory=list)
 
 
 class BatchListResponse(BaseModel):
     """List of batches for history view."""
-    batches: List[BatchResponse]
+    batches: List[BatchSummary]
     total: int
+    next_cursor: Optional[str] = None
+
+
+class BatchTerminalResponse(BaseModel):
+    batches: List[BatchSummary]
+    window_start: datetime
+    window_end: datetime
+    next_cursor: Optional[str] = None
+    coverage: Literal["recent_window", "reset"]
+
+
+class BatchLookupRequest(BaseModel):
+    ids: List[UUID]
+
+
+class BatchLookupResponse(BaseModel):
+    batches: List[BatchSummary]
+    unavailable_ids: List[UUID]
 
 
 class BatchValidationResponse(BaseModel):

@@ -1,3 +1,4 @@
+import type { BatchTerminalResponse } from './types/batch';
 import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
 import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip, Snackbar, Alert, GlobalStyles } from '@mui/material'
@@ -330,6 +331,7 @@ export function AppContent() {
   }>({ open: false, message: '', severity: 'info' });
   const seededPdfJobsRef = React.useRef(false);
   const seededBatchesRef = React.useRef(false);
+  const batchTerminalCursorRef = React.useRef<string | null>(null);
   const seenPdfTerminalRef = React.useRef<Set<string>>(new Set());
   const seenBatchTerminalRef = React.useRef<Set<string>>(new Set());
   const seenRunCompletionToastKeysRef = React.useRef<Set<string>>(new Set());
@@ -497,6 +499,7 @@ export function AppContent() {
     if (!isAuthenticated) {
       seededPdfJobsRef.current = false;
       seededBatchesRef.current = false;
+      batchTerminalCursorRef.current = null;
       seenPdfTerminalRef.current.clear();
       seenBatchTerminalRef.current.clear();
       return;
@@ -551,19 +554,12 @@ export function AppContent() {
 
       if (!onBatchPage) {
         try {
-          const response = await fetch('/api/batches', { credentials: 'include' });
+          const cursor = batchTerminalCursorRef.current;
+          const url = cursor === null ? '/api/batches/terminals' : `/api/batches/terminals?cursor=${encodeURIComponent(cursor)}`;
+          const response = await fetch(url, { credentials: 'include' });
           if (response.ok) {
-            const payload = (await response.json()) as {
-              batches?: Array<{
-                id: string;
-                status: string;
-                flow_name?: string | null;
-                completed_documents?: number;
-                total_documents?: number;
-                failed_documents?: number;
-              }>;
-            };
-            const batches = payload.batches ?? [];
+            const payload = (await response.json()) as BatchTerminalResponse;
+            const batches = payload.batches;
 
             for (const batch of batches) {
               const status = String(batch.status).toLowerCase();
@@ -591,13 +587,14 @@ export function AppContent() {
               } else {
                 setGlobalSnackbar({
                   open: true,
-                  message: `Batch completed${flowLabel}: ${batch.completed_documents ?? 0}/${batch.total_documents ?? 0} succeeded, ${batch.failed_documents ?? 0} failed`,
+                  message: `Batch completed${flowLabel}: ${batch.completed_documents}/${batch.total_documents} succeeded, ${batch.failed_documents} failed`,
                   severity: 'success',
                 });
               }
             }
 
-            seededBatchesRef.current = true;
+            batchTerminalCursorRef.current = payload.next_cursor;
+            if (payload.next_cursor === null) seededBatchesRef.current = true;
           }
         } catch (error) {
           console.error('Global batch notification poll failed:', error);

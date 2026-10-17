@@ -80,6 +80,11 @@ class Batch(Base):
 
     __table_args__ = (
         Index("idx_batches_user_id", "user_id"),
+        Index("idx_batches_owner_history", "user_id", "created_at", "id"),
+        Index("idx_batches_owner_active_history", "user_id", "created_at", "id",
+              postgresql_where=text("status IN ('pending', 'running')")),
+        Index("idx_batches_owner_terminal", "user_id", "completed_at", "id",
+              postgresql_where=text("status IN ('completed', 'cancelled')")),
         Index("idx_batches_status", "status"),
         Index("idx_batches_recovery_lease", "status", "lease_expires_at"),
     )

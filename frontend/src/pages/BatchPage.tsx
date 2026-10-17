@@ -1,3 +1,4 @@
+import type { BatchSummary, BatchListResponse } from '../types/batch';
 import React, { useState, useEffect } from 'react';
 import {
   Box,
@@ -286,18 +287,6 @@ export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
   };
 }
 
-interface RecentBatch {
-  id: string;
-  flow_id: string;
-  flow_name?: string;
-  status: 'pending' | 'running' | 'completed' | 'cancelled';
-  total_documents: number;
-  completed_documents: number;
-  failed_documents: number;
-  created_at: string;
-  completed_at?: string;
-}
-
 interface BatchState {
   status: BatchStatus;
   documents: BatchDocument[];
@@ -341,7 +330,7 @@ const BatchPage: React.FC = () => {
   const [flowLoadError, setFlowLoadError] = useState<string | null>(null);
 
   // Recent batches
-  const [recentBatches, setRecentBatches] = useState<RecentBatch[]>([]);
+  const [recentBatches, setRecentBatches] = useState<BatchSummary[]>([]);
   const [loadingRecentBatches, setLoadingRecentBatches] = useState(true);
 
   // Audit events - with localStorage persistence
@@ -430,6 +419,8 @@ const BatchPage: React.FC = () => {
   // Track if we've already auto-resumed a batch (to prevent re-triggering)
   const [hasAutoResumed, setHasAutoResumed] = useState(false);
 
+  const [activeSummaries, setActiveSummaries] = useState<BatchSummary[]>([]);
+
   // Load recent batches
   useEffect(() => {
     const fetchRecentBatches = async () => {
@@ -438,9 +429,13 @@ const BatchPage: React.FC = () => {
           credentials: 'include',
         });
         if (response.ok) {
-          const data = await response.json();
-          // Take only the 5 most recent batches
-          setRecentBatches((data.batches || []).slice(0, 5));
+          const data: BatchListResponse = await response.json();
+          setRecentBatches(data.batches.slice(0, 5));
+        }
+        const activeResponse = await fetch('/api/batches?status=active', { credentials: 'include' });
+        if (activeResponse.ok) {
+          const data: BatchListResponse = await activeResponse.json();
+          setActiveSummaries(data.batches);
         }
       } catch (error) {
         console.error('Failed to load recent batches:', error);
@@ -791,7 +786,7 @@ const BatchPage: React.FC = () => {
     }
 
     // Find any running or pending batch
-    const runningBatch = recentBatches.find(b => b.status === 'running' || b.status === 'pending');
+    const runningBatch = activeSummaries.find(b => b.status === 'running' || b.status === 'pending');
     if (runningBatch) {
       setHasAutoResumed(true);
       // Auto-resume this batch
@@ -828,7 +823,7 @@ const BatchPage: React.FC = () => {
       })();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recentBatches, loadingRecentBatches, hasAutoResumed, activeBatchId, batchState.status]);
+  }, [activeSummaries, loadingRecentBatches, hasAutoResumed, activeBatchId, batchState.status]);
 
   // Start batch processing
   const handleStartBatch = async () => {

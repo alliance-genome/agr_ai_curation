@@ -172,6 +172,26 @@ def _get_bounded_positive_env_int(
     return min(configured, maximum)
 
 
+def get_batch_page_max() -> int:
+    """Maximum summaries or observed IDs per request."""
+    return max(1, _get_env_int_with_fallback("BATCH_PAGE_MAX", 100))
+
+
+def get_batch_page_default() -> int:
+    """Default number of batch summaries per page."""
+    return max(1, _get_env_int_with_fallback("BATCH_PAGE_DEFAULT", 20))
+
+
+def get_batch_terminal_window_seconds() -> int:
+    """Recent terminal discovery coverage in seconds."""
+    return max(1, _get_env_int_with_fallback("BATCH_TERMINAL_WINDOW_SECONDS", 86400))
+
+
+def get_batch_metadata_chunk_size() -> int:
+    """Maximum identities per detail metadata SQL query."""
+    return max(1, _get_env_int_with_fallback("BATCH_METADATA_CHUNK_SIZE", 100))
+
+
 def get_batch_worker_lease_seconds() -> int:
     """Duration of an exclusive batch worker lease before crash recovery."""
     return max(1, _get_env_int_with_fallback("BATCH_WORKER_LEASE_SECONDS", 120))

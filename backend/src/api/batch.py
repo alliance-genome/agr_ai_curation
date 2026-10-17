@@ -7,6 +7,7 @@ All endpoints require Cognito JWT authentication via Security(get_auth_dependenc
 Batch ownership is enforced - users can only access their own batches.
 """
 
+from datetime import datetime
 import asyncio
 import json
 import logging
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 from .auth import get_auth_dependency
 from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.batch.service import BatchService
+from ..lib.batch.summaries import BatchFilter, BatchQueryError, terminal_summaries, lookup_summaries
 from ..lib.batch.result_files import canonical_result_files as _batch_document_result_files
 from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
@@ -39,6 +41,7 @@ from ..schemas.batch import (
     BatchResponse,
     BatchListResponse,
     BatchValidationResponse,
+    BatchTerminalResponse, BatchLookupRequest, BatchLookupResponse,
 )
 from ..services.user_service import principal_from_claims, provision_user
 
@@ -253,29 +256,53 @@ async def get_running_batch_count(
     """
     db_user = provision_user(db, principal_from_claims(user))
     service = BatchService(db)
-    return {
-        "running_count": service.count_running_batches(db_user.id),
-        "pending_documents": service.get_pending_documents_count(db_user.id),
-    }
+    return service.active_totals(db_user.id)
 
 
 @router.get("", response_model=BatchListResponse)
 async def list_batches(
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
+    limit: int | None = None,
+    cursor: str | None = None,
+    status: BatchFilter | None = None,
 ) -> BatchListResponse:
-    """List user's batches.
-
-    Returns batches ordered by created_at descending (most recent first).
-    """
+    """Bounded history; total counts all owned rows matching the status filter."""
     db_user = provision_user(db, principal_from_claims(user))
-    service = BatchService(db)
-    batches = service.list_batches(db_user.id)
+    try:
+        return BatchService(db).list_batches(db_user.id, limit, cursor, status)
+    except BatchQueryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Convert to response models (flow names will be looked up)
-    batch_responses = [service.batch_to_response(batch) for batch in batches]
 
-    return BatchListResponse(batches=batch_responses, total=len(batch_responses))
+@router.get("/terminals", response_model=BatchTerminalResponse)
+async def list_terminal_batches(
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+    limit: int | None = None,
+    cursor: str | None = None,
+    since: datetime | None = None,
+) -> BatchTerminalResponse:
+    """Bounded completion-time discovery, with explicit coverage reset."""
+    db_user = provision_user(db, principal_from_claims(user))
+    try:
+        return terminal_summaries(db, db_user.id, limit, cursor, since)
+    except BatchQueryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/lookup", response_model=BatchLookupResponse)
+async def lookup_batches(
+    body: BatchLookupRequest,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> BatchLookupResponse:
+    """Reconcile observed IDs; missing and unauthorized IDs are indistinguishable."""
+    db_user = provision_user(db, principal_from_claims(user))
+    try:
+        return lookup_summaries(db, db_user.id, body.ids)
+    except BatchQueryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/{batch_id}", response_model=BatchResponse)
