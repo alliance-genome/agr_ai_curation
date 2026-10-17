@@ -1026,3 +1026,11 @@ def test_optional_capacity_override_accepts_effective_compose_empty_default(monk
         assert value == "${AGENT_MODEL_CAPACITY_OVERRIDES_JSON:-}"
         monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", "")
         assert get_agent_model_capacity_overrides() == {}
+
+
+def test_application_pool_capacity_reaches_backend_and_worker():
+    services = _load_compose()["services"]
+    for service in ("backend", "benchmark_worker"):
+        environment = services[service]["environment"]
+        assert environment["APP_DB_POOL_SIZE"] == "${APP_DB_POOL_SIZE-5}"
+        assert environment["APP_DB_MAX_OVERFLOW"] == "${APP_DB_MAX_OVERFLOW-10}"
