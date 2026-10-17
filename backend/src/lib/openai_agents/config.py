@@ -3762,3 +3762,18 @@ def get_user_tenant_cache_ttl_seconds() -> int:
 def get_user_tenant_cache_max_entries() -> int:
     """Bound success entries and separately bound concurrent provisioning owners."""
     return max(1, _get_env_int_with_fallback("USER_TENANT_CACHE_MAX_ENTRIES", 1024))
+
+
+def get_pdf_job_recovery_interval_seconds() -> int:
+    """Delay between bounded durable-job recovery passes."""
+    return max(1, _get_env_int_with_fallback("PDF_JOB_RECOVERY_INTERVAL_SECONDS", 60))
+
+
+def get_pdf_job_recovery_batch_size() -> int:
+    """Maximum stale candidates per durable-job recovery transaction."""
+    return max(1, _get_env_int_with_fallback("PDF_JOB_RECOVERY_BATCH_SIZE", 100))
+
+
+def get_pdf_job_recovery_timeout_seconds() -> int:
+    """Bound individual recovery SQL statements, including lock waits."""
+    return max(1, _get_env_int_with_fallback("PDF_JOB_RECOVERY_TIMEOUT_SECONDS", 30))

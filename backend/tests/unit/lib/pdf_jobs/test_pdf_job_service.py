@@ -146,7 +146,7 @@ def test_single_job_readers_reconcile_stale_nonterminal_job(
         job.current_stage = "pending"
         job.started_at = None
     document = _build_document(job, status=document_status)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
 
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     monkeypatch.setattr(service_module, "_stale_timeout_seconds", lambda: 60)
@@ -185,7 +185,7 @@ def test_single_job_readers_reconcile_stale_nonterminal_job(
 def test_list_jobs_reconciles_stale_cancel_requested_job(monkeypatch):
     job = _build_job(status=PdfJobStatus.CANCEL_REQUESTED.value)
     document = _build_document(job)
-    session = _FakeSession([[job], job, document, 1, [job]])
+    session = _FakeSession([[job], document, job, 1, [job]])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     monkeypatch.setattr(service_module, "_stale_timeout_seconds", lambda: 60)
 
@@ -212,7 +212,7 @@ def test_stale_job_reconciliation_leaves_terminal_document_unchanged(
     completed_at = datetime.now(timezone.utc) - timedelta(minutes=5)
     document.processing_started_at = completed_at - timedelta(hours=1)
     document.processing_completed_at = completed_at
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     monkeypatch.setattr(service_module, "_stale_timeout_seconds", lambda: 60)
 
@@ -242,7 +242,7 @@ def test_explicit_terminal_finalizers_reconcile_document(
 ):
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     document = _build_document(job)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
     if finalizer == "failed":
@@ -290,7 +290,7 @@ def test_mark_completed_atomically_preserves_detailed_receipt_in_api_metadata(mo
 def test_mark_failed_atomically_preserves_detailed_receipt_in_api_metadata(monkeypatch):
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     document = _build_document(job)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     detailed_receipt = {
         "schema_version": 1,
@@ -320,7 +320,7 @@ def test_mark_failed_atomically_preserves_detailed_receipt_in_api_metadata(monke
 def test_terminal_reconciliation_honors_configured_document_error_limit(monkeypatch):
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     document = _build_document(job)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "7")
 
@@ -344,7 +344,7 @@ def test_mark_failed_honors_job_error_retention_limit(
     monkeypatch.setenv("PDF_DOCUMENT_ERROR_MESSAGE_MAX_CHARS", "11")
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     document = _build_document(job)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
     message = "Extractor failure detail. " * 200
 
@@ -370,7 +370,7 @@ def test_explicit_terminal_finalizers_leave_completed_document_unchanged(
     document.processing_started_at = completed_at - timedelta(hours=1)
     document.processing_completed_at = completed_at
     document.error_message = None
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
     if finalizer == "failed":
@@ -391,7 +391,7 @@ def test_repeated_finalizer_reconciles_from_durable_first_terminal_winner(monkey
     job.completed_at = datetime.now(timezone.utc)
     job.message = "Original cancellation"
     document = _build_document(job)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
     response = service_module.mark_failed(job_id=job.id, message="Late failure")
@@ -458,8 +458,8 @@ def test_no_job_orphan_apply_creates_canonical_failed_job_and_reconciles_documen
     session = _FakeSession(
         [
             [document],
-            lambda current_session: current_session.added[-1],
             document,
+            lambda current_session: current_session.added[-1],
         ]
     )
 
@@ -549,7 +549,7 @@ def test_terminal_reconciliation_rejects_missing_failure_message(monkeypatch):
     job.message = None
     job.error_message = None
     document = _build_document(job)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
     with pytest.raises(ValueError, match=f"Terminal job {job.id} has no failure message"):
@@ -564,7 +564,7 @@ def test_terminal_reconciliation_rejects_missing_completed_at(monkeypatch):
     job = _build_job(status=PdfJobStatus.CANCELLED.value)
     job.message = "Original cancellation"
     document = _build_document(job)
-    session = _FakeSession([job, job, document])
+    session = _FakeSession([job, document, job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
     with pytest.raises(ValueError, match=f"Terminal job {job.id} has no completed_at"):
@@ -582,7 +582,7 @@ def test_document_reconciliation_failure_rolls_back_job_transition(monkeypatch):
     job = _build_job(status=PdfJobStatus.RUNNING.value)
     document = _build_document(job)
     session = _FakeSession(
-        [job, job, document],
+        [job, document, job],
         commit_error=RuntimeError("document write failed"),
     )
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
@@ -601,7 +601,7 @@ def test_older_terminal_job_does_not_overwrite_document_when_newer_job_exists(mo
     newer_job.document_id = old_job.document_id
     newer_job.created_at = old_job.created_at + timedelta(minutes=1)
     document = _build_document(old_job)
-    session = _FakeSession([old_job, newer_job])
+    session = _FakeSession([old_job, document, newer_job])
     monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
 
     response = service_module.mark_cancelled(job_id=old_job.id, reason="Superseded")
@@ -611,3 +611,27 @@ def test_older_terminal_job_does_not_overwrite_document_when_newer_job_exists(mo
     assert document.status == "processing"
     assert document.processing_completed_at is None
     assert session.commit_calls == 1
+
+
+@pytest.mark.parametrize("failure", [None, "sql", "conversion"])
+def test_snapshot_single_select_no_repair_and_closes_on_failure(monkeypatch, failure):
+    job = _build_job(status="running")
+    session = _FakeSession([RuntimeError("sql") if failure == "sql" else [job]])
+    monkeypatch.setattr(service_module, "SessionLocal", lambda: session)
+    if failure == "conversion":
+        def fail(_job):
+            raise ValueError("conversion")
+        monkeypatch.setattr(service_module, "_to_response", fail)
+    if failure:
+        with pytest.raises((RuntimeError, ValueError)):
+            service_module.snapshot_jobs(user_id=42, window_days=7, limit=3)
+    else:
+        result = service_module.snapshot_jobs(user_id=42, window_days=7, limit=3)
+        assert result[0].status == "running"  # Deliberately stale; snapshot is pure.
+    assert session.closed
+    assert session.commit_calls == 0
+    assert len(session.statements) == 1
+    sql = str(session.statements[0])
+    assert "count(" not in sql and "FOR UPDATE" not in sql
+    assert "ORDER BY pdf_processing_jobs.created_at DESC, pdf_processing_jobs.id DESC" in sql
+    assert session.statements[0].compile().params["param_1"] == 3

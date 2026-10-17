@@ -99,19 +99,19 @@ async def stream_pdf_jobs(
         timeout_seconds = 3600
 
     async def generate():
-        last_signature = ""
+        last_signature = "[]"  # Preserve initial-empty suppression; the page loads REST first.
         deadline = asyncio.get_event_loop().time() + timeout_seconds
 
         while asyncio.get_event_loop().time() < deadline:
-            jobs = job_service.list_jobs(
+            jobs = await asyncio.to_thread(
+                job_service.snapshot_jobs,
                 user_id=user_id,
                 window_days=window_days,
                 limit=limit,
-                offset=0,
-            ).jobs
-            signature = "|".join(
-                f"{job.job_id}:{job.status}:{job.progress_percentage}:{job.updated_at.isoformat()}:{int(job.cancel_requested)}"
-                for job in jobs
+            )
+            signature = json.dumps(
+                [job.model_dump(mode="json") for job in jobs],
+                sort_keys=True,
             )
 
             if signature != last_signature:

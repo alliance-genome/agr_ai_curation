@@ -61,6 +61,7 @@ Start here for new developers:
 | [2026-04-13-chat-curation-evidence-alignment-plan.md](../design/2026-04-13-chat-curation-evidence-alignment-plan.md) | Deep-dive plan for aligning chat and curation PDF evidence navigation before the production hotfix |
 | [PDF_EVIDENCE_CONSISTENCY_STRATEGY.md](PDF_EVIDENCE_CONSISTENCY_STRATEGY.md) | Deep-dive architecture strategy for replacing split Home/Curation PDF viewers with one persistent route-level PDF.js host |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
+| [PDF_JOB_RECOVERY.md](guides/PDF_JOB_RECOVERY.md) | Read-only PDF-job SSE snapshots and bounded, viewer-independent stale recovery |
 | [PDF_NO_JOB_ORPHAN_REPAIR.md](guides/PDF_NO_JOB_ORPHAN_REPAIR.md) | Manual dry-run and bounded application procedure for historical pending PDF documents without durable jobs |
 | [SENTRY_OBSERVABILITY.md](guides/SENTRY_OBSERVABILITY.md) | Backend Sentry operating model: initialization, redaction, reporting facades, CloudWatch/Langfuse boundaries, and dev smoke testing |
 | [MODEL_REQUEST_MEASUREMENT_MATRIX.md](guides/MODEL_REQUEST_MEASUREMENT_MATRIX.md) | Per-request model input measurement: runtime entry paths, measurement points, provider field limits, and the regression guard |
