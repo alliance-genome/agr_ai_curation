@@ -1,4 +1,5 @@
 """Unit tests for curation workspace prep endpoints."""
+from unittest.mock import AsyncMock
 
 import logging
 from unittest.mock import MagicMock
@@ -82,7 +83,7 @@ async def test_get_benchmark_destinations_returns_only_display_safe_configuratio
 
 @pytest.mark.asyncio
 async def test_post_benchmark_snapshot_commits_service_result(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     snapshot_id = uuid4()
     expected = CurationBenchmarkSnapshotCreateResponse(
         snapshot_id=str(snapshot_id),
@@ -115,7 +116,7 @@ async def test_post_benchmark_snapshot_commits_service_result(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_benchmark_endpoint_returns_stable_sanitized_error(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     reported = []
 
     def _stale(*_args, **_kwargs):
@@ -150,7 +151,7 @@ async def test_benchmark_endpoint_returns_stable_sanitized_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_benchmark_endpoint_reports_sanitized_service_5xx(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     underlying = module.CurationBenchmarkSnapshotError(
         503,
         "handoff_configuration_invalid",
@@ -197,7 +198,7 @@ async def test_benchmark_endpoint_reports_sanitized_service_5xx(monkeypatch):
 async def test_benchmark_endpoint_reports_unexpected_failure_without_exposing_it(
     monkeypatch,
 ):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     underlying = RuntimeError("private envelope content")
     reported = []
 
@@ -243,7 +244,7 @@ async def test_benchmark_endpoint_reports_unexpected_failure_without_exposing_it
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retry", [False, True])
 async def test_post_benchmark_handoff_accepts_only_destination_id(monkeypatch, retry):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     snapshot_id = uuid4()
 
     async def _handoff(_db, **kwargs):
@@ -339,7 +340,7 @@ def _anchor() -> EvidenceAnchor:
 
 @pytest.mark.asyncio
 async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     monkeypatch.setattr(
         module,
         "build_chat_curation_prep_preview",
@@ -371,7 +372,7 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_chat_prep_preview_maps_value_error_to_sanitized_http_400(monkeypatch, caplog):
     caplog.set_level(logging.WARNING, logger=module.logger.name)
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     monkeypatch.setattr(
         module,
         "build_chat_curation_prep_preview",
@@ -395,7 +396,7 @@ async def test_get_chat_prep_preview_maps_value_error_to_sanitized_http_400(monk
 
 @pytest.mark.asyncio
 async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: MagicMock(id=7))
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=MagicMock(id=7)))
     expected = DomainEnvelopeReviewRowsResponse(
         envelope_id="env-1",
         envelope_revision=2,
@@ -430,7 +431,7 @@ async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeyp
 
 @pytest.mark.asyncio
 async def test_post_review_session_delegates_to_manual_create_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -470,7 +471,7 @@ async def test_post_review_session_delegates_to_manual_create_service(monkeypatc
 
 @pytest.mark.asyncio
 async def test_post_review_session_propagates_missing_document_error(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
 
     def _raise_not_found(*_args, **_kwargs):
         raise module.HTTPException(status_code=404, detail="Document document-404 not found")
@@ -493,7 +494,7 @@ async def test_post_review_session_propagates_missing_document_error(monkeypatch
 
 @pytest.mark.asyncio
 async def test_list_review_sessions_passes_current_user_scope_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -524,7 +525,7 @@ async def test_list_review_sessions_passes_current_user_scope_to_service(monkeyp
 
 @pytest.mark.asyncio
 async def test_get_saved_views_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
     db = object()
@@ -550,7 +551,7 @@ async def test_get_saved_views_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_saved_view_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
     db = object()
@@ -584,7 +585,7 @@ async def test_post_saved_view_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_saved_view_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
     db = object()
@@ -612,7 +613,7 @@ async def test_delete_saved_view_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_saved_views_requires_user_id(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
 
     with pytest.raises(module.HTTPException) as exc:
         await module.get_saved_views(
@@ -626,7 +627,7 @@ async def test_get_saved_views_requires_user_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -669,7 +670,7 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
 
 @pytest.mark.asyncio
 async def test_post_document_bootstrap_propagates_no_extraction_results_error(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
 
     async def _raise_not_found(*_args, **_kwargs):
         raise module.HTTPException(
@@ -698,7 +699,7 @@ async def test_post_document_bootstrap_propagates_no_extraction_results_error(mo
 
 @pytest.mark.asyncio
 async def test_get_document_bootstrap_status_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = CurationDocumentBootstrapAvailabilityResponse(eligible=True)
     captured: dict[str, object] = {}
 
@@ -740,7 +741,7 @@ async def test_get_document_bootstrap_status_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_evidence_recompute_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -779,7 +780,7 @@ async def test_post_evidence_recompute_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_manual_candidate_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -849,7 +850,7 @@ async def test_post_manual_candidate_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_manual_evidence_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -888,7 +889,7 @@ async def test_post_manual_evidence_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_manual_evidence_rolls_back_post_mutation_failure(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     monkeypatch.setattr(
         module,
         "create_manual_evidence",
@@ -917,7 +918,7 @@ async def test_post_manual_evidence_rolls_back_post_mutation_failure(monkeypatch
 
 @pytest.mark.asyncio
 async def test_post_candidate_decision_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -958,7 +959,7 @@ async def test_post_candidate_decision_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_review_candidate_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -994,7 +995,7 @@ async def test_delete_review_candidate_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_patch_review_candidate_draft_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1046,7 +1047,7 @@ async def test_patch_review_candidate_draft_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_patch_review_envelope_field_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1092,7 +1093,7 @@ async def test_patch_review_envelope_field_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_patch_review_envelope_field_rejects_path_body_mismatch(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     session_id = uuid4()
 
     with pytest.raises(module.HTTPException) as exc:
@@ -1118,7 +1119,7 @@ async def test_patch_review_envelope_field_rejects_path_body_mismatch(monkeypatc
 
 @pytest.mark.asyncio
 async def test_post_candidate_validation_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1163,7 +1164,7 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_candidate_validation_rolls_back_post_checkpoint_failure(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     monkeypatch.setattr(
         module,
         "validate_candidate",
@@ -1192,7 +1193,7 @@ async def test_post_candidate_validation_rolls_back_post_checkpoint_failure(monk
 
 @pytest.mark.asyncio
 async def test_post_session_validation_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1234,7 +1235,7 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_submission_preview_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1278,7 +1279,7 @@ async def test_post_submission_preview_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_submission_execute_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1321,7 +1322,7 @@ async def test_post_submission_execute_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_submission_execute_rolls_back_rejected_attempt(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
 
     def _reject_submission(*_args, **_kwargs):
         raise module.HTTPException(status_code=400, detail="No eligible candidates")
@@ -1351,7 +1352,7 @@ async def test_post_submission_execute_rolls_back_rejected_attempt(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_submission_retry_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1396,7 +1397,7 @@ async def test_post_submission_retry_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_submission_history_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1429,7 +1430,7 @@ async def test_get_submission_history_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_review_flow_runs_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1460,7 +1461,7 @@ async def test_get_review_flow_runs_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_review_flow_run_sessions_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1491,7 +1492,7 @@ async def test_get_review_flow_run_sessions_delegates_to_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_review_session_stats_passes_current_user_scope_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1522,7 +1523,7 @@ async def test_get_review_session_stats_passes_current_user_scope_to_service(mon
 
 @pytest.mark.asyncio
 async def test_get_next_review_session_passes_current_user_scope_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1553,7 +1554,7 @@ async def test_get_next_review_session_passes_current_user_scope_to_service(monk
 
 @pytest.mark.asyncio
 async def test_post_evidence_resolve_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
     expected = object()
     captured: dict[str, object] = {}
 
@@ -1593,7 +1594,7 @@ async def test_post_evidence_resolve_delegates_to_service(monkeypatch):
 @pytest.mark.asyncio
 async def test_trigger_chat_prep_maps_value_error_to_http_400(monkeypatch, caplog):
     caplog.set_level(logging.WARNING, logger=module.logger.name)
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
 
     async def _raise_value_error(*_args, **_kwargs):
         raise ValueError("No candidate annotations are available from this chat yet.")
@@ -1615,7 +1616,7 @@ async def test_trigger_chat_prep_maps_value_error_to_http_400(monkeypatch, caplo
 
 @pytest.mark.asyncio
 async def test_trigger_chat_prep_returns_service_payload(monkeypatch):
-    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
 
     async def _run_chat_prep(*_args, **_kwargs):
         return CurationPrepChatRunResponse(

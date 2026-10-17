@@ -1,6 +1,7 @@
 """Processing API endpoints for document reprocessing and re-embedding."""
 
 from fastapi import APIRouter, HTTPException, Path, Body, BackgroundTasks
+from starlette.concurrency import run_in_threadpool
 from typing import Optional
 import logging
 from typing import Dict, Any
@@ -32,7 +33,7 @@ from ..services.processing_status_policy import (
     stage_value as _stage_value,
 )
 from ..models.sql.database import SessionLocal
-from ..services.user_service import principal_from_claims, provision_user
+from ..services.user_service import principal_from_claims, provision_user, provision_user_async
 from ..config import get_pdf_storage_path
 from .documents import validate_user_file_path, verify_document_ownership
 
@@ -67,6 +68,7 @@ def _owned_source_file_path(
     *,
     session=None,
     for_update: bool = False,
+    provisioned_user_id: int | None = None,
 ):
     """Resolve the canonical owned source path, optionally under a row lock."""
     owns_session = session is None
@@ -77,6 +79,7 @@ def _owned_source_file_path(
             document_id,
             auth_user,
             for_update=for_update,
+            provisioned_user_id=provisioned_user_id,
         )
         storage_root = get_pdf_storage_path()
         return validate_user_file_path(
@@ -119,7 +122,7 @@ async def reprocess_document_endpoint(
             or document_data["document"].get("processingStatus")
         )
 
-        latest_job = _latest_job_for_user_document(document_id, user)
+        latest_job = await run_in_threadpool(_latest_job_for_user_document, document_id, user)
         if latest_job and latest_job.status in _ACTIVE_PDF_JOB_STATUSES:
             raise HTTPException(
                 status_code=409,
@@ -151,6 +154,7 @@ async def reprocess_document_endpoint(
                 )
 
         stage = ProcessingStage.PARSING if request.force_reparse else ProcessingStage.CHUNKING
+        provisioned_user = await provision_user_async(principal_from_claims(user))
         claim_session = SessionLocal()
         try:
             # PATCH acquires the same row lock before moving source bytes. The
@@ -161,6 +165,7 @@ async def reprocess_document_endpoint(
                 user,
                 session=claim_session,
                 for_update=True,
+                provisioned_user_id=provisioned_user.id,
             )
 
             if not file_path.exists():
@@ -294,7 +299,7 @@ async def reembed_document_endpoint(
             or document["document"].get("processingStatus")
         )
 
-        latest_job = _latest_job_for_user_document(document_id, user)
+        latest_job = await run_in_threadpool(_latest_job_for_user_document, document_id, user)
         if latest_job and latest_job.status in _ACTIVE_PDF_JOB_STATUSES:
             raise HTTPException(
                 status_code=409,

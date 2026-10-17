@@ -810,7 +810,7 @@ async def execute_flow_endpoint(
         403: Flow or its agents are unavailable to the caller
         404: Flow not found or soft-deleted
     """
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     repository = _get_chat_history_repository(db)
 
     flow = get_visible_flow(db, request.flow_id, db_user.id)

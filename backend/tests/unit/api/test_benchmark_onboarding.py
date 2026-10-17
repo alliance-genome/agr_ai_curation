@@ -174,13 +174,13 @@ def test_api_gate_and_read_capability_precede_onboarding(boundary, monkeypatch):
 @pytest.mark.parametrize(
     "constraint,code,active,status",
     [
-        ("uq_users_auth_sub", "23505", True, 200),
-        ("uq_users_auth_sub", "23505", False, 403),
+        ("uq_users_auth_sub", "23505", True, 503),
+        ("uq_users_auth_sub", "23505", False, 503),
         ("unrelated_constraint", "23505", True, 503),
         ("uq_users_auth_sub", "23514", True, 503),
     ],
 )
-def test_only_expected_subject_race_can_reconcile(
+def test_service_integrity_errors_are_not_retried_by_onboarding(
     boundary, constraint, code, active, status
 ):
     original = Exception("private-db-detail")
@@ -193,4 +193,4 @@ def test_only_expected_subject_race_can_reconcile(
     response = post(boundary)
     assert response.status_code == status
     assert "private" not in response.text
-    assert boundary.provision.call_count == (2 if status == 200 else 1)
+    assert boundary.provision.call_count == 1

@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+from unittest.mock import AsyncMock
+
 import pytest
 from fastapi import BackgroundTasks
 from src.lib.document_sources.access import DocumentSourceRequestContext
@@ -932,7 +934,7 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
         session_factory=lambda: _FakeSession(sessions),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=lambda: provider,
         create_document_fn=_create_document,
         create_job_fn=_create_job,
@@ -1011,7 +1013,7 @@ async def test_identifier_import_reports_source_pdf_download_access_denied(tmp_p
         session_factory=lambda: _FakeSession(sessions),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=lambda: provider,
         create_document_fn=lambda *_args, **_kwargs: None,
         create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="unused"),
@@ -1069,7 +1071,7 @@ async def test_reference_not_found_is_per_item_without_runtime_error(tmp_path, m
         session_factory=lambda: _FakeSession([]),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         import_batch_limit_provider=lambda: 10,
     )
     kwargs = dict(
@@ -1113,7 +1115,7 @@ async def test_identifier_import_service_resolve_does_not_download_or_dispatch(t
         session_factory=lambda: _FakeSession(sessions),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=lambda: provider,
         find_existing_source_document_fn=lambda *_args, **_kwargs: None,
         import_batch_limit_provider=lambda: 10,
@@ -1158,7 +1160,7 @@ async def test_identifier_resolve_cleans_phantom_provider_duplicate(tmp_path):
         session_factory=lambda: _FakeSession(sessions),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=lambda: provider,
         get_document_fn=_missing_document,
         find_existing_source_document_fn=lambda *_args, **_kwargs: existing,
@@ -1212,7 +1214,7 @@ async def test_identifier_import_cleans_phantom_provider_duplicate_before_import
         session_factory=lambda: _FakeSession(sessions),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=lambda: provider,
         create_document_fn=_create_document,
         create_job_fn=_create_job,
@@ -1274,7 +1276,7 @@ async def test_identifier_import_service_imports_pdf_when_markdown_is_missing(tm
         session_factory=lambda: _FakeSession(sessions),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=lambda: provider,
         create_document_fn=_create_document,
         create_job_fn=_create_job,
@@ -1372,7 +1374,7 @@ async def test_identifier_import_service_queues_abc_conversion_when_markdown_is_
         session_factory=lambda: _FakeSession(sessions),
         storage_path_provider=lambda: tmp_path,
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=lambda: provider,
         create_document_fn=_create_document,
         create_job_fn=_create_job,
@@ -1427,7 +1429,7 @@ async def test_identifier_import_service_rejects_missing_curator_token_before_pr
         upload_execution_service=_DispatchRecorder(),
         session_factory=lambda: _FakeSession(sessions),
         principal_from_claims_fn=lambda claims: SimpleNamespace(subject=claims["sub"]),
-        provision_user_fn=lambda _session, _principal: SimpleNamespace(id=42),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
         provider_factory=_provider_factory,
         import_batch_limit_provider=lambda: 10,
     )

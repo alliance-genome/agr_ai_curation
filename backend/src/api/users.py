@@ -29,7 +29,7 @@ from src.services.chat_route_preference_service import (
     list_chat_route_picker_targets,
     update_chat_route_preference,
 )
-from src.services.user_service import set_global_user_from_cognito
+from src.services.user_service import principal_from_claims, provision_user_async
 
 
 logger = logging.getLogger(__name__)
@@ -59,7 +59,6 @@ def _preference_response(state: ChatRoutePreferenceState) -> ChatRoutePreference
 @router.get("/me")
 async def get_current_user_info(
     user: Dict[str, Any] = get_auth_dependency(),
-    db: Session = Depends(get_db)
 ) -> dict:
     """Get current authenticated user's information.
 
@@ -68,7 +67,6 @@ async def get_current_user_info(
 
     Args:
         user: Authenticated Cognito user dict from auth dependency
-        db: Database session for querying user record
 
     Returns:
         User information dictionary with:
@@ -77,7 +75,7 @@ async def get_current_user_info(
         - email: User email address
         - display_name: User display name
         - created_at: Account creation timestamp
-        - last_login: Last authentication timestamp
+        - last_login: Sampled most-recent authenticated activity (UTC)
         - is_active: Account active status
 
     Raises:
@@ -85,8 +83,7 @@ async def get_current_user_info(
         404: If user record not found in database
 
     Note:
-        This endpoint triggers user auto-provisioning via set_global_user_from_cognito()
-        in the dependency chain (implements FR-005).
+        This endpoint awaits worker-owned user provisioning (implements FR-005).
     """
     if not user:
         raise HTTPException(
@@ -96,7 +93,7 @@ async def get_current_user_info(
 
     # Auto-provision user on first login (or update on subsequent logins)
     # This implements FR-005 (automatic user creation) and FR-006 (empty collections)
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
 
     response = db_user.to_dict()
     provider_groups = user.get("groups")
@@ -116,7 +113,7 @@ async def read_chat_route_preference(
 ) -> ChatRoutePreferenceResponse:
     """Read this authenticated user's routing intent and current availability."""
 
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     return _preference_response(
         get_chat_route_preference(
             db,
@@ -134,7 +131,7 @@ async def replace_chat_route_preference(
 ) -> ChatRoutePreferenceResponse:
     """Replace this authenticated user's routing intent."""
 
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         state = update_chat_route_preference(
             db,
@@ -159,7 +156,7 @@ async def delete_chat_route_preference(
 ) -> ChatRoutePreferenceResponse:
     """Clear stored routing intent and restore the automatic default."""
 
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     clear_chat_route_preference(db, user_id=db_user.id)
     return _preference_response(
         ChatRoutePreferenceState("automatic", None, None, True, None)
@@ -173,7 +170,7 @@ async def read_chat_route_targets(
 ) -> ChatRoutePickerResponse:
     """List current authorized Agent and saved-flow picker targets."""
 
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     targets = list_chat_route_picker_targets(
         db,
         user_id=db_user.id,
@@ -191,14 +188,14 @@ __all__ = ["router"]
 @router.get("/me/flow-shortcuts")
 async def get_flow_shortcuts(user: Dict[str, Any] = get_auth_dependency(), db: Session = Depends(get_db)):
     from src.services.flow_shortcut_service import read_shortcuts
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     return read_shortcuts(db, db_user.id)
 
 
 @router.put("/me/flow-shortcuts")
 async def put_flow_shortcuts(request: FlowShortcutUpdate, user: Dict[str, Any] = get_auth_dependency(), db: Session = Depends(get_db)):
     from src.services.flow_shortcut_service import save_shortcuts, ShortcutConflict, ShortcutUnavailable
-    db_user = set_global_user_from_cognito(db, user)
+    db_user = await provision_user_async(principal_from_claims(user))
     try:
         return save_shortcuts(db, db_user.id, request)
     except (ShortcutConflict, ShortcutUnavailable) as exc:

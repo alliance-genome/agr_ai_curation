@@ -1,195 +1,168 @@
-"""User provisioning and management service.
-
-Implements:
-- provision_user(): Auto-create users on first login
-- provision_weaviate_tenants(): Create Weaviate tenants for new users
-
-Pattern follows AGR Literature Service reference implementation.
-Requirements: FR-005, FR-006
-"""
+"""Authoritative user lookup, sampled activity, and retryable tenant provisioning."""
 
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
+from sqlalchemy import case, or_, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 from weaviate.classes.tenants import Tenant
 
 from auth_runtime.base import AuthPrincipal
 from src.models.sql.agent import Project, ProjectMember
 from src.models.sql.user import User
+from src.models.sql.database import SessionLocal
 from src.lib.weaviate_helpers import get_connection, get_tenant_name
-
+from src.lib.openai_agents.config import get_user_activity_write_interval_seconds
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
+from src.services.tenant_provisioning_cache import tenant_provisioning_cache
 
 logger = logging.getLogger(__name__)
 
 
 def provision_weaviate_tenants(auth_sub: str) -> bool:
-    """Create Weaviate tenants for new user in multi-tenant collections.
+    """Provision both collections; only completed success is cached per backend.
 
-    Creates tenants in both:
-    - DocumentChunk collection (for text embeddings)
-    - PDFDocument collection (for document metadata)
-
-    Args:
-        auth_sub: Auth provider subject identifier (from token 'sub' claim)
-
-    Returns:
-        True if provisioning succeeded, False if it failed (caller should retry)
-
-    Note:
-        - Idempotent: Safe to call multiple times (Weaviate ignores duplicate tenants)
-        - Called automatically by provision_user() on every login
-        - Returns False on failure so caller can retry on next login
+    Duplicate tenant creation is idempotent. A partial failure is retryable on
+    the next call, without undoing SQL provisioning or denying authentication.
     """
-    tenant_name = get_tenant_name(auth_sub)
-
     try:
         connection = get_connection()
+        tenant_name = get_tenant_name(auth_sub)
 
-        with connection.session() as client:
-            # Create tenant in DocumentChunk collection
-            chunk_collection = client.collections.get("DocumentChunk")
-            chunk_collection.tenants.create(Tenant(name=tenant_name))
-            logger.info("Created tenant '%s' in DocumentChunk collection", tenant_name)
+        def create() -> bool:
+            with connection.session() as client:
+                for name in ("DocumentChunk", "PDFDocument"):
+                    client.collections.get(name).tenants.create(Tenant(name=tenant_name))
+            return True
 
-            # Create tenant in PDFDocument collection
-            pdf_collection = client.collections.get("PDFDocument")
-            pdf_collection.tenants.create(Tenant(name=tenant_name))
-            logger.info("Created tenant '%s' in PDFDocument collection", tenant_name)
-
-        return True
-
-    except Exception as e:
-        logger.error('Failed to provision Weaviate tenants for %s: %s', auth_sub, e)
-        # Return False to signal failure - caller will retry on next login
+        # The connection object identifies the deployment; lifecycle replacement
+        # also invalidates in-flight generations. No credentials are cache keys.
+        return tenant_provisioning_cache.ensure((connection, auth_sub, tenant_name), create)
+    except Exception:
+        report_runtime_exception(
+            sanitized_runtime_error("Weaviate tenant provisioning failed"),
+            component="user_provisioning", operation="provision_tenants",
+        )
+        logger.error("Weaviate tenant provisioning failed; next request will retry",
+                     extra={"sentry_skip_event": True})
         return False
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _activity_due(last_login: Optional[datetime], now: datetime, interval: int) -> bool:
+    if last_login is None:
+        return True
+    # Legacy naive timestamps represent UTC. Future timestamps are retained until
+    # wall time catches up; a slower worker must never move activity backwards.
+    last_login = last_login.replace(tzinfo=timezone.utc) if last_login.tzinfo is None else last_login
+    return (now - last_login).total_seconds() >= interval
+
+
 def provision_user(db: Session, principal: AuthPrincipal) -> User:
-    """Ensure user row exists for authenticated principal, create if new.
+    """Resolve authenticated identity using the caller-owned synchronous Session.
 
-    This is the main user provisioning function, called on every authenticated request.
-    Pattern follows AGR Literature Service implementation.
-
-    Args:
-        db: SQLAlchemy database session
-        principal: Provider-agnostic authenticated principal
-
-    Returns:
-        User database model (either existing or newly created)
-
-    Behavior:
-        - First login: Create user and configured default-project membership atomically, then Weaviate tenants
-        - Subsequent logins: Update last_login timestamp
-        - Email changes: Update email from identity provider profile
-
-    Requirements:
-        - FR-005: Automatic user creation on first login
-        - FR-006: Empty Weaviate collections initialized for new users
-
-    Example:
-        >>> from fastapi import Depends
-        >>> @router.get("/endpoint")
-        >>> def protected_endpoint(
-        ...     user: dict = get_auth_dependency(),
-        ...     db: Session = Depends(get_db)
-        ... ):
-        ...     db_user = provision_user(db, principal)
-        ...     # Now db_user is guaranteed to exist
+    Writes commit as before; a warm lookup leaves its read transaction for the
+    caller to close. Call before starting caller-owned mutations. Async callers
+    use provision_user_async, whose worker owns its entire Session lifecycle.
+    Profile-only writes also sample activity, but never decrease it. SQL updates
+    touch only profile/activity fields, never flush stale User attributes.
     """
-    auth_sub: str = principal.subject
+    auth_sub = principal.subject
     if not auth_sub:
         raise ValueError("Authenticated principal missing subject")
-
-    # Extract email if valid (must contain @)
-    user_email: Optional[str] = principal.email
+    user_email = principal.email
     if user_email and '@' not in user_email:
         user_email = None
+    display_name = principal.display_name or user_email
+    now = _utc_now()
+    interval = get_user_activity_write_interval_seconds()
+    with db.no_autoflush:
+        db_user = db.query(User).filter_by(auth_sub=auth_sub).one_or_none()
+        if db_user is None:
+            project_id = None
+            configured_project = os.getenv("DEFAULT_PROJECT_ID", "").strip()
+            if configured_project:
+                try:
+                    project_id = uuid.UUID(configured_project)
+                except ValueError as exc:
+                    raise ValueError("DEFAULT_PROJECT_ID must be a project UUID") from exc
+                project = db.query(Project).filter_by(id=project_id, is_active=True).one_or_none()
+                if project is None:
+                    raise ValueError("DEFAULT_PROJECT_ID must identify an active project")
 
-    # Extract display name (use 'name' claim or fallback to email)
-    display_name: Optional[str] = principal.display_name or user_email
+            # Conflict handling is limited to auth_sub uniqueness. PostgreSQL
+            # waits for the competing insert; no rollback of caller work occurs.
+            created_id = db.execute(
+                insert(User).values(auth_sub=auth_sub, email=user_email,
+                                    display_name=display_name, created_at=now,
+                                    last_login=now, is_active=True)
+                .on_conflict_do_nothing(index_elements=[User.auth_sub])
+                .returning(User.id)
+            ).scalar_one_or_none()
+            if created_id is not None:
+                if project_id is not None:
+                    db.add(ProjectMember(project_id=project_id, user_id=created_id, role="member"))
+                db.commit()
+            db_user = db.query(User).filter_by(auth_sub=auth_sub).one()
 
-    # Check if user already exists by their auth_sub claim
-    db_user = db.query(User).filter_by(auth_sub=auth_sub).one_or_none()
+        profile_changed = db_user.email != user_email or db_user.display_name != display_name
+        if profile_changed or _activity_due(db_user.last_login, now, interval):
+            values = {"last_login": case(
+                (or_(User.last_login.is_(None), User.last_login < now), now),
+                else_=User.last_login,
+            )}
+            if profile_changed:
+                values.update(email=user_email, display_name=display_name)
+            statement = update(User).where(User.id == db_user.id)
+            if not profile_changed:
+                statement = statement.where(or_(
+                    User.last_login.is_(None), User.last_login <= now - timedelta(seconds=interval),
+                ))
+            result = db.execute(statement.values(**values).execution_options(synchronize_session=False))
+            if result.rowcount:
+                db.commit()
+                db.refresh(db_user)
 
-    if db_user is None:
-        # Enrollment is explicit deployment policy, never inferred from the first
-        # project. Validate before creating the user so both rows commit together.
-        project_id = None
-        configured_project = os.getenv("DEFAULT_PROJECT_ID", "").strip()
-        if configured_project:
-            try:
-                project_id = uuid.UUID(configured_project)
-            except ValueError as exc:
-                raise ValueError("DEFAULT_PROJECT_ID must be a project UUID") from exc
-            project = db.query(Project).filter_by(id=project_id, is_active=True).one_or_none()
-            if project is None:
-                raise ValueError("DEFAULT_PROJECT_ID must identify an active project")
-
-        # First login - create new user
-        logger.info('First login detected for principal %s - creating account', auth_sub)
-
-        # Create user record
-        db_user = User(
-            auth_sub=auth_sub,
-            email=user_email,
-            display_name=display_name,
-            created_at=datetime.now(timezone.utc),
-            last_login=datetime.now(timezone.utc),
-            is_active=True
-        )
-        db.add(db_user)
-        if project_id is not None:
-            db.flush()
-            db.add(ProjectMember(project_id=project_id, user_id=db_user.id, role="member"))
-        db.commit()
-        db.refresh(db_user)
-
-        logger.info('Created user account: id=%s, auth_sub=%s, email=%s', db_user.id, auth_sub, user_email)
-
-        # Provision Weaviate tenants for new user (FR-006)
-        # Returns False on failure - we'll retry on next login
-        provisioned = provision_weaviate_tenants(auth_sub)
-        if provisioned:
-            logger.info('Provisioned Weaviate tenants for user %s', auth_sub)
-        else:
-            logger.warning('Failed to provision Weaviate tenants for %s - will retry on next login', auth_sub)
-
-        return db_user
-
-    # Existing user - update metadata and retry tenant provisioning if needed
-    needs_update = False
-
-    # Update email if changed in identity provider
-    if db_user.email != user_email:
-        logger.info('Updating email for user %s: %s → %s', auth_sub, db_user.email, user_email)
-        db_user.email = user_email
-        needs_update = True
-
-    # Update display name if changed
-    if db_user.display_name != display_name:
-        logger.info('Updating display name for user %s: %s → %s', auth_sub, db_user.display_name, display_name)
-        db_user.display_name = display_name
-        needs_update = True
-
-    # Update last_login timestamp
-    db_user.last_login = datetime.now(timezone.utc)
-    needs_update = True
-
-    if needs_update:
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-
-    # Retry tenant provisioning on every login (idempotent if already exists)
-    # This ensures we eventually provision tenants even if first attempt failed
     provision_weaviate_tenants(auth_sub)
-
-    logger.debug('User %s authenticated (id=%s)', auth_sub, db_user.id)
     return db_user
+
+
+@dataclass(frozen=True)
+class ProvisionedUser:
+    """Stable scalar snapshot; contains no Session, ORM state, or relationships."""
+    id: int
+    auth_sub: str
+    email: Optional[str]
+    display_name: Optional[str]
+    created_at: datetime
+    last_login: Optional[datetime]
+    is_active: bool
+
+    def to_dict(self) -> dict:
+        result = asdict(self)
+        result["created_at"] = self.created_at.isoformat()
+        result["last_login"] = self.last_login.isoformat() if self.last_login else None
+        return result
+
+
+def _provision_owned_user(principal: AuthPrincipal) -> ProvisionedUser:
+    with SessionLocal() as db:
+        user = provision_user(db, principal)
+        return ProvisionedUser(**{field: getattr(user, field) for field in ProvisionedUser.__dataclass_fields__})
+
+
+async def provision_user_async(principal: AuthPrincipal) -> ProvisionedUser:
+    """Await provisioning in one worker; cancellation cannot orphan its Session."""
+    return await run_in_threadpool(_provision_owned_user, principal)
 
 
 def principal_from_claims(claims: Dict[str, Any], provider: str = "unknown") -> AuthPrincipal:
@@ -218,6 +191,8 @@ def set_global_user_from_cognito(db: Session, cognito_user: Dict[str, Any]) -> U
 
 __all__ = [
     "provision_user",
+    "provision_user_async",
+    "ProvisionedUser",
     "principal_from_claims",
     "set_global_user_from_cognito",
     "provision_weaviate_tenants",

@@ -1,4 +1,5 @@
 """Tests for custom-agent API endpoints."""
+from unittest.mock import AsyncMock
 
 import asyncio
 from datetime import UTC, datetime
@@ -57,7 +58,7 @@ def test_profile_revision_edit_requires_one_explicit_complete_transition():
 def test_profile_revision_conflict_rolls_back_agent_save_and_returns_409(monkeypatch):
     import src.api.agent_studio_custom as api
     custom_agent = SimpleNamespace(id=uuid.uuid4())
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=1)))
     monkeypatch.setattr(api, "get_custom_agent_for_user", lambda *args, **kwargs: custom_agent)
     def conflict(**kwargs):
         raise api.ProfileConflictError("Profile changed since it was opened")
@@ -102,8 +103,8 @@ class TestCustomAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -139,8 +140,8 @@ class TestCustomAgentTestEndpoint:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -264,8 +265,8 @@ class TestCustomAgentCrudContract:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
 
         def _fake_create_custom_agent(**kwargs):
@@ -345,8 +346,8 @@ class TestCustomAgentCrudContract:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         validation_message = (
             "Agents using an envelope output schema must include a builder finalize "
@@ -391,8 +392,8 @@ class TestCustomAgentCrudContract:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
 
         def _fake_list_custom_agents_for_user(_db, user_id, template_source=None):
@@ -420,8 +421,8 @@ class TestCustomAgentCrudContract:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -471,8 +472,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -505,8 +506,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         )
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -538,8 +539,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         )
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -586,8 +587,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         )
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
         monkeypatch.setattr(
@@ -631,8 +632,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -663,8 +664,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
 
         monkeypatch.setattr(
@@ -712,8 +713,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         observed_kwargs = {}
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -786,8 +787,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(api_module, "get_custom_agent_for_user", lambda *_args, **_kwargs: custom_agent)
 
@@ -873,8 +874,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
 
         monkeypatch.setattr(
@@ -932,8 +933,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(
             api_module,
@@ -966,8 +967,8 @@ class TestCustomAgentCrudErrorsAndBranches:
         )
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub=None),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub=None)),
         )
         with pytest.raises(HTTPException) as missing_user_exc:
             asyncio.run(
@@ -982,8 +983,8 @@ class TestCustomAgentCrudErrorsAndBranches:
 
         monkeypatch.setattr(
             api_module,
-            "set_global_user_from_cognito",
-            lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+            "provision_user_async",
+            AsyncMock(return_value=SimpleNamespace(id=1, auth_sub='auth-sub')),
         )
         monkeypatch.setattr(api_module, "get_agent_by_id", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("init failed")))
         with pytest.raises(HTTPException) as init_exc:
@@ -1061,7 +1062,7 @@ class TestCustomAgentCrudErrorsAndBranches:
 def test_discovery_scope_preserves_management_and_group_filtering(monkeypatch, scope):
     import src.api.agent_studio_custom as api
 
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=1)))
     monkeypatch.setattr(api, "get_groups_from_provider_groups", lambda _: ["MGI"])
     owned = MagicMock(return_value=[SimpleNamespace(allowed_group_ids=[])])
     visible = MagicMock(return_value=[
@@ -1088,7 +1089,7 @@ def test_discovery_scope_preserves_management_and_group_filtering(monkeypatch, s
 def test_shared_agent_detail_keeps_group_restrictions(monkeypatch, groups, allowed):
     import src.api.agent_studio_custom as api
 
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=1)))
     monkeypatch.setattr(api, "get_groups_from_provider_groups", lambda _: ["MGI"])
     agent = SimpleNamespace(allowed_group_ids=groups)
     lookup = MagicMock(return_value=agent)
@@ -1112,7 +1113,7 @@ def test_shared_agent_detail_keeps_group_restrictions(monkeypatch, groups, allow
 def test_shared_agent_nonowner_mutation_denied(monkeypatch, operation):
     import src.api.agent_studio_custom as api
 
-    monkeypatch.setattr(api, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=1))
+    monkeypatch.setattr(api, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=1)))
     db = MagicMock()
     db.query.return_value.filter.return_value = db.query.return_value
     db.query.return_value.first.return_value = SimpleNamespace(user_id=2)

@@ -4,9 +4,6 @@ This model represents user accounts created via AWS Cognito authentication.
 Users are auto-provisioned on first login (FR-005).
 """
 
-from datetime import datetime
-from typing import Optional
-
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, CheckConstraint
 from sqlalchemy.sql import func
 
@@ -67,7 +64,7 @@ class User(Base):
     last_login = Column(
         DateTime(timezone=True),
         nullable=True,
-        comment="Timestamp of most recent authentication"
+        comment="Sampled most-recent authenticated activity (UTC); profile changes persist immediately"
     )
 
     # Status

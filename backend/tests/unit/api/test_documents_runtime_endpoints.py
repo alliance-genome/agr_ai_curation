@@ -437,7 +437,7 @@ async def test_update_document_endpoint_rejects_current_indexed_reprocess_with_t
     assert exc.value.status_code == 409
     assert "processing is active" in exc.value.detail
     assert session.commits == 0
-    assert ownership_calls == [{"for_update": True}]
+    assert ownership_calls == [{"for_update": True, "provisioned_user_id": 7}]
 
 
 @pytest.mark.asyncio
@@ -1842,3 +1842,11 @@ async def test_listing_never_reconciles_incomplete_inventory(monkeypatch, scenar
         assert collection.query.fetch_objects.call_args.kwargs["offset"] == 20
         assert session.close.call_count == (1 if scenario == "vector_error" else 2)
         assert collection.aggregate.over_all.call_count == (0 if scenario == "vector_error" else 1)
+
+
+@pytest.fixture(autouse=True)
+def async_provisioning_boundary(monkeypatch):
+    monkeypatch.setattr(documents, "provision_user", lambda *_args: SimpleNamespace(id=7))
+    async def provision(principal):
+        return documents.provision_user(None, principal)
+    monkeypatch.setattr(documents, "provision_user_async", provision)

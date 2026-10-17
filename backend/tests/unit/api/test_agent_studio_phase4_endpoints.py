@@ -1,4 +1,5 @@
 """Tests for Phase 4 Agent Workshop tool-idea endpoints."""
+from unittest.mock import AsyncMock
 
 import asyncio
 from datetime import UTC, datetime
@@ -39,8 +40,8 @@ def test_create_tool_idea_endpoint_submits_request(monkeypatch):
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -92,8 +93,8 @@ def test_create_tool_idea_endpoint_returns_400_on_validation_error(monkeypatch, 
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7, auth_sub='auth-sub')),
     )
     monkeypatch.setattr(
         api_module,
@@ -138,8 +139,8 @@ def test_list_tool_ideas_endpoint_returns_current_user_requests(monkeypatch):
 
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7, auth_sub="auth-sub"),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7, auth_sub='auth-sub')),
     )
 
     def _fake_list_tool_idea_requests_visible_to_user(_db, user_id):
@@ -163,7 +164,7 @@ def test_list_tool_ideas_endpoint_returns_current_user_requests(monkeypatch):
 def test_list_tool_ideas_omits_teammate_conversations_in_serialized_response(monkeypatch):
     import src.api.agent_studio as api_module
 
-    monkeypatch.setattr(api_module, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=7))
+    monkeypatch.setattr(api_module, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
     own = _tool_idea_record()
     teammate = _tool_idea_record(user_id=8, developer_notes="Private triage")
     monkeypatch.setattr(api_module, "list_tool_idea_requests_visible_to_user", lambda *_: [own, teammate])

@@ -753,3 +753,10 @@ async def test_get_download_info_blocks_source_markdown_path_traversal(monkeypat
         )
 
     assert exc.value.status_code == 403
+
+
+@pytest.fixture(autouse=True)
+def async_provisioning_boundary(monkeypatch):
+    async def provision(principal):
+        return documents.provision_user(None, principal)
+    monkeypatch.setattr(documents, "provision_user_async", provision)

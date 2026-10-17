@@ -1,6 +1,7 @@
 """Contract tests for Agent Studio ChatContext session_id support."""
 
 from __future__ import annotations
+from unittest.mock import AsyncMock
 
 import json
 from types import SimpleNamespace
@@ -85,8 +86,8 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1)),
     )
 
     def _fake_get_db():

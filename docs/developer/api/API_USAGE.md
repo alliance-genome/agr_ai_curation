@@ -1175,3 +1175,72 @@ dependencies with 422 and execution rejects them with 403. The owner can repair
 the source by selecting available agents. Execution continues to use the caller's
 identity for documents, sessions, evidence and outputs. Flow sharing grants no
 access to source execution history, evidence exports or batches.
+
+## Authenticated user provisioning
+
+`last_login` is sampled most-recent authenticated activity, not a record of every
+request or only interactive sign-in. `USER_ACTIVITY_WRITE_INTERVAL_SECONDS`
+(default 300 seconds) limits unchanged-user writes. Null timestamps are filled;
+changed normalized email/name fields, including clearing them, persist immediately
+and also advance activity. Naive legacy timestamps mean UTC. Future timestamps
+are preserved until wall time catches up plus the interval; slower workers never
+move a newer timestamp backwards. Timestamp eligibility is rechecked by SQL, so
+concurrent stale reads cannot overwrite a newer activity value. Profile claims
+have no provider revision and are synchronized in database write order.
+
+Authentication and authoritative SQL lookup still run on every invocation. Warm
+unchanged provisioning performs no commit/refresh. Its read transaction remains
+open until its owner closes it; this optimization does not eliminate database
+reads or change pool sizing. Synchronous `provision_user(db, principal)` retains
+the caller-owned Session contract: call it before caller mutations, and retain
+explicit commits for those mutations. First-login insertion arbitrates only the
+unique `auth_sub` conflict in PostgreSQL; unrelated integrity failures still fail.
+Default-project membership and a newly inserted user commit together.
+
+Async auth, users, batch, document, PDF-job, chat, flow, Agent Studio and
+curation workspace API provisioning uses
+`await provision_user_async(principal)`. The worker creates, uses and closes its
+own Session and returns frozen `ProvisionedUser` scalars (`id`, `auth_sub`,
+`email`, `display_name`, `created_at`, `last_login`, `is_active`); it never returns
+ORM relationships. Request Sessions remain with their caller. Cancellation does
+not interrupt a running worker's cleanup. PDF SSE provisions once at connection
+setup; subsequent stream-loop/session changes belong to the stream tickets.
+Upload intake and identifier import services await the same provisioning boundary;
+their document persistence Sessions remain with the caller. Flow ownership and
+Agent Studio catalog/prompt helpers also await provisioning; their subsequent
+queries and mutations still use the request Session on the request thread.
+Synchronous viewer, generic profile and onboarding consumers retain the
+synchronous boundary in their owner context. This does not change authentication,
+role/group checks, deactivation policy, tenant mapping or ownership filtering.
+
+Tenant success is separate from activity sampling. Both collections must complete
+before a success is retained for `USER_TENANT_CACHE_TTL_SECONDS` (default 300),
+measured with a monotonic clock starting at completion. Partial failures remain
+retryable on the next request; duplicate tenant creates converge. SQL users stay
+provisioned even when Weaviate fails. A sanitized failure is reported to Sentry.
+`USER_TENANT_CACHE_MAX_ENTRIES` (default 1024) bounds retained successes and,
+separately, distinct in-flight owners. Same-key misses share one attempt; unrelated
+keys can provision concurrently. Entries contain no users, Sessions, credentials
+or authorization decisions, and are keyed by connection identity, authenticated subject and tenant name.
+Each process/worker has its own cache; this is not a distributed lock.
+
+After out-of-band tenant or collection resets, either restart **all** backend
+workers, or invoke
+`src.services.tenant_provisioning_cache.invalidate_tenant_provisioning_cache()`
+in each worker after the reset. Otherwise the first request after TTL expiry
+repairs provisioning. Supported connection replacement/close functions invalidate
+the cache. Invalidation keeps active owners registered but prevents their stale
+completion from repopulating success. No new schema-admin workflow is introduced.
+Zero interval writes each request; zero TTL disables retained successes. Negative
+interval/TTL values clamp to zero, capacity clamps to at least one, and malformed
+values use the documented defaults. Five-minute defaults trade bounded timestamp
+and reset freshness for fewer polling writes/remote operations; capacity bounds
+per-worker memory while accommodating 1024 recently active identities.
+
+Deterministic validation lives in `tests/unit/services/test_user_service.py`,
+`test_tenant_provisioning_cache.py`, `test_user_provisioning_async.py`, and
+`tests/integration/persistence/test_user_provisioning.py`. Inspected baseline:
+one commit, one refresh and two successful tenant creates for each unchanged
+invocation. Warm path: zero provisioning commits/refreshes/tenant creates, with
+an authoritative SQL lookup retained. These are operation counts, not measured
+production latency or throughput improvements.

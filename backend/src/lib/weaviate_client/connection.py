@@ -243,6 +243,8 @@ def set_connection(connection: WeaviateConnection) -> None:
         connection: WeaviateConnection instance to use globally
     """
     global _connection
+    from src.services.tenant_provisioning_cache import invalidate_tenant_provisioning_cache
+    invalidate_tenant_provisioning_cache()
     _connection = connection
 
 
@@ -257,14 +259,16 @@ def connect_to_weaviate(url: str = "http://localhost:8080",
     Returns:
         Weaviate client instance
     """
-    global _connection
-    _connection = WeaviateConnection(url, api_key)
-    return _connection.connect()
+    connection = WeaviateConnection(url, api_key)
+    set_connection(connection)
+    return connection.connect()
 
 
 def close_connection() -> None:
     """Close the global Weaviate connection."""
     global _connection
+    from src.services.tenant_provisioning_cache import invalidate_tenant_provisioning_cache
+    invalidate_tenant_provisioning_cache()
     if _connection:
         _connection.disconnect()
         _connection = None

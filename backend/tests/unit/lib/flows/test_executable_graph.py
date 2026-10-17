@@ -1,4 +1,5 @@
 """Consumer-parity coverage for canonical executable flow topology."""
+from unittest.mock import AsyncMock
 
 import json
 from datetime import datetime, timezone
@@ -500,8 +501,8 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
     db = _RoundTripDB()
     monkeypatch.setattr(
         flows_api,
-        "set_global_user_from_cognito",
-        lambda *_args, **_kwargs: SimpleNamespace(id=17),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=17)),
     )
     monkeypatch.setattr(
         flows_api,

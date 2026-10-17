@@ -1,6 +1,7 @@
 """Tests for Agent Studio provider-context compaction helpers."""
 
 from __future__ import annotations
+from unittest.mock import AsyncMock
 
 import asyncio
 import json
@@ -400,8 +401,8 @@ def test_streaming_tool_loop_sends_complete_large_result_to_provider(monkeypatch
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     monkeypatch.setattr(api_module, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
     monkeypatch.setattr(
@@ -512,8 +513,8 @@ def test_repeated_tool_loop_continuations_keep_exact_results(
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
     monkeypatch.setattr(api_module, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
     monkeypatch.setattr(

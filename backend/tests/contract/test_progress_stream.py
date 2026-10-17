@@ -53,8 +53,8 @@ def patch_stream_dependencies(monkeypatch: pytest.MonkeyPatch):
         "verify_document_ownership",
         lambda *_args, **_kwargs: SimpleNamespace(status="processing"),
     )
-    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
-    monkeypatch.setattr(main.documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(documents, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
+    monkeypatch.setattr(main.documents, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
     monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
     monkeypatch.setattr(main.documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
 

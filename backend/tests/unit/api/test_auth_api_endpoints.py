@@ -1,5 +1,7 @@
 """Unit tests for auth API endpoint handlers and edge paths."""
 
+from unittest.mock import AsyncMock
+
 import importlib
 import json
 import logging
@@ -152,7 +154,7 @@ async def test_callback_redirects_to_login_when_oauth_state_missing():
         response=Response(),
         code="code",
         state="state",
-        db=object(),
+
     )
     assert response.status_code == 302
     assert str(response.headers["location"]) == "/api/auth/login"
@@ -165,7 +167,7 @@ async def test_callback_redirects_to_login_on_state_mismatch():
         response=Response(),
         code="code",
         state="state",
-        db=object(),
+
     )
     assert response.status_code == 302
     assert str(response.headers["location"]) == "/api/auth/login"
@@ -178,7 +180,7 @@ async def test_callback_redirects_when_code_verifier_missing():
         response=Response(),
         code="code",
         state="state",
-        db=object(),
+
     )
     assert response.status_code == 302
     assert str(response.headers["location"]) == "/api/auth/login"
@@ -198,7 +200,7 @@ async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch, de
             return SimpleNamespace(subject="user-123", email="u@example.org", display_name="User", groups=[])
 
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
-    monkeypatch.setattr(auth_api, "provision_user", lambda _db, principal: SimpleNamespace(auth_sub=principal.subject))
+    monkeypatch.setattr(auth_api, "provision_user_async", AsyncMock(side_effect=lambda principal: SimpleNamespace(auth_sub=principal.subject)))
     monkeypatch.setattr(auth_api, "get_secure_cookies", lambda: False)
     monkeypatch.setattr(auth_api, "get_auth_session_cookie_max_age_seconds", lambda: 654)
     monkeypatch.setenv("AUTH_SESSION_COOKIE_MAX_AGE_SECONDS", "invalid")
@@ -208,7 +210,7 @@ async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch, de
         response=Response(),
         code="code",
         state="state",
-        db=object(),
+
     )
     assert response.status_code == 302
     assert str(response.headers["location"]) == expected
@@ -243,7 +245,7 @@ async def test_callback_raises_for_provider_failure(monkeypatch, caplog):
             response=Response(),
             code="code",
             state="state",
-            db=object(),
+
         )
     assert exc.value.status_code == 400
     assert exc.value.detail == "Authentication callback failed"
@@ -270,7 +272,7 @@ async def test_callback_raises_when_principal_subject_missing(monkeypatch):
             response=Response(),
             code="code",
             state="state",
-            db=object(),
+
         )
     assert exc.value.status_code == 400
 
@@ -473,7 +475,7 @@ async def test_callback_operational_reporting_preserves_response(monkeypatch, ki
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: object())
     monkeypatch.setattr(auth_api, "report_runtime_exception", report)
     with pytest.raises(HTTPException) as caught:
-        await auth_api.callback(_request(cookies={"oauth_state": "s", "oauth_code_verifier": "v"}), Response(), "c", "s", object())
+        await auth_api.callback(_request(cookies={"oauth_state": "s", "oauth_code_verifier": "v"}), Response(), "c", "s")
     assert caught.value.status_code == 400
     assert bool(calls) == expected
     assert "sensitive-provider-details" not in str(calls)
@@ -532,7 +534,7 @@ async def test_discovery_http_failure_reporting_preserves_response(
         else:
             await auth_api.callback(
                 _request(cookies={"oauth_state": "s", "oauth_code_verifier": "sensitive-verifier"}),
-                Response(), "sensitive-code", "s", object(),
+                Response(), "sensitive-code", "s",
             )
 
     assert caught.value.status_code == (503 if operation == "login" else 400)
@@ -589,7 +591,7 @@ async def test_malformed_token_response_is_reported_at_callback(monkeypatch, id_
     with pytest.raises(HTTPException) as caught:
         await auth_api.callback(
             _request(cookies={"oauth_state": "s", "oauth_code_verifier": "v"}),
-            Response(), "c", "s", object(),
+            Response(), "c", "s",
         )
     assert caught.value.status_code == 400
     assert report.call_count == 1

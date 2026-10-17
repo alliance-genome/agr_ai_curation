@@ -639,3 +639,10 @@ async def test_status_endpoint_prefers_cancelled_terminal_job_over_active_pipeli
     assert result["pipeline_status"]["current_stage"] == "cancelled"
     assert result["job_status"] == "cancelled"
     assert result["cancel_requested"] is True
+
+
+@pytest.fixture(autouse=True)
+def async_provisioning_boundary(monkeypatch):
+    async def provision(principal):
+        return documents.provision_user(None, principal)
+    monkeypatch.setattr(documents, "provision_user_async", provision)

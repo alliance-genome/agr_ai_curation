@@ -1,4 +1,5 @@
 """Unit tests for flow API ownership and soft-delete behavior."""
+from unittest.mock import AsyncMock
 
 import asyncio
 import importlib
@@ -66,26 +67,26 @@ def test_flows_crud_enforces_ownership_and_soft_delete(monkeypatch):
 
     monkeypatch.setattr(
         flows,
-        "set_global_user_from_cognito",
-        lambda _db, _auth_user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
-    resolved = flows.verify_flow_ownership(db, flow_id, {"sub": "auth-sub"})
+    resolved = asyncio.run(flows.verify_flow_ownership(db, flow_id, {"sub": "auth-sub"}))
     assert resolved is owned_flow
 
     monkeypatch.setattr(
         flows,
-        "set_global_user_from_cognito",
-        lambda _db, _auth_user: SimpleNamespace(id=99),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=99)),
     )
     with pytest.raises(HTTPException) as exc:
-        flows.verify_flow_ownership(db, flow_id, {"sub": "auth-sub"})
+        asyncio.run(flows.verify_flow_ownership(db, flow_id, {"sub": "auth-sub"}))
     assert exc.value.status_code == 403
 
     delete_db = _DummyDB()
     monkeypatch.setattr(
         flows,
         "verify_flow_ownership",
-        lambda _db, _flow_id, _user: owned_flow,
+        AsyncMock(side_effect=lambda _db, _flow_id, _user: owned_flow),
     )
 
     result = asyncio.run(
@@ -108,12 +109,12 @@ def test_verify_flow_ownership_returns_404_for_missing_or_deleted_flow(monkeypat
 
     monkeypatch.setattr(
         flows,
-        "set_global_user_from_cognito",
-        lambda _db, _auth_user: SimpleNamespace(id=7),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=7)),
     )
 
     with pytest.raises(HTTPException) as exc:
-        flows.verify_flow_ownership(db, flow_id, {"sub": "auth-sub"})
+        asyncio.run(flows.verify_flow_ownership(db, flow_id, {"sub": "auth-sub"}))
 
     assert exc.value.status_code == 404
 
@@ -126,7 +127,7 @@ def test_verify_flow_ownership_returns_404_for_missing_or_deleted_flow(monkeypat
     )
     soft_deleted_db = _DummyDB(flow=soft_deleted_flow)
     with pytest.raises(HTTPException) as soft_deleted_exc:
-        flows.verify_flow_ownership(soft_deleted_db, flow_id, {"sub": "auth-sub"})
+        asyncio.run(flows.verify_flow_ownership(soft_deleted_db, flow_id, {"sub": "auth-sub"}))
     assert soft_deleted_exc.value.status_code == 404
 
 
@@ -877,7 +878,7 @@ def test_project_members_cannot_mutate_source(monkeypatch, operation):
     from src.schemas.flows import UpdateFlowRequest, ShareFlowRequest
     flow = SimpleNamespace(id=uuid4(), user_id=7, is_active=True,
                            visibility="project", project_id=uuid4())
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=99))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=99)))
     kwargs = dict(flow_id=flow.id, user={"sub": "member"}, db=_DummyDB(flow))
     if operation == "update":
         kwargs["request"] = UpdateFlowRequest(name="Changed")
@@ -895,7 +896,7 @@ def test_share_unshare_and_membership_removal(monkeypatch):
                            visibility="private", project_id=None, shared_at=None)
     project_id = uuid4()
     db = _DummyDB(flow)
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=7))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
     monkeypatch.setattr(flows, "get_primary_project_id_for_user", lambda *_: project_id)
     monkeypatch.setattr(flows, "_flow_to_response", lambda flow, **_: flow)
     monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: {project_id})
@@ -914,7 +915,7 @@ def test_sharing_without_membership_is_rejected(monkeypatch):
     from src.schemas.flows import ShareFlowRequest
     flow = SimpleNamespace(id=uuid4(), user_id=7, is_active=True, visibility="private")
     db = _DummyDB(flow)
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=7))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=7)))
     def missing(*_):
         raise ValueError("User is not assigned to any project")
     monkeypatch.setattr(flows, "get_primary_project_id_for_user", missing)
@@ -972,7 +973,7 @@ def test_clone_rejects_private_source_or_unavailable_dependencies(monkeypatch, v
         name="Shared", description=None, execution_count=8, last_executed_at=now,
         created_at=now, updated_at=now, flow_definition=_minimal_flow_definition_payload())
     db = _DummyDB(source)
-    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_: SimpleNamespace(id=99))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=99)))
     monkeypatch.setattr(access, "get_project_ids_for_user", lambda *_: {project_id})
     monkeypatch.setattr(flows, "_flow_agent_policy_entry", lambda *_, **__: {} if available else None)
     with pytest.raises(HTTPException) as exc:

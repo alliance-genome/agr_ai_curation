@@ -1,6 +1,7 @@
 """Contract coverage for Agent Studio chat history tool registration."""
 
 from __future__ import annotations
+from unittest.mock import AsyncMock
 
 import json
 from datetime import datetime, timezone
@@ -43,8 +44,8 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
     monkeypatch.setattr(api_module, "clear_current_flow_context", lambda: None)
     monkeypatch.setattr(
         api_module,
-        "set_global_user_from_cognito",
-        lambda _db, _user: SimpleNamespace(id=1),
+        "provision_user_async",
+        AsyncMock(return_value=SimpleNamespace(id=1)),
     )
 
     def _fake_get_db():

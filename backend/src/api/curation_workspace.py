@@ -141,7 +141,7 @@ from src.schemas.curation_workspace import (
     CurationWorkspaceResponse,
     DomainEnvelopeReviewRowsResponse,
 )
-from src.services.user_service import set_global_user_from_cognito
+from src.services.user_service import principal_from_claims, provision_user_async
 from src.lib.agent_studio.profile_conformance import (
     EnvelopeIntegrityError,
     ProfileConformanceError,
@@ -421,7 +421,7 @@ async def post_benchmark_snapshot(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationBenchmarkSnapshotCreateResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     owner_subject = _require_current_user_id(user)
     try:
         result = create_benchmark_snapshot(
@@ -464,7 +464,7 @@ async def download_benchmark_snapshot(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> Response:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     try:
         content = load_benchmark_snapshot_bytes(
             db, snapshot_id=snapshot_id, current_user_id=_require_current_user_id(user)
@@ -490,7 +490,7 @@ async def post_benchmark_snapshot_handoff(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationBenchmarkHandoffResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     try:
         return await handoff_benchmark_snapshot(
             db,
@@ -519,7 +519,7 @@ async def retry_benchmark_snapshot_handoff(
     db: Session = Depends(get_db),
 ) -> CurationBenchmarkHandoffResponse:
     """Explicit recovery of a saved delivery, using its original bytes and identity."""
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     try:
         return await handoff_benchmark_snapshot(
             db, snapshot_id=snapshot_id, destination_id=request.destination_id,
@@ -539,7 +539,7 @@ async def list_review_sessions(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSessionListResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return list_sessions(db, request, current_user_id=_require_current_user_id(user))
 
 
@@ -549,7 +549,7 @@ async def post_review_session(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSessionCreateResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
     return create_manual_session(
         request,
@@ -565,7 +565,7 @@ async def get_saved_views(
     db: Session = Depends(get_db),
 ) -> CurationSavedViewListResponse:
     user_id = _require_current_user_id(user)
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return list_saved_view_records(db, current_user_id=user_id)
 
 
@@ -576,7 +576,7 @@ async def post_saved_view(
     db: Session = Depends(get_db),
 ) -> CurationSavedViewCreateResponse:
     user_id = _require_current_user_id(user)
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return create_saved_view_record(
         db,
         request,
@@ -591,7 +591,7 @@ async def delete_saved_view(
     db: Session = Depends(get_db),
 ) -> CurationSavedViewDeleteResponse:
     user_id = _require_current_user_id(user)
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return delete_saved_view_record(
         db,
         view_id,
@@ -605,7 +605,7 @@ async def get_review_session_stats(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSessionStatsResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return get_session_stats(
         db,
         request,
@@ -619,7 +619,7 @@ async def get_review_flow_runs(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationFlowRunListResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return list_flow_runs(db, request, current_user_id=_require_current_user_id(user))
 
 
@@ -629,7 +629,7 @@ async def get_review_flow_run_sessions(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationFlowRunSessionsResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return list_flow_run_sessions(db, request, current_user_id=_require_current_user_id(user))
 
 
@@ -639,7 +639,7 @@ async def get_next_review_session(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationNextSessionResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return get_next_session(db, request, current_user_id=_require_current_user_id(user))
 
 
@@ -650,7 +650,7 @@ async def get_review_session(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationReviewSession | CurationWorkspaceResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     if include_workspace:
         return get_session_workspace(db, session_id)
     return get_session_detail(db, session_id)
@@ -666,7 +666,7 @@ async def get_domain_envelope_review_rows(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> DomainEnvelopeReviewRowsResponse:
-    acting_user = set_global_user_from_cognito(db, user)
+    acting_user = await provision_user_async(principal_from_claims(user))
     try:
         return materialize_persisted_envelope_review_rows(
             db,
@@ -701,7 +701,7 @@ async def patch_review_session(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSessionUpdateResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return _run_curation_mutation(
         db,
         lambda: update_session(db, session_id, request, user),
@@ -714,7 +714,7 @@ async def post_evidence_recompute(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationEvidenceRecomputeResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -733,7 +733,7 @@ async def post_manual_evidence(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationManualEvidenceCreateResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -751,7 +751,7 @@ async def post_evidence_resolve(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationEvidenceResolveResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -773,7 +773,7 @@ async def post_document_bootstrap(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationDocumentBootstrapResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
     return await bootstrap_document_session(
         document_id,
@@ -794,7 +794,7 @@ async def get_document_bootstrap_status(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationDocumentBootstrapAvailabilityResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
     return get_document_bootstrap_availability(
         document_id,
@@ -810,7 +810,7 @@ async def get_chat_prep_preview(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationPrepChatPreviewResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
 
     try:
@@ -836,7 +836,7 @@ async def trigger_chat_prep(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationPrepChatRunResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     user_id = _require_current_user_id(user)
 
     try:
@@ -867,7 +867,7 @@ async def post_manual_candidate(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationManualCandidateCreateResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -891,7 +891,7 @@ async def patch_review_candidate_draft(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationCandidateDraftUpdateResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return _run_curation_mutation(
         db,
         lambda: update_candidate_draft(
@@ -915,7 +915,7 @@ async def patch_review_envelope_field(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationEnvelopeFieldPatchResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     if request.envelope_id != envelope_id:
         raise HTTPException(
             status_code=400,
@@ -944,7 +944,7 @@ async def post_review_validation_finding_waiver(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationValidationFindingWaiveResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     if request.envelope_id != envelope_id:
         raise HTTPException(
             status_code=400,
@@ -976,7 +976,7 @@ async def delete_review_candidate(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationCandidateDeleteResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -999,7 +999,7 @@ async def post_candidate_decision(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationCandidateDecisionResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -1022,7 +1022,7 @@ async def post_candidate_validation(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationCandidateValidationResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return _run_curation_mutation(
         db,
         lambda: validate_candidate(
@@ -1045,7 +1045,7 @@ async def post_session_validation(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSessionValidationResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return _run_curation_mutation(
         db,
         lambda: validate_session(
@@ -1068,7 +1068,7 @@ async def post_submission_preview(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSubmissionPreviewResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return _run_curation_mutation(
         db,
         lambda: submission_preview(db, session_id, request, actor_claims=user),
@@ -1085,7 +1085,7 @@ async def post_submission_execute(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSubmissionExecuteResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -1109,7 +1109,7 @@ async def post_submission_retry(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSubmissionRetryResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     _require_current_user_id(user)
     return _run_curation_mutation(
         db,
@@ -1133,7 +1133,7 @@ async def get_submission_history(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> CurationSubmissionHistoryResponse:
-    set_global_user_from_cognito(db, user)
+    await provision_user_async(principal_from_claims(user))
     return get_submission(db, session_id, submission_id)
 
 

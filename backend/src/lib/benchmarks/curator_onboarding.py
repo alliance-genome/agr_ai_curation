@@ -4,7 +4,6 @@ from typing import Callable, Literal
 
 from pydantic import Field
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from auth_runtime.base import AuthPrincipal, PrincipalLookupIdentity
 from src.auth.current_principal import get_current_principal_resolver
@@ -78,21 +77,7 @@ def onboard_benchmark_curator(
     )
     with session_factory() as session:
         _active_user(session, principal.subject)
-        try:
-            user = provision_user(session, principal)
-        except IntegrityError as error:
-            original = error.orig
-            diagnostic = getattr(original, "diag", None)
-            if (
-                getattr(original, "pgcode", None) != "23505"
-                or getattr(diagnostic, "constraint_name", None) != "uq_users_auth_sub"
-                or getattr(diagnostic, "table_name", None) != "users"
-            ):
-                raise
-            session.rollback()
-            if _active_user(session, principal.subject) is None:
-                raise
-            user = provision_user(session, principal)
+        user = provision_user(session, principal)
         if user.is_active is not True or user.auth_sub != principal.subject:
             raise PermissionError("Active curator account required")
     return receipt

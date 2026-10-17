@@ -1,5 +1,7 @@
 """Unit tests for batch API endpoints."""
 
+from unittest.mock import AsyncMock
+
 import asyncio
 from datetime import datetime, timezone
 import io
@@ -54,7 +56,7 @@ async def test_batch_contract_preflight_stops_before_work(monkeypatch, operation
 
 def _mock_auth(monkeypatch, user_id=11):
     monkeypatch.setattr(batch_api, "principal_from_claims", lambda claims: SimpleNamespace(subject=claims["sub"]))
-    monkeypatch.setattr(batch_api, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=user_id))
+    monkeypatch.setattr(batch_api, "provision_user_async", AsyncMock(side_effect=lambda *_args, **_kwargs: SimpleNamespace(id=user_id)))
 
 
 def _make_batch_response(batch_id=None, flow_id=None, status=BatchStatus.PENDING):

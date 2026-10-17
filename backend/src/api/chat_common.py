@@ -91,7 +91,7 @@ from ..schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 from ..schemas.flows import ExecuteFlowRequest
-from ..services.user_service import set_global_user_from_cognito
+from ..services.user_service import principal_from_claims, provision_user_async
 from ..services.chat_route_preference_service import (
     ChatRoutePreferenceState,
     get_chat_route_preference,
