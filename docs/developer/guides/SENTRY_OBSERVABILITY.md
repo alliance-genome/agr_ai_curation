@@ -629,6 +629,15 @@ shared identifier hash function. Tool, source, and error classification remain
 tags; raw application trace/session/curator IDs are omitted from custom Sentry
 payloads. Sentry SDK tracing identifiers and the separate SNS payload are unchanged.
 
+Batch ZIP downloads report recoverable member write/compression failures with
+component `batch_zip` and operation `entry_write_failed`. A failed construction
+whose requesting coroutine was cancelled reports `abandoned_build_failed` when
+the worker completes. Both use a fixed, chain-free exception without file paths,
+filenames, owner IDs, SQL, or raw exception text. Ordinary missing/ineligible files
+and expected 400/404 results stay quiet. Construction failures still awaited by
+the request propagate to framework capture rather than being reported twice.
+These downloads do not change Langfuse or TraceReview instrumentation.
+
 ## Sensitive Database Wrappers
 
 Some exception types should not be logged or captured directly. SQLAlchemy

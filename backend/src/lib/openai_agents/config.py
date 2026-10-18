@@ -187,6 +187,11 @@ def get_batch_terminal_window_seconds() -> int:
     return max(1, _get_env_int_with_fallback("BATCH_TERMINAL_WINDOW_SECONDS", 86400))
 
 
+def get_batch_zip_metadata_chunk_size() -> int:
+    """Maximum distinct output IDs per owner-filtered batch ZIP metadata query."""
+    return max(1, _get_env_int_with_fallback("BATCH_ZIP_METADATA_CHUNK_SIZE", 500))
+
+
 def get_batch_metadata_chunk_size() -> int:
     """Maximum identities per detail metadata SQL query."""
     return max(1, _get_env_int_with_fallback("BATCH_METADATA_CHUNK_SIZE", 100))
