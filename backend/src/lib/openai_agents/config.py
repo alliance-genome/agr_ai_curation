@@ -1147,6 +1147,25 @@ def get_flow_supervisor_parallel_tool_calls_enabled() -> bool:
 # for the documented rationale and consequences of each.
 # =============================================================================
 
+# --- Shared application/feedback database pool ---
+
+
+def get_app_db_pool_size() -> int:
+    """Retained connection capacity per process; zero would disable the bound."""
+    value = int(_get_env("APP_DB_POOL_SIZE", "5"))
+    if value < 1:
+        raise ValueError("APP_DB_POOL_SIZE must be a positive integer")
+    return value
+
+
+def get_app_db_max_overflow() -> int:
+    """Additional concurrent connections per process; unlimited overflow is forbidden."""
+    value = int(_get_env("APP_DB_MAX_OVERFLOW", "10"))
+    if value < 0:
+        raise ValueError("APP_DB_MAX_OVERFLOW must be a nonnegative integer")
+    return value
+
+
 # --- Observability ---
 
 

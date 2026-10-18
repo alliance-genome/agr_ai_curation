@@ -213,7 +213,7 @@ def test_run_feedback_processing_in_background_uses_new_session(monkeypatch):
     monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
 
     import src.models.sql.database as db_module
-    monkeypatch.setattr(db_module, "FeedbackSessionLocal", lambda: _FakeBgDb())
+    monkeypatch.setattr(db_module, "SessionLocal", lambda: _FakeBgDb())
 
     feedback_api._run_feedback_processing_in_background("feedback-456")
     assert calls["process_called"] is True
@@ -254,7 +254,7 @@ def test_run_feedback_processing_in_background_reports_and_swallows_errors(
     )
 
     import src.models.sql.database as db_module
-    monkeypatch.setattr(db_module, "FeedbackSessionLocal", lambda: _FakeBgDb())
+    monkeypatch.setattr(db_module, "SessionLocal", lambda: _FakeBgDb())
     caplog.set_level(logging.ERROR, logger=feedback_api.logger.name)
 
     feedback_api._run_feedback_processing_in_background("feedback-456")

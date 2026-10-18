@@ -130,9 +130,9 @@ def _require_trace_review_internal_request(request: Request) -> tuple[str, str |
 def _run_feedback_processing_in_background(feedback_id: str) -> None:
     """Process one feedback report using a fresh database session."""
 
-    from src.models.sql.database import FeedbackSessionLocal
+    from src.models.sql.database import SessionLocal
 
-    bg_db = FeedbackSessionLocal()
+    bg_db = SessionLocal()
     try:
         FeedbackService(bg_db).process_feedback_report(feedback_id)
     except Exception as exc:
