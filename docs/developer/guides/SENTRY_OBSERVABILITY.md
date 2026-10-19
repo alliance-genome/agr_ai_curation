@@ -514,6 +514,15 @@ report_runtime_exception(
 )
 ```
 
+PDF job stream snapshots retain their shielded worker after stream cancellation.
+The worker still closes its own SQL session; an abandoned failure reports once
+with component `pdf_jobs` and operation `abandoned_snapshot_failed`. The report
+uses a fixed, chain-free exception with no SQL, DTO content, or identifiers.
+Successful abandoned snapshots and cancellation remain quiet. Live failures
+propagate to the existing request failure owner without explicit capture here.
+Reporting failures cannot escape the completion callback; its fixed warning
+skips Sentry log promotion.
+
 Canonical agent history reports failed writes, searches, reads and integrity
 checks with component `agent_history` and operations `write_failed`,
 `search_failed` or `read_failed`. Reports use fixed, chain-free exceptions and

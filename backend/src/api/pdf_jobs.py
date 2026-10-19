@@ -103,8 +103,7 @@ async def stream_pdf_jobs(
         deadline = asyncio.get_event_loop().time() + timeout_seconds
 
         while asyncio.get_event_loop().time() < deadline:
-            jobs = await asyncio.to_thread(
-                job_service.snapshot_jobs,
+            jobs = await job_service.snapshot_jobs_async(
                 user_id=user_id,
                 window_days=window_days,
                 limit=limit,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -11,6 +13,7 @@ from uuid import UUID
 from sqlalchemy import exists, func, select, text
 from sqlalchemy.exc import OperationalError
 
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.openai_agents.config import (
     get_pdf_document_error_message_max_chars,
     get_pdf_job_error_message_max_chars,
@@ -32,6 +35,11 @@ from src.services.processing_status_policy import (
     PDF_JOB_STATUS_TO_PROCESSING_STATUS,
     TERMINAL_PROCESSING_STATUSES,
 )
+
+
+logger = logging.getLogger(__name__)
+# Retain workers until completion even after their requesting stream disconnects.
+_pending_snapshots: set[asyncio.Task] = set()
 
 
 _TERMINAL_STATUSES = {
@@ -553,6 +561,47 @@ def get_latest_job_for_document(
         raise
     finally:
         session.close()
+
+
+def _observe_abandoned_snapshot(task: asyncio.Task) -> None:
+    _pending_snapshots.discard(task)
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error("Abandoned PDF job snapshot failed"),
+                component="pdf_jobs",
+                operation="abandoned_snapshot_failed",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to report abandoned PDF job snapshot failure",
+                extra={"sentry_skip_event": True},
+            )
+
+
+async def snapshot_jobs_async(
+    *, user_id: int, window_days: int = 7, limit: int = 50,
+) -> list[PdfJobResponse]:
+    """Let live callers own failures; observe workers abandoned by cancellation."""
+    task = asyncio.create_task(asyncio.to_thread(
+        snapshot_jobs, user_id=user_id, window_days=window_days, limit=limit,
+    ))
+    _pending_snapshots.add(task)
+    try:
+        result = await asyncio.shield(task)
+    except asyncio.CancelledError:
+        task.add_done_callback(_observe_abandoned_snapshot)
+        raise
+    except BaseException:
+        _pending_snapshots.discard(task)
+        raise
+    else:
+        _pending_snapshots.discard(task)
+        return result
 
 
 def snapshot_jobs(*, user_id: int, window_days: int = 7, limit: int = 50) -> list[PdfJobResponse]:
