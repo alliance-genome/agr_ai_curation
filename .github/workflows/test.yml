@@ -385,6 +385,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check helper argument handling and workspace identities
         run: bash scripts/tests/test_docker_test_compose.sh
+      - name: Check local and prebuilt agent gate smoke images
+        run: bash scripts/tests/test_agent_pr_gate_backend_smoke.sh
       - name: Check installed package freshness across builds and workspaces
         run: python3 scripts/tests/test_docker_test_compose_freshness.py
 
