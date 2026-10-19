@@ -647,6 +647,16 @@ and expected 400/404 results stay quiet. Construction failures still awaited by
 the request propagate to framework capture rather than being reported twice.
 These downloads do not change Langfuse or TraceReview instrumentation.
 
+Preferred-flow setup (lookup and stream construction) marks propagated exceptions
+without changing their type or response classification. When chat streaming handles
+these failures, it reports component `preferred_flow_chat_stream`, operation
+`setup_failed`, with a fixed, chain-free wrapper and only exception-type context
+bounded by the runtime facade. SQL, identifiers, and curator content are excluded.
+The companion log omits the raw exception/traceback and skips event promotion.
+Reporting failure preserves terminal notice persistence and replay. Structured
+flow-runtime failures retain their existing capture owner; non-stream chat retains
+its HTTP reporting owner. Langfuse and TraceReview contracts are unchanged.
+
 ## Sensitive Database Wrappers
 
 Some exception types should not be logged or captured directly. SQLAlchemy
