@@ -8,7 +8,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 assert_contains() {
   local pattern="$1"
   local file="$2"
-  if ! rg -n --fixed-strings -- "$pattern" "$file" >/dev/null 2>&1; then
+  if ! grep -Fq -- "$pattern" "$file" >/dev/null 2>&1; then
     echo "Expected to find '$pattern' in $file" >&2
     exit 1
   fi
@@ -103,7 +103,7 @@ test_build_command_boundary() {
   assert_contains '--env-file up up --build -d backend-unit-tests' "${temp_root}/docker.log"
   assert_contains 'config --services' "${temp_root}/docker.log"
   assert_contains 'down -v' "${temp_root}/docker.log"
-  [[ "$(rg -c -- '--build' "${temp_root}/docker.log")" == 2 ]]
+  [[ "$(grep -c -- '--build' "${temp_root}/docker.log")" == 2 ]]
   rm -rf "${temp_root}"
 }
 
@@ -118,8 +118,8 @@ test_workspace_project_identity() {
     env -u COMPOSE_PROJECT_NAME PATH="${temp_root}/bin:${PATH}" DOCKER_STUB_LOG="${temp_root}/${workspace}.log" \
       bash "${temp_root}/${workspace}/scripts/testing/docker-test-compose.sh" ps
   done
-  project_a="$(rg '^project=' "${temp_root}/a.log")"
-  project_b="$(rg '^project=' "${temp_root}/b.log")"
+  project_a="$(grep '^project=' "${temp_root}/a.log")"
+  project_b="$(grep '^project=' "${temp_root}/b.log")"
   [[ "${project_a}" != "${project_b}" ]]
   env COMPOSE_PROJECT_NAME=explicit PATH="${temp_root}/bin:${PATH}" DOCKER_STUB_LOG="${temp_root}/explicit.log" \
     bash "${temp_root}/a/scripts/testing/docker-test-compose.sh" ps
