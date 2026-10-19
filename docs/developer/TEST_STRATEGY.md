@@ -29,6 +29,33 @@ environment intentionally uses the system daemon. Run only one command against
 the same Compose project at a time, and inspect active containers before any
 manual cleanup.
 
+The helper adds `--build` to `run` and `up`, so installed local packages such
+as `auth_runtime` reflect the selected checkout, including uncommitted package
+changes. Docker layer caching remains enabled. Test services use Compose-generated
+image names, scoped to the project; the helper defaults to a stable project name
+hashed from the checkout's absolute path. Separate worktrees therefore do not
+share mutable test image tags. Explicit `-p` or `COMPOSE_PROJECT_NAME` overrides
+remain supported; choose unique names for concurrent workspaces. Direct Compose
+invocations must supply `--build` and a unique project name themselves.
+
+Use the same helper, checkout, Docker mode, and any explicit project override
+for cleanup: `bash scripts/testing/docker-test-compose.sh down -v --remove-orphans`.
+The local agent PR gate resolves and refreshes that same checkout-scoped unit
+image before its backend smoke test. Build it once with the helper first. CI
+sets `AGENT_GATE_UNIT_TEST_IMAGE` to its freshly prebuilt image to reuse the
+GHA cache; an explicit image is consumed as supplied, without rebuilding.
+`AGENT_GATE_SKIP_TEST_SMOKE_IF_MISSING=1` still permits a missing-image skip.
+
+Helper regression checks: `bash scripts/tests/test_docker_test_compose.sh`.
+The Docker-backed installed-package freshness and workspace-isolation check is
+`python3 scripts/tests/test_docker_test_compose_freshness.py`; it uses the system
+Docker daemon (or `DOCKER_HOST`), builds disposable network-free fixtures, and
+removes their Compose resources and images afterward.
+
+Older projects created before checkout-specific naming must be cleaned up using
+their original explicit project name. `ps`, `config`, and `down` never build.
+
+
 ## Synthetic Benchmark Replacement Canary
 
 For the opt-in, no-provider v2 benchmark composition proof, run

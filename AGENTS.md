@@ -361,3 +361,13 @@ public HTTP behavior and existing observability.
 
 - New dependencies are necessary and from trusted sources
 - requirements.txt and package.json changes are intentional
+
+For each new or changed operational setting, inspect the supported development
+and production deployment environment mappings and forward the setting to every
+service that consumes it. A getter and `.env.example` entry alone do not make a
+host environment override reach a container. Before implementation handoff,
+prove both the default and a nondefault override in rendered Compose
+configuration. Extend the existing contracts in
+`scripts/testing/production_compose_contract_test.sh` and
+`backend/tests/unit/test_docker_compose_production.py` as applicable; do not
+stop at a getter-only unit test.

@@ -300,15 +300,14 @@ run_path_scoped_check \
 
 CHANGED_BACKEND_FILES="$(git diff --name-only "${DIFF_RANGE}" -- backend || true)"
 if [[ -n "${CHANGED_BACKEND_FILES}" ]]; then
-  if docker image inspect ai-curation-unit-tests:latest >/dev/null 2>&1; then
-    run_check "backend-unit-smoke" \
-      "docker run --rm -v \"${ROOT_DIR}/backend:/app/backend\" ai-curation-unit-tests:latest python -m pytest tests/unit/test_exceptions.py -q"
+  if bash scripts/testing/agent_pr_gate_backend_smoke.sh >/tmp/agent_gate.out 2>/tmp/agent_gate.err; then
+    record_check "backend-unit-smoke" "pass" "$(cat /tmp/agent_gate.out)"
   else
-    if [[ "${AGENT_GATE_SKIP_TEST_SMOKE_IF_MISSING:-0}" == "1" ]]; then
-      record_skip "backend-unit-smoke" \
-        "backend changed; skipped because image missing and AGENT_GATE_SKIP_TEST_SMOKE_IF_MISSING=1"
+    smoke_status=$?
+    if [[ "${smoke_status}" == 3 ]]; then
+      record_skip "backend-unit-smoke" "$(cat /tmp/agent_gate.out)"
     else
-      record_check "backend-unit-smoke" "fail" "backend changed but ai-curation-unit-tests:latest image is missing"
+      record_check "backend-unit-smoke" "fail" "$(cat /tmp/agent_gate.err /tmp/agent_gate.out)"
     fi
   fi
 else

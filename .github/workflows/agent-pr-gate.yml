@@ -62,6 +62,7 @@ jobs:
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
           AGENT_GATE_PYTHON_BIN: python
+          AGENT_GATE_UNIT_TEST_IMAGE: ai-curation-unit-tests:latest
           AGENT_GATE_IGNORE_JUSTIFICATION: ${{ github.event.pull_request.body }}
           AGENT_PR_GATE_REPORT: file_outputs/ci/agent_pr_gate_report.json
         run: |
