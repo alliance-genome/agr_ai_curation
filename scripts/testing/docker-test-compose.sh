@@ -24,4 +24,24 @@ fi
 compose_args=(-f "${COMPOSE_FILE}")
 append_local_reranker_profile_args "${RERANK_PROVIDER:-none}" compose_args
 
-exec docker compose "${compose_args[@]}" "$@"
+# A checkout-specific project also scopes Compose-generated image names. Explicit
+# -p/--project-name and COMPOSE_PROJECT_NAME remain available to callers.
+workspace_hash="$(printf '%s' "${REPO_ROOT}" | sha256sum)"
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-agr-tests-${workspace_hash:0:16}}"
+
+# Insert --build at the command boundary, never inside the container command.
+# Compose global options that take values must be skipped as pairs.
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    -f|--file|-p|--project-name|--project-directory|--env-file|--profile|--ansi|--progress|--parallel)
+      i=$((i + 1)) ;;
+    --*=*|-*) ;;
+    run|up)
+      args=("${args[@]:0:i+1}" --build "${args[@]:i+1}")
+      break ;;
+    *) break ;;
+  esac
+done
+
+exec docker compose "${compose_args[@]}" "${args[@]}"

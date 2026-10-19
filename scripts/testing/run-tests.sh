@@ -58,13 +58,6 @@ if [ "$TEST_TYPE" = "build" ]; then
     echo -e "${YELLOW}This will take several minutes on first build.${NC}"
     echo -e "${GREEN}Subsequent builds will be much faster due to layer caching.${NC}"
 
-    # Check if image exists for caching
-    if docker images | grep -q "ai-curation-backend-tests"; then
-        echo -e "${GREEN}Found existing image for cache.${NC}"
-    else
-        echo -e "${YELLOW}First build - no cache available yet.${NC}"
-    fi
-
     test_stack_compose build backend-tests
     echo -e "${GREEN}✅ Build complete!${NC}"
     exit 0

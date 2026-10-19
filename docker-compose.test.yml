@@ -1,5 +1,5 @@
 # Docker Compose configuration for running tests
-# Usage: docker compose -f docker-compose.test.yml run --rm backend-unit-tests
+# Usage: bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests
 #
 # To build the image with caching:
 # docker compose -f docker-compose.test.yml build backend-unit-tests backend-tests
@@ -140,7 +140,6 @@ services:
       - test-network
 
   backend-tests:
-    image: ai-curation-backend-tests:latest
     build:
       context: ./backend
       dockerfile: Dockerfile.test
@@ -214,7 +213,6 @@ services:
 
   # Unit tests - lightweight image without ML dependencies (fast build)
   backend-unit-tests:
-    image: ai-curation-unit-tests:latest
     build:
       context: .
       dockerfile: backend/Dockerfile.unit-test
@@ -280,7 +278,6 @@ services:
       - test-network
 
   backend-integration-tests:
-    image: ai-curation-backend-tests:latest
     build:
       context: ./backend
       dockerfile: Dockerfile.test
@@ -404,7 +401,6 @@ services:
   # Persistence tests - chunk storage verification against real Weaviate
   # Uses lightweight unit-test image: no ML deps needed (no torch/CUDA/unstructured)
   backend-persistence-tests:
-    image: ai-curation-unit-tests:latest
     build:
       context: .
       dockerfile: backend/Dockerfile.unit-test
@@ -448,7 +444,6 @@ services:
       - test-network
 
   backend-contract-tests:
-    image: ai-curation-backend-tests:latest
     build:
       context: ./backend
       dockerfile: Dockerfile.test

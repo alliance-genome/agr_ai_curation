@@ -191,6 +191,8 @@ jobs:
   backend-contract-core-tests:
     name: Backend Contract Core Tests
     runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: backend-contract-ci
 
     steps:
       - name: Checkout repository
@@ -206,7 +208,9 @@ jobs:
           file: ./backend/Dockerfile.test
           push: false
           load: true
-          tags: ai-curation-backend-tests:latest
+          tags: |
+            ai-curation-backend-tests:latest
+            backend-contract-ci-backend-contract-tests:latest
           # Contract tests use backend/Dockerfile.test, so keep this separate
           # from the lighter backend/Dockerfile.unit-test cache namespace.
           cache-from: type=gha,scope=backend-contract-test
@@ -374,9 +378,21 @@ jobs:
           echo "Job status: \`${{ job.status }}\`." >> $GITHUB_STEP_SUMMARY
           echo "Artifact: \`openai-agents-upgrade-gate-shell-regression-log\`." >> $GITHUB_STEP_SUMMARY
 
+  docker-test-compose-regression:
+    name: Docker Test Compose Regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check helper argument handling and workspace identities
+        run: bash scripts/tests/test_docker_test_compose.sh
+      - name: Check installed package freshness across builds and workspaces
+        run: python3 scripts/tests/test_docker_test_compose_freshness.py
+
   backend-persistence-tests:
     name: Backend Persistence Tests
     runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: backend-persistence-ci
 
     steps:
       - name: Checkout repository
@@ -392,7 +408,7 @@ jobs:
           file: ./backend/Dockerfile.unit-test
           push: false
           load: true
-          tags: ai-curation-unit-tests:latest
+          tags: backend-persistence-ci-backend-persistence-tests:latest
           # Reuse the same cache scope as Backend Unit Tests because this job
           # builds the same backend/Dockerfile.unit-test image.
           cache-from: type=gha,scope=backend-unit-test
