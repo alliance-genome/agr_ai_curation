@@ -1289,26 +1289,32 @@ async def _run_resolved_chat_route(
     """Yield the shared chat event contract from the turn's pinned executor."""
 
     if route.mode == "flow":
-        flow = db.get(CurationFlow, UUID(route.target_id or ""))
-        if flow is None:
-            raise RuntimeError("Authorized preferred flow disappeared before execution")
-        outcome = FlowRunOutcome()
-        agents_used: List[str] = []
-        flow_stream = execute_flow(
-            flow=flow,
-            user_id=user_id,
-            session_id=session_id,
-            db_user_id=db_user_id,
-            document_id=document_id,
-            document_name=document_name,
-            user_query=context_messages[-1]["content"],
-            active_groups=active_groups,
-            flow_run_id=route.flow_run_id,
-            cost_run_id=turn_id,
-            chat_route_mode=route.mode,
-            chat_route_target_id=route.target_id,
-            inspection_context=inspection_context,
-        )
+        try:
+            flow = db.get(CurationFlow, UUID(route.target_id or ""))
+            if flow is None:
+                raise RuntimeError("Authorized preferred flow disappeared before execution")
+            outcome = FlowRunOutcome()
+            agents_used: List[str] = []
+            flow_stream = execute_flow(
+                flow=flow,
+                user_id=user_id,
+                session_id=session_id,
+                db_user_id=db_user_id,
+                document_id=document_id,
+                document_name=document_name,
+                user_query=context_messages[-1]["content"],
+                active_groups=active_groups,
+                flow_run_id=route.flow_run_id,
+                cost_run_id=turn_id,
+                chat_route_mode=route.mode,
+                chat_route_target_id=route.target_id,
+                inspection_context=inspection_context,
+            )
+        except Exception as exc:
+            # Preserve the original exception for response classification. The
+            # streaming handler owns capture; non-stream chat has its HTTP owner.
+            setattr(exc, "_preferred_flow_setup_failed", True)
+            raise
         try:
             async for event in flow_stream:
                 event_type = str(event.get("type") or "")

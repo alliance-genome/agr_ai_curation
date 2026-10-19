@@ -10,6 +10,7 @@ from unittest.mock import ANY
 from uuid import uuid4
 
 from fastapi.responses import StreamingResponse
+from sqlalchemy.exc import OperationalError
 import pytest
 
 from src.api import chat, chat_common, chat_stream
@@ -2782,9 +2783,22 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
     assert calls[0][1]["operation"] == "sanitized_http_exception"
 
 
-@pytest.mark.parametrize("ending", ["error", "eof", "exception", "cancel"])
-def test_visible_partial_text_survives_failed_turn_and_replay(monkeypatch, ending):
-    saved, executions = [], []
+@pytest.mark.parametrize("ending", ["error", "eof", "exception", "cancel", "flow_lookup", "flow_missing", "flow_capture_failure"])
+def test_visible_partial_text_survives_failed_turn_and_replay(monkeypatch, caplog, ending):
+    saved, executions, captures = [], [], []
+    setup_failure = ending.startswith("flow_")
+    flow_id = uuid4()
+    def lookup(*_args):
+        executions.append(True)
+        if ending == "flow_missing":
+            return None
+        raise OperationalError("SELECT private_sql", {"token": "secret_token"}, RuntimeError("curator_text"))
+    def report(exc, **kwargs):
+        captures.append((exc, kwargs))
+        if ending == "flow_capture_failure":
+            raise RuntimeError("reporter unavailable")
+    _patch_chat_impl(monkeypatch, "report_runtime_exception", report)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
     for name in ("set_current_session_id", "set_current_user_id"):
         _patch_chat_impl(monkeypatch, name, lambda *_: None)
     _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _: None))
@@ -2793,7 +2807,7 @@ def test_visible_partial_text_survives_failed_turn_and_replay(monkeypatch, endin
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _: SimpleNamespace(
         list_recent_messages=lambda **_: [], get_message_by_turn_id=lambda **_: saved[0] if saved else None))
     _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", lambda **_: chat.PreparedChatStreamTurn(
-        turn_id="partial-turn", effective_user_message="extract", route=chat.ResolvedChatRoute(mode="automatic"),
+        turn_id="partial-turn", effective_user_message="extract", route=chat.ResolvedChatRoute(mode="flow", target_id=str(flow_id)) if setup_failure else chat.ResolvedChatRoute(mode="automatic"),
         user_turn_created=not saved, replay_assistant_turn=saved[0] if saved else None))
 
     async def noop(*_args, **_kwargs):
@@ -2829,14 +2843,36 @@ def test_visible_partial_text_survives_failed_turn_and_replay(monkeypatch, endin
     def consume():
         response = asyncio.run(chat.chat_stream_endpoint(
             chat_message=chat.ChatMessage(message="extract", session_id="partial-session", turn_id="partial-turn"),
-            user={"sub": "auth-sub", "cognito:groups": []}))
+            user={"sub": "auth-sub", "cognito:groups": []},
+            db=SimpleNamespace(get=lookup)))
         return asyncio.run(_consume_stream(response))
     live = consume()
     assert len(saved) == 1
-    assert "Partial response (the request did not finish):\nPartial work β" in saved[0].content
+    if setup_failure:
+        assert len(captures) == 1
+        exc, metadata = captures[0]
+        assert str(exc) == "Preferred-flow setup failed"
+        assert exc.__traceback__ is not None
+        assert exc.__context__ is None
+        assert exc.__cause__ is None
+        assert metadata == {
+            "component": "preferred_flow_chat_stream",
+            "operation": "setup_failed",
+            "context": {"exception_type": "RuntimeError" if ending == "flow_missing" else "OperationalError"},
+        }
+        record = next(r for r in caplog.records if r.message.startswith("Stream error"))
+        assert record.sentry_skip_event is True
+        assert not record.exc_info
+        for sensitive in ("private_sql", "secret_token", "curator_text", str(flow_id)):
+            assert sensitive not in str(captures)
+            assert sensitive not in caplog.text
+    else:
+        assert "Partial response (the request did not finish):\nPartial work β" in saved[0].content
     assert saved[0].payload_json["terminal_state"] in {"turn_failed", "turn_interrupted"}
     assert not any(item["type"] == "turn_completed" for item in live)
     replay = consume()
     assert next(item["content"] for item in replay if item["type"] == "TEXT_MESSAGE_CONTENT") == saved[0].content
     assert replay[-1]["type"] == saved[0].payload_json["terminal_state"]
     assert len(executions) == 1
+    if setup_failure:
+        assert len(captures) == 1

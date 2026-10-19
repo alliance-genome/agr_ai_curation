@@ -1337,16 +1337,29 @@ async def chat_stream_endpoint(
         except Exception as exc:
             sentry_terminal_status = "error"
             set_sentry_span_status(sentry_transaction, "internal_error")
+            setup_failed = getattr(exc, "_preferred_flow_setup_failed", False)
+            if setup_failed:
+                try:
+                    report_runtime_exception(
+                        sanitized_runtime_error("Preferred-flow setup failed"),
+                        component="preferred_flow_chat_stream",
+                        operation="setup_failed",
+                        context={"exception_type": type(exc).__name__},
+                    )
+                except Exception:
+                    # Reporting cannot interrupt terminal recovery or replay.
+                    pass
             logger.error(
                 "Stream error: %s",
-                exc,
+                type(exc).__name__ if setup_failed else exc,
                 extra={
                     "session_id": current_session_id,
                     "user_id": user_id,
                     "trace_id": trace_id,
                     "turn_id": current_turn_id,
+                    "sentry_skip_event": setup_failed,
                 },
-                exc_info=True,
+                exc_info=not setup_failed,
             )
             terminal_type, safe_message = _persist_failure_notice(
                 session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
