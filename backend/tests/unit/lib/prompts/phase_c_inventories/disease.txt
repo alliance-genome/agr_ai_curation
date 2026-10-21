@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: disease validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -70,7 +71,7 @@ If no tool-backed match is found for a requested expected field, return `status:
 If the package-tool lookup fails after one retry, return `status: "unresolved"` with an `error` lookup attempt and a curator-safe message.
 
 # DISV-18 shared result contract root fields (contract tokens) + do-not-wrap
-Do not wrap the object under `validation_result`, `result`, or any other property:
+The application assembles these canonical fields from your decision and recorded evidence:
 `status` is the resolved/unresolved decision; the rest are copied from the request.
 `resolved_values`: resolved scalars keyed by the binding's expected-result fields, such as `curie`, `label`, or `ontology_term_type`
 `resolved_objects`: package-tool-grounded disease ontology records (`curie`, `name`, and any `definition`, `ontology_type`, `synonyms`).

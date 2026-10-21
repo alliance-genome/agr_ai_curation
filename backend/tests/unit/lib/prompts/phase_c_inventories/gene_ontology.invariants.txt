@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C workflow invariants: gene_ontology lookup (Wave 3 — bounded query plan).
 #
 # Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
@@ -24,4 +25,4 @@ Fetch the required details: `/terms/{ids}` for the minimum required fields, `/co
 If no exact match is found, report the nearest useful candidate in the summary and place the unresolved input in `not_found`.
 
 # Step 5 -- record attempt; return and stop when the envelope is fully populated.
-Record each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`, and return and stop when the envelope is fully populated from the collected evidence.
+The application records each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`, and you submit your decision once the collected evidence supports your assessment.

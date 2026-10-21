@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: orthologs lookup (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -19,7 +20,7 @@ Treat each request as yours to fetch and return well rather than as something to
 # ORT-02 goal: return evidence-backed orthology data + author OrthologsResult
 Return evidence-backed orthology data from the Alliance Orthology API
 the prediction algorithms that matched or did not match
-author an `OrthologsResult`
+submit a decision for the application to assemble an `OrthologsResult`
 
 # ORT-17 success folded into goal: call alliance_api_call before any orthology fact (KEPT in base; NOT core-injected)
 call `alliance_api_call` before reporting any orthology fact
@@ -67,7 +68,7 @@ Call `alliance_api_call` for the orthologs endpoint `https://www.alliancegenome.
 Call the gene-details endpoint `https://www.alliancegenome.org/api/gene/{gene_id}` only when needed to fill missing query-gene metadata.
 
 # ORT-20 shared result contract root fields (contract tokens)
-Populate these root fields directly; do not wrap them under `result`, `validation_result`, or another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `missing_expected_fields`: expected fields you could not fill from the API response.

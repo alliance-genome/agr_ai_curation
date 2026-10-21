@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: gene validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -129,7 +130,7 @@ Several genes sharing a name -> check the species and taxon on each query result
 # GV-28/GV-29/GV-30/GV-31 shared result contract root fields (contract tokens)
 # (4 copied-from-request root fields collapsed to one agm-style line in the leanness
 #  pass; the contract test still asserts each backtick token, all retained here.)
-Populate these root fields exactly, and do not wrap them under another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_values`: scalar values keyed by expected result field
 `resolved_objects`: optional diagnostic lookup context only.

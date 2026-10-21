@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: controlled_vocabulary validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -76,7 +77,7 @@ If the tool returns zero results, return unresolved with `lookup_attempts`, `mis
 # CVV-20 shared result contract root fields (contract tokens incl ambiguous + vocabulary-specific)
 Return only the shared validator statuses:
 `status: "unresolved"` when the target is not found, remains ambiguous, is obsolete, lacks required vocabulary/query input, has missing expected fields, or cannot be checked because the tool fails.
-Populate these root fields directly; do not wrap them under another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_objects`: raw or normalized vocabulary term facts returned by lookup for resolved matches.
 `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.

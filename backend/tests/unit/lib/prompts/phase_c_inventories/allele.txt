@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # September 16 ALL-1208 semantic retention inventory.
 # Replaces repetitive historical phrase pins; coverage mapping and deliberate
 # policy corrections are recorded in docs/design/phaseC-checklists/allele.md.
@@ -56,7 +57,7 @@ An empty search alone does not prove the allele is absent from the entire databa
 `candidates`
 `allele_candidates`
 obsolete/extinct flags, attribution provenance/confidence, and match type
-Record every `agr_curation_query` call in `lookup_attempts`
+The application records every `agr_curation_query` call in `lookup_attempts`
 outcome, coverage, and meaningful errors
 `explanation`
 `curator_message`

@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C workflow invariants: orthologs lookup (Wave 3 — bounded lookup path).
 #
 # Invariants are STRONGER than plain phrase retention: each line is an ordered step of
@@ -21,4 +22,4 @@ Call `alliance_api_call` for the orthologs endpoint `https://www.alliancegenome.
 Parse the orthology relationships from the `results` array per the rules above.
 
 # Step 4 -- record each call in lookup_attempts; stop once evidence is enough.
-Record each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`.
+The application records each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`.

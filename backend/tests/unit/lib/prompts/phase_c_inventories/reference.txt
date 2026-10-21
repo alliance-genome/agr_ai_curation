@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: reference validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -55,7 +56,7 @@ Do not patch extractor envelope fields, object payloads, or metadata; return val
 Domain-specific reference details belong only inside `resolved_objects`, `candidates[].details`, `candidate_references`, `ambiguity`, or `no_match`; they must not replace any shared root field.
 
 # RFV-21 shared result contract root fields (contract tokens), no wrap
-Do not wrap the object under `validation_result`, `result`, or any other property:
+The application assembles these canonical fields from your decision and recorded evidence:
 `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 

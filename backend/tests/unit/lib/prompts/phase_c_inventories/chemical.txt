@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: chemical validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -77,7 +78,7 @@ Parent terms (classification): `GET /backend/api/public/ontology/parents/{chebi_
 Child terms (more specific): `GET /backend/api/public/ontology/children/{chebi_id}/`.
 
 # CHV-26 shared result contract root fields (contract tokens), no wrap
-Do not wrap the object under `validation_result`, `result`, or any other property:
+The application assembles these canonical fields from your decision and recorded evidence:
 `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 

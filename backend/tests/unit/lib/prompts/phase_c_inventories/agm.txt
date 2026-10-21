@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: agm validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -65,7 +66,7 @@ If a label-only lookup has neither `taxon` nor `data_provider_hint`, return unre
 If the tool reports unavailable helper behavior or an error, return unresolved with lookup attempt outcome `error`.
 
 # AGMV-20 shared result contract root fields (contract tokens, incl agm-specific roots)
-Populate these root fields directly; do not wrap them under another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_values`: resolved scalars keyed by the binding's `expected_result_fields`
 `resolved_objects`: database-returned AGM facts for resolved matches.

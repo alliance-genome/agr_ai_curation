@@ -1037,7 +1037,7 @@ def test_extractor_to_flow_runs_custom_once_without_standard_fallback(tmp_path, 
         assert request.validator_agent.agent_id == "custom-agent"
         if custom_fails:
             raise RuntimeError("custom source failed")
-        return _result_payload(request)
+        return DomainValidatorResultBase.model_validate(_result_payload(request))
 
     monkeypatch.setattr(executor, "_run_custom_flow_validator_agent", custom)
     token = set_flow_validator_selections(groups)

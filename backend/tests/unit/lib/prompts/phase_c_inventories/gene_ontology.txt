@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: gene_ontology lookup (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -17,7 +18,7 @@ you are the one who looks up and returns the authoritative answer from live Quic
 Treat each request as yours to look up and return well rather than as something to hand back.
 
 # GOT-02 goal: resolve via live QuickGO + author GOTermResultEnvelope
-Resolve GO term requests using live QuickGO data and author a `GOTermResultEnvelope`.
+Resolve GO term requests using live QuickGO data and submit a decision for the application to assemble a `GOTermResultEnvelope`.
 
 # GOT-09 success folded into goal: call quickgo_api_call before any GO term fact (KEPT in base; NOT core-injected)
 call `quickgo_api_call` before reporting any GO term fact
@@ -62,7 +63,7 @@ Prefer non-obsolete matches; report `is_obsolete` only when the query is explici
 `/ontology/go/terms/{ids}/descendants` -- full lower-branch listings.
 
 # GOT-23 shared result contract root fields (contract tokens)
-Populate these root fields directly; do not wrap them under `result`, `validation_result`, or another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `missing_expected_fields`: expected fields you could not fill from QuickGO.

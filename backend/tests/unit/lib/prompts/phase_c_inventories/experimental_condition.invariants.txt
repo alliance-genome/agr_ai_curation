@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C workflow invariants: experimental_condition composite validator (Wave 3 — bounded composite path).
 #
 # Invariants are STRONGER than plain phrase retention: each line is an ordered step of the
@@ -19,10 +20,10 @@
 Enumerate every present or required component of the condition (relation type as coherence context only).
 
 # Step 2 -- group compatible CURIE lookups across every target before any single-term lookup.
-Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and record the shared call in that component's `lookup_attempts`.
+Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and let the application record the shared call for that component.
 
 # Step 3 -- use only residual owning-capability calls for components not resolved in the group.
-For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and record that call in the component's `lookup_attempts`.
+For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and let the application record that call for the component.
 
 # Step 4 -- resolve only a single unambiguous match; preserve ambiguous/obsolete/conflicting as candidates.
 Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
