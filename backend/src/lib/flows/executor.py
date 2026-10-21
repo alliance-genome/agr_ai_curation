@@ -97,6 +97,7 @@ from src.lib.domain_packs.validation_findings import append_validation_findings_
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorDispatchJob,
     ValidatorRuntimeContext,
+    _validator_result_target_matches_request_identity,
     dispatch_validator_jobs,
     group_dispatch_context,
     resolve_group_scoped_validator_matches,
@@ -1600,10 +1601,20 @@ async def _run_custom_flow_validator_agent(
     # Match the dispatcher's existing typed-subclass projection: package-specific
     # views stay in the accepted audit payload; materialization consumes the shared
     # canonical fields (including full candidates, facts and lookup provenance).
-    return validator_result_from_agent_output({
+    result = DomainValidatorResultBase.model_validate({
         key: value for key, value in accepted_payload.items()
         if key in DomainValidatorResultBase.model_fields
-    }, request=request)
+    })
+    # Finalization already checked completeness, including composite field scope.
+    # Recheck identity only; serialization drops private assembly provenance.
+    if (
+        result.request_id != request.request_id
+        or result.validator_binding_id != request.validator_binding_id
+        or result.validator_agent != request.validator_agent
+        or not _validator_result_target_matches_request_identity(result, request=request)
+    ):
+        raise ValueError("Accepted flow validator result has mismatched request identity")
+    return result.model_copy(update={"target": request.target})
 
 
 def _ordered_validation_matches(
