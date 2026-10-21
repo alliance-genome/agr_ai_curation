@@ -599,6 +599,19 @@ def _build_snippet(text: str, needle_lower: str) -> str:
     return excerpt
 
 
+def _validate_section_chunks(chunks: List[dict]) -> None:
+    """Reject incomplete stored rows before filtering can hide missing content."""
+    for chunk in chunks:
+        text = _chunk_text(chunk)
+        chunk_id = resolve_chunk_identifier(chunk, _best_effort_metadata(chunk))
+        if not chunk_id or not isinstance(text, str) or not text:
+            raise RuntimeError("Stored section chunk is missing identity or text")
+        try:
+            _coerce_chunk_index(chunk.get("chunk_index"))
+        except ValueError as exc:
+            raise RuntimeError("Stored section chunk has invalid chunk_index") from exc
+
+
 def _section_entries(
     chunks: List[dict],
     *,
@@ -613,9 +626,7 @@ def _section_entries(
         metadata = _best_effort_metadata(chunk)
         page_number = _chunk_page(chunk, metadata)
         chunk_id = resolve_chunk_identifier(chunk, metadata)
-        if not (chunk_id and text):
-            entries.append({"page_number": page_number})
-            continue
+        chunk_index = _coerce_chunk_index(chunk.get("chunk_index"))
         snippet = _build_snippet(text, needle) if needle else None
         entries.append(
             {
@@ -626,7 +637,7 @@ def _section_entries(
                 "part": snippet if snippet is not None else text,
                 "source": SectionChunkSource(
                     chunk_id=chunk_id,
-                    chunk_index=_coerce_chunk_index(chunk.get("chunk_index")),
+                    chunk_index=chunk_index,
                     page_number=page_number,
                     section_title=_chunk_section_title(chunk, metadata, section_fallback),
                     subsection=_chunk_subsection(chunk, metadata, subsection_fallback),
@@ -640,16 +651,16 @@ def _section_entries(
 
 
 def _assemble_section_entries(entries: List[dict]) -> dict:
-    sources = [entry["source"] for entry in entries if "source" in entry]
+    sources = [entry["source"] for entry in entries]
     return {
         "content": "\n\n".join(
-            entry["part"] for entry in entries if entry.get("part") is not None
+            entry["part"] for entry in entries
         ),
         "page_numbers": sorted(
             {entry["page_number"] for entry in entries if entry.get("page_number")}
         ),
         "source_chunks": sources,
-        "doc_items": [item for entry in entries for item in entry.get("doc_items") or []],
+        "doc_items": [item for entry in entries for item in entry["doc_items"]],
     }
 
 
@@ -794,6 +805,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             chunks[0], _best_effort_metadata(chunks[0]), section_name
         )
 
+        _validate_section_chunks(chunks)
         needle = text_contains.lower() if text_contains else None
         if needle:
             selected = [
@@ -966,6 +978,7 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
                 subsection=None
             )
 
+        _validate_section_chunks(chunks)
         needle = text_contains.lower() if text_contains else None
         if needle:
             selected = [

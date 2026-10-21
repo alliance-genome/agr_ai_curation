@@ -1676,6 +1676,7 @@ async def get_chunks_by_subsection(
                         pass
 
                 chunks.append({
+                    "id": str(obj.uuid) if obj.uuid else None,
                     "text": props.get("content"),
                     "chunk_index": props.get("chunkIndex"),
                     "section_title": props.get("sectionTitle"),
