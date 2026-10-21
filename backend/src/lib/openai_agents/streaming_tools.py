@@ -5573,7 +5573,10 @@ async def run_specialist_with_events(
                 "phase": "specialist_stream",
             },
         )
-        builder_workspace.mark_cancelled(reason="specialist stream cancelled")
+        # Finalization is immutable even if later validation changes the state.
+        # Preserve the receipt and propagate the original stream failure.
+        if builder_workspace.finalization is None:
+            builder_workspace.mark_cancelled(reason="specialist stream cancelled")
         raise
     except Exception as e:
         sentry_stream_finalization_status = "error"
@@ -5620,7 +5623,8 @@ async def run_specialist_with_events(
                 builder_workspace=builder_workspace, tool_name=tool_name,
                 candidate_id=builder_candidate_id,
             )
-        builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
+        if builder_workspace.finalization is None:
+            builder_workspace.mark_aborted(reason=f"{type(e).__name__}: {e}")
         raise
     finally:
         if sentry_span is not None:

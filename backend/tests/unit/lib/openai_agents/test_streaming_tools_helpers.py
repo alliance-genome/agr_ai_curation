@@ -4186,3 +4186,79 @@ async def test_inline_validator_pdf_failure_reaches_terminal_owner_without_gener
     failure = classify_failure(raised.value)
     assert failure.category == "pdf_read_failed"
     assert failure.message == "There was an error reading the PDF. We couldn't continue the extraction."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workspace_phase", ["staged", "finalized", "post_finalization_validation"])
+@pytest.mark.parametrize("failure_kind", ["provider", "timeout", "cancelled"])
+async def test_stream_failure_preserves_original_error_and_finalized_workspace(
+    monkeypatch, workspace_phase, failure_kind,
+):
+    from agents.models.openai_responses import ResponsesWebSocketError
+    from src.lib.openai_agents.curator_errors import classify_failure
+
+    failure = {
+        "provider": ResponsesWebSocketError({
+            "type": "error", "sequence_number": 56,
+            "error": {"type": "server_error", "code": "server_error",
+                      "message": "PRIVATE PROVIDER DETAIL", "param": None},
+        }),
+        "timeout": TimeoutError("PRIVATE TIMEOUT DETAIL"),
+        "cancelled": asyncio.CancelledError("user stopped"),
+    }[failure_kind]
+    workspaces = []
+    snapshots = []
+    persisted = []
+    emitted = []
+    runs = []
+
+    class FailingStream:
+        async def stream_events(self):
+            workspace = streaming_tools.get_active_extraction_builder_workspace()
+            workspaces.append(workspace)
+            workspace.upsert_candidate(candidate_id="candidate-1", staged_fields={"value": "original"})
+            if workspace_phase != "staged":
+                workspace.finalize(candidate_ids=["candidate-1"])
+                if workspace_phase == "post_finalization_validation":
+                    workspace.record_validation_failure(errors=[{"message": "validation failed"}])
+            snapshots.append(copy.deepcopy(workspace.snapshot(redact_payload=False)))
+            if False:
+                yield None
+            raise failure
+
+    def run_streamed(*args, **kwargs):
+        runs.append(True)
+        return FailingStream()
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _: None)
+    monkeypatch.setattr(streaming_tools.Runner, "run_streamed", run_streamed)
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+    monkeypatch.setattr(streaming_tools, "persist_inline_validated_extraction_result", lambda **kw: persisted.append(kw))
+    agent = SimpleNamespace(name="PDF Specialist", tools=[], output_type=None, instructions="", model="gpt-4o")
+    from src.lib.openai_agents.agents import supervisor_agent
+
+    tool = supervisor_agent._create_streaming_tool(
+        agent=agent, tool_name="run_flow_specialist", tool_description="Extract",
+        specialist_name=agent.name, inline_chat_persistence=False,
+        propagate_errors=True,
+    )
+    with pytest.raises(type(failure)) as caught:
+        await tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name, run_config=None),
+            json.dumps({"query": "extract"}),
+        )
+    assert caught.value is failure
+    workspace = workspaces[0]
+    if workspace_phase == "staged":
+        assert workspace.state == ("cancelled" if failure_kind == "cancelled" else "aborted")
+        assert workspace.finalization is None
+    else:
+        assert workspace.snapshot(redact_payload=False) == snapshots[0]
+        assert workspace.finalization is not None
+    assert len(runs) == 1
+    assert persisted == []
+    assert not any(event["type"] in {"FILE_READY", "SPECIALIST_RESULT"} for event in emitted)
+    if failure_kind == "provider":
+        outcome = classify_failure(caught.value)
+        assert outcome.category == "provider_unavailable"
+        assert "did not finish" in outcome.message

@@ -2974,11 +2974,12 @@ def test_execute_flow_endpoint_reattaches_to_active_same_turn_without_reclaiming
     assert keepalive_calls == [True]
 
 
-@pytest.mark.parametrize("websocket_failure", [False, True, "specialist", "pdf"])
+@pytest.mark.parametrize("websocket_failure", [False, True, "specialist", "pdf", "finalized_provider"])
 def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog, websocket_failure):
+    finalized_provider = websocket_failure == "finalized_provider"
     specialist_failure = websocket_failure == "specialist"
     pdf_failure = websocket_failure == "pdf"
-    websocket_failure = websocket_failure is True
+    websocket_failure = websocket_failure is True or finalized_provider
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-error")
     flow = SimpleNamespace(
@@ -2999,9 +3000,57 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
         lambda exc, **kwargs: runtime_reports.append((exc, kwargs)) or True,
     )
 
+    finalized_workspaces = []
+    persisted = []
+    if finalized_provider:
+        from copy import deepcopy
+        from agents.models.openai_responses import ResponsesWebSocketError
+        from src.lib.openai_agents import streaming_tools
+        from src.lib.openai_agents.agents import supervisor_agent
+
+        provider_error = ResponsesWebSocketError({
+            "type": "error", "sequence_number": 56,
+            "error": {"type": "server_error", "code": "server_error",
+                      "message": "private provider payload"},
+        })
+
+        class FinalizedFailingStream:
+            async def stream_events(self):
+                workspace = streaming_tools.get_active_extraction_builder_workspace()
+                for index in range(28):
+                    workspace.upsert_candidate(
+                        candidate_id=f"candidate-{index}", staged_fields={"value": index},
+                    )
+                workspace.finalize(candidate_ids=list(workspace.candidates))
+                finalized_workspaces.append((workspace, deepcopy(workspace.snapshot(redact_payload=False))))
+                if False:
+                    yield None
+                raise provider_error
+
+        monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _: None)
+        monkeypatch.setattr(streaming_tools.Runner, "run_streamed", lambda *a, **kw: FinalizedFailingStream())
+        monkeypatch.setattr(streaming_tools, "persist_inline_validated_extraction_result", lambda **kw: persisted.append(kw))
+        specialist_tool = supervisor_agent._create_streaming_tool(
+            agent=SimpleNamespace(name="PDF Specialist", tools=[], output_type=None, instructions="", model="gpt-4o"),
+            tool_name="run_flow_specialist", tool_description="Extract",
+            specialist_name="PDF Specialist", inline_chat_persistence=False,
+            propagate_errors=True,
+        )
+
     async def _fake_execute_flow(**_kwargs):
+        from agents.models.openai_responses import ResponsesWebSocketError
         if False:
             yield {"type": "RUN_STARTED"}
+        if finalized_provider:
+            from agents import UserError
+            try:
+                await specialist_tool.on_invoke_tool(
+                    SimpleNamespace(tool_name=specialist_tool.name, run_config=None),
+                    json.dumps({"query": "extract"}),
+                )
+            except ResponsesWebSocketError as cause:
+                raise UserError("executor boom") from cause
+            pytest.fail("Provider failure was converted to successful tool output")
         if pdf_failure:
             from agents import UserError
             from agr_ai_curation_runtime.document_errors import DocumentReadError
@@ -3066,6 +3115,13 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
     reported_exc, report_kwargs = runtime_reports[0]
     assert type(reported_exc).__name__ == expected_type
     assert str(reported_exc) == "executor boom"
+    if finalized_provider:
+        assert reported_exc.__cause__ is provider_error
+        assert len(finalized_workspaces) == 1
+        workspace, snapshot = finalized_workspaces[0]
+        assert workspace.snapshot(redact_payload=False) == snapshot
+        assert workspace.state == "finalized"
+        assert persisted == []
     assert report_kwargs == {
         "component": "execute_flow_stream",
         "operation": "event_generator_failed",
