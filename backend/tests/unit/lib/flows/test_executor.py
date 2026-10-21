@@ -3929,8 +3929,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
         ]
 
+    @pytest.mark.parametrize("composite", [False, True])
     def test_supplemental_validation_groups_run_every_custom_validator_node(
-        self, monkeypatch
+        self, monkeypatch, composite
     ):
         """Distinct supplemental sidecars must all execute against the source revision."""
         executor = _executor_module()
@@ -3974,6 +3975,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             },
             expected_result_fields={"identifier": "gene.identifier"},
         )
+        if composite:
+            binding = replace(binding, expected_result_fields={"identifier": "gene.identifier", "design_matches": "gene.design_matches"})
         second_binding = replace(
             binding,
             binding_id="custom.supplemental.identifier",
@@ -4017,8 +4020,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     "source_envelope_revision": source_envelope_revision,
                 }
             )
-            return {
+            return executor.DomainValidatorResultBase.model_validate({
                 "status": "resolved",
+                "field_resolutions": {"identifier": {"status": "resolved", "lookup_outcome": "matched", "resolved_values": {"identifier": "AGR:0001"}}} if composite else {},
                 "request_id": request.request_id,
                 "validator_binding_id": request.validator_binding_id,
                 "validator_agent": request.validator_agent.model_dump(mode="json"),
@@ -4038,7 +4042,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ],
                 "curator_message": None,
                 "explanation": "Supplemental validator passed.",
-            }
+            })
 
         monkeypatch.setattr(
             executor,
@@ -4081,6 +4085,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             )
         )
 
+        assert all(item.result.is_complete for item in materialization_inputs)
         assert selector_findings == []
         assert len(calls) == 2
         assert [call["binding_match"] for call in calls] == list(matches)
@@ -4115,7 +4120,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             for item in metadata
         )
         assert all(
-            item["expected_result_fields"] == {"identifier": "gene.identifier"}
+            item["expected_result_fields"] == binding.expected_result_fields
             for item in metadata
         )
         assert all(
@@ -4204,6 +4209,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
         if accepted_status == "wrong_identity":
             accepted_payload["request_id"] = "different-request"
         if accepted_status == "composite":
+            accepted_payload["field_resolutions"] = {"identifier": {
+                "status": "resolved", "lookup_outcome": "matched",
+                "resolved_values": {"identifier": "AGR:0001"},
+            }}
             accepted_payload["target"]["input_values"] = {"normalized": "context"}
 
         class _FakeTool:

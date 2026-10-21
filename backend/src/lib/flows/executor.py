@@ -1860,7 +1860,7 @@ async def _collect_flow_validator_materialization_inputs(
                         raise ValueError(
                             "custom validator node is missing from the flow definition"
                         )
-                    raw_output = await _run_custom_flow_validator_agent(
+                    validator_result = await _run_custom_flow_validator_agent(
                         request,
                         binding_match=match,
                         validator_node=validator_node,
@@ -1868,10 +1868,8 @@ async def _collect_flow_validator_materialization_inputs(
                         source_envelope_id=source_envelope.envelope_id,
                         source_envelope_revision=source_envelope_revision,
                     )
-                    validator_result = validator_result_from_agent_output(
-                        raw_output,
-                        request=request,
-                    )
+                    # The custom runner returns an identity-checked, finalized
+                    # typed result. Do not reclassify its accepted field scope.
                 except Exception as exc:
                     raise_if_document_read_failed(exc)
                     record_handled_stage_failure(exc)
