@@ -41,6 +41,8 @@ write_test_env() {
       'ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=6000' \
       'BATCH_STREAM_POLL_INTERVAL_SECONDS=2.5' \
       'CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=7.5' \
+      'PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=6000' \
+      'PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=17' \
       'PDF_JOB_RECOVERY_INTERVAL_SECONDS=75' \
       'PDF_JOB_RECOVERY_BATCH_SIZE=25' \
       'PDF_JOB_RECOVERY_TIMEOUT_SECONDS=15' \
@@ -91,7 +93,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -Ev '^(VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -119,6 +121,8 @@ config = json.load(open(sys.argv[1], encoding="utf-8"))
 assert str(config["services"]["backend"]["environment"]["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"]) == "4000"
 backend_env = config["services"]["backend"]["environment"]
 assert str(backend_env["PDF_JOB_RECOVERY_INTERVAL_SECONDS"]) == "60"
+assert str(backend_env["PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS"]) == "5400"
+assert str(backend_env["PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS"]) == "30"
 assert str(backend_env["BATCH_STREAM_POLL_INTERVAL_SECONDS"]) == "1.0"
 assert str(backend_env["CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS"]) == "30"
 assert str(backend_env["PDF_JOB_RECOVERY_BATCH_SIZE"]) == "100"
@@ -130,7 +134,7 @@ assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "3"
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "1000"
 assert str(frontend_env["VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS"]) == "5000"
-assert str(frontend_env["VITE_PDF_PROGRESS_TIMEOUT_MS"]) == "3600000"
+assert str(frontend_env["VITE_PDF_PROGRESS_TIMEOUT_MS"]) == "9000000"
 assert str(frontend_env["VITE_PDF_PROGRESS_POLL_INTERVAL_MS"]) == "1000"
 assert frontend_env["VITE_BENCHMARK_PORTAL_URL"] == ""
 PY
@@ -233,6 +237,8 @@ config = json.load(open(sys.argv[1], encoding="utf-8"))
 backend_env = config["services"]["backend"]["environment"]
 assert str(backend_env["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"]) == "6000"
 assert str(backend_env["PDF_JOB_RECOVERY_INTERVAL_SECONDS"]) == "75"
+assert str(backend_env["PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS"]) == "6000"
+assert str(backend_env["PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS"]) == "17"
 assert str(backend_env["BATCH_STREAM_POLL_INTERVAL_SECONDS"]) == "2.5"
 assert str(backend_env["CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS"]) == "7.5"
 assert str(backend_env["PDF_JOB_RECOVERY_BATCH_SIZE"]) == "25"

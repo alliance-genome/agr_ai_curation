@@ -1121,10 +1121,9 @@ async def test_real_polling_continues_after_reported_reader_write_failure(monkey
     class Session:
         def get(self, *args, **kwargs): return Response()
     async def convert(job, groups, advance, callback):
-        parser = object.__new__(PDFXParser)
-        parser.service_url = "https://example.org"
-        parser.timeout_seconds = 10
-        parser._poll_attempt_count = 0
+        monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://example.org")
+        monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "10")
+        parser = PDFXParser()
         result = await parser._poll_until_complete(Session(), "synthetic", {}, callback)
         assert result["status"] == "complete"
         raise ConversionStateError("stop fixture after polling")

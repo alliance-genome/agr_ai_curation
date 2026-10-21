@@ -1850,3 +1850,27 @@ def async_provisioning_boundary(monkeypatch):
     async def provision(principal):
         return documents.provision_user(None, principal)
     monkeypatch.setattr(documents, "provision_user_async", provision)
+
+
+@pytest.mark.asyncio
+async def test_progress_stream_default_includes_queue_allowance(monkeypatch):
+    elapsed = [0.0]
+    monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "2")
+    monkeypatch.setenv("PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS", "3")
+    monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
+    monkeypatch.delenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(documents, "time", SimpleNamespace(monotonic=lambda: elapsed[0]))
+    async def advance(seconds):
+        elapsed[0] += seconds
+    monkeypatch.setattr(documents.asyncio, "sleep", advance)
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents, "get_document", lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}))
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+    response = await documents.stream_document_progress(str(uuid4()), {"sub": "user-1"})
+    payload = await _collect_stream(response)
+    assert elapsed[0] == 5
+    assert '"stage": "timeout"' in payload

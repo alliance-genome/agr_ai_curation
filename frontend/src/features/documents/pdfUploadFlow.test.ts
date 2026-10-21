@@ -104,11 +104,15 @@ describe('PDF progress tracking', () => {
     expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
   });
 
-  it('enforces the default one-hour total timeout without polling', async () => {
+  it('keeps waiting beyond one hour and enforces the combined queue and processing deadline', async () => {
     const result = waitForDocumentProcessing('doc');
     const rejected = expect(result).rejects.toThrow('Timed out');
     FakeEventSource.latest.onopen?.();
+    let settled = false;
+    void result.then(() => { settled = true; }, () => { settled = true; });
     await vi.advanceTimersByTimeAsync(3600000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5400000);
     await rejected;
     expect(fetchMock).not.toHaveBeenCalled();
   });

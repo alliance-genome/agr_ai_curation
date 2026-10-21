@@ -57,7 +57,7 @@ from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeValidationError,
     external_document_source_import_enabled,
 )
-from ..lib.openai_agents.config import get_document_source_provider
+from ..lib.openai_agents.config import get_document_source_provider, get_pdf_extraction_queue_timeout_seconds
 from ..lib.pipeline.tracker import PipelineTracker
 from ..lib.weaviate_client.documents import (
     async_list_documents as list_documents,
@@ -1925,7 +1925,7 @@ async def stream_document_progress(
         last_status_snapshot = None
         retry_count = 0
         poll_interval_raw = os.getenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
-        timeout_raw = os.getenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS") or os.getenv("PDF_EXTRACTION_TIMEOUT", "3600")
+        timeout_raw = os.getenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS")
 
         try:
             poll_interval_seconds = int(poll_interval_raw)
@@ -1939,7 +1939,10 @@ async def stream_document_progress(
             poll_interval_seconds = 1
 
         try:
-            timeout_seconds = int(timeout_raw)
+            timeout_seconds = (
+                int(timeout_raw) if timeout_raw else
+                get_pdf_extraction_queue_timeout_seconds() + int(os.getenv("PDF_EXTRACTION_TIMEOUT", "3600"))
+            )
             if timeout_seconds <= 0:
                 raise ValueError
         except (TypeError, ValueError):
