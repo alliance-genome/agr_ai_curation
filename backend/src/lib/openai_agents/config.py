@@ -3405,6 +3405,16 @@ def get_pdf_document_error_message_max_chars() -> int:
     )
 
 
+def get_pdf_extraction_queue_timeout_seconds() -> int:
+    """Maximum wait before first observed PDFX processing. Default 90 minutes."""
+    return max(1, _get_env_int_with_fallback("PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS", 5400))
+
+
+def get_pdf_extraction_status_request_timeout_seconds() -> int:
+    """Bound each status request so cancellation can be checked. Default 30."""
+    return max(1, _get_env_int_with_fallback("PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS", 30))
+
+
 def get_pdf_extraction_receipt_token_max_chars() -> int:
     """Max chars retained for one content-free PDFX receipt token. Default 128."""
     return max(

@@ -15,7 +15,11 @@ from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 import aiohttp
 
-from src.lib.openai_agents.config import get_pdf_extraction_receipt_token_max_chars
+from src.lib.openai_agents.config import (
+    get_pdf_extraction_receipt_token_max_chars,
+    get_pdf_extraction_queue_timeout_seconds,
+    get_pdf_extraction_status_request_timeout_seconds,
+)
 from src.lib.observability.runtime import report_runtime_exception
 
 from ..pdf_limits import MAX_PDF_FILE_SIZE_BYTES, pdf_file_size_limit_message
@@ -166,6 +170,8 @@ class PDFXParser:
         if not self.service_url:
             raise ConfigurationError("PDF_EXTRACTION_SERVICE_URL is required")
 
+        self.status_request_timeout_seconds = get_pdf_extraction_status_request_timeout_seconds()
+        self.queue_timeout_seconds = get_pdf_extraction_queue_timeout_seconds()
         timeout_raw = os.getenv("PDF_EXTRACTION_TIMEOUT", "3600")
         try:
             self.timeout_seconds = int(timeout_raw)
@@ -642,9 +648,27 @@ class PDFXParser:
     ) -> Dict[str, Any]:
         """Poll extraction job until completion or failure."""
         status_endpoint = f"{self.service_url}/api/v1/extract/{process_id}"
-        deadline = time.monotonic() + self.timeout_seconds
+        deadline = time.monotonic() + self.queue_timeout_seconds
+        processing_started = False
         latest_status = "pending"
         last_logged_signature = ""
+
+        def deadline_error() -> PDFParsingError:
+            phase = "processing" if processing_started else "queue"
+            return _pdfx_failure_error(
+                f"PDF extraction {phase} allowance expired",
+                category="polling_timeout",
+                boundary=f"poll_{phase}",
+                public_message=(
+                    PDFX_POLLING_TIMEOUT_MESSAGE if processing_started else
+                    "PDF extraction could not start within the configured queue wait. Please try again later."
+                ),
+                process_id=_safe_provider_token(process_id),
+                provider_status=_safe_provider_token(latest_status),
+            )
+
+        async def pause() -> None:
+            await asyncio.sleep(min(self.poll_interval_seconds, max(0, deadline - time.monotonic())))
 
         while True:
             if cancel_requested_callback and await cancel_requested_callback():
@@ -653,127 +677,134 @@ class PDFXParser:
                     f"PDF extraction cancelled by user request for process_id={process_id}"
                 )
 
-            if time.monotonic() >= deadline:
-                raise _pdfx_failure_error(
-                    f"PDF extraction timed out before completion for process_id={process_id}",
-                    category="polling_timeout",
-                    boundary="poll",
-                    public_message=PDFX_POLLING_TIMEOUT_MESSAGE,
-                    process_id=_safe_provider_token(process_id),
-                    provider_status=_safe_provider_token(latest_status),
-                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise deadline_error()
 
             self._poll_attempt_count += 1
-            async with session.get(status_endpoint, headers=headers) as response:
-                body_text = await response.text()
-                payload: Dict[str, Any] = {}
-                try:
-                    payload = json.loads(body_text)
-                except json.JSONDecodeError:
-                    # Proxy/load balancer may emit HTML for transient gateway errors.
-                    if response.status in _TRANSIENT_HTTP_STATUS:
-                        logger.warning(
-                            "Transient non-JSON PDF extraction status response: HTTP %s",
-                            response.status,
-                        )
-                        await asyncio.sleep(self.poll_interval_seconds)
-                        continue
-                    raise _pdfx_failure_error(
-                        "PDF extraction status endpoint returned non-JSON response "
-                        f"with HTTP {response.status}",
-                        category="unknown_provider_failure",
-                        boundary="poll",
-                        public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
-                        process_id=_safe_provider_token(process_id),
-                        http_status=response.status,
-                    )
+            try:
+                async with session.get(
+                    status_endpoint, headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=min(remaining, self.status_request_timeout_seconds)),
+                ) as response:
+                    body_text = await response.text()
+                    http_status = response.status
+            except asyncio.TimeoutError:
+                if time.monotonic() >= deadline:
+                    raise deadline_error() from None
+                await pause()
+                continue
+            if time.monotonic() >= deadline:
+                raise deadline_error()
 
-                status = str(payload.get("status", "")).strip().lower()
-
-                if response.status in _TRANSIENT_HTTP_STATUS and status not in {"failed", "failure"}:
+            payload: Dict[str, Any] = {}
+            try:
+                payload = json.loads(body_text)
+            except json.JSONDecodeError:
+                # Proxy/load balancer may emit HTML for transient gateway errors.
+                if http_status in _TRANSIENT_HTTP_STATUS:
                     logger.warning(
-                        "Transient PDF extraction status error for process_id=%s: HTTP %s",
-                        _safe_provider_token(process_id) or "unavailable",
-                        response.status,
+                        "Transient non-JSON PDF extraction status response: HTTP %s",
+                        http_status,
                     )
-                    await asyncio.sleep(self.poll_interval_seconds)
+                    await pause()
                     continue
+                raise _pdfx_failure_error(
+                    "PDF extraction status endpoint returned non-JSON response "
+                    f"with HTTP {http_status}",
+                    category="unknown_provider_failure",
+                    boundary="poll",
+                    public_message=PDFX_UNKNOWN_FAILURE_MESSAGE,
+                    process_id=_safe_provider_token(process_id),
+                    http_status=http_status,
+                )
 
-                if not status:
-                    raise PDFParsingError("PDF extraction status payload missing 'status'")
-                latest_status = status
+            status = str(payload.get("status", "")).strip().lower()
 
-                if status in {"failed", "failure"}:
-                    provider_error_code = _safe_provider_token(payload.get("error_code"))
-                    safe_process_id = _safe_provider_token(process_id)
-                    code_suffix = (
-                        f" error_code={provider_error_code}"
-                        if provider_error_code
+            if http_status in _TRANSIENT_HTTP_STATUS and status not in {"failed", "failure"}:
+                logger.warning(
+                    "Transient PDF extraction status error for process_id=%s: HTTP %s",
+                    _safe_provider_token(process_id) or "unavailable",
+                    http_status,
+                )
+                await pause()
+                continue
+
+            if not status:
+                raise PDFParsingError("PDF extraction status payload missing 'status'")
+            latest_status = status
+
+            if status in {"started", "progress", "running"} and not processing_started:
+                # One transition only: retries/re-queuing never replenish either allowance.
+                processing_started = True
+                deadline = time.monotonic() + self.timeout_seconds
+
+            if status in {"failed", "failure"}:
+                provider_error_code = _safe_provider_token(payload.get("error_code"))
+                safe_process_id = _safe_provider_token(process_id)
+                code_suffix = (
+                    f" error_code={provider_error_code}"
+                    if provider_error_code
+                    else ""
+                )
+                raise _pdfx_failure_error(
+                    "PDF extraction failed"
+                    + (
+                        f" for process_id={safe_process_id}"
+                        if safe_process_id
                         else ""
                     )
-                    raise _pdfx_failure_error(
-                        "PDF extraction failed"
-                        + (
-                            f" for process_id={safe_process_id}"
-                            if safe_process_id
-                            else ""
-                        )
-                        + f" status={status}{code_suffix}",
-                        category="provider_terminal_failure",
-                        boundary="poll",
-                        public_message=PDFX_PROVIDER_FAILURE_MESSAGE,
-                        process_id=safe_process_id,
-                        provider_status=status,
-                        provider_error_code=provider_error_code,
-                        http_status=response.status,
-                    )
-
-                progress: Dict[str, Any] = (
-                    payload["progress"] if isinstance(payload.get("progress"), dict) else {}
+                    + f" status={status}{code_suffix}",
+                    category="provider_terminal_failure",
+                    boundary="poll",
+                    public_message=PDFX_PROVIDER_FAILURE_MESSAGE,
+                    process_id=safe_process_id,
+                    provider_status=status,
+                    provider_error_code=provider_error_code,
+                    http_status=http_status,
                 )
-                progress_stage = str(progress.get("stage", "")).strip()
-                progress_percent = progress.get("percent")
-                safe_progress_percent = (
-                    progress_percent
-                    if isinstance(progress_percent, (int, float))
-                    else "-"
+
+            progress: Dict[str, Any] = (
+                payload["progress"] if isinstance(payload.get("progress"), dict) else {}
+            )
+            progress_stage = str(progress.get("stage", "")).strip()
+            progress_percent = progress.get("percent")
+            safe_progress_percent = (
+                progress_percent
+                if isinstance(progress_percent, (int, float))
+                else "-"
+            )
+            state = str(payload.get("state", "")).strip()
+            safe_status = _safe_provider_token(status) or "unrecognized"
+            safe_state = _safe_provider_token(state) or "-"
+            safe_progress_stage = _safe_provider_token(progress_stage) or "-"
+            signature = (
+                f"{safe_status}|{safe_state}|{safe_progress_stage}|{safe_progress_percent}"
+            )
+            if signature != last_logged_signature:
+                logger.info(
+                    "PDFX status process_id=%s status=%s state=%s progress_stage=%s "
+                    "progress_percent=%s",
+                    _safe_provider_token(process_id) or "unavailable",
+                    safe_status,
+                    safe_state,
+                    safe_progress_stage,
+                    safe_progress_percent,
                 )
-                state = str(payload.get("state", "")).strip()
-                safe_status = _safe_provider_token(status) or "unrecognized"
-                safe_state = _safe_provider_token(state) or "-"
-                safe_progress_stage = _safe_provider_token(progress_stage) or "-"
-                signature = (
-                    f"{safe_status}|{safe_state}|{safe_progress_stage}|{safe_progress_percent}"
-                )
-                if signature != last_logged_signature:
-                    logger.info(
-                        "PDFX status process_id=%s status=%s state=%s progress_stage=%s "
-                        "progress_percent=%s",
-                        _safe_provider_token(process_id) or "unavailable",
-                        safe_status,
-                        safe_state,
-                        safe_progress_stage,
-                        safe_progress_percent,
-                    )
-                    last_logged_signature = signature
+                last_logged_signature = signature
 
-                if progress_callback:
-                    try:
-                        await progress_callback(reader_progress(payload))
-                    except PDFCancellationError:
-                        raise
-                    except Exception:
-                        logger.debug("Progress callback failed", exc_info=True)
+            if progress_callback:
+                try:
+                    await progress_callback(reader_progress(payload))
+                except PDFCancellationError:
+                    raise
+                except Exception:
+                    logger.debug("Progress callback failed", exc_info=True)
 
-                if status in {"complete", "succeeded", "success"}:
-                    return payload
+            if status in {"complete", "succeeded", "success"}:
+                return payload
 
-            await asyncio.sleep(self.poll_interval_seconds)
-
-        raise PDFParsingError(
-            "PDF extraction ended in an unexpected status for "
-            f"process_id={_safe_provider_token(process_id) or 'unavailable'}"
-        )
+            await pause()
 
     async def _request_cancel(
         self,

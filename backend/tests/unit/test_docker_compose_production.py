@@ -1049,3 +1049,15 @@ def test_application_pool_capacity_reaches_backend_and_worker():
         environment = services[service]["environment"]
         assert environment["APP_DB_POOL_SIZE"] == "${APP_DB_POOL_SIZE-5}"
         assert environment["APP_DB_MAX_OVERFLOW"] == "${APP_DB_MAX_OVERFLOW-10}"
+
+
+@pytest.mark.parametrize("name,default", [
+    ("PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS", 5400),
+    ("PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS", 30),
+])
+def test_pdfx_wait_settings_reach_backend(name, default):
+    dev = _list_environment(_load_dev_compose()["services"]["backend"]["environment"])
+    prod = _load_compose()["services"]["backend"]["environment"]
+    assert dev[name] == prod[name] == "${" + name + ":-" + str(default) + "}"
+    for template in (ENV_TEMPLATE_PATH, ENV_EXAMPLE_PATH):
+        assert f"{name}={default}" in template.read_text()
