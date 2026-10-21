@@ -48,7 +48,9 @@ ingested the original result or recovered the curator's failed upload.
 - Queue expiry and processing expiry remain `polling_timeout` failures, with
   `poll_queue` or `poll_processing` boundaries in the existing failure receipt
   and sanitized Sentry context. Queue expiry has distinct curator-facing text.
-- The default progress stream covers queue plus processing allowances. An
+- The default browser wait (`VITE_PDF_PROGRESS_TIMEOUT_MS`, 9000000 ms) and
+  backend progress stream cover queue plus processing allowances. Align the
+  browser setting when changing either allowance. An
   explicit `PDF_PROCESSING_SSE_TIMEOUT_SECONDS` still overrides its lifetime.
   Stale-job reconciliation measures inactivity, not total job age: each successful
   poll's progress callback refreshes durable activity. Its default two-hour

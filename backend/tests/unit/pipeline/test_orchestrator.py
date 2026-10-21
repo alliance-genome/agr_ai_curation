@@ -377,7 +377,7 @@ def test_pipeline_failure_has_one_sentry_owner_with_real_logging(capture_succeed
             failure = PDFParsingError("private pipeline detail", details={
                 "public_message": "PDF reader timed out",
                 "pdfx_failure": {
-                    "failure_category": "polling_timeout", "failure_boundary": "poll_queue" if shape == "pending" else "poll_processing", "timeout_seconds": 3600,
+                    "failure_category": "polling_timeout", "failure_boundary": "poll_queue" if shape == "pending" else "poll_processing", "timeout_seconds": 5400 if shape == "pending" else 3600,
                     "process_id": "process-" + shape, "provider_status": shape,
                     "poll_attempt_count": 120, "provider_error": "PRIVATE_UNAPPROVED_PROVIDER_DETAIL",
                 },
@@ -413,7 +413,7 @@ def test_pipeline_failure_has_one_sentry_owner_with_real_logging(capture_succeed
                 if shape != "generic":
                     assert context["pdfx_failure_boundary"] == ("poll_queue" if shape == "pending" else "poll_processing")
                     assert context["pdfx_failure_category"] == "polling_timeout"
-                    assert context["pdfx_timeout_seconds"] == 3600
+                    assert context["pdfx_timeout_seconds"] == (5400 if shape == "pending" else 3600)
                     assert context["pdfx_process_id"] == "process-" + shape
                     assert context["pdfx_provider_status"] == shape
                     assert context["pdfx_poll_attempt_count"] == 120

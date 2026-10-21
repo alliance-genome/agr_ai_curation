@@ -62,7 +62,7 @@ describe('PDF progress runtime configuration', () => {
   });
   it.each([
     ['PDF_PROGRESS_CONNECT_TIMEOUT_MS', 5000],
-    ['PDF_PROGRESS_TIMEOUT_MS', 3600000],
+    ['PDF_PROGRESS_TIMEOUT_MS', 9000000],
     ['PDF_PROGRESS_POLL_INTERVAL_MS', 1000],
   ] as const)('configures %s at boot with a documented default', async (key, value) => {
     const defaults = await import('./documentIntakeConfig');

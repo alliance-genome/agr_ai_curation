@@ -1135,3 +1135,33 @@ async def test_timed_out_status_request_rechecks_cancellation(parser_env, monkey
         await parser._poll_until_complete(session, 'process-1', {}, None, cancelled)
     assert calls == [True, True, 'cancel']
     assert session.get_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('phase,expected', [('queue', 5400), ('processing', 300)])
+async def test_parse_timeout_receipt_records_expired_phase_budget(parser_env, monkeypatch, tmp_path, phase, expected):
+    from src.lib.pipeline import pdfx_parser as module
+    class Session:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+    parser = PDFXParser()
+    observations = []
+    async def submit(*args):
+        return {'process_id': 'process-1'}
+    async def poll(**kwargs):
+        raise module._pdfx_failure_error(
+            'Allowance expired', category='polling_timeout', boundary=f'poll_{phase}',
+            public_message='PDF wait expired', process_id='process-1',
+        )
+    monkeypatch.setattr(module.aiohttp, 'ClientSession', lambda **kwargs: Session())
+    monkeypatch.setattr(parser, '_submit_extraction', submit)
+    monkeypatch.setattr(parser, '_poll_until_complete', poll)
+    pdf = tmp_path / 'paper.pdf'
+    pdf.write_bytes(b'%PDF-1.4\n%test')
+    with pytest.raises(PDFParsingError) as raised:
+        await parser.parse_pdf_document(pdf, 'document-1', 'user-1', observability_callback=observations.append)
+    assert raised.value.details[PDFX_FAILURE_DETAILS_KEY]['timeout_seconds'] == expected
+    assert observations[0]['timeout_seconds'] == expected
+    assert observations[0]['failure_boundary'] == f'poll_{phase}'

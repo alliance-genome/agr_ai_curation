@@ -375,7 +375,11 @@ class PDFXParser:
                     failure,
                     submit_attempt_count=self._submit_attempt_count,
                     poll_attempt_count=self._poll_attempt_count,
-                    timeout_seconds=self.timeout_seconds,
+                    timeout_seconds=(
+                        self.queue_timeout_seconds
+                        if failure.get("failure_boundary") == "poll_queue"
+                        else self.timeout_seconds
+                    ),
                 )
                 exc.details[PDFX_FAILURE_DETAILS_KEY] = failure_evidence
                 raise

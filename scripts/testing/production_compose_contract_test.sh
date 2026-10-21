@@ -134,7 +134,7 @@ assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS"]) == "3"
 assert str(frontend_env["VITE_CHAT_STREAM_RECOVERY_DELAY_MS"]) == "1000"
 assert str(frontend_env["VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS"]) == "5000"
-assert str(frontend_env["VITE_PDF_PROGRESS_TIMEOUT_MS"]) == "3600000"
+assert str(frontend_env["VITE_PDF_PROGRESS_TIMEOUT_MS"]) == "9000000"
 assert str(frontend_env["VITE_PDF_PROGRESS_POLL_INTERVAL_MS"]) == "1000"
 assert frontend_env["VITE_BENCHMARK_PORTAL_URL"] == ""
 PY
