@@ -71,6 +71,8 @@ class _SequenceSession:
 def parser_env(monkeypatch):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "http://pdfx.local")
     monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "300")
+    monkeypatch.delenv("PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS", raising=False)
     monkeypatch.setenv("PDF_EXTRACTION_POLL_INTERVAL_SECONDS", "2")
     monkeypatch.delenv("PDF_EXTRACTION_PRIMARY_DOWNLOAD_METHOD", raising=False)
 
