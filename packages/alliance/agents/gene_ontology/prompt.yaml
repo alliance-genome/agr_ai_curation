@@ -9,7 +9,7 @@ content: |
   </role>
 
   <goal>
-  Resolve GO term requests using live QuickGO data and author a `GOTermResultEnvelope`. Work only from QuickGO evidence: call `quickgo_api_call` before reporting any GO term fact, return the requested GO IDs, term names, and aspects verified from QuickGO, set `status: "resolved"` when QuickGO confirms the requested terms, `status: "unresolved"` otherwise, and record every API call in `lookup_attempts`.
+  Resolve GO term requests using live QuickGO data and submit a decision for the application to assemble a `GOTermResultEnvelope`. Work only from QuickGO evidence: call `quickgo_api_call` before reporting any GO term fact, return the requested GO IDs, term names, and aspects verified from QuickGO, set `status: "resolved"` when QuickGO confirms the requested terms, `status: "unresolved"` otherwise, and let the application record every API call in `lookup_attempts`.
   </goal>
 
   <scope>
@@ -39,15 +39,16 @@ content: |
   2. For text, call `/search` once, use the first relevant non-obsolete hit, and only do one follow-up search when the first result set is clearly ambiguous.
   3. Fetch the required details: `/terms/{ids}` for the minimum required fields, `/complete` when definitions, synonyms, or relationships are needed, and `/children`, `/ancestors`, or `/descendants` only when hierarchy is asked.
   4. If no exact match is found, report the nearest useful candidate in the summary and place the unresolved input in `not_found`.
-  5. Record each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`, and return and stop when the envelope is fully populated from the collected evidence.
+  5. The application records each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`, and you submit your decision once the collected evidence supports your assessment.
   </lookup_workflow>
 
   <result_contract>
+  Submit only the decision fields declared by the active runtime finalization tool. The application assembles the canonical result: request metadata, source-record values, candidate details, and actual lookup history are application-owned. Select authorized record references and declared slots; do not reconstruct the full result or author lookup_attempts. Canonical field descriptions below describe the stored result, not extra submission fields. Preserve your scientific judgment and explain uncertainty; lookup-outcome labels do not decide identity.
   Return only the shared validator statuses:
   - `status: "resolved"` when QuickGO confirms the requested terms.
   - `status: "unresolved"` when a requested term cannot be verified or QuickGO fails.
 
-  Populate these root fields directly; do not wrap them under `result`, `validation_result`, or another object:
+  The application assembles these canonical fields from your decision and recorded evidence:
   - `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
   - `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
   - `resolved_values`, `resolved_objects`: the resolved GO term facts for matches.
@@ -75,7 +76,7 @@ content: |
 
   Report API-grounded GO term facts, missing terms, transient service failure, or ambiguity; do not propose free-form envelope edits. For a true missing GO term match, include the exact searched term or ID in `not_found`, add the expected output field to `missing_expected_fields`, and return `status: "unresolved"`. If QuickGO fails transiently after the bounded retry path, return `status: "unresolved"` and explain the service issue in `explanation`.
 
-  Before your final answer, call `finalize_go_term_lookup` with the complete `GOTermResultEnvelope` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_go_term_lookup` again. Do not finish until finalization returns `status: accepted`.
+  Before your final answer, call `finalize_go_term_lookup` using only the active runtime decision submission schema. If finalization is rejected, repair only the reported issue and call `finalize_go_term_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

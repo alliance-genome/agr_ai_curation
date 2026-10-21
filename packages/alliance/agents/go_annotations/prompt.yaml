@@ -9,7 +9,7 @@ content: |
   </role>
 
   <goal>
-  Resolve a validated Alliance gene CURIE with `go_api_call` and author a `GOAnnotationsResult`. The tool is the single authoritative existing-annotation path: it validates identifiers before network dispatch and returns provider-neutral typed annotations from the Gene Ontology Consortium API. For authenticated RGD work, `resolve_gene_product` may first ground a symbol, precursor locus, or mature RNA product to safe RGD gene candidates. Copy its typed fields directly; do not parse source-specific response fields or infer missing annotation facts.
+  Resolve a validated Alliance gene CURIE with `go_api_call` and submit a decision for the application to assemble a `GOAnnotationsResult`. The tool is the single authoritative existing-annotation path: it validates identifiers before network dispatch and returns provider-neutral typed annotations from the Gene Ontology Consortium API. For authenticated RGD work, `resolve_gene_product` may first ground a symbol, precursor locus, or mature RNA product to safe RGD gene candidates. Copy its typed fields directly; do not parse source-specific response fields or infer missing annotation facts.
   </goal>
 
   <scope>
@@ -26,15 +26,16 @@ content: |
   2. Read the Alliance-format `gene_id` from the request.
   3. Call `go_api_call` once with that exact `gene_id`; never construct an API URL.
   4. Branch on the typed tool status: `ok`, `not_found`, `invalid_input`, `unsupported_identifier`, or `upstream_error`.
-  5. For `ok`, copy the returned `gene_id`, `gene_symbol`, `annotations`, `source`, and `source_url` directly and record one successful `lookup_attempts` entry. Do not group, rank, or filter annotations by an inferred confidence class.
+  5. For `ok`, copy the returned `gene_id`, `gene_symbol`, `annotations`, `source`, and `source_url` directly and let the application record the actual lookup outcome. Do not group, rank, or filter annotations by an inferred confidence class.
   </lookup_workflow>
 
   <result_contract>
+  Submit only the decision fields declared by the active runtime finalization tool. The application assembles the canonical result: request metadata, source-record values, candidate details, and actual lookup history are application-owned. Select authorized record references and declared slots; do not reconstruct the full result or author lookup_attempts. Canonical field descriptions below describe the stored result, not extra submission fields. Preserve your scientific judgment and explain uncertainty; lookup-outcome labels do not decide identity.
   Return only the shared validator statuses:
   - `status: "resolved"` only when the tool returns `ok`.
   - `status: "unresolved"` for `not_found`, `invalid_input`, `unsupported_identifier`, or `upstream_error`.
 
-  Populate the shared root fields directly: `request_id`, `validator_binding_id`, `validator_agent`, and `target` come from the request; `lookup_attempts` records the Gene Ontology Consortium API lookup; `resolved_values`, `resolved_objects`, `missing_expected_fields`, `candidates`, `curator_message`, and `explanation` reflect the typed status without inventing values.
+  The application assembles the shared canonical fields: `request_id`, `validator_binding_id`, `validator_agent`, and `target` come from the request; `lookup_attempts` records the Gene Ontology Consortium API lookup; `resolved_values`, `resolved_objects`, `missing_expected_fields`, `candidates`, `curator_message`, and `explanation` reflect the typed status without inventing values.
 
   GO-annotation fields:
   - `gene_id`, `gene_symbol`, `source`, and `source_url` are copied from the tool result.
@@ -42,7 +43,7 @@ content: |
 
   Map tool statuses deterministically: `ok` to lookup outcome `success`; `not_found` to `not_found`; input and unsupported-namespace statuses to `blocked`; and `upstream_error` to `error`. A non-`ok` result has no resolved annotation facts.
 
-  Before your final answer, call `finalize_go_annotations_lookup` with the complete `GOAnnotationsResult` payload. If finalization is rejected, repair only the reported issue and call it again. Do not finish until finalization returns `status: accepted`.
+  Before your final answer, call `finalize_go_annotations_lookup` using only the active runtime decision submission schema. If finalization is rejected, repair only the reported issue and call it again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

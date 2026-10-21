@@ -1804,3 +1804,62 @@ def test_custom_review_policy_preserves_all_summary_fields(policy):
     assert {field.field_path for field in rows[0].summary_fields} == {
         "gene.symbol", "condition.label", "evidence[0].quote",
     }
+
+
+@pytest.mark.asyncio
+async def test_trace_derived_ai9_materialization_preserves_judgment_and_original():
+    """Replay actual lookup/decision into a synthetic host envelope, without an LLM."""
+    import json
+    from agents import function_tool
+    from agents.tool_context import ToolContext
+    from src.lib.config.schema_discovery import discover_agent_schemas
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema
+
+    fixture = json.loads((Path(__file__).parents[3] / "fixtures" / "ai9_compact_finalization.json").read_text())
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    envelope.extracted_objects[0].payload = {"mention": {"text": "Ai9"}}
+    item = _validator_item(metadata, envelope)
+    schemas = discover_agent_schemas(Path(__file__).parents[5] / "packages" / "alliance" / "agents")
+    runtime = runtime_for_schema([item.request], result_schema=schemas["AlleleResultEnvelope"])
+    assert runtime is not None
+
+    @function_tool
+    def agr_curation_query(method: str, allele_symbol: str, data_provider: str, discovery_limit: int, limit: int) -> dict:
+        return fixture["lookup_output"]
+
+    tool = runtime.wrap_lookup_tool(agr_curation_query)
+    args = json.dumps(fixture["lookup_input"])
+    output = json.loads(await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name,
+        tool_call_id="trace-derived-search", tool_arguments=args), args))
+    refs = [row["record_ref"] for row in output["validator_record_refs"]]
+
+    def rebind(value):
+        if isinstance(value, dict):
+            return {k: refs[v] if k == "record_ref" else rebind(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [rebind(v) for v in value]
+        return value
+
+    decision = rebind(fixture["decisions"]["resolved"])
+    decision["request_id"] = item.request.request_id
+    # Synthetic qualification added only to exercise transport, not historical evidence.
+    decision["unresolved_questions"] = ["Confirm the experimental background if needed."]
+    assembled = runtime.assemble(decision)
+    materialized = materialize_validator_results_into_envelope(envelope, metadata, [
+        ValidatorResultMaterializationInput(match=item.match, request=item.request, result=assembled),
+    ])
+    reference = next(obj for obj in materialized.materialized_objects if obj.object_type == "Allele")
+    assert reference.payload["primary_external_id"] == "MGI:3809523"
+    original = next(iter(materialized.envelope.validator_results.values()))["result"]
+    assert original["status"] == "resolved" and original["output_issues"] == []
+    assert original["lookup_attempts"][0]["outcome"] == "ambiguous"
+    assert original["lookup_attempts"][0]["result_count"] == 13
+    assert original["unresolved_questions"] == decision["unresolved_questions"]
+    for actual, expected in zip(original["candidates"], decision["candidates"], strict=True):
+        assert actual["details"]["scientific_assessment"]["explanation"] == expected["explanation"]
+    serialized = DomainEnvelope.model_validate_json(materialized.envelope.model_dump_json())
+    assert serialized.validator_results == materialized.envelope.validator_results
+    assert any(summary.status.value == "resolved" for summary in project_validation_summary_projections(
+        serialized, envelope_revision=1, object_id=reference.object_id,
+    ))

@@ -380,3 +380,28 @@ def test_last_outstanding_decision_reaches_front_of_bounded_preview(monkeypatch)
     assert summary["outstanding_remaining"] == 0
     assert summary["details_complete"] is False
     assert all(item["validator_result_key"] == item["read"]["validator_result_key"] for item in summary["results"])
+
+
+def test_resolved_validator_notes_are_visible_without_marking_result_outstanding():
+    from src.lib.domain_packs.validator_result_records import validator_result_snapshot
+
+    payload = _payload(0)
+    raw = {
+        "status": "resolved", "request_id": "with-note",
+        "validator_binding_id": "binding", "target": {"object_id": "object-1"},
+        "resolved_values": {"curie": "TEST:1"},
+        "unresolved_questions": ["Confirm which experimental background the paper used."],
+    }
+    key, original = validator_result_snapshot(raw, source_envelope_revision=1)
+    payload["validator_results"] = {key: {**original, "recorded_order": 0}}
+    summary = build_extraction_manifest_page(
+        payload, result_ref="extraction-result:fixture",
+    )["validator_results"]
+    decision = summary["results"][0]
+    assert decision["status"] == "resolved"
+    assert decision["output_complete"] is True
+    assert decision["outstanding"] is False
+    assert decision["follow_up_question_count"] == 1
+    assert decision["read"]["validator_result_key"] == key
+    assert decision["original_ref"] == key
+    assert original["result"]["unresolved_questions"] == raw["unresolved_questions"]

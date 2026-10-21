@@ -25,6 +25,7 @@ from src.lib.domain_packs.compact_decisions import (
 )
 from src.lib.openai_agents.tool_result_bounds import bounded_json_result, full_tool_results_requested, json_pointer_for_row, result_view_schema_properties
 from src.schemas.domain_validator import DomainValidatorResultBase, ValidatorLookupAttempt
+from src.lib.domain_packs.validator_guidance import VALIDATOR_FOLLOW_UP_GUIDANCE
 
 # Page/detail arguments a validator lookup accepts; continuation always names
 # the stored lookup instead of re-running it, so refs stay call-scoped.
@@ -308,6 +309,28 @@ def compact_finalization_schema(tool, runtime, *, batch=False):
     return tool
 
 
+def compact_repair_instructions(runtime, *, batch=False) -> tuple[str, ...]:
+    """Describe the actual decision schema, never the assembled result schema."""
+    permitted = {
+        request_id: list(contract.decision_schema.model_fields)
+        for request_id, contract in runtime.contracts.items()
+    }
+    return (
+        ("Resubmit results with exactly one decision per request. " if batch else
+         "Resubmit result with one decision for this request. ")
+        + "Permitted decision fields by request: " + json.dumps(permitted),
+        "Correct the reported structural problem using the tool's declared schema and "
+        "this invocation's authorized references. Select only available source fields for "
+        "record slots; use scientific values only for slots that declare that option.",
+        "The application assembles source values, request metadata and lookup history. "
+        "Do not reconstruct or submit the canonical result or add fields outside the decision schema.",
+        "Preserve your scientific judgment, explanation and valid selections. Change status "
+        "only if your assessment changes, never to satisfy a lookup-outcome label.",
+        "Preserve unresolved_questions as follow-up questions for the caller to assess. "
+        "They do not by themselves make a resolved result incomplete or require redispatch.",
+    )
+
+
 def compact_finalization_instruction(runtime, *, tool_name, batch=False):
     # Lookup tools accept validator_request_ids only when they serve more than
     # one request (wrap_lookup_tool); a single-request run must not be told to pass it.
@@ -340,6 +363,9 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
         "The program copies source facts, request identity and actual lookup counts into the canonical result. "
         f"Call {tool_name} with {'results containing exactly one compact decision per request' if batch else 'result containing one compact decision'} "
         "using the tool's declared schema. Repair rejected decisions; stop after acceptance. "
+        "unresolved_questions lists follow-up questions for the caller to assess, including "
+        "whether another validator call is useful. Preserve them even for a resolved decision; "
+        "questions alone do not make output incomplete or require redispatch. "
         "Do not output or reconstruct the complete canonical result. "
         + ("For batch lookups, validator_request_ids must identify only the requests served by that call. "
            if scoped_lookups else "")
@@ -348,4 +374,5 @@ def compact_finalization_instruction(runtime, *, tool_name, batch=False):
         "Derived restatements of returned rows are omitted; the program keeps the complete response. "
         "Slot contracts: " + json.dumps(contracts)
         + " Supplied-context/scientific-option references (not database verification): " + json.dumps(runtime.source_catalog)
+        + "\n" + VALIDATOR_FOLLOW_UP_GUIDANCE
     )

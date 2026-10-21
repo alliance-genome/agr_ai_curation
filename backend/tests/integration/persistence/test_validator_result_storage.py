@@ -9,11 +9,12 @@ from src.models.sql.database import SessionLocal
 from src.models.sql.validator_result import ValidatorResultRecord
 
 
-def test_exact_jsonb_original_idempotency_and_owner_session_authorization():
+@pytest.mark.parametrize("status", ["resolved", "unresolved"])
+def test_exact_jsonb_original_idempotency_and_owner_session_authorization(status):
     user = "validator-storage-test-" + uuid4().hex
     session = uuid4().hex
     invocation = uuid4().hex
-    payload = {"status": "unresolved", "explanation": "β 😀 / quotation \"exact\" " * 1000,
+    payload = {"status": status, "unresolved_questions": ["Optional source qualification β 😀"], "explanation": "β 😀 / quotation \"exact\" " * 1000,
                "lookup_attempts": [{"query": {str(i): list(range(30)) for i in range(60)}}],
                "unknown_future_field": {"nested": [None, False, 1.25]}}
     kwargs = dict(user_id=user, session_id=session, invocation_id=invocation, agent_key="fixture_validator")
@@ -25,7 +26,7 @@ def test_exact_jsonb_original_idempotency_and_owner_session_authorization():
         assert read_validator_result(result_id, user_id="different-owner", session_id=None) is None
         assert read_validator_result(result_id, user_id=user, session_id="different-session") is None
         assert read_validator_result(result_id, user_id=user, session_id=None)["result_ref"] == reference
-        assert list_validator_results(user_id=user, session_id=session)[0]["decision_status"] == "unresolved"
+        assert list_validator_results(user_id=user, session_id=session)[0]["decision_status"] == status
         assert list_validator_results(user_id="different-owner", session_id=session) == []
         with pytest.raises(ValueError, match="different original"):
             persist_validator_result({**payload, "explanation": "replacement"}, **kwargs)

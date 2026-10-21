@@ -45,6 +45,10 @@ def test_core_compact_instruction_does_not_inject_package_semantics():
     assert "GO not_found_inputs" not in text
     assert "gene_symbols" not in text
     assert "allele_symbols" not in text
+    assert "optional list of useful follow-up questions, notes or qualifications" in text
+    assert "Leave it empty unless" in text
+    assert "Questions alone do not make output incomplete" in text
+    assert "not a programmatic rule" in text
 
 
 def test_batch_finalizer_retains_safe_peers_of_foreign_record_and_later_bad_retries():

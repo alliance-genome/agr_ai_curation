@@ -97,6 +97,7 @@ from src.lib.domain_packs.validation_findings import append_validation_findings_
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorDispatchJob,
     ValidatorRuntimeContext,
+    _validator_result_target_matches_request_identity,
     dispatch_validator_jobs,
     group_dispatch_context,
     resolve_group_scoped_validator_matches,
@@ -1462,9 +1463,9 @@ async def _run_custom_flow_validator_agent(
         "You are running as a Flow Builder validation attachment. Validate only the "
         "compact DomainValidationRequest JSON supplied in the user message. The "
         "runtime payload may omit selector declarations, target.input_values, and "
-        "full evidence records when they duplicate selected_inputs or evidence_summary. Return one JSON "
-        "object matching the DomainValidatorResultBase contract. Preserve the supplied "
-        "request_id, validator_binding_id, validator_agent, and target fields exactly.\n\n"
+        "full evidence records when they duplicate selected_inputs or evidence_summary. "
+        "Submit your decision through the finalization tool using the active runtime's "
+        "declared submission schema. Preserve your scientific judgment and explanation.\n\n"
         "---\n\n"
     )
     runtime_context = [instruction_prefix]
@@ -1600,10 +1601,20 @@ async def _run_custom_flow_validator_agent(
     # Match the dispatcher's existing typed-subclass projection: package-specific
     # views stay in the accepted audit payload; materialization consumes the shared
     # canonical fields (including full candidates, facts and lookup provenance).
-    return DomainValidatorResultBase.model_validate({
+    result = DomainValidatorResultBase.model_validate({
         key: value for key, value in accepted_payload.items()
         if key in DomainValidatorResultBase.model_fields
     })
+    # Finalization already checked completeness, including composite field scope.
+    # Recheck identity only; serialization drops private assembly provenance.
+    if (
+        result.request_id != request.request_id
+        or result.validator_binding_id != request.validator_binding_id
+        or result.validator_agent != request.validator_agent
+        or not _validator_result_target_matches_request_identity(result, request=request)
+    ):
+        raise ValueError("Accepted flow validator result has mismatched request identity")
+    return result.model_copy(update={"target": request.target})
 
 
 def _ordered_validation_matches(
@@ -1849,7 +1860,7 @@ async def _collect_flow_validator_materialization_inputs(
                         raise ValueError(
                             "custom validator node is missing from the flow definition"
                         )
-                    raw_output = await _run_custom_flow_validator_agent(
+                    validator_result = await _run_custom_flow_validator_agent(
                         request,
                         binding_match=match,
                         validator_node=validator_node,
@@ -1857,10 +1868,8 @@ async def _collect_flow_validator_materialization_inputs(
                         source_envelope_id=source_envelope.envelope_id,
                         source_envelope_revision=source_envelope_revision,
                     )
-                    validator_result = validator_result_from_agent_output(
-                        raw_output,
-                        request=request,
-                    )
+                    # The custom runner returns an identity-checked, finalized
+                    # typed result. Do not reclassify its accepted field scope.
                 except Exception as exc:
                     raise_if_document_read_failed(exc)
                     record_handled_stage_failure(exc)

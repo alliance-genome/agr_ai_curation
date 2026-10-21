@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: ontology_term validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -113,7 +114,7 @@ After lookup, apply the `accepted_prefixes`, `allowed_term_curies`, `unresolved_
 Stop when the evidence supports a decision, or bounded searches cannot distinguish the candidates.
 
 # OTV-26 shared result contract root fields (contract tokens, incl ontology-specific + status)
-Populate these root fields directly; do not wrap them under another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_objects`: raw or normalized ontology term facts returned by lookup for resolved matches.

@@ -3929,8 +3929,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
         ]
 
+    @pytest.mark.parametrize("composite", [False, True])
     def test_supplemental_validation_groups_run_every_custom_validator_node(
-        self, monkeypatch
+        self, monkeypatch, composite
     ):
         """Distinct supplemental sidecars must all execute against the source revision."""
         executor = _executor_module()
@@ -3974,6 +3975,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             },
             expected_result_fields={"identifier": "gene.identifier"},
         )
+        if composite:
+            binding = replace(binding, expected_result_fields={"identifier": "gene.identifier", "design_matches": "gene.design_matches"})
         second_binding = replace(
             binding,
             binding_id="custom.supplemental.identifier",
@@ -4017,8 +4020,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     "source_envelope_revision": source_envelope_revision,
                 }
             )
-            return {
+            return executor.DomainValidatorResultBase.model_validate({
                 "status": "resolved",
+                "field_resolutions": {"identifier": {"status": "resolved", "lookup_outcome": "matched", "resolved_values": {"identifier": "AGR:0001"}}} if composite else {},
                 "request_id": request.request_id,
                 "validator_binding_id": request.validator_binding_id,
                 "validator_agent": request.validator_agent.model_dump(mode="json"),
@@ -4038,7 +4042,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ],
                 "curator_message": None,
                 "explanation": "Supplemental validator passed.",
-            }
+            })
 
         monkeypatch.setattr(
             executor,
@@ -4081,6 +4085,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             )
         )
 
+        assert all(item.result.is_complete for item in materialization_inputs)
         assert selector_findings == []
         assert len(calls) == 2
         assert [call["binding_match"] for call in calls] == list(matches)
@@ -4115,7 +4120,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             for item in metadata
         )
         assert all(
-            item["expected_result_fields"] == {"identifier": "gene.identifier"}
+            item["expected_result_fields"] == binding.expected_result_fields
             for item in metadata
         )
         assert all(
@@ -4136,7 +4141,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @pytest.mark.parametrize("benchmark", [False, True])
     @pytest.mark.parametrize("custom", [False, True])
-    @pytest.mark.parametrize("accepted_status", ["resolved", "unresolved", "incomplete", None])
+    @pytest.mark.parametrize("accepted_status", ["resolved", "unresolved", "incomplete", "wrong_identity", "composite", None])
     def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, benchmark, custom, accepted_status):
         executor = _executor_module()
         from src.schemas.domain_validator import (
@@ -4171,6 +4176,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ],
             expected_result_fields={"identifier": "gene.identifier"},
         )
+        if accepted_status == "composite":
+            request.expected_result_fields["design_matches"] = "gene.design_matches"
         captured = {}
         agent_key = "ca_pinned_validator" if custom else "custom_validator"
 
@@ -4186,17 +4193,27 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "validator_binding_id": request.validator_binding_id,
             "validator_agent": request.validator_agent.model_dump(mode="json"),
             "target": request.target.model_dump(mode="json"),
-            "status": "resolved" if accepted_status == "incomplete" else accepted_status,
+            "status": "resolved" if accepted_status in {"incomplete", "composite", "wrong_identity"} else accepted_status,
             "output_issues": ["Unfinished structural correction."] if accepted_status == "incomplete" else [],
-            "resolved_values": {"identifier": "AGR:0001"} if accepted_status in {"resolved", "incomplete"} else {},
+            "resolved_values": {"identifier": "AGR:0001"} if accepted_status in {"resolved", "incomplete", "composite", "wrong_identity"} else {},
             "resolved_objects": [],
-            "missing_expected_fields": [] if accepted_status in {"resolved", "incomplete"} else ["identifier"],
+            "missing_expected_fields": [] if accepted_status in {"resolved", "incomplete", "composite", "wrong_identity"} else ["identifier"],
             "candidates": [{"value": "AGR:0001", "details": {"evidence_record_ids": ["evidence-1"], "source_record": {"curie": "AGR:0001"}}}],
             "lookup_attempts": [{"provider": "fixture", "method": "search", "query": {"identifier": "AGR:0001"}, "result_count": 1, "outcome": "success"}],
             "curator_message": None,
             "allele_candidates": [{"allele_id": "AGR:0001"}],
             "explanation": "Accepted scientific decision",
+            "unresolved_questions": ["Optional source qualification for the extractor"],
         }
+
+        if accepted_status == "wrong_identity":
+            accepted_payload["request_id"] = "different-request"
+        if accepted_status == "composite":
+            accepted_payload["field_resolutions"] = {"identifier": {
+                "status": "resolved", "lookup_outcome": "matched",
+                "resolved_values": {"identifier": "AGR:0001"},
+            }}
+            accepted_payload["target"]["input_values"] = {"normalized": "context"}
 
         class _FakeTool:
             async def on_invoke_tool(self, tool_ctx, args_json):
@@ -4251,16 +4268,30 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 with pytest.raises(ValueError, match="accepted structured result"):
                     asyncio.run(run())
                 return
+            if accepted_status == "wrong_identity":
+                with pytest.raises(ValueError, match="mismatched request identity"):
+                    asyncio.run(run())
+                return
             result = asyncio.run(run())
+            if accepted_status == "composite":
+                assert result.status == "resolved" and result.is_complete
+                assert result.missing_expected_fields == []
+                assert result.target == request.target
+                return
 
         assert result.candidates[0].details == accepted_payload["candidates"][0]["details"]
         assert result.lookup_attempts[0].result_count == 1
         materialized = executor.validator_result_from_agent_output(result, request=request)
-        assert materialized.status == ("resolved" if accepted_status == "incomplete" else accepted_status)
+        assert materialized.status == ("resolved" if accepted_status in {"incomplete", "composite", "wrong_identity"} else accepted_status)
         assert materialized.is_complete is (accepted_status != "incomplete")
         assert materialized.resolved_values == accepted_payload["resolved_values"]
         assert materialized.target == request.target
         assert materialized.explanation == "Accepted scientific decision"
+        assert materialized.unresolved_questions == accepted_payload["unresolved_questions"]
+        runtime_context = "\n".join(captured["agent_kwargs"]["additional_runtime_context"])
+        assert "active runtime's declared submission schema" in runtime_context
+        assert "DomainValidatorResultBase contract" not in runtime_context
+        assert "validator_binding_id, validator_agent, and target fields exactly" not in runtime_context
 
         if benchmark and custom:
             assert captured["agent_kwargs"]["benchmark_slot"] == f"agent:{agent_key}"

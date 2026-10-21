@@ -52,6 +52,7 @@ from src.lib.context import (
     get_current_trace_id,
     get_current_user_id,
 )
+from src.lib.domain_packs.validator_guidance import EXTRACTOR_FOLLOW_UP_GUIDANCE
 from src.lib.chat_state import document_state
 from src.lib.curation_workspace.chat_prep_confirmation import prepare_from_chat
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
@@ -1819,6 +1820,7 @@ def create_supervisor_agent(
     specialist_tools.append(recall_chat_history_tool)
 
     runtime_prompt_parts = [
+        EXTRACTOR_FOLLOW_UP_GUIDANCE,
         "CURATION PREP RULES:\n"
         "- Preview exact saved-result refs and counts before asking for confirmation.\n"
         "- Explain that whole results include ALL eligible candidates; never label fourteen as a selected four.\n"

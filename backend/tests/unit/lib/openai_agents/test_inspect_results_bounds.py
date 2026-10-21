@@ -665,6 +665,7 @@ async def test_complete_original_unicode_chunks_and_historical_unavailability(mo
 
     payload = _payload(1)
     raw = {"status": "resolved", "request_id": "request-long", "explanation": UNICODE * 2000,
+           "unresolved_questions": ["Confirm the experimental background: " + UNICODE],
            "lookup_attempts": [{"query": {str(i): [UNICODE] * 30 for i in range(60)}}]}
     key, original = validator_result_snapshot(raw, request={"input": UNICODE}, source_envelope_revision=1)
     original["recorded_order"] = 0

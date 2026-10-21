@@ -393,7 +393,7 @@ def test_reference_prompt_contract_uses_tool_before_deciding():
         "ambiguous",
         "No literature reference matched",
         "upstream error",
-        "Do not wrap",
+        "Submit only the decision fields declared by the active runtime",
         "Never call Elasticsearch",
     ]:
         assert fragment in content, f"reference prompt missing {fragment}"

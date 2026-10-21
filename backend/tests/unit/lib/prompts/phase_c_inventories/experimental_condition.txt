@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: experimental_condition composite validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -62,7 +63,7 @@ Use `condition_relation_type` only to judge coherence -- does the resolved condi
 
 # ECV-09 per-component status policy (component_validations entry + the four per-component status values + selected_inputs channel)
 Build one `component_validations[]` entry for every present or required component
-preserve each component's field path and `selected_inputs`, copy that component's lookup attempts into `component_validations[].lookup_attempts`, and preserve ambiguous, obsolete, conflicting, prefix-mismatched, or alternate records in `component_validations[].candidates`.
+preserve each component's field path and `selected_inputs`, let the application attach that component's actual lookup attempts to `component_validations[].lookup_attempts`, and preserve ambiguous, obsolete, conflicting, prefix-mismatched, or alternate records in `component_validations[].candidates`.
 `"resolved"` only when tool evidence resolves the component and all expected component fields are present
 `"unresolved"` when a required component is missing, ambiguous, not found, obsolete, conflicting, has a prefix/type/provider/taxon mismatch, or the tool fails
 `"not_present"` for optional components that are absent
@@ -75,7 +76,7 @@ ambiguous or missing required component results MUST keep the root condition `st
 Return only the shared validator statuses:
 `status: "resolved"` when every required condition component is resolved and the condition-level expected fields can be populated from lookup evidence.
 `status: "unresolved"` when any required component is missing, ambiguous, unavailable, or only partially resolved.
-Populate these root fields directly; do not wrap them under another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_objects`: normalized condition facts returned or selected from component lookups.
 `missing_expected_fields`: expected fields this composite validator could not populate.

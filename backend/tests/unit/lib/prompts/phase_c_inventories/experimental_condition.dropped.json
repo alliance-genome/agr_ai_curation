@@ -40,11 +40,11 @@
   {
     "phrase": "For each present grounded component -- condition class/id, condition chemical (ChEBI ontology term), condition taxon, quantity/unit, data provider -- call the owning capability's `agr_curation_query` method before resolving it, and record each call in that component's `lookup_attempts`.",
     "synonyms": [
-      "Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and record the shared call in that component's `lookup_attempts`.",
-      "For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and record that call in the component's `lookup_attempts`."
+      "Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and let the application record the shared call for that component.",
+      "For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and let the application record that call for the component."
     ],
     "category": "relocated",
-    "reason": "ALL-592 splits the old per-component-first workflow step into a grouped cross-target lookup followed by residual per-component calls. Lookup-attempt provenance remains required for both paths.",
+    "reason": "ALL-592 splits the old per-component-first workflow step into a grouped cross-target lookup followed by residual per-component calls. Lookup-attempt provenance remains required for both paths. ALL-1274 retains this grouped/residual workflow while moving lookup-audit assembly to the application; the validator submits decisions and references.",
     "old_source": "packages/alliance/agents/experimental_condition/prompt.yaml:<lookup_workflow>",
     "new_home": "render"
   }

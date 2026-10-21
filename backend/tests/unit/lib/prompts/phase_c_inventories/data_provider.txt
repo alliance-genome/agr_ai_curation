@@ -1,3 +1,4 @@
+# ALL-1274: compact decisions; canonical fields and lookup history are application-owned.
 # Phase C load-bearing phrase inventory: data_provider validator (base render, no group)
 #
 # FULL coverage derived from the authoritative semantic-coverage checklist
@@ -67,7 +68,7 @@ If the tool reports under-development or unavailable helper behavior, return unr
 If the tool returns zero exact matches, return unresolved with `lookup_attempts`, `missing_expected_fields`, provider candidates when returned, and a curator-facing no-match explanation.
 
 # DPV-14 shared result contract root fields (contract tokens, incl provider-specific roots)
-Populate these root fields directly; do not wrap them under another object:
+The application assembles these canonical fields from your decision and recorded evidence:
 `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
 `resolved_objects`: raw or normalized provider facts returned by lookup for resolved matches.
 `missing_expected_fields`: expected fields you could not populate from lookup evidence.

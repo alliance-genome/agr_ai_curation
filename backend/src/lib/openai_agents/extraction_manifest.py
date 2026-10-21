@@ -508,6 +508,7 @@ def validator_result_entries(
             "original_ref": ref,
             "source_envelope_revision": snapshot.get("source_envelope_revision"),
             "output_complete": not bool(result.get("output_issues")),
+            "follow_up_question_count": len(result.get("unresolved_questions") or []),
         })
         if isinstance(result.get("target"), Mapping):
             decisions[ref]["target"] = {name: result["target"][name] for name in (
@@ -527,6 +528,7 @@ def validator_result_entries(
             for name in ("status", "request_id", "validator_binding_id", "resolved_values", "missing_expected_fields")
             if name in result
         })
+        entry.setdefault("follow_up_question_count", len(result.get("unresolved_questions") or []))
         entry.setdefault("original_available", False)
         entry.setdefault("output_complete", None)  # Unknown for historical projections.
         target = result.get("target")
