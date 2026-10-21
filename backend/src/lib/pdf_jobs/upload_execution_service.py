@@ -138,11 +138,14 @@ class JobAwarePipelineTracker:
         document_id: str,
         error: Exception,
         stage: ProcessingStage | None = None,
+        *,
+        sentry_reported: bool = False,
     ):
         return await self.base_tracker.handle_pipeline_failure(
             document_id,
             error,
             stage,
+            sentry_reported=sentry_reported,
         )
 
 

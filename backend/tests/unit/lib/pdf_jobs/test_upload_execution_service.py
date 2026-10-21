@@ -57,7 +57,7 @@ class _Tracker:
             }
         )
 
-    async def handle_pipeline_failure(self, document_id, error, stage=None):
+    async def handle_pipeline_failure(self, document_id, error, stage=None, *, sentry_reported=False):
         self.failure_calls.append(
             {
                 "document_id": document_id,
