@@ -49,6 +49,13 @@ def classify_tool_result(output: Any, *, studio: bool = False) -> ToolOutcome:
         if value.get("lookup_status") == "transient":
             return ToolOutcome(False, "lookup_dependency_failure")
         return ToolOutcome(value.get("status") != "error")
+    if (
+        value.get("status") == "needs_source_read"
+        and value.get("error_code") == "unissued_document_selection"
+        and value.get("saved") is False
+    ):
+        # A rejected selection is visible as unsuccessful, but is not an outage.
+        return ToolOutcome(False)
     if studio:
         return ToolOutcome(
             not (value.get("success") is False or value.get("status") == "error")

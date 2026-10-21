@@ -64,6 +64,8 @@ from src.lib.observability import tool_results, runtime
             False,
             None,
         ),
+        ({"status": "needs_source_read", "error_code": "unissued_document_selection", "saved": False}, False, False, None),
+        ({"status": "needs_source_read"}, False, True, None),
         ({"status": "error", "data": {"success": False}}, False, True, None),
         ("ERROR timeout secret arbitrary text", False, True, None),
     ],

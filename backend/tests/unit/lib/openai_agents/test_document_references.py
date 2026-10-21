@@ -376,3 +376,279 @@ async def test_workspace_failures_keep_their_actual_cause_and_classification():
     items = [{"type": "function_call", "name": "attach_evidence_to_object", "call_id": "attach", "arguments": "{}"},
         {"type": "function_call_output", "call_id": "attach", "output": "An error occurred while running the tool: missing workspace"}]
     assert await refs.project_model_source_items(items, user_id="alice", cache={}) == items
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unissued", ["chunk", "span_window"])
+@pytest.mark.parametrize("selected_chunk", [31, 36])
+async def test_unissued_selection_requires_explicit_read_then_resubmission(store, scope, monkeypatch, unissued, selected_chunk):
+    from agr_ai_curation_alliance.tools import documents, weaviate_search
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+
+    chunk, spans = source(selected_chunk, "First exact sentence.\n\nSecond α😀 sentence.")
+    chunk.update(document_id="doc-a", page_number=3, section_title="Results", metadata={"page_number": 3, "section_title": "Results"})
+    selected_span = 1 if unissued == "span_window" else 0
+    if unissued == "span_window":
+        binding(store, scope).retain(chunk, spans, [0])
+    else:
+        from uuid import UUID
+        neighbor, _ = source(selected_chunk - 1, "Neighbor read does not issue the selected chunk.")
+        neighbor["id"] = str(UUID(int=selected_chunk))
+        neighbor_spans = [s.to_dict() for s in build_evidence_spans(chunk_id=neighbor["id"], chunk_text=neighbor["text"])]
+        binding(store, scope).retain(neighbor, neighbor_spans, [0])
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, scope))
+    verifications = []
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: verifications.append(value.generation))
+    lookup = AsyncMock(return_value=chunk)
+    monkeypatch.setattr(refs, "get_chunk_by_index", lookup)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", AsyncMock(return_value=chunk))
+    monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", AsyncMock(return_value={}))
+    canonical_lookup = AsyncMock(return_value=chunk)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "alice")
+    context = {"document_id": "doc-a", "user_id": "alice"}
+    record = documents.create_record_evidence_tool(context)
+    read = documents.create_read_chunk_tool(context)
+    args = {"entity": "example", "selections": [{"chunk_index": selected_chunk, "span_index": selected_span}]}
+    result = await record.on_invoke_tool(_build_tool_context(record.name, args), json.dumps(args))
+    assert result["status"] == "needs_source_read"
+    assert result["error_code"] == "unissued_document_selection"
+    assert result["saved"] is False
+    assert result["selection"] == args["selections"][0]
+    assert "read_chunk" in result["message"]
+    assert "evidence_record_id" not in result
+    assert build_record_evidence_summary_record(tool_name="record_evidence", tool_input=args, tool_output=result) is None
+    lookup.assert_not_awaited()
+    canonical_lookup.assert_not_awaited()
+    assert len(verifications) == 1
+    assert refs._ACTIVE_SOURCE.get() is None
+
+    # The agent must issue the read and submit the selection again itself.
+    await read.on_invoke_tool(_build_tool_context(read.name, {}), json.dumps({"chunk_index": selected_chunk}))
+    accepted = await record.on_invoke_tool(_build_tool_context(record.name, args), json.dumps(args))
+    assert accepted["status"] == "verified"
+    assert accepted["verified_quote"] == spans[selected_span]["text"]
+    assert accepted["source_span_ids"] == [spans[selected_span]["span_id"]]
+    assert accepted["selections"] == args["selections"]
+    assert len(verifications) == 3
+
+
+@pytest.mark.asyncio
+async def test_mixed_issued_and_unissued_selections_cannot_partially_update_evidence(store, scope, monkeypatch):
+    from copy import deepcopy
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    chunk, spans = source()
+    value = binding(store, scope)
+    value.retain(chunk, spans, [0])
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: value)
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value=chunk))
+    canonical_lookup = AsyncMock(return_value=chunk)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    existing = {"evidence_record_id": "existing", "document_id": "doc-a", "status": "verified",
+                "verified_quote": "Original quote", "source_span_ids": ["original"],
+                "object_id": "original-target", "field_path": "original-field"}
+    before = deepcopy(existing)
+    tool = record_evidence.create_record_evidence_tool("doc-a", "alice", workspace_records=[existing])
+    args = {"entity": "example", "evidence_record_id": "existing", "selections": [
+        {"chunk_index": 42, "span_index": 0}, {"chunk_index": 43, "span_index": 0}]}
+    result = await tool.on_invoke_tool(_build_tool_context(tool.name, args), json.dumps(args))
+    assert result["status"] == "needs_source_read"
+    assert result["selection"] == args["selections"][1]
+    assert existing == before
+    assert value.staged_updates == []
+    canonical_lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["history", "missing_chunk", "changed_chunk", "lookup", "corrupt_span", "invalid_span", "generation_after_rejection"])
+async def test_record_evidence_source_faults_remain_terminal(store, scope, monkeypatch, fault):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    chunk, spans = source()
+    value = binding(store, scope)
+    value.retain(chunk, spans, [0])
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: value)
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value=chunk))
+    canonical_lookup = AsyncMock()
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    def fail(*args, **kwargs):
+        raise RuntimeError("Private source dependency failed")
+    if fault == "history":
+        monkeypatch.setattr(refs, "_read_bindings", fail)
+    elif fault == "missing_chunk":
+        monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value=None))
+    elif fault == "changed_chunk":
+        monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value={**chunk, "text": "Changed"}))
+    elif fault == "lookup":
+        monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(side_effect=RuntimeError("Private lookup failed")))
+    elif fault == "corrupt_span":
+        monkeypatch.setattr(refs, "resolve_evidence_span_id", fail)
+    elif fault == "generation_after_rejection":
+        monkeypatch.setattr(refs, "_verify_source_generation", fail)
+    tool = record_evidence.create_record_evidence_tool("doc-a", "alice")
+    args = {"entity": "example", "selections": [{"chunk_index": 43 if fault == "generation_after_rejection" else 42, "span_index": 99 if fault == "invalid_span" else 0}]}
+    with pytest.raises(DocumentReadError) as caught:
+        await tool.on_invoke_tool(_build_tool_context(tool.name, args), json.dumps(args))
+    assert caught.value.__cause__ is not None
+    assert value.staged_updates == []
+    assert refs._ACTIVE_SOURCE.get() is None
+    canonical_lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_parallel_record_calls_keep_read_prerequisites_scoped(store, scope, monkeypatch):
+    import asyncio
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    chunk, spans = source()
+    chunk.update(document_id="doc-a", page_number=3, section_title="Results", metadata={"page_number": 3, "section_title": "Results"})
+    binding(store, scope).retain(chunk, spans, [0])
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, scope))
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value=chunk))
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", AsyncMock(return_value=chunk))
+    monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "alice")
+    tool = record_evidence.create_record_evidence_tool("doc-a", "alice")
+    async def record(index):
+        args = {"entity": "example", "selections": [{"chunk_index": index, "span_index": 0}]}
+        return await tool.on_invoke_tool(_build_tool_context(tool.name, args), json.dumps(args))
+    accepted, rejected = await asyncio.gather(record(42), record(43))
+    assert accepted["status"] == "verified"
+    assert accepted["verified_quote"] == spans[0]["text"]
+    assert rejected["status"] == "needs_source_read"
+    assert rejected["saved"] is False
+    assert "evidence_record_id" not in rejected
+    assert refs._ACTIVE_SOURCE.get() is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_selection_verification_never_reaches_evidence_mutation(store, scope, monkeypatch):
+    import asyncio
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    chunk, spans = source()
+    value = binding(store, scope)
+    value.retain(chunk, spans, [0])
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: value)
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    entered = asyncio.Event()
+    async def wait_for_source(**kwargs):
+        entered.set()
+        await asyncio.Future()
+    monkeypatch.setattr(refs, "get_chunk_by_index", wait_for_source)
+    canonical_lookup = AsyncMock()
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    tool = record_evidence.create_record_evidence_tool("doc-a", "alice")
+    args = {"entity": "example", "selections": [{"chunk_index": 42, "span_index": 0}]}
+    task = asyncio.create_task(tool.on_invoke_tool(_build_tool_context(tool.name, args), json.dumps(args)))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert value.staged_updates == []
+    canonical_lookup.assert_not_awaited()
+    assert refs._ACTIVE_SOURCE.get() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_failure", [False, True])
+async def test_selection_result_through_flow_boundary_and_sentry(store, scope, monkeypatch, source_failure):
+    """Real SDK tool errors reach the endpoint owner; read prerequisites do not."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+    import sentry_sdk
+    from sentry_sdk import Client
+    from sentry_sdk.transport import Transport
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from src.lib.observability.sentry import before_send
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    from src.lib.openai_agents.curator_errors import failure_for_event
+    from tests.unit.api import test_chat_execute_flow_endpoint as boundary
+
+    events = []
+    class MemoryTransport(Transport):
+        def capture_envelope(self, envelope):
+            for item in envelope.items:
+                if item.headers.get("type") == "event":
+                    events.append(item.payload.json)
+
+    calls = boundary._patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    chunk, spans = source()
+    value = binding(store, scope)
+    if source_failure:
+        value.retain(chunk, spans, [0])
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: value)
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(side_effect=RuntimeError("PRIVATE source outage")))
+    canonical_lookup = AsyncMock()
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    tool = record_evidence.create_record_evidence_tool("doc-a", "alice")
+    args = {"entity": "example", "selections": [{"chunk_index": 42, "span_index": 0}]}
+    results = []
+    async def execute(**kwargs):
+        result = await tool.on_invoke_tool(_build_tool_context(tool.name, args), json.dumps(args))
+        results.append(result)
+        # No implicit read or retry: the test executor returns the tool guidance.
+        yield {"type": "RUN_FINISHED", "data": {"response": result["message"]}}
+    boundary._patch_chat_impl(monkeypatch, "execute_flow", execute)
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, user_id=7, is_active=True, visibility="private",
+        project_id=None, shared_at=None, name="Evidence", execution_count=0,
+        last_executed_at=None, flow_definition={})
+    client = Client(dsn="http://public@localhost/1", transport=MemoryTransport,
+        default_integrations=False, integrations=[LoggingIntegration(event_level=40)],
+        before_send=before_send, send_default_pii=False)
+    try:
+        with sentry_sdk.isolation_scope() as sentry_scope:
+            sentry_scope.set_client(client)
+            response = await boundary.chat.execute_flow_endpoint(
+                request=boundary.chat.ExecuteFlowRequest(flow_id=flow_id, session_id="evidence-boundary"),
+                db=boundary._DummyDB(flow=flow), user={"sub": "auth-sub", "cognito:groups": []})
+            streamed = await boundary._consume_stream(response)
+            client.flush()
+        if source_failure:
+            assert results == []
+            assert [event["type"] for event in streamed] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
+            assert streamed[1]["message"] == failure_for_event({"error_type": "DocumentReadError"}).message
+            assert len(events) == 1
+            assert events[0]["tags"]["runtime_component"] == "execute_flow_stream"
+            assert events[0]["tags"]["operation"] == "event_generator_failed"
+        else:
+            assert results[0]["status"] == "needs_source_read"
+            assert results[0]["saved"] is False
+            assert not any(event["type"] in {"RUN_ERROR", "SUPERVISOR_ERROR"} for event in streamed)
+            assert events == []
+        canonical_lookup.assert_not_awaited()
+        assert value.staged_updates == []
+        assert calls["clear"] == ["evidence-boundary"]
+    finally:
+        client.close()
+        boundary.chat._LOCAL_CANCEL_EVENTS.clear()
+        boundary.chat._LOCAL_SESSION_OWNERS.clear()
+        boundary.chat.executable_run_manager._runs.clear()
+        boundary.chat.executable_run_manager._active_session_run_ids.clear()

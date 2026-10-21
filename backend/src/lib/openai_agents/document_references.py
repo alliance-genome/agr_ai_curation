@@ -39,6 +39,14 @@ class DocumentReferenceError(ValueError):
     """Structural source/selection failure; no scientific judgment is involved."""
 
 
+class UnissuedDocumentSelectionError(DocumentReferenceError):
+    """The agent selected a chunk or span window it has not read in this scope."""
+
+    def __init__(self, selection: DocumentSelection, message: str):
+        self.selection = selection
+        super().__init__(message)
+
+
 def _read_bindings(store: HistoryStore, scope: HistoryScope, document_id: str, *, db=None) -> list[dict]:
     # Only backend-owned source bindings cross specialist lineage boundaries.
     # Arbitrary history payloads still use HistoryStore's stricter access policy.
@@ -151,12 +159,15 @@ class SourceBinding:
             records = [r for r in self.records if r["kind"] == _SPAN_KIND
                        and r["chunk_index"] == selection.chunk_index]
             if not records:
-                raise DocumentReferenceError("Read the selected chunk before recording evidence")
+                raise UnissuedDocumentSelectionError(selection, "Read the selected chunk before recording evidence")
             record = records[-1]
+            span = next((s for s in record["spans"] if s["span_index"] == selection.span_index), None)
+            if span is None:
+                raise DocumentReferenceError("Selected span is unavailable")
             issued = {i for r in self.records if r["kind"] == _WINDOW_KIND
                       and r["chunk_index"] == selection.chunk_index for i in r["issued_indexes"]}
             if selection.span_index not in issued:
-                raise DocumentReferenceError("Read the selected span window before recording evidence")
+                raise UnissuedDocumentSelectionError(selection, "Read the selected span window before recording evidence")
             if selection.chunk_index not in chunks:
                 chunks[selection.chunk_index] = await get_chunk_by_index(
                     chunk_index=selection.chunk_index, user_id=self.user_id, document_id=self.document_id)
@@ -164,9 +175,6 @@ class SourceBinding:
             if (not chunk or chunk["id"] != record["chunk_id"]
                     or hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest() != record["content_sha256"]):
                 raise DocumentReferenceError("Selected source no longer matches its issued definition")
-            span = next((s for s in record["spans"] if s["span_index"] == selection.span_index), None)
-            if span is None:
-                raise DocumentReferenceError("Selected span is unavailable")
             resolve_evidence_span_id(span_id=span["span_id"], chunk_text=chunk["text"], expected_chunk_id=chunk["id"])
             if span["span_id"] not in result:
                 result.append(span["span_id"])
