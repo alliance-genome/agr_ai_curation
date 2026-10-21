@@ -587,6 +587,8 @@ class DomainEnvelopeTraceAnalyzer:
                     "recorded_order": _short_value(snapshot.get("recorded_order")),
                     "output_complete": not bool(result["output_issues"]) if isinstance(result.get("output_issues"), list) else None,
                     "original_available": True,
+                    "follow_up_question_count": len(result.get("unresolved_questions") or []),
+                    "unresolved_questions": _short_value(result.get("unresolved_questions", [])),
                     "source_path": source_path + ".validator_results",
                 },
             )

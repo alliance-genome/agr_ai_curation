@@ -440,4 +440,6 @@ def test_validator_prompt_finalization_uses_active_submission_contract(agent_nam
     prompt = yaml.safe_load((ALLIANCE_AGENTS_PATH / agent_name / "prompt.yaml").read_text())["content"]
     assert "Submit only the decision fields declared by the active runtime finalization tool" in prompt
     assert not re.search(r"call `finalize_[^`]+` with the complete", prompt)
+    if agent_name == "rgd_go_evidence_policy":
+        assert "`decision:" not in prompt
     assert "do not reconstruct the full result or author lookup_attempts" in prompt

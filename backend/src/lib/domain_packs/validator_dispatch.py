@@ -2777,6 +2777,7 @@ def _validator_result_finalization_feedback(
     result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
     profile_mapped: bool = False,
     compact_runtime: Any = None,
+    batch: bool = False,
 ) -> _ValidatorFinalizationFeedback:
     try:
         # Keep the assembler's private completeness provenance on typed results;
@@ -2794,7 +2795,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime, batch=batch),
         )
 
     expected_agent = request.validator_agent.model_dump(mode="json")
@@ -2815,7 +2816,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime, batch=batch),
         )
 
     if profile_mapped and (
@@ -2831,7 +2832,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime, batch=batch),
         )
 
     normalized = result.model_copy(
@@ -2851,7 +2852,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime, batch=batch),
             incomplete_result=expected_result,
         )
 
@@ -2864,7 +2865,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime, batch=batch),
         )
 
     return _ValidatorFinalizationFeedback(
@@ -2947,7 +2948,7 @@ def _validator_batch_results_finalization_feedback(
             except ValueError as exc:
                 result_errors.append({"request_id": request.request_id, "message": str(exc),
                                       "repair_instructions": list(_validator_repair_instructions(
-                                          str(exc), compact_runtime=compact_runtime,
+                                          str(exc), compact_runtime=compact_runtime, batch=True,
                                       ))})
                 continue
         feedback = _validator_result_finalization_feedback(
@@ -2956,6 +2957,7 @@ def _validator_batch_results_finalization_feedback(
             result_schema=(result_schemas or {}).get(request.request_id, DomainValidatorResultBase),
             profile_mapped=bool(job.match.binding.raw.get("profile_validation")),
             compact_runtime=compact_runtime,
+            batch=True,
         )
         retained = feedback.accepted_result or feedback.incomplete_result
         if retained is not None:

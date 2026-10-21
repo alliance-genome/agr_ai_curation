@@ -2690,12 +2690,11 @@ def _build_structured_specialist_finalization_tool(
             except ValueError as exc:
                 if compact_runtime is None:
                     raise
+                from src.lib.domain_packs.compact_runtime import compact_repair_instructions
                 feedback = _StructuredSpecialistFinalizationFeedback(
                     accepted_payload=None, message=str(exc),
+                    repair_instructions=list(compact_repair_instructions(compact_runtime)),
                 )
-        if compact_runtime is not None and feedback.accepted_payload is None:
-            from src.lib.domain_packs.compact_runtime import compact_repair_instructions
-            feedback.repair_instructions = list(compact_repair_instructions(compact_runtime))
         if feedback.accepted_payload is not None:
             finalization_state.accepted_payload = feedback.accepted_payload
             finalization_state.incomplete_payload = None

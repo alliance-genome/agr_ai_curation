@@ -121,6 +121,8 @@ async def test_real_compact_repair_preserves_judgment_questions_and_ambiguous_au
     assert "Preserve your scientific judgment" in guidance
     assert "Return exactly the DomainValidatorResultBase" not in guidance
     assert "Copy request_id, validator_binding_id" not in guidance
+    if mode == "batch":
+        assert all("Resubmit results" in " ".join(error["repair_instructions"]) for error in rejected["result_errors"] if "repair_instructions" in error)
     incomplete = (state.incomplete_payload if mode == "streaming" else
                   (state.incomplete_results[0].model_dump() if mode == "batch" else state.incomplete_result.model_dump()))
     assert incomplete["status"] == "resolved"
@@ -148,3 +150,35 @@ async def test_real_compact_repair_preserves_judgment_questions_and_ambiguous_au
     assert handoff["read"]["detail_path"] == "original.result"
     restored = DomainValidatorResultBase.model_validate_json(json.dumps(result))
     assert restored.unresolved_questions == decision["unresolved_questions"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("at_limit", [False, True])
+async def test_streaming_compact_preserves_specific_repair_and_stop_guidance(monkeypatch, at_limit):
+    runtime = SimpleNamespace(
+        contracts={"r": SimpleNamespace(decision_schema=CompactValidatorDecision, result_schema=DomainValidatorResultBase)},
+        assemble=Mock(return_value=SimpleNamespace(is_complete=True, model_dump=lambda **_: {})),
+    )
+    specific = "Use the supplied live evidence record reference."
+    monkeypatch.setattr(streaming_tools, "_structured_specialist_finalization_feedback", lambda *a, **kw:
+        streaming_tools._StructuredSpecialistFinalizationFeedback(
+            accepted_payload=None, message="Evidence reference missing", repair_instructions=[specific],
+        ))
+    state = streaming_tools._StructuredSpecialistFinalizationState(
+        required=True, tool_name="finalize_fixture", agent_name="Fixture", output_type_name="Fixture",
+        attempt_limit_exceeded=at_limit,
+    )
+    tool = streaming_tools._build_structured_specialist_finalization_tool(
+        expected_output_type=DomainValidatorResultBase, finalization_state=state,
+        tool_calls=[], live_evidence_records=[], function_tool_factory=function_tool, compact_runtime=runtime,
+    )
+    arguments = json.dumps({"result": {}})
+    feedback = await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name,
+        tool_call_id="finalize", tool_arguments=arguments), arguments)
+    guidance = " ".join(feedback["repair_instructions"])
+    if at_limit:
+        assert "Stop calling" in guidance
+        runtime.assemble.assert_not_called()
+    else:
+        assert specific in guidance
+    assert "Resubmit" not in guidance

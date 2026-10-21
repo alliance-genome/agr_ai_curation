@@ -1600,10 +1600,10 @@ async def _run_custom_flow_validator_agent(
     # Match the dispatcher's existing typed-subclass projection: package-specific
     # views stay in the accepted audit payload; materialization consumes the shared
     # canonical fields (including full candidates, facts and lookup provenance).
-    return DomainValidatorResultBase.model_validate({
+    return validator_result_from_agent_output({
         key: value for key, value in accepted_payload.items()
         if key in DomainValidatorResultBase.model_fields
-    })
+    }, request=request)
 
 
 def _ordered_validation_matches(

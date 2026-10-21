@@ -102,6 +102,7 @@ def test_original_validator_metadata_links_findings_without_reconstructing_histo
         "request": {"private_query": "do not copy into preview"}, "result": {
             "status": "resolved", "validator_binding_id": "gene_identity",
             "target": {"object_id": "object-1", "input_values": {"long": "x" * 1000}},
+            "unresolved_questions": ["Confirm background"],
             "output_issues": [], "explanation": "Full original retained elsewhere"}}
     envelope = {"envelope_id": "envelope-1", "domain_pack_id": "gene", "revision": 4,
         "objects": [], "validator_results": {ref: snapshot}, "validation_findings": [
@@ -116,6 +117,8 @@ def test_original_validator_metadata_links_findings_without_reconstructing_histo
     assert summary["envelopes"][0]["validator_result_count"] == 1
     row = summary["validator_results"][0]
     assert row["ref"] == ref and row["source_envelope_revision"] == 3
+    assert row["follow_up_question_count"] == 1
+    assert row["unresolved_questions"] == ["Confirm background"]
     assert row["recorded_order"] == 2 and row["status"] == "resolved"
     assert row["validator_binding_id"] == "gene_identity" and row["output_complete"] is True
     assert row["target"]["input_values"]["long"].endswith("...")
