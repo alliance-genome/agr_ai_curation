@@ -468,6 +468,7 @@ async def test_parent_and_subsection_chunk_helpers(monkeypatch):
     subsection_response = SimpleNamespace(
         objects=[
             SimpleNamespace(
+                uuid="subsection-uuid",
                 properties={
                     "content": "S1",
                     "chunkIndex": 11,
@@ -500,6 +501,7 @@ async def test_parent_and_subsection_chunk_helpers(monkeypatch):
     assert parent_rows[0]["doc_items"] == [{"id": "bbox-parent"}]
     assert len(subsection_rows) == 1
     assert subsection_rows[0]["doc_items"] == []
+    assert subsection_rows[0]["id"] == "subsection-uuid"
 
 
 @pytest.mark.asyncio

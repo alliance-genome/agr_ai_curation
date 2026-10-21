@@ -891,3 +891,124 @@ async def test_real_sdk_preserves_required_pdf_read_failure(monkeypatch):
     failure = classify_failure(caught.value)
     assert failure.category == "pdf_read_failed"
     assert "PRIVATE" not in failure.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent,count", [("Results", 4), ("Methods", 1)])
+@pytest.mark.parametrize("partial_name", [False, True])
+@pytest.mark.parametrize("mode", ["all", "first_page", "page", "filtered", "missing_identity", "missing_index", "no_match"])
+async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
+    monkeypatch, parent, count, partial_name, mode,
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from uuid import UUID
+    from agents import function_tool
+    from agr_ai_curation_alliance.tools.documents import create_read_subsection_tool
+    from src.lib.weaviate_client import chunks
+    from src.lib.agent_studio.catalog_service import _document_model_result
+    from src.lib.openai_agents import streaming_tools
+
+    texts = [f"  α passage {index}.\nNegative finding preserved.  " for index in range(count)]
+    objects = [SimpleNamespace(uuid=UUID(int=index + 1), properties={
+        "content": text, "chunkIndex": 30 + index, "sectionTitle": parent,
+        "parentSection": parent, "subsection": "Animals and expression",
+        "pageNumber": index + 2, "metadata": {},
+        "docItemProvenance": json.dumps([{"page": index + 2, "bbox": [1, 2, 3, 4]}]),
+    }) for index, text in enumerate(texts)]
+    if mode == "missing_identity":
+        objects[0].uuid = None
+    elif mode == "missing_index":
+        objects[0].properties["chunkIndex"] = None
+    elif mode == "no_match":
+        objects = []
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=objects)
+    client = object()
+    @contextmanager
+    def session():
+        yield client
+    monkeypatch.setattr(chunks, "get_connection", lambda: SimpleNamespace(session=session))
+    tenants = []
+    def collections(actual_client, user_id):
+        assert actual_client is client
+        tenants.append(user_id)
+        return collection, MagicMock()
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", collections)
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+    tool = create_read_subsection_tool({"document_id": "doc-12345678", "user_id": "owner-1"})
+    payload = {"parent_section": parent, "subsection": "Animals" if partial_name else "Animals and expression"}
+    selected = list(range(count))
+    if mode == "first_page":
+        payload.update(max_chunks=1, offset=0)
+        selected = [0]
+    elif mode == "page":
+        payload.update(max_chunks=1, offset=count - 1)
+        selected = [count - 1]
+    elif mode == "filtered":
+        payload["text_contains"] = "passage 0"
+        selected = [0]
+    if mode in {"missing_identity", "missing_index"}:
+        from agr_ai_curation_runtime.document_errors import DocumentReadError
+        with pytest.raises(DocumentReadError):
+            await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
+        return
+    canonical = await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
+    raw = canonical.model_dump(mode="json")
+    if mode == "no_match":
+        assert raw["subsection"] is None
+        assert "No content found" in raw["summary"]
+        assert raw["error_code"] is None
+        return
+    result = raw["subsection"]
+    assert result["content"] == "\n\n".join(texts[index] for index in selected)
+    assert result["returned_chunk_count"] == len(selected)
+    assert result["total_chunk_count"] == (1 if mode == "filtered" else count)
+    has_more = mode == "first_page" and count > 1
+    assert result["truncated"] is has_more
+    assert result["next_offset"] == (1 if has_more else None)
+    assert [source["chunk_id"] for source in result["source_chunks"]] == [str(objects[index].uuid) for index in selected]
+    assert [source["chunk_index"] for source in result["source_chunks"]] == [30 + index for index in selected]
+    view = _document_model_result("read_subsection", canonical)
+    import hashlib
+    assert view["subsection"]["content"] == result["content"]
+    assert view["subsection"]["content_sha256"] == hashlib.sha256(result["content"].encode()).hexdigest()
+    assert all("chunk_id" not in source for source in view["subsection"]["source_chunks"])
+    assert [source["chunk_index"] for source in view["subsection"]["source_chunks"]] == [30 + index for index in selected]
+    assert "doc_items" not in view["subsection"]
+    assert emitted[0]["doc_items"] == result["doc_items"]
+    assert tenants == ["owner-1"]
+    assert all(str(obj.uuid) not in json.dumps(view) for obj in objects)
+    weaviate_search.retain_issued_spans.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_kind", ["section", "subsection"])
+@pytest.mark.parametrize("bad_field,bad_value", [
+    ("id", None), ("chunk_index", None), ("chunk_index", True), ("chunk_index", -1), ("text", ""), ("text", None),
+])
+@pytest.mark.parametrize("filtered", [False, True])
+async def test_section_source_metadata_fault_is_not_empty_success_or_cursor_error(
+    monkeypatch, tool_kind, bad_field, bad_value, filtered,
+):
+    from agents import function_tool
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+    row = {"id": "canonical-id", "chunk_index": 0, "text": "Unchanged scientific text", "page_number": 2}
+    row[bad_field] = bad_value
+    async def retrieve(**kwargs):
+        return [row]
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", retrieve)
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", retrieve)
+    factory = getattr(weaviate_search, f"create_read_{tool_kind}_tool")
+    tool = factory("doc-12345678", "user-1")
+    payload = {"section_name": "Methods"} if tool_kind == "section" else {"parent_section": "Methods", "subsection": "Animals"}
+    if filtered:
+        payload["text_contains"] = "scientific"
+    with pytest.raises(DocumentReadError) as caught:
+        await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert "Stored section chunk" in str(caught.value.__cause__)
