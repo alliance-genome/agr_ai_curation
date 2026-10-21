@@ -39,6 +39,23 @@ workspace evidence updates are staged until the final generation check succeeds.
 Changed source or segmentation fails explicitly instead of rebinding an ordinal.
 These checks verify identity and exact source, not scientific sufficiency.
 
+## Selections that have not been read
+
+If `record_evidence` selects a chunk or span window that has not been issued in
+the authenticated source scope, it returns `status: needs_source_read`,
+`error_code: unissued_document_selection`, `saved: false`, and the rejected local
+selection. The agent must explicitly call `read_chunk` for the relevant window
+and submit the selections again within its existing turn budget. The application
+does not fetch the missing selection, replay the tool, or save partial evidence.
+Mixed issued/unissued selections cannot alter an existing evidence record.
+
+This is a source-read precondition, not evidence that retrieval failed. The
+rejection remains unsuccessful in tool telemetry without generating a new Sentry
+operational error. TraceReview preserves the status, selection and read guidance.
+Authorization, generation changes, missing stored chunks, hash/span mismatches,
+history failures and dependency errors remain terminal `DocumentReadError`s.
+The final source-generation check still runs before returning the rejection.
+
 ## Model and persistence boundaries
 
 Canonical SDK results remain intact for evidence capture and UI provenance.

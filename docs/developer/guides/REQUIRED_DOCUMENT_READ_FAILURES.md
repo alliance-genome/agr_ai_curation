@@ -6,6 +6,11 @@ recoverable validator finding, or instruction to continue without source text.
 An empty search or unmatched section query remains a valid discovery result.
 Structured cursor and response-size errors retain their existing correction and
 reporting paths; they do not assert that PDF source retrieval failed.
+An evidence selection whose chunk/span window has not been issued is a distinct
+`needs_source_read` precondition: no evidence is saved, and the agent must
+explicitly read and resubmit. It does not relax source validation or permit
+continuation without the required read. See
+[document-local references](DOCUMENT_LOCAL_REFERENCES.md#selections-that-have-not-been-read).
 
 Package document tools raise `DocumentReadError` with the original exception
 chained as its cause. The SDK failure callback raises instead of turning a

@@ -1234,6 +1234,8 @@ def create_record_evidence_tool(
 
         Backend verification copies exact source text; do not supply quote text.
         Multiple selections form one evidence record, in the supplied order.
+        A needs_source_read response saves nothing: explicitly read the selected
+        chunk/span window with read_chunk, then submit issued selections again.
         Supplying evidence_record_id replaces that active record's source while
         retaining attachments unless new target arguments are supplied.
 
@@ -1247,7 +1249,25 @@ def create_record_evidence_tool(
             object_type: Optional target object type.
             validation_finding_id: Optional validation finding being corrected.
         """
-        span_ids = await resolve_selections(selections)
+        from src.lib.openai_agents.document_references import UnissuedDocumentSelectionError
+        try:
+            span_ids = await resolve_selections(selections)
+        except UnissuedDocumentSelectionError as exc:
+            return _log_record_evidence_result(
+                {
+                    "status": "needs_source_read",
+                    "error_code": "unissued_document_selection",
+                    "saved": False,
+                    "selection": exc.selection.model_dump(),
+                    "message": (
+                        "Nothing was saved. Call read_chunk for the selected chunk_index "
+                        "and read the window containing the selected span_index. "
+                        "Then explicitly call record_evidence again with issued selections."
+                    ),
+                },
+                document_id=document_id,
+                verification_method="local_selection",
+            )
         result = await recorder(
             entity=entity, span_ids=span_ids, evidence_record_id=evidence_record_id,
             object_id=object_id, pending_ref_id=pending_ref_id, field_path=field_path,

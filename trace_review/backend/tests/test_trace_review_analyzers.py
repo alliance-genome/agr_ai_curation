@@ -11,6 +11,19 @@ from src.utils.trace_output import extract_trace_response_text, is_trace_output_
 
 
 class TraceReviewAnalyzerTests(unittest.TestCase):
+    def test_unissued_evidence_selection_preserves_rejection_and_read_guidance(self):
+        rejected = {
+            "status": "needs_source_read", "error_code": "unissued_document_selection",
+            "saved": False, "selection": {"chunk_index": 31, "span_index": 0},
+            "message": "Nothing was saved. Call read_chunk, then explicitly resubmit.",
+        }
+        for serialized in (json.dumps(rejected), str(rejected)):
+            result = ToolResultParser.parse(serialized)
+            self.assertEqual(result["parse_status"], "full")
+            self.assertEqual(result["parsed"]["json_data"], rejected)
+            self.assertEqual(result["summary"], "Status: needs_source_read")
+            self.assertNotIn("evidence_record_id", result["parsed"]["json_data"])
+
     def test_summary_group_context_uses_only_canonical_opaque_ids(self):
         for metadata, expected_groups in (
             ({"active_groups": ["group-alpha", "WB"]}, ["group-alpha", "WB"]),
