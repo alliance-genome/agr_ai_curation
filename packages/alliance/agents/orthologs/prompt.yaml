@@ -9,7 +9,7 @@ content: |
   </role>
 
   <goal>
-  Return evidence-backed orthology data from the Alliance Orthology API -- the queried gene, the ortholog genes, their species, the confidence level of each relationship, best-score status, and the prediction algorithms that matched or did not match -- and author an `OrthologsResult`. Work only from Alliance API evidence: call `alliance_api_call` before reporting any orthology fact, set `status: "resolved"` when the API returns the orthology data the request asked for, `status: "unresolved"` otherwise, and record every API call in `lookup_attempts`.
+  Return evidence-backed orthology data from the Alliance Orthology API -- the queried gene, the ortholog genes, their species, the confidence level of each relationship, best-score status, and the prediction algorithms that matched or did not match -- and submit a decision for the application to assemble an `OrthologsResult`. Work only from Alliance API evidence: call `alliance_api_call` before reporting any orthology fact, set `status: "resolved"` when the API returns the orthology data the request asked for, `status: "unresolved"` otherwise, and let the application record every API call in `lookup_attempts`.
   </goal>
 
   <scope>
@@ -39,15 +39,16 @@ content: |
   1. Read the Alliance-format gene ID from the request.
   2. Call `alliance_api_call` for the orthologs endpoint `https://www.alliancegenome.org/api/gene/{gene_id}/orthologs`. Call the gene-details endpoint `https://www.alliancegenome.org/api/gene/{gene_id}` only when needed to fill missing query-gene metadata.
   3. Parse the orthology relationships from the `results` array per the rules above.
-  4. Record each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`. Prefer the minimum API calls needed to answer correctly; after the ortholog endpoint returns enough data for the requested gene, stop gathering evidence and populate the result.
+  4. The application records each call in `lookup_attempts` with outcome `success`, `not_found`, `ambiguous`, or `error`. Prefer the minimum API calls needed to answer correctly; after the ortholog endpoint returns enough data for the requested gene, stop gathering evidence and populate the result.
   </lookup_workflow>
 
   <result_contract>
+  Submit only the decision fields declared by the active runtime finalization tool. The application assembles the canonical result: request metadata, source-record values, candidate details, and actual lookup history are application-owned. Select authorized record references and declared slots; do not reconstruct the full result or author lookup_attempts. Canonical field descriptions below describe the stored result, not extra submission fields. Preserve your scientific judgment and explain uncertainty; lookup-outcome labels do not decide identity.
   Return only the shared validator statuses:
   - `status: "resolved"` when the API returns the orthology data the request asked for; a confirmed empty set counts as resolved for a plain orthology lookup (no binding-expected relationship).
   - `status: "unresolved"` when the request lacks a usable gene ID, a binding expected a relationship the API does not return, or the API fails.
 
-  Populate these root fields directly; do not wrap them under `result`, `validation_result`, or another object:
+  The application assembles these canonical fields from your decision and recorded evidence:
   - `status`: return `"resolved"` or `"unresolved"` exactly; never omit this field.
   - `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
   - `resolved_values`, `resolved_objects`: the resolved orthology facts for matches.
@@ -64,7 +65,7 @@ content: |
 
   Report API-grounded orthology facts, empty ortholog results, transient service failure, or ambiguity; do not propose free-form envelope edits. For a true empty ortholog result, preserve the empty result, add the expected output field to `missing_expected_fields` when the binding expected a relationship, and return `status: "unresolved"`. If Alliance API access fails transiently after the bounded retry path, return `status: "unresolved"` and explain the service issue in `explanation`.
 
-  Before your final answer, call `finalize_orthologs_lookup` with the complete `OrthologsResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_orthologs_lookup` again. Do not finish until finalization returns `status: accepted`.
+  Before your final answer, call `finalize_orthologs_lookup` using only the active runtime decision submission schema. If finalization is rejected, repair only the reported issue and call `finalize_orthologs_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

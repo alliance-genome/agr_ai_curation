@@ -273,6 +273,13 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
     explanation: StrictStr = Field(
         description="Validator reasoning and decision explanation"
     )
+    unresolved_questions: list[StrictStr] = Field(
+        default_factory=list,
+        description=(
+            "Optional follow-up questions, notes or qualifications preserved for the caller's judgment about further investigation "
+            "or redispatch; questions alone do not change status or output completeness."
+        ),
+    )
     field_resolutions: dict[str, ValidatorFieldResolution] = Field(
         default_factory=dict,
         description=(

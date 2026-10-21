@@ -1462,9 +1462,9 @@ async def _run_custom_flow_validator_agent(
         "You are running as a Flow Builder validation attachment. Validate only the "
         "compact DomainValidationRequest JSON supplied in the user message. The "
         "runtime payload may omit selector declarations, target.input_values, and "
-        "full evidence records when they duplicate selected_inputs or evidence_summary. Return one JSON "
-        "object matching the DomainValidatorResultBase contract. Preserve the supplied "
-        "request_id, validator_binding_id, validator_agent, and target fields exactly.\n\n"
+        "full evidence records when they duplicate selected_inputs or evidence_summary. "
+        "Submit your decision through the finalization tool using the active runtime's "
+        "declared submission schema. Preserve your scientific judgment and explanation.\n\n"
         "---\n\n"
     )
     runtime_context = [instruction_prefix]

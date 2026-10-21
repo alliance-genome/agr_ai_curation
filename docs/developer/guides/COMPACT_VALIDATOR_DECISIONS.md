@@ -113,9 +113,25 @@ application commit alongside the original saved revision.
 For compact decisions, the invocation's source workspace checks record membership,
 identity and evidence references before assembling canonical output. Streaming
 finalization does not recheck that output with the older success-outcome filter:
-an LLM can select a supported record from an ambiguous lookup response. The legacy
-provenance check remains for noncompact callers; schema, completeness and document
-evidence checks still apply to compact output.
+an LLM can select a supported record from an ambiguous lookup response. Noncompact callers also preserve scientific judgments independently of lookup
+outcome labels. Their fact-grounding and audit-integrity checks remain; schema,
+completeness and document evidence checks still apply to compact output.
+
+All compact rejection paths use repair guidance derived from the actual decision
+schema, including single, batch, custom-profile and streaming finalizers. They
+never request canonical identity, source-value or lookup-history fields. The model
+repairs structural problems without changing its scientific judgment to fit an
+audit label. `unresolved_questions` contains optional follow-up questions, notes or qualifications for the caller's
+judgment about further investigation or redispatch. Questions do not make an
+otherwise complete resolved result incomplete. They survive in the canonical
+result and explanation; the compact caller handoff includes their count and the
+existing exact-result inspection reference. There is no automatic redispatch. Application-owned runtime instructions (not
+curator-editable package or saved prompt text) tell validators to leave this list
+empty unless a specific note would materially help the caller. Extractor runtime
+instructions explain how to inspect notes and decide whether new context warrants
+redispatch. Neither side treats the list as a failure flag.
+Missing required fields and invalid references remain structural failures.
+
 
 Expected decision/schema errors remain repairable finalizer rejections. Unexpected
 adapter type/key errors clear accepted state, report a content-free operational

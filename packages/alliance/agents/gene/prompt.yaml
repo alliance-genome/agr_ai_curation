@@ -120,11 +120,12 @@ content: |
   </lookup_workflow>
 
   <result_contract>
+  Submit only the decision fields declared by the active runtime finalization tool. The application assembles the canonical result: request metadata, source-record values, candidate details, and actual lookup history are application-owned. Select authorized record references and declared slots; do not reconstruct the full result or author lookup_attempts. Canonical field descriptions below describe the stored result, not extra submission fields. Preserve your scientific judgment and explain uncertainty; lookup-outcome labels do not decide identity.
   Return only the shared validator statuses:
   - `status: "resolved"` when lookup evidence resolves the requested target and all expected fields this validator can derive are present.
   - `status: "unresolved"` when the target is not found, stays ambiguous, has missing expected fields, or cannot be checked because the tool failed.
 
-  Populate these root fields exactly, and do not wrap them under another object:
+  The application assembles these canonical fields from your decision and recorded evidence:
   - `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
   - `resolved_values`: scalar values keyed by expected result field, such as gene CURIE, symbol, species, data provider, or full name.
   - `resolved_objects`: optional diagnostic lookup context only. Do not rely on it for materialization, and do not invent a separate Gene object when the active binding expects scalar `resolved_values`. The gene domain pack materializes scalar fields on the `gene_mention_evidence` target; it does not create a separate Gene object.
@@ -135,11 +136,7 @@ content: |
   - `explanation`: a plain-language decision explanation tied to the database evidence and the lookup attempts.
   - `gene_candidates`: gene-specific candidate detail preserving useful lookup fields, such as `gene_id`, `symbol`, `species`, `data_provider`, `name`, `gene_type`, `genomic_location`, `cross_references`, `synonyms`, and `match_type`.
 
-  Resolved-result lookup invariant:
-  - If your final status is `resolved`, `lookup_attempts` MUST include at least one entry with `outcome: "success"` for the database call that supports the selected gene.
-  - Do not return `status: "resolved"` when every lookup attempt is `ambiguous`, `not_found`, `conflict`, or `error`; return `status: "unresolved"` instead.
-  - When `search_genes` returns one exact provider/taxon-supported gene plus broader prefix, contains, or synonym candidates, you may resolve to the exact candidate when the paper context supports it. Record the supporting `search_genes`, `get_gene_by_exact_symbol`, or `get_gene_by_id` call with `outcome: "success"`, and preserve non-selected alternates in `candidates` or `gene_candidates`.
-  - The shared `lookup_attempts` schema uses `query`, `result_count`, and `outcome`; do not copy tool-only fields like `attempted_query`, `candidate_count`, or `lookup_status` into the final validator result.
+  A search may return multiple records while the paper evidence supports selecting one. Keep the actual search outcome unchanged; it is not a scientific verdict.
 
   For each resolved or candidate gene object, include:
   - `gene_id`: the Gene CURIE in Alliance format, such as `WB:WBGene00001234`.
@@ -150,7 +147,7 @@ content: |
 
   Include these optional fields only when query results return them: `name`, `gene_type`, `genomic_location` (chromosome, start, end, and strand when available), `cross_references`, and `synonyms`.
 
-  Before your final answer, call `finalize_gene_lookup` with the complete `GeneResultEnvelope` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_gene_lookup` again. Do not finish until finalization returns `status: accepted`.
+  Complete the finalization tool required by the active runtime contract. If finalization is rejected, correct the reported structural issue using only permitted decision fields. Preserve your scientific judgment; stop after acceptance.
   </result_contract>
 
   <stop_rules>

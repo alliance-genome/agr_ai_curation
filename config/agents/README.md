@@ -269,7 +269,7 @@ Common pattern: `AGENT_{AGENT_ID}_MODEL`, `AGENT_{AGENT_ID}_TEMP`.
 
 ## Lookup finalization provenance
 
-Agents with the `lookup_provenance` structured-finalization check must log one
+The canonical audit for the `lookup_provenance` structured-finalization check records one
 `lookup_attempt` per concrete tool call. Preserve the method and complete non-null
 arguments (method may be separate from `query`). Counts describe returned records,
 not selected candidates or discovered totals; bulk counts sum each group's returned
@@ -284,6 +284,11 @@ configured identifiers and fields are retained before display compaction. Non-nu
 claims must match a record with the same identity; missing source metadata remains
 null. The allele package uses this for `data_provider`, which cannot be inferred
 from an identifier prefix, species, query filter, or a different candidate.
+
+Compact agents submit decisions and source references; the application assembles
+identity, facts and actual lookup attempts. Shared repair instructions name the
+active decision schema, never the canonical result schema. Scientific resolution
+is independent of search-outcome labels on compact and noncompact paths.
 
 Runtime finalization instructions also explain these rules to custom agents with
 the active contract without changing their authored prompts. Existing immutable

@@ -2542,6 +2542,9 @@ def _append_validator_finalization_instructions(
             "evidence; do not invent values to fill mapped slots. Unresolved or "
             "ambiguous identities must remain unresolved."
         )
+    if compact_runtime is None:
+        from src.lib.domain_packs.validator_guidance import VALIDATOR_FOLLOW_UP_GUIDANCE
+        instruction_block += "\n" + VALIDATOR_FOLLOW_UP_GUIDANCE
     instructions = getattr(agent, "instructions", None)
     if instructions is None:
         agent.instructions = instruction_block
@@ -2688,12 +2691,16 @@ def _build_finalize_validator_result_tool(
                 fail_compact_assembly()
             except ValueError as exc:
                 finalization_state.accepted_result = None
-                return {"status": "rejected", "message": str(exc)}
+                return {"status": "rejected", "message": str(exc),
+                        "repair_instructions": list(_validator_repair_instructions(
+                            str(exc), compact_runtime=compact_runtime,
+                        ))}
         feedback = _validator_result_finalization_feedback(
             result,
             request=request,
             result_schema=result_schema,
             profile_mapped=profile_mapped,
+            compact_runtime=compact_runtime,
         )
         if feedback.accepted_result is not None:
             finalization_state.accepted_result = feedback.accepted_result
@@ -2769,6 +2776,7 @@ def _validator_result_finalization_feedback(
     request: DomainValidationRequest,
     result_schema: type[DomainValidatorResultBase] = DomainValidatorResultBase,
     profile_mapped: bool = False,
+    compact_runtime: Any = None,
 ) -> _ValidatorFinalizationFeedback:
     try:
         # Keep the assembler's private completeness provenance on typed results;
@@ -2786,7 +2794,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
         )
 
     expected_agent = request.validator_agent.model_dump(mode="json")
@@ -2807,7 +2815,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
         )
 
     if profile_mapped and (
@@ -2823,7 +2831,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
         )
 
     normalized = result.model_copy(
@@ -2843,7 +2851,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
             incomplete_result=expected_result,
         )
 
@@ -2856,7 +2864,7 @@ def _validator_result_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime),
         )
 
     return _ValidatorFinalizationFeedback(
@@ -2875,12 +2883,12 @@ def _validator_batch_results_finalization_feedback(
     if not isinstance(raw_results, list):
         message = (
             "Validator batch rejected: pass a results list with exactly one "
-            "DomainValidatorResultBase-compatible result per request."
+            "result matching the active submission schema per request."
         )
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime, batch=True),
         )
 
     expected_request_ids = {job.request.request_id for job in jobs}
@@ -2937,13 +2945,17 @@ def _validator_batch_results_finalization_feedback(
             try:
                 raw_result = compact_runtime.assemble(raw_result)
             except ValueError as exc:
-                result_errors.append({"request_id": request.request_id, "message": str(exc)})
+                result_errors.append({"request_id": request.request_id, "message": str(exc),
+                                      "repair_instructions": list(_validator_repair_instructions(
+                                          str(exc), compact_runtime=compact_runtime,
+                                      ))})
                 continue
         feedback = _validator_result_finalization_feedback(
             raw_result,
             request=request,
             result_schema=(result_schemas or {}).get(request.request_id, DomainValidatorResultBase),
             profile_mapped=bool(job.match.binding.raw.get("profile_validation")),
+            compact_runtime=compact_runtime,
         )
         retained = feedback.accepted_result or feedback.incomplete_result
         if retained is not None:
@@ -2967,7 +2979,7 @@ def _validator_batch_results_finalization_feedback(
         return _ValidatorFinalizationFeedback(
             accepted_result=None,
             message=message,
-            repair_instructions=_validator_repair_instructions(message),
+            repair_instructions=_validator_repair_instructions(message, compact_runtime=compact_runtime, batch=True),
             result_errors=tuple(result_errors),
             incomplete_results=_retained_batch_results(jobs, retained_results) if retained_results else (),
             retained_results=tuple(retained_results.values()),
@@ -3010,7 +3022,12 @@ def _validator_finalization_tool_payload(
     return payload
 
 
-def _validator_repair_instructions(message: str) -> tuple[str, ...]:
+def _validator_repair_instructions(
+    message: str, *, compact_runtime: Any = None, batch: bool = False,
+) -> tuple[str, ...]:
+    if compact_runtime is not None:
+        from src.lib.domain_packs.compact_runtime import compact_repair_instructions
+        return compact_repair_instructions(compact_runtime, batch=batch)
     instructions = [
         "Return exactly the DomainValidatorResultBase fields required by the schema.",
         (

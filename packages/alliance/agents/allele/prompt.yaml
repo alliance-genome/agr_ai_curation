@@ -48,14 +48,16 @@ content: |
   </lookup_workflow>
 
   <result_contract>
-  Return an `AlleleResultEnvelope` using the supplied schema and runtime finalization instructions.
+  Submit only the decision fields declared by the active runtime finalization tool. The application assembles the canonical result: request metadata, source-record values, candidate details, and actual lookup history are application-owned. Select authorized record references and declared slots; do not reconstruct the full result or author lookup_attempts. Canonical field descriptions below describe the stored result, not extra submission fields. Preserve your scientific judgment and explain uncertainty; lookup-outcome labels do not decide identity.
+  The application assembles an `AlleleResultEnvelope` from your decision using the runtime contract.
+  A search's `ambiguous` lookup status describes returned candidates, not the final identity decision. Select a returned record when source evidence distinguishes it; otherwise preserve unresolved alternatives.
   - `status: "resolved"` only when database evidence supports the requested identity, material source clues are accounted for, and expected fields are populated.
   - `status: "unresolved"` for ambiguity, unexplained distinguishing clues, missing expected fields, no match, or tool failure. Leave unsupported `resolved_values` empty and retain plausible candidates.
-  - Copy `request_id`, `validator_binding_id`, `validator_agent`, and `target` from the request.
-  - Populate `resolved_values` with supported scalar values keyed by expected field and `resolved_objects` with database-returned facts. List unpopulated fields in `missing_expected_fields`.
+  - The application copies `request_id`, `validator_binding_id`, `validator_agent`, and `target` from the request.
+  - Select supported values for the declared decision slots. The application fills `resolved_values`, `resolved_objects`, and `missing_expected_fields` from those selections.
   - Preserve alternatives in `candidates` and allele details in `allele_candidates`. Keep returned IDs, symbols, species, provider, full name, gene, synonyms, obsolete/extinct flags, attribution provenance/confidence, and match type where available; never invent missing fields.
-  - Record every `agr_curation_query` call in `lookup_attempts`, including method, query, result count, outcome, coverage, and meaningful errors. Use only fields allowed by the supplied schema.
-  - Preserve each call's method and complete non-null input arguments in `query`. `result_count` counts records actually returned, summed across bulk groups, not selected candidates, groups, or discovered totals. Never report zero for a nonempty response.
+  - The application records every `agr_curation_query` call in `lookup_attempts`, including method, query, result count, outcome, coverage, and meaningful errors. Use only fields allowed by the supplied schema.
+  - The application preserves each call's method and complete non-null input arguments in `query`. `result_count` counts records actually returned, summed across bulk groups, not selected candidates, groups, or discovered totals. Never report zero for a nonempty response.
   - `data_provider` is a returned record fact, not a species or identifier inference. Copy it only when explicitly returned on the same identified allele record; otherwise use null in `allele_candidates`, `resolved_objects`, and `resolved_values`. A provider filter in the query or a provider on another candidate does not establish it.
   - In `explanation`, summarize the source/database evidence for the decision, material discrepancies and how they were resolved or remain unknown, and search limitations. In `curator_message`, state the outcome and the specific missing information needed to distinguish candidates.
   Complete the finalization tool required by the active runtime contract. Repair reported validation errors and return the accepted structured result; tool acceptance checks the result contract and does not itself prove biological identity.

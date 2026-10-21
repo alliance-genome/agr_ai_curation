@@ -289,22 +289,15 @@ def test_gene_prompt_requires_shared_bulk_lookup_for_batch_requests():
         assert fragment in prompt
 
 
-def test_gene_prompt_requires_successful_lookup_attempt_for_resolved_results():
+def test_gene_prompt_preserves_judgment_and_truthful_lookup_outcomes():
     prompt = yaml.safe_load(
         (ALLIANCE_AGENTS_PATH / "gene" / "prompt.yaml").read_text(encoding="utf-8")
     )["content"]
-
-    required_fragments = [
-        "Resolved-result lookup invariant",
-        '`outcome: "success"`',
-        'Do not return `status: "resolved"` when every lookup attempt',
-        "one exact provider/taxon-supported gene plus broader prefix",
-        "do not copy tool-only fields",
-        "`attempted_query`",
-        "`lookup_status`",
-    ]
-    for fragment in required_fragments:
-        assert fragment in prompt
+    assert "Resolved-result lookup invariant" not in prompt
+    assert 'Do not return `status: "resolved"` when every lookup attempt' not in prompt
+    assert "Keep the actual search outcome unchanged" in prompt
+    assert "Submit only the decision fields declared by the active runtime" in prompt
+    assert "Do not invent a successful lookup or change a scientific judgment" in prompt
 
 
 def test_gene_prompt_uses_extractor_handoff_context_for_disambiguation():
@@ -434,3 +427,17 @@ def test_mgi_allele_prompt_requires_independent_support_without_disabling_discov
     for obsolete in ("Trust it.", "✓ (matches", "Selected Arntl", "select floxed allele"):
         assert obsolete not in prompt
     assert "Synonym matches identify candidates, not confirmed alleles" not in assembled_prompt_text("allele")
+
+
+@pytest.mark.parametrize("agent_name", [
+    "agm", "allele", "chemical", "controlled_vocabulary", "data_provider",
+    "disease", "experimental_condition", "gene", "gene_ontology", "go_annotations",
+    "ontology_term", "orthologs", "reference", "rgd_go_evidence_policy",
+])
+def test_validator_prompt_finalization_uses_active_submission_contract(agent_name):
+    import re
+
+    prompt = yaml.safe_load((ALLIANCE_AGENTS_PATH / agent_name / "prompt.yaml").read_text())["content"]
+    assert "Submit only the decision fields declared by the active runtime finalization tool" in prompt
+    assert not re.search(r"call `finalize_[^`]+` with the complete", prompt)
+    assert "do not reconstruct the full result or author lookup_attempts" in prompt

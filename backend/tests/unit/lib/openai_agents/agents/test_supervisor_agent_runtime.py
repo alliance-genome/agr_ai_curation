@@ -1732,6 +1732,8 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
 
     assert "DOCUMENT CONTEXT: A PDF document is loaded." in created.instructions
     assert "RUNTIME TOOL DESCRIPTIONS ARE AUTHORITATIVE" in created.instructions
+    assert "questions, notes or qualifications" in created.instructions
+    assert "not a failure flag or an automatic retry request" in created.instructions
     assert created.input_guardrails == ["safety"]
     assert captured_dynamic["sections"] == ["Introduction", "Methods"]
     assert captured_dynamic["authoritative_user_request"] == (

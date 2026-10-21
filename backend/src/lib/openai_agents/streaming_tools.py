@@ -874,6 +874,7 @@ def _with_builder_finalization_guidance(agent: Agent) -> Agent:
     names = sorted({_extract_tool_name(tool) for tool in (getattr(agent, "tools", None) or [])} & known)
     if not names:
         return agent
+    from src.lib.domain_packs.validator_guidance import EXTRACTOR_FOLLOW_UP_GUIDANCE
     return _append_agent_runtime_instruction(
         agent, agent,
         instruction=(
@@ -882,7 +883,8 @@ def _with_builder_finalization_guidance(agent: Agent) -> Agent:
             "candidate IDs you intend to retain. If the paper contains no eligible objects, "
             "explicitly finalize with candidate_ids=[] and explain the empty result and exclusions. "
             "An empty extraction is a valid completed result; prose alone does not finalize it. "
-            "Never invent a candidate to make the extraction nonempty."
+            "Never invent a candidate to make the extraction nonempty.\n"
+            + EXTRACTOR_FOLLOW_UP_GUIDANCE
         ),
         layer_id_suffix="builder_completion", title="Builder completion contract",
         source_ref="src.lib.openai_agents.streaming_tools:builder_completion",
@@ -2194,7 +2196,7 @@ def _lookup_provenance_finalization_errors(
     grounded_facts = bool(grounded_fact_values)
     errors: List[Dict[str, Any]] = []
 
-    if not concrete_calls and (status == "resolved" or resolved_facts or grounded_facts):
+    if not concrete_calls and (resolved_facts or grounded_facts):
         errors.append({
             "field": "tool_calls",
             "message": (
@@ -2203,22 +2205,7 @@ def _lookup_provenance_finalization_errors(
             ),
         })
 
-    if status == "resolved" and not successful_calls:
-        errors.append({
-            "field": "tool_calls",
-            "message": (
-                f"Resolved {output_type_name} output requires a successful "
-                f"{expected_tool} call in this run."
-            ),
-        })
-
-    if status == "resolved" and not resolved_facts:
-        errors.append({
-            "field": "status",
-            "message": "Resolved lookup output must include resolved API-grounded facts.",
-        })
-
-    if grounded_facts and not successful_calls:
+    if (resolved_facts or grounded_facts) and not successful_calls:
         errors.append({
             "field": "tool_calls",
             "message": (
@@ -2252,7 +2239,7 @@ def _lookup_provenance_finalization_errors(
             ),
         })
 
-    if not matching_attempts and (concrete_calls or status == "resolved" or grounded_facts):
+    if not matching_attempts and (concrete_calls or grounded_facts):
         errors.append({
             "field": "lookup_attempts",
             "message": (
@@ -2267,32 +2254,16 @@ def _lookup_provenance_finalization_errors(
             "message": "Record one lookup_attempt for every concrete API tool call.",
         })
 
-    success_attempts = [
-        attempt for attempt in matching_attempts if attempt.get("outcome") == "success"
-    ]
     error_attempts = [
         attempt for attempt in matching_attempts if attempt.get("outcome") == "error"
     ]
-    if status == "resolved" and not success_attempts:
-        errors.append({
-            "field": "lookup_attempts[].outcome",
-            "message": "Resolved lookup output requires a successful lookup_attempt.",
-        })
-    if failed_calls and not successful_calls and status == "resolved":
-        errors.append({
-            "field": "status",
-            "message": (
-                "A failed API lookup cannot produce a resolved result unless a "
-                "later successful API call supersedes it."
-            ),
-        })
     if failed_calls and not successful_calls and status == "unresolved" and not error_attempts:
         errors.append({
             "field": "lookup_attempts[].outcome",
             "message": "Unresolved API failures must be recorded with outcome 'error'.",
         })
 
-    if status == "resolved" or resolved_facts:
+    if resolved_facts:
         errors.extend(_lookup_fact_identity_errors(
             payload,
             config=config,
@@ -2562,7 +2533,7 @@ def _structured_specialist_finalization_feedback(
     if lookup_errors:
         field_errors.extend(lookup_errors)
         repair_instructions.append(
-            "Use the required lookup API tool first, record each concrete API call in lookup_attempts, and make the final status match the API evidence."
+            "Record actual lookup calls faithfully and correct unsupported copied facts. Preserve your scientific judgment; do not change it to fit a lookup-outcome label."
         )
 
     if field_errors:
@@ -2721,8 +2692,10 @@ def _build_structured_specialist_finalization_tool(
                     raise
                 feedback = _StructuredSpecialistFinalizationFeedback(
                     accepted_payload=None, message=str(exc),
-                    repair_instructions=["Repair the compact scientific decision using this invocation's references."],
                 )
+        if compact_runtime is not None and feedback.accepted_payload is None:
+            from src.lib.domain_packs.compact_runtime import compact_repair_instructions
+            feedback.repair_instructions = list(compact_repair_instructions(compact_runtime))
         if feedback.accepted_payload is not None:
             finalization_state.accepted_payload = feedback.accepted_payload
             finalization_state.incomplete_payload = None
@@ -2796,6 +2769,9 @@ def _append_structured_specialist_finalization_instruction(
     if compact_runtime is not None:
         from src.lib.domain_packs.compact_runtime import compact_finalization_instruction
         instruction = compact_finalization_instruction(compact_runtime, tool_name=finalization_state.tool_name)
+    if compact_runtime is None and is_domain_validator_result_schema(getattr(source_agent, "output_type", None)):
+        from src.lib.domain_packs.validator_guidance import VALIDATOR_FOLLOW_UP_GUIDANCE
+        instruction += "\n" + VALIDATOR_FOLLOW_UP_GUIDANCE
     return _append_agent_runtime_instruction(
         runtime_agent,
         source_agent,
@@ -3195,6 +3171,7 @@ def _domain_validator_supervisor_summary(
         "candidate_count": len(payload.get("candidates") or []),
         "lookup_attempt_count": len(payload.get("lookup_attempts") or []),
         "missing_expected_field_count": len(payload.get("missing_expected_fields") or []),
+        "follow_up_question_count": len(payload.get("unresolved_questions") or []),
     }
     if result_ref:
         preview["read"] = {"action": "validator_results", "result_ref": result_ref,

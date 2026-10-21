@@ -241,12 +241,13 @@ def test_domain_assembler_cannot_fabricate_or_replace_lookup_audit():
         store.assemble(CompactValidatorDecision.model_validate(payload))
 
 
-def test_contradictory_questions_preserve_judgment_for_structural_correction():
+def test_follow_up_questions_preserve_complete_resolved_judgment():
     store, ref = workspace()
     payload = decision(ref)
     payload["unresolved_questions"] = ["Which supplier?"]
     result = store.assemble(CompactValidatorDecision.model_validate(payload))
     assert result.status == "resolved"
-    assert not result.is_complete
+    assert result.is_complete
+    assert result.unresolved_questions == ["Which supplier?"]
     assert result.resolved_values["identifier"] == "EX:101"
     assert "Which supplier?" in result.explanation

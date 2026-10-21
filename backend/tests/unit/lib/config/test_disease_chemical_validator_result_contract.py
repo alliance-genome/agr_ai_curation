@@ -158,7 +158,7 @@ def test_disease_and_chemical_prompt_contracts_use_shared_fields():
             "missing_expected_fields",
             "candidates",
             "ambiguous",
-            "Do not wrap",
+            "Submit only the decision fields declared by the active runtime",
         ]:
             assert fragment in content, f"{folder} prompt missing {fragment}"
 

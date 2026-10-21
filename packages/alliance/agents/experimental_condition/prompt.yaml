@@ -39,26 +39,27 @@ content: |
     - Quantity/unit vocabulary uses the `controlled_vocabulary_validation` capability through `agr_curation_query` methods `get_vocabulary_term` and `search_vocabulary_terms`.
     - Data-provider context uses the `data_provider_validation` capability through `agr_curation_query` methods `get_data_provider` and `get_data_providers`.
   - Relation type is COHERENCE CONTEXT ONLY: the dedicated condition-relation binding owns relation-vocabulary validation and already resolves the relation name (e.g. `has_condition`) against its own vocabulary. Do NOT look up the relation vocabulary yourself and do NOT mark the condition unresolved because of the relation. Use `condition_relation_type` only to judge coherence -- does the resolved condition class fit the stated relation? -- and never call `get_vocabulary_term`/`search_vocabulary_terms` for the relation.
-  - Build one `component_validations[]` entry for every present or required component: set its `validator_agent` to the lower-level owner above, preserve each component's field path and `selected_inputs`, copy that component's lookup attempts into `component_validations[].lookup_attempts`, and preserve ambiguous, obsolete, conflicting, prefix-mismatched, or alternate records in `component_validations[].candidates`. Use the per-component `status` exactly: `"resolved"` only when tool evidence resolves the component and all expected component fields are present; `"unresolved"` when a required component is missing, ambiguous, not found, obsolete, conflicting, has a prefix/type/provider/taxon mismatch, or the tool fails; `"not_present"` for optional components that are absent; `"not_checked"` only for supplemental free text or evidence context that has no lower-level lookup.
+  - Build one `component_validations[]` entry for every present or required component: set its `validator_agent` to the lower-level owner above, preserve each component's field path and `selected_inputs`, let the application attach that component's actual lookup attempts to `component_validations[].lookup_attempts`, and preserve ambiguous, obsolete, conflicting, prefix-mismatched, or alternate records in `component_validations[].candidates`. Use the per-component `status` exactly: `"resolved"` only when tool evidence resolves the component and all expected component fields are present; `"unresolved"` when a required component is missing, ambiguous, not found, obsolete, conflicting, has a prefix/type/provider/taxon mismatch, or the tool fails; `"not_present"` for optional components that are absent; `"not_checked"` only for supplemental free text or evidence context that has no lower-level lookup.
   - Composite roll-up: ambiguous or missing required component results MUST keep the root condition `status: "unresolved"` and list the component in `unresolved_components`.
   </resolution_and_validation_rules>
 
   <lookup_workflow>
   Bounded composite lookup path:
   1. Enumerate every present or required component of the condition (relation type as coherence context only).
-  2. Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and record the shared call in that component's `lookup_attempts`.
-  3. For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and record that call in the component's `lookup_attempts`.
+  2. Group same-family lookup work across every target in the request before calling tools. Collect the unique present CURIE components -- condition class/id, condition chemical (ChEBI ontology term), and condition taxon -- and make one `agr_curation_query` `get_ontology_terms` call with the combined `terms` list before any single-term ontology lookup. Assign each returned record back to every matching component and let the application record the shared call for that component.
+  3. For each present grounded component not resolved by the grouped call -- including quantity/unit, data provider, or an ontology component needing targeted follow-up -- call only the owning capability's residual `agr_curation_query` method before resolving it, and let the application record that call for the component.
   4. Resolve a component only when tool evidence returns a single unambiguous match satisfying its expected fields; preserve ambiguous, obsolete, conflicting, or alternate records as that component's candidates and leave it unresolved.
   5. Judge relation coherence using `condition_relation_type` as context only -- does the resolved condition class fit the stated relation? -- without looking up the relation vocabulary.
   6. Compose the condition-level decision: resolved only when every required component resolved and the condition-level expected fields can be populated from lookup evidence; otherwise unresolved with the blocking components listed in `unresolved_components`.
   </lookup_workflow>
 
   <result_contract>
+  Submit only the decision fields declared by the active runtime finalization tool. The application assembles the canonical result: request metadata, source-record values, candidate details, and actual lookup history are application-owned. Select authorized record references and declared slots; do not reconstruct the full result or author lookup_attempts. Canonical field descriptions below describe the stored result, not extra submission fields. Preserve your scientific judgment and explain uncertainty; lookup-outcome labels do not decide identity.
   Return only the shared validator statuses:
   - `status: "resolved"` when every required condition component is resolved and the condition-level expected fields can be populated from lookup evidence.
   - `status: "unresolved"` when any required component is missing, ambiguous, unavailable, or only partially resolved.
 
-  Populate these root fields directly; do not wrap them under another object:
+  The application assembles these canonical fields from your decision and recorded evidence:
   - `request_id`, `validator_binding_id`, `validator_agent`, `target`: copied from the request.
   - `resolved_values`: scalar condition-level values keyed by the binding's `expected_result_fields`, such as `condition_id` and `normalized_components`. For resolved conditions, copy expected scalar outputs using those keys; include `condition_id` only when derived from provider evidence or a stable condition key explicitly supplied by the request.
   - `resolved_objects`: normalized condition facts returned or selected from component lookups.
@@ -73,7 +74,7 @@ content: |
 
   Do not use metadata-only validator states as result statuses. Do not return compatibility fields, legacy summary stores, or envelope patches; envelope composition belongs outside validator results.
 
-  Before your final answer, call `finalize_experimental_condition_lookup` with the complete `ExperimentalConditionValidationResult` payload you intend to return. If finalization is rejected, repair only the reported issue and call `finalize_experimental_condition_lookup` again. Do not finish until finalization returns `status: accepted`.
+  Before your final answer, call `finalize_experimental_condition_lookup` using only the active runtime decision submission schema. If finalization is rejected, repair only the reported issue and call `finalize_experimental_condition_lookup` again. Do not finish until finalization returns `status: accepted`.
   </result_contract>
 
   <stop_rules>

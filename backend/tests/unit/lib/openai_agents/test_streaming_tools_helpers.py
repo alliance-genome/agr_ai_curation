@@ -1011,7 +1011,8 @@ def test_saved_custom_prompt_receives_lookup_provenance_instruction(_repo_packag
 
 
 @pytest.mark.parametrize("status", ["resolved", "unresolved"])
-def test_allele_finalization_accepts_truthful_metadata_without_changing_decision(status, _repo_package_curation_registry):
+@pytest.mark.parametrize("outcome", ["success", "ambiguous", "conflict"])
+def test_allele_finalization_accepts_truthful_metadata_without_changing_decision(status, outcome, _repo_package_curation_registry):
     config = _finalization_config("ask_allele_validation_specialist")
     record = {"allele_id": "MGI:1", "symbol": "Example", "data_provider": None}
     payload = _validator_result_payload(
@@ -1020,7 +1021,7 @@ def test_allele_finalization_accepts_truthful_metadata_without_changing_decision
         resolved_values={"allele_id": "MGI:1", "data_provider": None} if status == "resolved" else {},
         allele_candidates=[record],
         lookup_attempts=[{"provider": "agr_curation_query", "method": "search_alleles",
-                          "query": {"allele_symbol": "Example"}, "result_count": 1, "outcome": "success"}])
+                          "query": {"allele_symbol": "Example"}, "result_count": 1, "outcome": outcome}])
     captured = streaming_tools._tool_output_payload_for_finalization("agr_curation_query",
         {"status": "ok", "data": [{"curie": "MGI:1", "symbol": "Example"}]}, finalization_config=config)
     feedback = streaming_tools._structured_specialist_finalization_feedback(payload,
@@ -1033,6 +1034,8 @@ def test_allele_finalization_accepts_truthful_metadata_without_changing_decision
     assert feedback.accepted_payload["allele_candidates"][0]["allele_id"] == "MGI:1"
     assert feedback.accepted_payload["allele_candidates"][0]["data_provider"] is None
     assert feedback.accepted_payload["lookup_attempts"][0]["result_count"] == 1
+
+    assert feedback.accepted_payload["lookup_attempts"][0]["outcome"] == outcome
 
 
 def _search_document_stream_events() -> list[SimpleNamespace]:
@@ -1889,6 +1892,44 @@ def _complete_go_annotation(url: str) -> dict:
             "source_record_id": "RGD:620474|GO:0000122|ISO",
         },
     }
+
+
+@pytest.mark.parametrize("status", ["resolved", "unresolved"])
+def test_go_annotations_finalization_rejects_facts_without_source_data(
+    status, _repo_package_curation_registry,
+):
+    gene_id = "RGD:620474"
+    url = "https://api.geneontology.org/api/bioentity/gene/RGD:620474/function"
+    payload = _validator_result_payload(
+        status=status,
+        agent_id="go_annotations_lookup",
+        target_inputs={"gene_id": gene_id},
+        expected_fields=["annotations"],
+        lookup_attempts=[{
+            "provider": "go_api_call", "method": "typed_gene_lookup",
+            "query": {"gene_id": gene_id}, "result_count": 0, "outcome": "error",
+        }],
+        gene_id=gene_id,
+        source="Gene Ontology Consortium API",
+        source_url=url,
+        annotations=[_complete_go_annotation(url)],
+    )
+    feedback = streaming_tools._structured_specialist_finalization_feedback(
+        payload,
+        expected_output_type=_package_schema("GOAnnotationsResult"),
+        finalization_config=_finalization_config("ask_go_annotations_specialist"),
+        tool_calls=[streaming_tools.SpecialistToolCall(
+            tool_name="go_api_call",
+            tool_args={"gene_id": gene_id},
+            output_payload={"status": "error", "data": None},
+        )],
+        live_evidence_records=[],
+    )
+    assert feedback.accepted_payload is None
+    assert any(
+        error.get("field") == "tool_calls" and "lookup facts require" in error["message"]
+        for error in feedback.field_errors
+    ), feedback.field_errors
 
 
 def _go_annotations_fidelity_feedback(
@@ -2975,6 +3016,8 @@ def test_runtime_instruction_append_updates_pending_prompt_assembly():
     assert used_run.assembly.layer_manifest["layers"][-1]["content"] == (
         "Runtime-only instruction."
     )
+    assert used_run.assembly.layer_manifest["layers"][-1]["editable"] is False
+    assert used_run.assembly.layer_manifest["layers"][-1]["locked"] is True
 
 
 def test_runtime_instruction_append_does_not_accumulate_on_reused_source_agent():
@@ -4103,6 +4146,9 @@ def test_current_empty_result_guidance_applies_without_rewriting_saved_prompt(to
     assert "candidate_ids=[]" in runtime.instructions
     assert tool_name in runtime.instructions
     assert runtime.tools is source.tools
+    assert "unresolved_questions" in runtime.instructions
+    assert "not a failure flag or an automatic retry request" in runtime.instructions
+    assert "Redispatch only when useful new context" in runtime.instructions
 
 
 @pytest.mark.asyncio
@@ -4112,6 +4158,7 @@ async def test_nested_validator_original_is_durable_before_compact_handoff(monke
     from src.lib.domain_packs import validator_result_storage
     payload = _validator_result_payload(status="unresolved", missing_expected_fields=["results"])
     payload["explanation"] = "Complete lookup explanation β😀 " * 500
+    payload["unresolved_questions"] = ["Optional supplier qualification β😀"]
     payload["lookup_attempts"] = [{"provider": "fixture", "method": "lookup", "query": {
         "evidence": {"literal": "keep exactly"},
         "nested": {"original": "kept", "evidence_record_ids": ["ev2", "ev1", "ev2"]},
@@ -4138,6 +4185,7 @@ async def test_nested_validator_original_is_durable_before_compact_handoff(monke
         handoff = await run
         assert "validator-result:12345678-1234-1234-1234-123456789abc" in handoff
         assert len(handoff) < len(payload["explanation"])
+        assert json.loads(handoff.split("\n", 1)[1])["follow_up_question_count"] == 1
     assert len(calls) == 1
     assert calls[0][0] == typed.model_dump(mode="json")
     assert calls[0][1]["user_id"] == "authenticated-owner"
@@ -4262,3 +4310,77 @@ async def test_stream_failure_preserves_original_error_and_finalized_workspace(
         outcome = classify_failure(caught.value)
         assert outcome.category == "provider_unavailable"
         assert "did not finish" in outcome.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_mapped", [False, True])
+async def test_ai9_trace_derived_decisions_cross_actual_finalizer(profile_mapped, _repo_package_curation_registry):
+    """Rebind real sanitized lookup/decisions; no model or scientific oracle is run."""
+    from pathlib import Path
+    from agents import function_tool
+    from agents.tool_context import ToolContext
+    from src.lib.domain_packs.compact_runtime import runtime_for_schema
+    from src.lib.domain_packs import validator_dispatch as dispatch
+    from src.schemas.domain_validator import DomainValidationRequest
+
+    fixture = json.loads((Path(__file__).parents[3] / "fixtures" / "ai9_compact_finalization.json").read_text())
+    request = DomainValidationRequest(request_id="ai9-fixture", validator_binding_id="allele_mention_reference_validation",
+        validator_agent={"package_id": "agr.alliance", "agent_id": "allele_validation"},
+        target={"domain_pack_id": "agr.alliance.allele", "object_id": "allele-mention-3"},
+        selected_inputs={"mention": "Ai9", "taxon": "NCBITaxon:10090"},
+        expected_result_fields={"curie": "allele.curie", "symbol": "allele.symbol", "taxon": "allele.taxon"})
+    schema = _package_schema("AlleleResultEnvelope")
+    runtime = runtime_for_schema([request], result_schema=schema,
+        profile_request_ids=(request.request_id,) if profile_mapped else ())
+
+    @function_tool
+    def agr_curation_query(method: str, allele_symbol: str, data_provider: str, discovery_limit: int, limit: int) -> dict:
+        return fixture["lookup_output"]
+
+    tool = runtime.wrap_lookup_tool(agr_curation_query)
+    args = json.dumps(fixture["lookup_input"])
+    output = json.loads(await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name,
+        tool_call_id="trace-derived-search", tool_arguments=args), args))
+    refs = [v["record_ref"] for v in output["validator_record_refs"]]
+    assert len(refs) == 13
+
+    def rebind(value):
+        if isinstance(value, dict):
+            return {k: refs[v] if k == "record_ref" else rebind(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [rebind(v) for v in value]
+        return value
+
+    state = dispatch._ValidatorFinalizationState()
+    finalizer = dispatch._build_finalize_validator_result_tool(request, finalization_state=state,
+        function_tool_factory=function_tool, result_schema=schema, profile_mapped=profile_mapped,
+        compact_runtime=runtime)
+
+    async def submit(name):
+        args = json.dumps({"result": rebind(fixture["decisions"][name])})
+        return await finalizer.on_invoke_tool(ToolContext(context=None, tool_name=finalizer.name,
+            tool_call_id=name, tool_arguments=args), args)
+
+    assert (await submit("resolved"))["status"] == "accepted"
+    result = state.accepted_result
+    assert result.status == "resolved" and result.is_complete
+    assert result.resolved_values["curie"] == "MGI:3809523"
+    assert result.lookup_attempts[0].outcome == "ambiguous"
+    assert result.lookup_attempts[0].result_count == 13
+    assert result.explanation == fixture["decisions"]["resolved"]["explanation"]
+    wrong = await submit("wrong_full_format")
+    assert wrong["status"] == "rejected"
+    assert "Extra inputs are not permitted" in wrong["message"]
+    assert "Permitted decision fields" in " ".join(wrong["repair_instructions"])
+    assert (await submit("resolved"))["status"] == "accepted"
+    assert (await submit("unresolved"))["status"] == "accepted"
+    assert state.accepted_result.status == "unresolved"
+    assert state.accepted_result.unresolved_questions == fixture["decisions"]["unresolved"]["unresolved_questions"]
+
+
+def test_generic_finalizer_does_not_require_ceremonial_lookup_for_judgment(_repo_package_curation_registry):
+    payload = _validator_result_payload(status="resolved", expected_fields=[], resolved_values={}, lookup_attempts=[])
+    errors, _ = streaming_tools._lookup_provenance_finalization_errors(payload,
+        output_type_name="ScientificAssessment", finalization_config=_finalization_config("ask_allele_validation_specialist"),
+        tool_calls=[])
+    assert errors == []

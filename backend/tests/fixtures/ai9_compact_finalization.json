@@ -1,0 +1,631 @@
+{
+  "provenance": "Derived from the sanitized ALL-1274 attachment: actual 13-row lookup and submitted decisions. Feedback/trace/request IDs removed; record references replaced with row indices for rebinding to each test invocation. Not a live model replay.",
+  "lookup_input": {
+    "method": "search_alleles",
+    "allele_symbol": "Ai9",
+    "data_provider": "MGI",
+    "discovery_limit": 20,
+    "limit": 20
+  },
+  "lookup_output": {
+    "status": "ok",
+    "lookup_status": "ambiguous",
+    "count": 13,
+    "coverage": {
+      "database_total": null,
+      "detail_missing_count": 0,
+      "discovered_count": 13,
+      "discovery_capped": false,
+      "discovery_limit": 20,
+      "display_capped": false,
+      "display_limit": 20,
+      "returned_count": 13
+    },
+    "data": [
+      {
+        "annotations_capped": [],
+        "curie": "MGI:3809523",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:104735",
+            "relation": "is_allele_of",
+            "symbol": "Gt(ROSA)26Sor"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [
+          "exact_identifier_or_name"
+        ],
+        "match_type": "exact",
+        "matched_text": "Ai9",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 9, Hongkui Zeng",
+        "symbol": "Gt(ROSA)26Sor<sup>tm9(CAG-tdTomato)Hze</sup>",
+        "synonyms": [
+          "Ai9",
+          "Ai9(RCL-tdT",
+          "R26<sup>LSL-tdTomato</sup>",
+          "Rosa26<sup>LSL-tdTomato</sup>",
+          "Rosa26<sup>Tomato</sup>",
+          "Rosa-CAG-LSL-tdTomato-WPRE",
+          "Rosa-LSL-TdTomato",
+          "ROSA:lxp-stp-lxp:tdTomato",
+          "Rs-tdTomato-R",
+          "tdTomato<sup>LSL</sup>"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:5146869",
+        "curie_validated": true,
+        "functional_impacts": [],
+        "genes": [
+          {
+            "curie": "MGI:2142079",
+            "relation": "is_allele_of",
+            "symbol": "AI987944"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "AI987944<sup>Gt(IST11467A11)Tigm</sup>",
+        "mutation_types": [
+          {
+            "curie": "SO:0001218",
+            "name": "transgenic_insertion"
+          }
+        ],
+        "name": "gene trap IST11467A11, Texas A&M Institute for Genomic Medicine",
+        "symbol": "AI987944<sup>Gt(IST11467A11)Tigm</sup>",
+        "synonyms": [],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:5558069",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "inducible",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:5490612",
+            "relation": "is_allele_of",
+            "symbol": "Igs7"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai90D",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 90.1, Hongkui Zeng",
+        "symbol": "Igs7<sup>tm90.1(tetO-COP4*/EGFP)Hze</sup>",
+        "synonyms": [
+          "Ai90D",
+          "Ai90deltaHygro",
+          "Ai90(TITL-Chronos)-D",
+          "Ai90(TITL-ShChR)-D"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:5558086",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "inducible",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:5490612",
+            "relation": "is_allele_of",
+            "symbol": "Igs7"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai93",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 93, Hongkui Zeng",
+        "symbol": "Igs7<sup>tm93.1(tetO-GCaMP6f)Hze</sup>",
+        "synonyms": [
+          "Ai93",
+          "Ai93D",
+          "Ai93(TITL-GCaMP6f)"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:5558090",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "no_functional_change",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:104735",
+            "relation": "is_allele_of",
+            "symbol": "Gt(ROSA)26Sor"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai95D",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 95.1, Hongkui Zeng",
+        "symbol": "Gt(ROSA)26Sor<sup>tm95.1(CAG-GCaMP6f)Hze</sup>",
+        "synonyms": [
+          "Ai95D",
+          "Ai95Deltaneo",
+          "Ai95(RCL-GCaMP6f)",
+          "GCaMP6f<sup>tg</sup>"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:5558094",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "inserted_expressed_sequence",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:104735",
+            "relation": "is_allele_of",
+            "symbol": "Gt(ROSA)26Sor"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai96",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 96, Hongkui Zeng",
+        "symbol": "Gt(ROSA)26Sor<sup>tm96(CAG-GCaMP6s)Hze</sup>",
+        "synonyms": [
+          "Ai96",
+          "Ai96(RCL-GCaMP6s)",
+          "Ai96(Rosa-CAG-LSL-GCaMP6s)"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:5607576",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "inducible",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:5490612",
+            "relation": "is_allele_of",
+            "symbol": "Igs7"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai94D",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 94.1, Hongkui Zeng",
+        "symbol": "Igs7<sup>tm94.1(tetO-GCaMP6s)Hze</sup>",
+        "synonyms": [
+          "Ai94D",
+          "Ai94(TIGRE-Ins-TRE-LSL-GCaMP6s)-D",
+          "Ai94(TITL-GCaMP6s)"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:5645699",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "inducible",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:5490612",
+            "relation": "is_allele_of",
+            "symbol": "Igs7"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai92(TITL-YCX2.60)",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 92.1, Hongkui Zeng",
+        "symbol": "Igs7<sup>tm92.1(tetO-ECFP*/Venus*)Hze</sup>",
+        "synonyms": [
+          "Ai92(TITL-YCX2.60)",
+          "Igs7<sup>tm92.1(tetO-YCX2,60)Hze</sup>",
+          "Igs7<sup>tm92.1(tetO-YCX2.60)Hze</sup>"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:6507752",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:104735",
+            "relation": "is_allele_of",
+            "symbol": "Gt(ROSA)26Sor"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai9-SauSpyCas9",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "endonuclease-mediated mutation 1, Jason Heaney",
+        "symbol": "Gt(ROSA)26Sor<sup>em1(CAG-tdTomato)Jahe</sup>",
+        "synonyms": [
+          "Ai9-SauSpyCas9"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:6508540",
+        "curie_validated": true,
+        "functional_impacts": [
+          "reporter"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:104735",
+            "relation": "is_allele_of",
+            "symbol": "Gt(ROSA)26Sor"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai9-Cas12a",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "endonuclease-mediated mutation 2, Jason Heaney",
+        "symbol": "Gt(ROSA)26Sor<sup>em2(CAG-tdTomato)Jahe</sup>",
+        "synonyms": [
+          "Ai9-Cas12a"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:7738796",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready",
+          "epitope_tag",
+          "humanized_sequence",
+          "inserted_expressed_sequence"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:104735",
+            "relation": "is_allele_of",
+            "symbol": "Gt(ROSA)26Sor"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "Ai9CDS",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "targeted mutation 2, David Kirsch",
+        "symbol": "Gt(ROSA)26Sor<sup>tm2(CIC/DUX4)Dgk</sup>",
+        "synonyms": [
+          "Ai9CDS"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:8310612",
+        "curie_validated": true,
+        "functional_impacts": [
+          "amorphic_(null/knockout)"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:2142079",
+            "relation": "is_allele_of",
+            "symbol": "AI987944"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "AI987944<sup>em1Cya</sup>",
+        "mutation_types": [
+          {
+            "curie": "SO:0000159",
+            "name": "deletion"
+          }
+        ],
+        "name": "Endonuclease-mediated mutation 1, Cyagen",
+        "symbol": "AI987944<sup>em1Cya</sup>",
+        "synonyms": [
+          "AI987944<sup>em1</sup>"
+        ],
+        "taxon": "NCBITaxon:10090"
+      },
+      {
+        "annotations_capped": [],
+        "curie": "MGI:8310613",
+        "curie_validated": true,
+        "functional_impacts": [
+          "conditional_ready"
+        ],
+        "genes": [
+          {
+            "curie": "MGI:2142079",
+            "relation": "is_allele_of",
+            "symbol": "AI987944"
+          }
+        ],
+        "identity_status": "unconfirmed",
+        "match_reasons": [],
+        "match_type": "starts_with",
+        "matched_text": "AI987944<sup>em1flox</sup>",
+        "mutation_types": [
+          {
+            "curie": "SO:0000667",
+            "name": "insertion"
+          }
+        ],
+        "name": "Endonuclease-mediated mutation 2, Cyagen",
+        "symbol": "AI987944<sup>em2Cya</sup>",
+        "synonyms": [
+          "AI987944<sup>em1flox</sup>"
+        ],
+        "taxon": "NCBITaxon:10090"
+      }
+    ]
+  },
+  "decisions": {
+    "resolved": {
+      "request_id": "ai9-fixture",
+      "status": "resolved",
+      "candidates": [
+        {
+          "record_ref": 0,
+          "disposition": "selected",
+          "explanation": "The paper explicitly names Ai9 ES clone. In the mouse-scoped database search, MGI:3809523 is the sole exact match and lists Ai9 as a synonym; it is an allele of Gt(ROSA)26Sor and has taxon NCBITaxon:10090, concordant with the supplied mouse taxon and Rosa26 context.",
+          "score": 0.99,
+          "matched_fields": {
+            "mention": "Ai9",
+            "synonym": "Ai9",
+            "associated_gene_context": "Rosa26",
+            "taxon": "NCBITaxon:10090"
+          }
+        },
+        {
+          "record_ref": 8,
+          "disposition": "excluded",
+          "explanation": "This is a distinct allele whose synonym is Ai9-SauSpyCas9, not the exact paper mention Ai9."
+        },
+        {
+          "record_ref": 9,
+          "disposition": "excluded",
+          "explanation": "This is a distinct allele whose synonym is Ai9-Cas12a, not the exact paper mention Ai9."
+        }
+      ],
+      "slots": {
+        "curie": {
+          "kind": "record",
+          "record_ref": 0,
+          "field": "curie"
+        },
+        "symbol": {
+          "kind": "record",
+          "record_ref": 0,
+          "field": "symbol"
+        },
+        "taxon": {
+          "kind": "record",
+          "record_ref": 0,
+          "field": "taxon"
+        }
+      },
+      "explanation": "Resolved Ai9 to the exact mouse database candidate MGI:3809523. The supplied Figure 1 quote refers to the Ai9 ES clone, and the database candidate has exact matched text/synonym Ai9, is associated with Gt(ROSA)26Sor, and has the supplied mouse taxon. Other returned records were starts-with matches to longer, distinct Ai9-derived names.",
+      "curator_message": "Resolved: Ai9 corresponds to MGI:3809523 in the mouse database."
+    },
+    "wrong_full_format": {
+      "request_id": "ai9-fixture",
+      "validator_binding_id": "allele_mention_reference_validation",
+      "validator_agent": {
+        "agent_id": "allele_validation",
+        "package_id": "agr.alliance"
+      },
+      "target": {
+        "domain_pack_id": "agr.alliance.allele",
+        "expected_fields": [
+          "curie",
+          "symbol",
+          "taxon"
+        ],
+        "field_path": "mention.text",
+        "object_id": "allele-mention-3",
+        "object_role": "metadata_only",
+        "object_type": "AlleleMention"
+      },
+      "status": "resolved",
+      "candidates": [
+        {
+          "record_ref": 0,
+          "disposition": "selected",
+          "explanation": "The paper names Ai9 ES clone; the mouse-scoped database record has exact matched text and synonym Ai9, is associated with Gt(ROSA)26Sor, and has the supplied mouse taxon.",
+          "score": 0.99,
+          "matched_fields": {
+            "mention": "Ai9",
+            "synonym": "Ai9",
+            "associated_gene_context": "Rosa26",
+            "taxon": "NCBITaxon:10090"
+          }
+        }
+      ],
+      "slots": {
+        "curie": {
+          "kind": "record",
+          "record_ref": 0,
+          "field": "curie"
+        },
+        "symbol": {
+          "kind": "record",
+          "record_ref": 0,
+          "field": "symbol"
+        },
+        "taxon": {
+          "kind": "record",
+          "record_ref": 0,
+          "field": "taxon"
+        }
+      },
+      "lookup_attempts": [
+        {
+          "method": "search_alleles",
+          "query": {
+            "method": "search_alleles",
+            "allele_symbol": "Ai9",
+            "data_provider": "MGI",
+            "discovery_limit": 20,
+            "limit": 20
+          },
+          "result_count": 13,
+          "outcome": "success",
+          "coverage": {
+            "discovered_count": 13,
+            "returned_count": 13,
+            "discovery_capped": false,
+            "display_capped": false
+          }
+        }
+      ],
+      "resolved_values": {
+        "curie": "MGI:3809523",
+        "symbol": "Gt(ROSA)26Sor<sup>tm9(CAG-tdTomato)Hze</sup>",
+        "taxon": "NCBITaxon:10090"
+      },
+      "resolved_objects": [],
+      "missing_expected_fields": [],
+      "explanation": "Resolved Ai9 to exact mouse database candidate MGI:3809523. The supplied Figure 1 quote names the Ai9 ES clone. The record has exact matched text/synonym Ai9, is an allele of Gt(ROSA)26Sor, and has mouse taxon NCBITaxon:10090. Starts-with results are distinct longer Ai9-derived names.",
+      "curator_message": "Resolved: Ai9 corresponds to MGI:3809523 in the mouse database."
+    },
+    "unresolved": {
+      "request_id": "ai9-fixture",
+      "status": "unresolved",
+      "candidates": [
+        {
+          "record_ref": 0,
+          "disposition": "plausible",
+          "explanation": "MGI:3809523 is the strongest candidate: the source says Ai9 ES clone, and this mouse record has exact matched text and synonym Ai9, is an allele of Gt(ROSA)26Sor, and has taxon NCBITaxon:10090. However, the lookup response remains classified as ambiguous because it also returned longer Ai9-derived names.",
+          "score": 0.99,
+          "matched_fields": {
+            "mention": "Ai9",
+            "synonym": "Ai9",
+            "associated_gene_context": "Rosa26",
+            "taxon": "NCBITaxon:10090"
+          }
+        },
+        {
+          "record_ref": 8,
+          "disposition": "excluded",
+          "explanation": "The candidate is a distinct record matched through the longer synonym Ai9-SauSpyCas9 rather than exact Ai9."
+        },
+        {
+          "record_ref": 9,
+          "disposition": "excluded",
+          "explanation": "The candidate is a distinct record matched through the longer synonym Ai9-Cas12a rather than exact Ai9."
+        }
+      ],
+      "explanation": "The source quote names an Ai9 ES clone. Mouse-scoped database searching found MGI:3809523 as an exact Ai9 match, with Ai9 as a synonym, Gt(ROSA)26Sor association, and the supplied mouse taxon. Other returned records are starts-with or gene-associated records, including distinct Ai9-derived names. Because the available lookup outcome is classified ambiguous rather than successful, identity is retained as plausible rather than finalized.",
+      "curator_message": "Unresolved by runtime validation: MGI:3809523 is the strongly supported Ai9 candidate, but a unique successful lookup outcome is required to finalize the requested fields.",
+      "unresolved_questions": [
+        "Can the database lookup be rerun or adjudicated as a unique exact synonym match for Ai9 (MGI:3809523), excluding longer Ai9-derived allele names?"
+      ]
+    }
+  }
+}

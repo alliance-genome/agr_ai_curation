@@ -4196,6 +4196,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "curator_message": None,
             "allele_candidates": [{"allele_id": "AGR:0001"}],
             "explanation": "Accepted scientific decision",
+            "unresolved_questions": ["Optional source qualification for the extractor"],
         }
 
         class _FakeTool:
@@ -4261,6 +4262,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert materialized.resolved_values == accepted_payload["resolved_values"]
         assert materialized.target == request.target
         assert materialized.explanation == "Accepted scientific decision"
+        assert materialized.unresolved_questions == accepted_payload["unresolved_questions"]
+        runtime_context = "\n".join(captured["agent_kwargs"]["additional_runtime_context"])
+        assert "active runtime's declared submission schema" in runtime_context
+        assert "DomainValidatorResultBase contract" not in runtime_context
+        assert "validator_binding_id, validator_agent, and target fields exactly" not in runtime_context
 
         if benchmark and custom:
             assert captured["agent_kwargs"]["benchmark_slot"] == f"agent:{agent_key}"
