@@ -175,7 +175,9 @@ class PipelineTracker:
         self,
         document_id: str,
         error: Exception,
-        stage: Optional[ProcessingStage] = None
+        stage: Optional[ProcessingStage] = None,
+        *,
+        sentry_reported: bool = False,
     ) -> ProcessingError:
         """Handle pipeline failure and record error details.
 
@@ -183,6 +185,7 @@ class PipelineTracker:
             document_id: Document UUID
             error: The exception that occurred
             stage: Stage where failure occurred
+            sentry_reported: The caller already captured this failure in Sentry.
 
         Returns:
             ProcessingError object
@@ -192,6 +195,7 @@ class PipelineTracker:
             document_id,
             str(error),
             exc_info=(type(error), error, error.__traceback__) if error.__traceback__ else False,
+            extra={"sentry_skip_event": sentry_reported},
         )
 
         # Determine current stage if not provided

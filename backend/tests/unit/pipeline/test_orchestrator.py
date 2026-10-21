@@ -327,3 +327,103 @@ async def test_processing_status_failure_prevents_source_replacement(orchestrato
             await orchestrator.process_pdf_document(sample_pdf, "doc-123", "test-user", validate_first=False)
     parser.assert_not_awaited()
     storage.assert_not_awaited()
+
+
+@pytest.mark.parametrize("capture_succeeds", [True, False])
+@pytest.mark.parametrize("failure_shape", ["pending", "progress", "generic"])
+@pytest.mark.parametrize("log_event_level", ["ERROR", "WARNING"])
+def test_pipeline_failure_has_one_sentry_owner_with_real_logging(capture_succeeds, failure_shape, log_event_level):
+    """Exercise orchestrator, job tracker and managed task with the real SDK."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent("""
+        import asyncio
+        import logging
+        import sys
+        import os
+        import json
+        os.environ["SENTRY_CONTENT_REDACTION_ENABLED"] = "false"
+        from contextlib import nullcontext
+        from pathlib import Path
+        from unittest.mock import AsyncMock, MagicMock, patch
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        from src.lib.observability.sentry import before_send, hash_sentry_identifier
+        from src.lib.observability.background_tasks import observed_background_task
+        from src.lib.pdf_jobs.upload_execution_service import JobAwarePipelineTracker
+        from src.lib.pipeline.orchestrator import DocumentPipelineOrchestrator
+        from src.lib.pipeline.tracker import PipelineTracker
+        from src.lib.exceptions import PDFParsingError
+        from src.models.pipeline import ProcessingStage
+        events = []
+        records = []
+        class RecordLog(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+        logging.getLogger("src.lib.pipeline.tracker").addHandler(RecordLog())
+        sentry_sdk.init(dsn="http://public@example.invalid/1", transport=events.append,
+            before_send=before_send, include_local_variables=False, traces_sample_rate=1.0,
+            integrations=[LoggingIntegration(level=logging.INFO, event_level=getattr(logging, sys.argv[3]))],
+            default_integrations=False)
+        async def run():
+            tracker = PipelineTracker()
+            job_tracker = JobAwarePipelineTracker(tracker, "test-job")
+            shape = sys.argv[2]
+            document_id = "doc-" + shape
+            pipeline = DocumentPipelineOrchestrator(MagicMock(), tracker=tracker if shape == "pending" else job_tracker)
+            pipeline._sync_sql_document_status = AsyncMock()
+            failure = PDFParsingError("private pipeline detail", details={
+                "public_message": "PDF reader timed out",
+                "pdfx_failure": {
+                    "failure_category": "polling_timeout", "failure_boundary": "poll", "timeout_seconds": 3600,
+                    "process_id": "process-" + shape, "provider_status": shape,
+                    "poll_attempt_count": 120, "provider_error": "PRIVATE_UNAPPROVED_PROVIDER_DETAIL",
+                },
+            })
+            if shape == "generic":
+                failure = RuntimeError("private pipeline detail")
+            public_message = "private pipeline detail" if shape == "generic" else "PDF reader timed out"
+            capture_succeeds = sys.argv[1] == "True"
+            capture = nullcontext() if capture_succeeds else patch("src.lib.pipeline.orchestrator.report_runtime_exception", return_value=False)
+            with sentry_sdk.start_transaction(op="pdf.processing", name="test", sampled=False) as transaction, capture, patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(side_effect=failure)), \
+                 patch("src.lib.weaviate_client.documents.update_document_status_detailed", new=AsyncMock()), \
+                 patch("src.lib.pdf_jobs.upload_execution_service.pdf_job_service.update_progress"), \
+                 patch("src.lib.pdf_jobs.upload_execution_service.pdf_job_service.is_cancel_requested", return_value=False), \
+                 patch("src.lib.observability.cost_context.execution_context", return_value={"run_id": "test-run", "activity": "background"}):
+                execute = pipeline.process_pdf_document if shape == "pending" else observed_background_task(pipeline.process_pdf_document)
+                result = await execute(Path("unused.pdf"), document_id, "user-test", validate_first=False)
+            assert not result.success
+            assert result.error == public_message
+            assert len(records) == 1
+            assert public_message in records[0].getMessage()
+            assert records[0].sentry_skip_event is capture_succeeds
+            assert len(tracker.processing_errors[document_id]) == 1
+            sentry_sdk.flush(timeout=1)
+            assert len(events) == 1, events
+            assert events[0]["contexts"]["trace"]["trace_id"] == transaction.trace_id
+            assert "PRIVATE_UNAPPROVED_PROVIDER_DETAIL" not in json.dumps(events)
+            assert document_id not in json.dumps(events)
+            if capture_succeeds:
+                assert events[0]["tags"]["operation"] == "process_pdf_document_failed"
+                context = events[0]["contexts"]["runtime_exception"]
+                assert context["document_id"] == hash_sentry_identifier(document_id)
+                assert events[0]["exception"]["values"][-1]["type"] == type(failure).__name__
+                if shape != "generic":
+                    assert context["pdfx_failure_boundary"] == "poll"
+                    assert context["pdfx_failure_category"] == "polling_timeout"
+                    assert context["pdfx_timeout_seconds"] == 3600
+                    assert context["pdfx_process_id"] == "process-" + shape
+                    assert context["pdfx_provider_status"] == shape
+                    assert context["pdfx_poll_attempt_count"] == 120
+            else:
+                assert events[0]["logger"] == "src.lib.pipeline.tracker"
+            events.clear()
+            await tracker.handle_pipeline_failure("standalone", RuntimeError("independent error"), ProcessingStage.PARSING)
+            sentry_sdk.flush(timeout=1)
+            assert len(events) == 1, events
+        asyncio.run(run())
+    """)
+    result = subprocess.run([sys.executable, "-c", script, str(capture_succeeds), failure_shape, log_event_level], text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr + result.stdout

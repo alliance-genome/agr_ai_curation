@@ -330,13 +330,18 @@ class DocumentPipelineOrchestrator:
                 "extraction_strategy": extraction_strategy,
             }
             runtime_context.update(_pdfx_runtime_context(e))
-            report_runtime_exception(
+            sentry_reported = report_runtime_exception(
                 e,
                 component="document_pipeline",
                 operation="process_pdf_document_failed",
                 context=runtime_context,
             )
-            logger.warning("Pipeline failed for document %s: %s", document_id, e, exc_info=True)
+            # The explicit report owns this failure; the tracker ERROR log is
+            # the backup if capture fails, even when WARNING logs are promoted.
+            logger.warning(
+                "Pipeline failed for document %s: %s", document_id, e, exc_info=True,
+                extra={"sentry_skip_event": True},
+            )
             public_error_message = _public_pipeline_error_message(e)
 
             # Mark as failed
@@ -344,6 +349,7 @@ class DocumentPipelineOrchestrator:
                 document_id,
                 e,
                 public_error_message=public_error_message,
+                sentry_reported=sentry_reported,
             )
 
             duration = (datetime.now() - start_time).total_seconds()
@@ -588,6 +594,7 @@ class DocumentPipelineOrchestrator:
         error: Exception,
         *,
         public_error_message: Optional[str] = None,
+        sentry_reported: bool = False,
     ):
         """Handle pipeline failure."""
         safe_message = public_error_message or _public_pipeline_error_message(error)
@@ -613,7 +620,8 @@ class DocumentPipelineOrchestrator:
         await self.tracker.handle_pipeline_failure(
             document_id,
             tracker_error,
-            stage=ProcessingStage.FAILED
+            stage=ProcessingStage.FAILED,
+            sentry_reported=sentry_reported,
         )
         await self.tracker.track_pipeline_progress(
             document_id,
