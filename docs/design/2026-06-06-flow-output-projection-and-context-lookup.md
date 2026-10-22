@@ -550,3 +550,37 @@ Add the new projection tests to the targeted pytest invocation once the filename
 3. How much grouping should full implementation support? `group_by` with one or more exact field refs is the safe baseline; nested custom trees should remain later.
 4. Should ordinary supervisor `export_to_file` eventually move to this projection service for follow-up exports from existing refs?
 5. Should file preview include CSV/TSV row count by scanning the whole file when the file is small, or always report an estimate to avoid surprise cost?
+
+## Export accounting and saved diagnostics (ALL-1391)
+
+Projection results measure candidate rows after source selection, sequential filter
+removals, explicit override exclusions, retained rows, and actual exported rows.
+The row unit is explicit (object, evidence, validation finding, or artifact).
+Grouped JSON reports group count separately; split-list columns do not multiply
+rows. Preview paging, explicit `max_rows`, and export truncation are distinct.
+The persisted `projection_summary.row_count` is the number written, while
+`total_count` is the retained count before limits. Unmeasured historical/manual
+projections report unavailable accounting, never fabricated zero counts.
+
+Successful formatter receipts carry `export_accounting` and `export_details.read`.
+AI and selected-fields exports preserve their existing file-card event ownership.
+Supervisors in chat and flow execution (including batch flows) receive internal
+instructions to explain measured counts and describe filters neutrally; filters
+are not necessarily curator-authored. A valid nonempty source filtered to zero
+can intentionally produce an empty file. Missing source data remains an error.
+
+The file metadata contains complete `export_diagnostics`: stage counts, applied
+filter specifications with sequential removals, and full warnings. Warning scope
+is the source bundle plus projection, which can include unselected artifacts;
+warnings alone do not establish missing export data. Compact warning previews use
+`FLOW_PROJECTION_MAX_LIST_ITEMS` and `FLOW_PROJECTION_MAX_TEXT_CHARS`.
+
+`read_export_details` accepts the receipt's file ID and diagnostics SHA-256 and
+returns exact JSON character windows. Follow `next_offset` until null and join
+`text` to recover the full JSON. `SUPERVISOR_FIELD_TEXT_LIMIT` bounds each window.
+The query requires both the authenticated curator and current session; IDs alone
+grant no access. A changed digest returns stale rather than mixing versions after
+a file replacement. Missing historical diagnostics remain unavailable. The tool
+is read-only and must never cause another save or extraction to recover metadata.
+Benchmark-frozen tool surfaces are unchanged. TraceReview preserves these JSON
+receipts and detail windows through its generic tool-result parser.

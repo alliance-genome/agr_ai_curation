@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
 from src.lib.context import get_current_trace_id, get_current_session_id
+from src.lib.export_accounting import projection_summary as _projection_summary, compact_accounting, export_details_reference
 
 import asyncio
 import hashlib
@@ -624,36 +625,6 @@ def _projection_plan_from_tool_payload(
     except ValidationError as exc:
         raise ValueError(f"Projection plan schema is invalid: {exc}") from exc
     return plan.model_copy(update={"format": output_format})
-
-
-def _projection_summary(result: FlowOutputProjectionResult) -> dict[str, Any]:
-    """Compact receipt facts about a finalized projection; never its rows."""
-
-    headers = [column.header or column.key for column in result.columns]
-    column_limit = get_output_tool_catalog_page_size()
-    return {
-        "format": result.format,
-        "row_source": result.row_source,
-        "columns": headers[:column_limit],
-        **(
-            {"columns_omitted": len(headers) - column_limit}
-            if len(headers) > column_limit
-            else {}
-        ),
-        "column_count": len(headers),
-        "total_count": result.total_count,
-        "row_count": len(result.rows),
-        "truncated": result.truncated,
-        "limited_by_max_rows": result.limited_by_max_rows,
-        "overrides_applied": result.overrides_applied,
-        "rows_excluded": result.rows_excluded,
-        "group_by": list(result.group_by),
-        "warning_count": len(result.warnings),
-        "warnings": [
-            _bounded_text(warning)
-            for warning in result.warnings[:_MAX_LIST_ITEMS]
-        ],
-    }
 
 
 def _field_label(bundle: FlowOutputArtifactBundle, field_ref: str) -> str:
@@ -2067,7 +2038,8 @@ def build_output_formatter_tools(
         description_override=(
             "Finalize a projection over all saved bundle rows and save one CSV/TSV/JSON file. "
             "Empty plan_json uses the validated default projection. Returns a compact "
-            "receipt; this tool never accepts raw rows or file text."
+            "receipt with measured export_accounting and export_details.read for full saved diagnostics. "
+            "Explain applied filters using these counts; this tool never accepts raw rows or file text."
         ),
         strict_mode=False,
     )
@@ -2109,7 +2081,10 @@ def build_output_formatter_tools(
                         },
                     )
                 projection = finalize_output_projection(bundle, plan)
-                if projection.total_count < 1 and locked_plan is None:
+                if (projection.total_count < 1 and locked_plan is None
+                        and not (projection.export_accounting is not None
+                                 and projection.export_accounting.candidate_row_count > 0
+                                 and projection.export_accounting.rows_removed_by_filters > 0)):
                     return _tool_json(
                         {
                             "status": "invalid",
@@ -2179,6 +2154,8 @@ def build_output_formatter_tools(
             file_info.setdefault("format", resolved_output_format)
             file_info["status"] = "ok"
             file_info["projection_summary"] = _projection_summary(projection)
+            file_info["export_accounting"] = compact_accounting(projection)
+            file_info["export_details"] = export_details_reference(file_info["file_id"], projection)
             finalized_file_info = {
                 key: _jsonable(value)
                 for key, value in file_info.items()
@@ -2189,6 +2166,8 @@ def build_output_formatter_tools(
                     "format",
                     "download_url",
                     "projection_summary",
+                    "export_accounting",
+                    "export_details",
                 }
             }
             return _tool_json(
@@ -2265,7 +2244,10 @@ def build_output_formatter_tools(
                             },
                         )
                     projection = finalize_output_projection(bundle, plan)
-                    if projection.total_count < 1 and locked_plan is None:
+                    if (projection.total_count < 1 and locked_plan is None
+                        and not (projection.export_accounting is not None
+                                 and projection.export_accounting.candidate_row_count > 0
+                                 and projection.export_accounting.rows_removed_by_filters > 0)):
                         return _tool_json(
                             {
                                 "status": "invalid",

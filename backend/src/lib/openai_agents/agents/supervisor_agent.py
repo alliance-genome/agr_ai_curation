@@ -60,6 +60,8 @@ from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
 from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool, INSPECTION_GUIDANCE
+from src.lib.openai_agents.export_details_tool import make_export_details_tool
+from src.lib.export_accounting import EXPORT_ACCOUNTING_GUIDANCE
 from src.lib.openai_agents.tool_surface import canonical_tool_name
 from src.lib.openai_agents.supervisor_context_tools import (
     inspect_chat_traces,
@@ -86,6 +88,7 @@ _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
     {
         _CURATION_PREP_TOOL_NAME,
         "inspect_results",
+        "read_export_details",
         _INSPECT_CHAT_TRACES_TOOL_NAME,
         _RECALL_CHAT_HISTORY_TOOL_NAME,
     }
@@ -1635,6 +1638,7 @@ def create_supervisor_agent(
     specialist_tools.append(prepare_for_curation_tool)
 
     specialist_tools.append(make_result_inspection_tool())
+    specialist_tools.append(make_export_details_tool())
 
     @function_tool(
         name_override=_INSPECT_CHAT_TRACES_TOOL_NAME,
@@ -1806,7 +1810,7 @@ def create_supervisor_agent(
     # Compatible providers return a concrete SDK model; native OpenAI returns a name.
     supervisor = Agent(
         name="Query Supervisor",
-        instructions=instructions + INSPECTION_GUIDANCE,
+        instructions=instructions + INSPECTION_GUIDANCE + "\n" + EXPORT_ACCOUNTING_GUIDANCE,
         model=model,
         model_settings=supervisor_settings,
         input_guardrails=input_guardrails,
@@ -1835,7 +1839,7 @@ def create_supervisor_agent(
     tool_names = [getattr(t, 'name', str(t)) for t in specialist_tools]
     log_agent_config_to_langfuse(
         agent_name="Query Supervisor",
-        instructions=instructions + INSPECTION_GUIDANCE,
+        instructions=instructions + INSPECTION_GUIDANCE + "\n" + EXPORT_ACCOUNTING_GUIDANCE,
         model=effective_model,
         tools=tool_names,
         model_settings={

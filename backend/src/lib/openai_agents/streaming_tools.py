@@ -4543,8 +4543,10 @@ def _formatter_saved_file_handoff(output: Any) -> Optional[Dict[str, Any]]:
         return {"status": "handoff_error", "saved_file": True,
                 "message": "Save succeeded, but its download metadata is incomplete. Do not invent a URL or report a failed save.",
                 "missing_fields": missing}
+    from src.lib.export_accounting import validated_accounting_handoff
     return {"status": "ok", "saved_file": True,
-            "file": file_ready_event_details(file_info)}
+            "file": file_ready_event_details(file_info),
+            **validated_accounting_handoff(file_info)}
 
 
 @costed_call
