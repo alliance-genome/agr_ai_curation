@@ -1143,7 +1143,11 @@ def test_group_restricted_saved_flow_keeps_authenticated_context(
             assert rejected.status_code == 403, rejected.text
         assert len(calls) == 1
 
-    # A group-like value in an editable node cannot grant access at save time.
+    # Even an authorized caller cannot put authorization context in node data:
+    # the request schema rejects the unsupported field before catalog checks.
+    monkeypatch.setattr(principal, "groups", ["RGDCurator"])
     definition["nodes"][1]["data"]["authenticated_groups"] = ["RGD"]
     forged = client.post("/api/flows", json={"name": f"test_forged_{uuid4().hex}", "flow_definition": definition})
-    assert forged.status_code in (400, 422), forged.text
+    assert forged.status_code == 422, forged.text
+    assert any(error["type"] == "extra_forbidden" and error["loc"][-1] == "authenticated_groups"
+               for error in forged.json()["detail"])
