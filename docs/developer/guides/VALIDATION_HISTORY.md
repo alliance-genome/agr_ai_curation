@@ -186,7 +186,8 @@ or materialization; they are not evidence of durable storage by themselves.
   `requires_history_read`; exact decisions remain in history. Trace summaries
   give a follow-up count without falsely claiming an empty question list.
 - Owner identity is the authorization boundary. Document-backed artifacts also
-  require current document ownership. Source session IDs partition immutable
+  require current document ownership, or a recorded owner-scoped retirement when
+  the source document has been removed. Source session IDs partition immutable
   identities and are checked exactly, but are not independent user ACLs.
   Authenticated document-less chat uses a null document source, not a fake PDF.
 - `VALIDATION_HISTORY_PAGE_SIZE` controls history facts per page (default 5).
@@ -199,6 +200,12 @@ or materialization; they are not evidence of durable storage by themselves.
   `backend/tests/fixtures/validation_history/transitions.json` and is replayed
   against PostgreSQL for downstream implementers.
 
-Whole-document deletion retention is awaiting an explicit product decision;
-annotation retirement approval must not be treated as that decision. Do not
-release this integration series while that policy is unresolved.
+Removing a PDF from the active library retires its immutable history rather than
+purging it. Shared document cleanup appends an owner-scoped retirement marker in
+the same transaction as removing current SQL projections. Source files and
+search/vector records may still be removed by the existing deletion workflow.
+The recorded owner can read the baseline, attempts, and exact archived checkpoint
+with its original document/session scope after removal. New dispatch, selection,
+or restoration is blocked; late in-flight completions remain auditable. A rolled
+back deletion also rolls back retirement. This does not expose another owner's
+history or recreate the removed source document.

@@ -1468,3 +1468,90 @@ def test_real_two_wave_materializer_preserves_elements_or_rejects_rewrite(
                 for item in waves
                 if item["dispatch_wave"] == 1
             )
+
+
+def test_document_cleanup_retires_history_and_preserves_owner_exact_reads(scope):
+    from uuid import UUID
+    from src.lib.document_cleanup import cleanup_document_curation_dependencies
+    from src.lib.validation_history.runtime import capture_extraction
+    from src.lib.domain_envelopes.persistence import (
+        DomainEnvelopeCheckpointRequest,
+        write_domain_envelope_checkpoint,
+    )
+    from src.lib.curation_workspace.models import DomainEnvelopeModel
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+
+    envelope = DomainEnvelope(
+        envelope_id="retired-document-" + uuid4().hex,
+        domain_pack_id="fixture",
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_id="one", object_type="gene", payload={"name": "original"}
+            )
+        ],
+    )
+    envelope = capture_extraction(
+        scope=scope,
+        producer_id="document-retirement",
+        typed=envelope.model_dump(mode="json"),
+        envelope=envelope,
+        provenance={},
+    )
+    aid = envelope.metadata["validation_history"]["artifact_id"]
+    tid = envelope.extracted_objects[0].metadata["validation_history"]["target_id"]
+    att = attempt(scope, aid, tid)
+    with SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(
+            db,
+            DomainEnvelopeCheckpointRequest(
+                project_key="fixture",
+                envelope=envelope,
+                expected_revision=0,
+                document_id=scope.document_id,
+                adapter_key="fixture",
+                source_extraction_result_id=str(uuid4()),
+            ),
+        )
+    with SessionLocal() as db:
+        cleanup_document_curation_dependencies(db, UUID(scope.document_id))
+        db.delete(db.get(PDFDocument, UUID(scope.document_id)))
+        db.flush()
+        db.rollback()
+    assert h.read_baseline(scope, aid)["retired"] is False
+    with SessionLocal.begin() as db:
+        cleanup_document_curation_dependencies(db, UUID(scope.document_id))
+        db.delete(db.get(PDFDocument, UUID(scope.document_id)))
+    with SessionLocal() as db:
+        assert db.get(DomainEnvelopeModel, envelope.envelope_id) is None
+    assert h.read_baseline(scope, aid)["retired"] is True
+    assert h.read_fact(scope, aid, att)["content"]["input"]["request"]["evidence"]
+    archived = h.read_archived_checkpoint(
+        scope, aid, envelope_id=envelope.envelope_id, revision=1
+    )
+    assert archived["extracted_objects"][0]["payload"]["name"] == "original"
+    late = h.complete_attempt(
+        scope,
+        aid,
+        att,
+        state="completed",
+        result={"status": "resolved"},
+        diagnostics={},
+    )
+    for action in ("accept", "restore"):
+        with pytest.raises(h.HistoryConflict):
+            decision(
+                scope,
+                aid,
+                tid,
+                0,
+                action,
+                **({"subject": late} if action == "accept" else {}),
+            )
+    with pytest.raises(h.HistoryConflict):
+        attempt(scope, aid, tid, "new-call")
+    with pytest.raises(h.HistoryAccessError):
+        h.read_baseline(
+            h.HistoryScope("other-owner", scope.document_id, scope.session_id), aid
+        )
+    with pytest.raises(h.HistoryAccessError):
+        h.read_archived_checkpoint(scope, aid, envelope_id="unrelated", revision=1)

@@ -61,6 +61,15 @@ def _attach_object_targets(updated, scope, artifact_id, root_target, *, origin):
     # One transaction for all objects/fields/elements; no per-element auth round trips.
     with store.SessionLocal.begin() as db:
         store._artifact(db, artifact_id, scope)
+        from sqlalchemy import select
+        from src.models.sql.validation_history import ValidationArtifact
+
+        db.scalar(
+            select(ValidationArtifact.id)
+            .where(ValidationArtifact.id == artifact_id)
+            .with_for_update()
+        )
+        store._require_live_artifact(db, artifact_id)
 
         def register(identity, original, parent):
             return store.register_target_in_transaction(

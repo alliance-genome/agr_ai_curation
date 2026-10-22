@@ -78,9 +78,11 @@ def _authorize(db, scope: HistoryScope):
         None
         if user is None
         else db.scalar(
-            select(PDFDocument).where(
+            select(PDFDocument)
+            .where(
                 PDFDocument.id == UUID(scope.document_id), PDFDocument.user_id == user
             )
+            .with_for_update(read=True)
         )
     )
     # History is an internal owned read/append surface, not a library edit or
@@ -90,8 +92,23 @@ def _authorize(db, scope: HistoryScope):
     return document
 
 
+def _document_retirement(db, artifact_id):
+    return db.scalar(
+        select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact_id,
+            ValidationFact.operation_id == "document-retired",
+        )
+    )
+
+
+def _require_live_artifact(db, artifact_id):
+    if _document_retirement(db, artifact_id) is not None:
+        raise HistoryConflict(
+            "Document history is retired; new validation or selection is not allowed"
+        )
+
+
 def _artifact(db, artifact_id: str, scope: HistoryScope) -> ValidationArtifact:
-    _authorize(db, scope)
     row = db.get(ValidationArtifact, artifact_id)
     if row is None or (row.owner_id, row.document_id, row.session_id) != (
         scope.owner_id,
@@ -99,7 +116,72 @@ def _artifact(db, artifact_id: str, scope: HistoryScope) -> ValidationArtifact:
         scope.session_id,
     ):
         raise HistoryAccessError("Validation history artifact is not accessible")
+    user_id = db.scalar(select(User.id).where(User.auth_sub == scope.owner_id))
+    if user_id is None:
+        raise HistoryAccessError("Validation history owner is not accessible")
+    if scope.document_id is not None:
+        document = db.get(PDFDocument, UUID(scope.document_id))
+        if document is not None:
+            if document.user_id != user_id:
+                raise HistoryAccessError("Validation history source is not accessible")
+        elif _document_retirement(db, artifact_id) is None:
+            raise HistoryAccessError("Validation history source is not accessible")
     return row
+
+
+def retire_document_history(db, document_id: UUID) -> int:
+    """Retire audit artifacts in the same transaction as document cleanup.
+
+    Preserve source/attempt/decision bodies. The trusted cleanup caller already
+    checks document ownership; the actor is derived from that actual source row.
+    """
+    document = db.scalar(
+        select(PDFDocument).where(PDFDocument.id == document_id).with_for_update()
+    )
+    if document is None:
+        return 0
+    owner = db.get(User, document.user_id)
+    if owner is None:
+        raise HistoryAccessError("Document retirement requires its recorded owner")
+    artifacts = list(
+        db.scalars(
+            select(ValidationArtifact)
+            .where(ValidationArtifact.document_id == str(document_id))
+            .order_by(ValidationArtifact.id)
+            .with_for_update()
+        )
+    )
+    for artifact in artifacts:
+        if artifact.owner_id != owner.auth_sub:
+            raise HistoryAccessError("Document history ownership mismatch")
+        _append(
+            db,
+            artifact.id,
+            operation_id="document-retired",
+            kind="document_retirement",
+            body={
+                "document_id": str(document_id),
+                "actor": {"type": "curator", "id": owner.auth_sub},
+                "reason": "Source document removed from the active library",
+                "file_hash": document.file_hash,
+            },
+        )
+    return len(artifacts)
+
+
+def read_archived_checkpoint(scope, artifact_id, *, envelope_id, revision):
+    from src.models.sql.validation_history import ValidationCheckpoint
+    from .checkpoints import read_checkpoint_body
+
+    with SessionLocal() as db:
+        artifact = _artifact(db, artifact_id, scope)
+        baseline = db.get(ValidationBody, artifact.baseline_sha).content
+        if baseline["normalized"].get("envelope_id") != envelope_id:
+            raise HistoryAccessError("Checkpoint does not belong to this artifact")
+        checkpoint = db.get(ValidationCheckpoint, (envelope_id, revision))
+        if checkpoint is None or checkpoint.document_id != str(scope.document_id):
+            raise HistoryAccessError("Checkpoint is not accessible")
+        return read_checkpoint_body(db, checkpoint.body_sha)
 
 
 def _body(db, value: dict[str, Any]) -> str:
@@ -253,6 +335,7 @@ def read_baseline(scope: HistoryScope, artifact_id: str) -> dict:
         row = _artifact(db, artifact_id, scope)
         return {
             "artifact_id": row.id,
+            "retired": _document_retirement(db, row.id) is not None,
             "subject_kind": row.subject_kind,
             "original_available": row.subject_kind != "historical",
             "provenance": deepcopy(row.provenance),
@@ -272,6 +355,12 @@ def register_target(
     """Identity is assigned at capture, never derived from mutable label/index content."""
     with SessionLocal.begin() as db:
         _artifact(db, artifact_id, scope)
+        db.scalar(
+            select(ValidationArtifact.id)
+            .where(ValidationArtifact.id == artifact_id)
+            .with_for_update()
+        )
+        _require_live_artifact(db, artifact_id)
         return register_target_in_transaction(
             db,
             artifact_id,
@@ -323,6 +412,8 @@ def _prerequisites_current(db, scope, references):
 
 
 def _attempt_is_current(db, scope, artifact_id, attempt_content, target_id=None):
+    if _document_retirement(db, artifact_id) is not None:
+        return False
     for tid, generations in attempt_content["coverage_lineages"].items():
         if target_id is not None and tid != target_id:
             continue
@@ -551,6 +642,7 @@ def _target_lineage(db, artifact_id: str, target_id: str) -> dict[str, int]:
 
 
 def _require_active_target(db, artifact_id: str, target_id: str):
+    _require_live_artifact(db, artifact_id)
     for ancestor in _target_lineage(db, artifact_id, target_id):
         if not _current(db, artifact_id, ancestor)["active"]:
             raise HistoryConflict(
@@ -622,6 +714,7 @@ def apply_decisions_in_transaction(
         .where(ValidationArtifact.id == artifact.id)
         .with_for_update()
     )
+    _require_live_artifact(db, artifact_id)
     operation = db.scalar(
         select(ValidationFact).where(
             ValidationFact.artifact_id == artifact_id,
