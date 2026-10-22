@@ -488,6 +488,10 @@ def _inspect(
         from src.lib.openai_agents.result_inspection_views import readable_document_ids
         readable = readable_document_ids(records, user_id=user_id)
         records = [record for record in records if str(_record_attr(record, "document_id")) in readable]
+    # Choose the requested source before resolving its version. A missing view
+    # on the newest result must never select an older extraction instead.
+    if action not in {"list", "search"} or (action == "search" and normalized_target == "latest" and parsed_ref is None):
+        records = records[:1]
     unavailable_views = []
     if result_view == "post_validation":
         from src.lib.openai_agents.result_inspection_views import validation_view, InspectionViewUnavailable
@@ -497,7 +501,7 @@ def _inspect(
                 projected.append(validation_view(record, revision=envelope_revision, user_id=user_id))
             except InspectionViewUnavailable as exc:
                 # Explicit reads fail; discovery omits unavailable views without substituting originals.
-                if parsed_ref:
+                if parsed_ref or action not in {"list", "search"}:
                     raise _RequestError("result_view_unavailable", str(exc)) from exc
                 unavailable_views.append({"result_ref": _record_result_ref(record), "reason": str(exc)})
         records = projected

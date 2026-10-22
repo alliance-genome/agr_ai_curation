@@ -923,3 +923,20 @@ async def test_search_retains_supported_matches_alongside_legacy_list_payload(mo
     assert response["status"] == "ok"
     assert response["matches"]
     assert response["unsupported_result_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_latest_missing_version_never_selects_an_older_extraction(monkeypatch):
+    from src.lib.openai_agents import result_inspection_views as views
+    latest = vars(_InspectRecord(created_at=datetime(2026, 10, 22, tzinfo=timezone.utc)))
+    older = vars(_InspectRecord(extraction_result_id="33333333-3333-3333-3333-333333333333"))
+    _patch_records(monkeypatch, [older, latest])
+    def resolve(record, **kwargs):
+        assert record["extraction_result_id"] == RESULT_ID, "Must not substitute the older result"
+        raise views.InspectionViewUnavailable("Newest checkpoint unavailable")
+    monkeypatch.setattr(views, "validation_view", resolve)
+    response = json.loads(await inspect_results_module.inspect_results(action="summary", result_view="post_validation"))
+    assert response["error_code"] == "result_view_unavailable"
+    search = json.loads(await inspect_results_module.inspect_results(action="search", result_view="post_validation"))
+    assert search["matches"] == []
+    assert len(search["unavailable_views"]) == 1
