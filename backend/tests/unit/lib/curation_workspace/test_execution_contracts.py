@@ -442,7 +442,7 @@ def test_checkpoint_validates_profile_before_any_row_mutation(extraction, existi
         assert row.revision == 3
 
 
-def test_inline_persistence_checks_profile_before_loading_existing_result(extraction):
+def test_inline_persistence_checks_profile_before_loading_existing_result(extraction, monkeypatch):
     from src.lib.curation_workspace.extraction_results import (
         persist_inline_validated_extraction_result,
     )
@@ -455,6 +455,8 @@ def test_inline_persistence_checks_profile_before_loading_existing_result(extrac
         "extracted_objects": payload["curatable_objects"],
         "metadata": {"extraction_metadata": payload["metadata"]},
     }
+    canonical["metadata"]["validation_history"] = {"artifact_id": str(uuid4())}
+    monkeypatch.setattr("src.lib.validation_history.runtime.require_captured_envelope", lambda *a, **k: None)
     with pytest.raises(ProfileConformanceError):
         persist_inline_validated_extraction_result(
             payload_json=canonical,

@@ -853,10 +853,10 @@ async def test_post_validation_view_is_explicit_and_exact_with_pinned_reads(monk
     original["metadata"] = {"inspection_checkpoint": {"envelope_id": "saved-envelope", "revision": 2}}
     validated = deepcopy(original["payload_json"])
     validated["specialist_explanation"] = "Validated checkpoint explanation"
-    row = SimpleNamespace(revision=2, envelope_json=validated, source_extraction_result_id=RESULT_ID, document_id=DOCUMENT_ID)
+    row = SimpleNamespace(revision=2, body_sha="saved-body", source_extraction_result_id=RESULT_ID, document_id=DOCUMENT_ID)
     db = MagicMock()
     db.__enter__.return_value = db
-    db.get.return_value = row
+    db.get.side_effect = lambda model, key: SimpleNamespace(content=validated) if model.__name__ == "ValidationBody" else row
     monkeypatch.setattr(views, "SessionLocal", lambda: db)
     monkeypatch.setattr(views, "readable_document_ids", lambda *args, **kw: {DOCUMENT_ID})
     _patch_records(monkeypatch, [original])
@@ -871,7 +871,7 @@ async def test_post_validation_view_is_explicit_and_exact_with_pinned_reads(monk
     assert page["result_view"] == "post_validation"
     row.revision = 3
     stale = json.loads(await inspect_results_module.inspect_results(action="explanation", result_ref=ref, result_view="post_validation", envelope_revision=2))
-    assert stale["error_code"] == "result_view_unavailable"
+    assert stale["value"] == validated["specialist_explanation"]
     assert original["payload_json"] != validated
 
 

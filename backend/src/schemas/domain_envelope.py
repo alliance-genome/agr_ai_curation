@@ -574,9 +574,10 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
     validator_results: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
         description=(
-            "Complete original validator request/result snapshots, stored once per "
-            "content-addressed validation_result_ref. Finding details are display "
-            "projections. Historical findings without a reference have no saved original."
+            "Validator attempt references and bounded summaries. Complete originals "
+            "are fetched from immutable history through authorized exact reads. "
+            "Known legacy inline originals remain historical evidence; missing "
+            "originals are not reconstructed from finding projections."
         ),
     )
     history: list[HistoryEvent] = Field(

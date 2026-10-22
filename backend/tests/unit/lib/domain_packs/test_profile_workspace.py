@@ -6,11 +6,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
+
 from src.lib.curation_workspace import pipeline, session_validation_service
 from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
 from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
 from .test_profile_validation import example as example
 from .test_profile_materialization import prepared, results
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 @pytest.mark.parametrize("inline_complete", [False, True])
@@ -131,7 +138,8 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
 
     monkeypatch.setattr(session_validation_service, "dispatch_active_validator_bindings", dispatch)
     computation = session_validation_service._compute_candidate_validation(
-        db, candidate, force=True, validated_at=datetime.now(timezone.utc))
+        db, candidate, force=True, validated_at=datetime.now(timezone.utc),
+        runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id=str(candidate.session.document_id)))
     assert len(requests) == 2 and requests[0].expected_revision == 0
     assert candidate.envelope_id == f"manual-profile:{candidate.id}"
     assert candidate.normalized_payload == {}

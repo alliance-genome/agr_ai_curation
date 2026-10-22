@@ -12,6 +12,8 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -41,6 +43,10 @@ from src.schemas.domain_validator import (
     ValidatorAgentRef,
 )
 from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 @pytest.fixture(autouse=True)

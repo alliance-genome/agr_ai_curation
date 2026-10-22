@@ -37,13 +37,51 @@ def retain_validator_original(
     request: DomainValidationRequest, source_envelope_revision: int | None,
 ) -> tuple[DomainEnvelope, str]:
     """Shared boundary for packaged and custom-profile materialization."""
-    ref, original = validator_result_snapshot(
-        result.model_dump(mode="json"), request=request.model_dump(mode="json"),
-        source_envelope_revision=source_envelope_revision,
-    )
-    if ref not in envelope.validator_results:
-        original["recorded_order"] = len(envelope.validator_results)
-        envelope = envelope.model_copy(update={
-            "validator_results": {**envelope.validator_results, ref: original},
-        })
-    return envelope, ref
+    history = result._history_ref
+    if history is None:
+        raise ValueError("Materialization requires a durable validation history reference")
+    ref = "validation-fact:" + history["fact_id"]
+    original = {
+        "schema_version": 2,
+        "source_envelope_revision": source_envelope_revision,
+        "history_ref": deepcopy(history),
+        "recorded_order": history["sequence"],
+        "original_available": history["execution_state"] in {"completed", "incomplete"},
+        "result": {name: value for name, value in result.model_dump(mode="json").items()
+                   if name in {"status", "request_id", "validator_binding_id", "target"}},
+        "output_complete": not bool(result.output_issues),
+        "follow_up_question_count": len(result.unresolved_questions),
+        "review_status": "pending",
+    }
+    original["result"]["target"] = {name: value for name, value in original["result"]["target"].items()
+                                    if name in {"object_type", "object_id", "field_path", "domain_pack_id"}}
+    if not original["original_available"]:
+        original["result"]["status"] = history["execution_state"]
+        original["output_complete"] = False
+    previous = envelope.validator_results.get(ref)
+    if previous is not None and previous != original:
+        raise ValueError("Validation completion reference was reused with different metadata")
+    return envelope.model_copy(update={"validator_results": {**envelope.validator_results, ref: original}}), ref
+
+
+def read_validator_original(snapshot: Mapping[str, Any], *, user_id: str, document_id: str) -> dict | None:
+    """Resolve only after the caller authorized the containing extraction."""
+    if snapshot["schema_version"] == 1:
+        # A known historical body, not a reconstructed answer or review decision.
+        return deepcopy(dict(snapshot))
+    from src.lib.validation_history import store
+    reference = snapshot["history_ref"]
+    scope = store.HistoryScope(user_id, document_id, reference["session_id"])
+    completion = store.read_fact(scope, reference["artifact_id"], reference["fact_id"])
+    if completion["sha256"] != reference["body_sha256"]:
+        raise store.HistoryConflict("Validator body reference does not match its immutable fact")
+    if completion["kind"] == "scheduling":
+        return None
+    if completion["kind"] != "completion":
+        raise store.HistoryConflict("Validator reference is not a completion or scheduling fact")
+    if completion["content"]["result"] is None:
+        return None
+    attempt = store.read_fact(scope, reference["artifact_id"], completion["parent_id"])
+    return {"schema_version": 2, "source_envelope_revision": snapshot.get("source_envelope_revision"),
+            "request": attempt["content"]["input"]["request"], "result": completion["content"]["result"],
+            "history_ref": deepcopy(reference)}

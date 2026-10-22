@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 import sys
 from pathlib import Path
 
@@ -541,7 +543,7 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
             ValidatorResultMaterializationInput(
                 match=resolved_match,
                 request=resolved_request,
-                result=DomainValidatorResultBase(
+                result=result_with_history_receipt(DomainValidatorResultBase(
                     status="resolved",
                     request_id=resolved_request.request_id,
                     validator_binding_id=resolved_request.validator_binding_id,
@@ -569,12 +571,12 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
                     ],
                     curator_message="Resolved crb 11A22.",
                     explanation="Resolved by allele validation fixture.",
-                ),
+                )),
             ),
             ValidatorResultMaterializationInput(
                 match=unresolved_match,
                 request=unresolved_request,
-                result=DomainValidatorResultBase(
+                result=result_with_history_receipt(DomainValidatorResultBase(
                     status="unresolved",
                     request_id=unresolved_request.request_id,
                     validator_binding_id=unresolved_request.validator_binding_id,
@@ -595,7 +597,7 @@ def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
                     ],
                     curator_message="Could not resolve crb unknown.",
                     explanation="No database allele matched the mention.",
-                ),
+                )),
             ),
         ],
     )

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 import copy
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
+
 
 import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search
 import src.lib.openai_agents.tools.evidence_workspace as evidence_workspace
@@ -20,6 +23,10 @@ from src.lib.openai_agents.evidence_summary import (
     canonicalize_structured_result_payload,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 _PAT_UNC_TLN_CHUNK_ID = "11111111-1111-4111-8111-111111111111"
 _WEAK_MARKER_CHUNK_ID = "33333333-3333-4333-8333-333333333333"

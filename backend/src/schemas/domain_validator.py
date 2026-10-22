@@ -238,6 +238,8 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
     # Composite completeness concerns the values actually decided, not absent
     # components whose possible destination fields also appear in the binding.
     _assembled_field_completeness: bool = PrivateAttr(default=False)
+    _execution_failure: str | None = PrivateAttr(default=None)
+    _history_ref: dict[str, Any] | None = PrivateAttr(default=None)
 
     status: DomainValidatorStatus = Field(
         description="Validator decision for the target; active validators only return resolved or unresolved",

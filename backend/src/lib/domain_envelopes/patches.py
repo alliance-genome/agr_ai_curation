@@ -334,6 +334,10 @@ def apply_curator_field_patch(
 
     updated_objects = list(envelope.extracted_objects)
     object_metadata = dict(domain_object.metadata)
+    retired_target_id = None
+    if patch.operation is EnvelopeFieldPatchOperation.REMOVE:
+        from src.lib.validation_history.runtime import retire_element_projection
+        object_metadata, retired_target_id = retire_element_projection(object_metadata, patch.field_path)
     if override_audit is not None:
         # Audit trail of curator validation overrides: who, when, what was there before.
         object_metadata[CURATOR_OVERRIDE_METADATA_KEY] = [
@@ -381,6 +385,11 @@ def apply_curator_field_patch(
         "after": patch.value,
         "reason": patch.reason,
     }
+    if retired_target_id is not None:
+        details["validation_history_retirement"] = {
+            "target_id": retired_target_id, "actor_id": actor_id,
+            "reason": patch.reason or "Curator retired the item",
+        }
     field_event = _curator_event(
         envelope=envelope,
         event_type=HistoryEventKind.FIELD_UPDATED,

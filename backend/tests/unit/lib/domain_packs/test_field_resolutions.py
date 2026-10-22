@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 from pathlib import Path
 
 import pytest
@@ -131,7 +133,7 @@ def _item(metadata, envelope, *, status, field_resolutions, resolved_values=None
     match = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])[0]
     request = build_domain_validation_request(match).request
     assert request is not None
-    result = DomainValidatorResultBase.model_validate(
+    result = result_with_history_receipt(DomainValidatorResultBase.model_validate(
         {
             "status": status,
             "request_id": request.request_id,
@@ -149,7 +151,7 @@ def _item(metadata, envelope, *, status, field_resolutions, resolved_values=None
             "explanation": "Overall composite decision.",
             "field_resolutions": field_resolutions,
         }
-    )
+    ))
     return ValidatorResultMaterializationInput(match=match, request=request, result=result)
 
 
@@ -188,14 +190,14 @@ def test_composite_cannot_create_absent_declared_identity_from_root_slots(adapte
     decisions = {f"{component}_curie": {"status": "resolved", "lookup_outcome": "matched",
                   "resolved_values": {f"{component}_curie": curie, f"{component}_name": name}}
                  for component, (curie, name) in values.items()}
-    result = DomainValidatorResultBase.model_validate({
+    result = result_with_history_receipt(DomainValidatorResultBase.model_validate({
         "request_id": request.request_id, "validator_binding_id": request.validator_binding_id,
         "validator_agent": request.validator_agent, "target": request.target, "status": "resolved",
         "resolved_values": {"condition_taxon_curie": "NCBITaxon:7955", "condition_taxon_name": "Danio rerio"},
         "field_resolutions": decisions, "explanation": "Three stored components confirmed; no taxon component.",
         "resolved_objects": [], "missing_expected_fields": [], "candidates": [],
         "lookup_attempts": [], "curator_message": None,
-    })
+    }))
     patched = materialize_validator_results_into_envelope(envelope, pack.metadata, [
         ValidatorResultMaterializationInput(match=match, request=request, result=result),
     ]).envelope

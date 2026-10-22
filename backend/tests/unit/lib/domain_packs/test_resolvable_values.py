@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 from pathlib import Path
 
 import pytest
@@ -108,7 +110,7 @@ def test_the_classifier_only_returns_declared_classifications():
 
 
 def _classify(outcomes):
-    return validator_failure_classification(DomainValidatorResultBase.model_validate({
+    return validator_failure_classification(result_with_history_receipt(DomainValidatorResultBase.model_validate({
         "status": "unresolved", "request_id": "r", "validator_binding_id": "b",
         "validator_agent": {"package_id": "p", "agent_id": "a"},
         "target": {"domain_pack_id": "fixture.vocab", "object_type": "T"}, "resolved_values": {}, "resolved_objects": [],
@@ -118,7 +120,7 @@ def _classify(outcomes):
             for outcome in outcomes
         ],
         "curator_message": None, "explanation": "e",
-    }))
+    })))
 
 
 def test_all_lookups_succeeding_without_a_fit_is_rejected_candidates():
@@ -432,7 +434,7 @@ def _item(metadata, envelope, *, status="resolved", values=None, outcome="succes
     match = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])[0]
     request = build_domain_validation_request(match).request
     assert request is not None
-    result = DomainValidatorResultBase.model_validate(
+    result = result_with_history_receipt(DomainValidatorResultBase.model_validate(
         {
             "status": status,
             "request_id": request.request_id,
@@ -455,7 +457,7 @@ def _item(metadata, envelope, *, status="resolved", values=None, outcome="succes
             "curator_message": None,
             "explanation": "Fixture validator decision.",
         }
-    )
+    ))
     return ValidatorResultMaterializationInput(match=match, request=request, result=result)
 
 
@@ -1154,7 +1156,7 @@ def test_revalidating_a_legacy_record_upgrades_declared_values_and_records_the_e
             if request.validator_binding_id == "fixture.subject_lookup"
             else {"terms": [{"curie": "U:1", "name": "embryo"}, {"curie": "U:2", "name": "adult"}]}
         )
-        result = DomainValidatorResultBase.model_validate({
+        result = result_with_history_receipt(DomainValidatorResultBase.model_validate({
             "status": "resolved", "request_id": request.request_id,
             "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
             "target": request.target, "resolved_values": values, "resolved_objects": [],
@@ -1162,7 +1164,7 @@ def test_revalidating_a_legacy_record_upgrades_declared_values_and_records_the_e
             "lookup_attempts": [{"provider": "fixture", "method": "exact", "query": {}, "result_count": 1,
                                  "outcome": "success"}],
             "curator_message": None, "explanation": "Matched the stored identity.",
-        })
+        }))
         items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
 
     result = materialize_validator_results_into_envelope(envelope, metadata, items)
@@ -1299,7 +1301,7 @@ def test_an_undeclared_object_root_with_a_mention_is_not_a_resolvable_value():
     for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
         request = build_domain_validation_request(match).request
         resolved = request.validator_binding_id == "fixture.annotation_type"
-        result = DomainValidatorResultBase.model_validate({
+        result = result_with_history_receipt(DomainValidatorResultBase.model_validate({
             "status": "resolved" if resolved else "unresolved", "request_id": request.request_id,
             "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
             "target": request.target, "resolved_values": {"term_name": "manually_curated"} if resolved else {},
@@ -1307,7 +1309,7 @@ def test_an_undeclared_object_root_with_a_mention_is_not_a_resolvable_value():
             "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1,
                                  "outcome": "success" if resolved else "not_found"}],
             "curator_message": None, "explanation": "e",
-        })
+        }))
         items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
 
     for ordered in (items, list(reversed(items))):
@@ -1409,7 +1411,7 @@ def test_a_value_that_cannot_be_written_becomes_a_finding_and_the_rest_are_writt
     items = []
     for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
         request = build_domain_validation_request(match).request
-        result = DomainValidatorResultBase.model_validate({
+        result = result_with_history_receipt(DomainValidatorResultBase.model_validate({
             "status": "unresolved", "request_id": request.request_id,
             "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
             "target": request.target, "resolved_values": {}, "resolved_objects": [],
@@ -1417,7 +1419,7 @@ def test_a_value_that_cannot_be_written_becomes_a_finding_and_the_rest_are_writt
             "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 0,
                                  "outcome": "not_found"}],
             "curator_message": None, "explanation": "e",
-        })
+        }))
         items.append(ValidatorResultMaterializationInput(match=match, request=request, result=result))
 
     result = materialize_validator_results_into_envelope(envelope, metadata, items)
@@ -1893,8 +1895,15 @@ def test_incomplete_judgment_roundtrips_without_publishing_resolved_values():
         assert value["lookup_outcome"] == "invalid_schema"
     finding = next(f for f in restored.validation_findings if f.code == "domain_pack.validator_output_incomplete")
     assert finding.status.value == "open"
-    saved = DomainValidatorResultBase.model_validate(finding.details["validation_result"])
-    assert saved.status == "resolved"
+    summary = finding.details["validation_result"]
+    assert summary["status"] == "resolved"
+    assert summary["output_issues"] == item.result.output_issues
+    original_ref = finding.details["validation_result_ref"]
+    descriptor = restored.validator_results[original_ref]
+    assert descriptor["schema_version"] == 2
+    assert descriptor["history_ref"] == item.result._history_ref
+    # The complete original now lives in the exact history reader, not this finding.
+    saved = DomainValidatorResultBase.model_validate_json(item.result.model_dump_json())
     assert not saved.is_complete
     assert saved.resolved_values == {"curie": "ONT:1", "name": "epidermis"}
     assert saved.explanation == item.result.explanation

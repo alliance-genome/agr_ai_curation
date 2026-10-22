@@ -324,6 +324,16 @@ def _persist(
     trace_id="trace-inline-1",
     builder_finalization=None,
 ):
+    if "extracted_objects" in payload and "validation_history" not in payload.get("metadata", {}):
+        from src.lib.validation_history.runtime import capture_extraction
+        from src.lib.validation_history.store import HistoryScope
+        from src.schemas.domain_envelope import DomainEnvelope
+        captured = capture_extraction(
+            scope=HistoryScope("test_pdf_owner_inline_extraction", str(document_id), origin_session_id),
+            producer_id=payload["envelope_id"], typed=copy.deepcopy(payload),
+            envelope=DomainEnvelope.model_validate(payload), provenance={"test": "inline"})
+        payload.clear()
+        payload.update(captured.model_dump(mode="json"))
     return persist_inline_validated_extraction_result(
         payload_json=payload,
         document_id=document_id,
@@ -333,7 +343,7 @@ def _persist(
         source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id=origin_session_id,
         trace_id=trace_id,
-        user_id="user-inline-1",
+        user_id="test_pdf_owner_inline_extraction",
         builder_finalization=builder_finalization or dict(_BUILDER_FINALIZATION),
         db=db_session,
     )

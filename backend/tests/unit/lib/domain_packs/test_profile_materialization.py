@@ -3,6 +3,8 @@
 from dataclasses import replace
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
@@ -11,6 +13,10 @@ from src.lib.domain_packs.validator_dispatch import _apply_validator_evidence_up
 from src.lib.domain_packs.profile_validation import compile_profile_validation
 from src.schemas.domain_validator import DomainValidatorResultBase
 from .test_profile_validation import example as example, envelope, resolve
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 def prepared(example, *, attributes=None, per_element=False, active_group_ids=()):
@@ -48,6 +54,8 @@ def results(source, context, values, *, status="resolved", objects=None):
                               "outcome": "not_found" if status == "unresolved" else "success"}],
             curator_message=None, explanation="Fixture lookup",
         )
+        from tests.validation_history_unit_support import result_with_history_receipt
+        result_with_history_receipt(result)
         items.append(ValidatorResultMaterializationInput(match, request, result))
     return items
 
@@ -79,8 +87,9 @@ def test_complete_commit_preserves_original_and_audits_exact_contract(example, m
     assert finding.details["linkml_alignment"] == "not_assessed"
     assert len(output.envelope.validator_results) == 1
     ref = finding.details["validation_result_ref"]
-    assert output.envelope.validator_results[ref]["result"] == items[0].result.model_dump(mode="json")
-    assert output.envelope.validator_results[ref]["request"] == items[0].request.model_dump(mode="json")
+    assert output.envelope.validator_results[ref]["history_ref"] == items[0].result._history_ref
+    assert output.envelope.validator_results[ref]["result"]["status"] == items[0].result.status
+    assert "request" not in output.envelope.validator_results[ref]
 
 
 

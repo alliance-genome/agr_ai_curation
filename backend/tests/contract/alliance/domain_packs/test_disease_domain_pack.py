@@ -10,6 +10,9 @@ from typing import Any
 
 import pytest
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history, result_with_history_receipt
+
+
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
@@ -66,6 +69,10 @@ from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _iter_linkml_provider_refs,
     _load_linkml_index,
 )
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 DISEASE_PACK_DIR = REPO_ROOT / "packages" / "alliance" / "domain_packs" / "disease"
 FORBIDDEN_LEGACY_COLLECTIONS = {
@@ -795,7 +802,7 @@ def test_disease_relation_lookup_projects_sibling_expected_result_fields():
             ValidatorResultMaterializationInput(
                 match=matches[0],
                 request=request,
-                result=DomainValidatorResultBase(
+                result=result_with_history_receipt(DomainValidatorResultBase(
                     status="resolved",
                     request_id=request.request_id,
                     validator_binding_id=request.validator_binding_id,
@@ -823,7 +830,7 @@ def test_disease_relation_lookup_projects_sibling_expected_result_fields():
                     ],
                     curator_message="Resolved disease relation.",
                     explanation="Resolved relation vocabulary from fixture.",
-                ),
+                )),
             )
         ],
     )
@@ -909,7 +916,7 @@ def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
             ValidatorResultMaterializationInput(
                 match=matches[0],
                 request=request,
-                result=DomainValidatorResultBase(
+                result=result_with_history_receipt(DomainValidatorResultBase(
                     status="resolved",
                     request_id=request.request_id,
                     validator_binding_id=request.validator_binding_id,
@@ -937,7 +944,7 @@ def test_disease_condition_relation_lookup_projects_indexed_sibling_fields():
                     ],
                     curator_message="Resolved condition relation.",
                     explanation="Resolved condition relation from fixture.",
-                ),
+                )),
             )
         ],
     )
@@ -1391,7 +1398,7 @@ def test_two_relations_fan_out_per_relation_and_per_condition():
 
 
 def _validator_result(request, *, status: str, resolved_values: dict[str, Any], outcome: str):
-    return DomainValidatorResultBase(
+    return result_with_history_receipt(DomainValidatorResultBase(
         status=status,
         request_id=request.request_id,
         validator_binding_id=request.validator_binding_id,
@@ -1412,7 +1419,7 @@ def _validator_result(request, *, status: str, resolved_values: dict[str, Any], 
         ],
         curator_message="Fixture decision.",
         explanation="Fixture explanation.",
-    )
+    ))
 
 
 def _materialize(envelope: DomainEnvelope, binding_id: str, decide) -> dict[str, Any]:
@@ -2157,6 +2164,7 @@ def test_a_curator_removes_the_lone_disease_evidence_code():
     envelope = _override_envelope()
     envelope.extracted_objects[0].payload["evidence_code_curies"] = _staged_list(["IMP"], ("curie",))
     [element] = envelope.extracted_objects[0].payload["evidence_code_curies"]
+    envelope.extracted_objects[0].metadata["validation_history"] = {"elements": {"evidence_code_curies": ["evidence-1"]}}
 
     result = apply_curator_field_patch(
         envelope, _disease_pack(),

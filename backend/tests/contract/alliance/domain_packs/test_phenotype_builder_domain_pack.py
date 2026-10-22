@@ -16,6 +16,8 @@ export/submission adapters and is intentionally left untouched (envelope legacy 
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -911,7 +913,7 @@ def _term_materialization_inputs(envelope: Any, *, status: str, lookup_outcome: 
         request = build_domain_validation_request(match).request
         assert request is not None
         resolved = status == "resolved"
-        result = DomainValidatorResultBase.model_validate(
+        result = result_with_history_receipt(DomainValidatorResultBase.model_validate(
             {
                 "status": status,
                 "request_id": request.request_id,
@@ -938,7 +940,7 @@ def _term_materialization_inputs(envelope: Any, *, status: str, lookup_outcome: 
                 ],
                 "explanation": "Fixture ontology decision.",
             }
-        )
+        ))
         items.append(
             ValidatorResultMaterializationInput(match=match, request=request, result=result)
         )

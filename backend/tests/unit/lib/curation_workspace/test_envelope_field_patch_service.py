@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -43,6 +44,7 @@ from src.lib.domain_envelopes.persistence import (
 )
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
@@ -61,6 +63,8 @@ from src.schemas.domain_envelope import (
     HistoryEventKind,
 )
 
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 @compiles(PostgresUUID, "sqlite")
 def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
@@ -72,7 +76,10 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
     return "JSON"
 
 
+
 TEST_TABLES = [
+    ValidationBody.__table__,
+    ValidationCheckpoint.__table__,
     User.__table__,
     PDFDocument.__table__,
     CurationReviewSession.__table__,
@@ -107,6 +114,8 @@ def db_session():
         table.indexes.clear()
         for column in table.columns:
             restored_defaults.append((column, column.server_default))
+            if table.name == "validation_checkpoints" and column.name == "created_at":
+                continue
             if table.name.startswith("domain_") and column.name in {
                 "created_at",
                 "updated_at",

@@ -9,6 +9,8 @@ reference of its type. Only objects holding an object_ref to the target change.
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 from pathlib import Path
 from typing import Any
 
@@ -198,7 +200,7 @@ def _materialize(
     match = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])[0]
     request = build_domain_validation_request(match).request
     assert request is not None
-    result = DomainValidatorResultBase.model_validate(
+    result = result_with_history_receipt(DomainValidatorResultBase.model_validate(
         {
             "request_id": request.request_id,
             "validator_binding_id": request.validator_binding_id,
@@ -213,7 +215,7 @@ def _materialize(
             "explanation": "Fixture maker decision.",
             **result_fields,
         }
-    )
+    ))
     return materialize_validator_results_into_envelope(
         envelope,
         metadata,

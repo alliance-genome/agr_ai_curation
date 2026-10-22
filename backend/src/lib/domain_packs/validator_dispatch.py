@@ -312,6 +312,7 @@ class _ValidatorBatchAgentRunOutput:
 def dispatch_validator_jobs(
     jobs: list[ValidatorDispatchJob],
     *,
+    history_binding,
     runner: DomainValidatorAgentRunner | None = None,
     batch_runner: DomainValidatorBatchAgentRunner | None = None,
     event_emitter: ValidatorDispatchEventEmitter | None = None,
@@ -369,6 +370,9 @@ def dispatch_validator_jobs(
             executable_jobs.append(job)
             ordered_units.append(job)
             continue
+        from uuid import uuid4
+        from src.lib.validation_history.runtime import record_preflight
+        record_preflight(history_binding, job, validator_result, operation_id="preflight:" + str(uuid4()))
         ordered_units.append(
             ValidatorResultMaterializationInput(
                 match=job.match,
@@ -388,6 +392,7 @@ def dispatch_validator_jobs(
         batch_runner=agent_batch_runner,
         event_emitter=event_emitter,
         max_parallel_validators=max_parallel_validators,
+        history_binding=history_binding,
     )
     LOGGER.info(
         "Executed %s prepared validator dispatch job(s) in %.3fs",
@@ -457,6 +462,8 @@ def dispatch_active_validator_bindings(
 ) -> ActiveValidatorDispatchResult:
     """Dispatch active validator bindings and append result findings."""
 
+    from src.lib.validation_history.runtime import bind_artifact
+    history_binding = bind_artifact(envelope, runtime_context)
     authenticated_groups = _normalized_authenticated_groups(runtime_context)
     if profile_context is None:
         from .profile_validation import resolve_envelope_profile_validation
@@ -566,6 +573,7 @@ def dispatch_active_validator_bindings(
         pending_findings.extend(selector_findings)
         job_dispatch = dispatch_validator_jobs(
             jobs,
+            history_binding=history_binding,
             runner=runner,
             batch_runner=batch_runner,
             event_emitter=event_emitter,
@@ -610,7 +618,9 @@ def dispatch_active_validator_bindings(
                 len(materialization_items),
                 time.monotonic() - materialization_started_at,
             )
-            updated_envelope = materialization_result.envelope
+            from src.lib.validation_history.runtime import capture_derived_objects
+            updated_envelope = capture_derived_objects(history_binding, materialization_result.envelope,
+                [item.result for item in materialization_items], previous_envelope=updated_envelope)
             appended_findings.extend(materialization_result.appended_findings)
 
     if pending_findings:
@@ -631,6 +641,17 @@ def dispatch_active_validator_bindings(
             update={"metadata": updated_metadata}
         )
 
+    from src.lib.validation_history.store import record_scheduling
+    from uuid import uuid4
+    if suppressed_bindings:
+        record_scheduling(history_binding.scope, history_binding.artifact_id,
+            operation_id="flow-scheduling:" + str(uuid4()), outcome="flow_skipped",
+            details={"suppressed_bindings": suppressed_bindings})
+    if not validator_results:
+        record_scheduling(history_binding.scope, history_binding.artifact_id,
+            operation_id="empty-scheduling:" + str(uuid4()),
+            outcome="zero_item" if not envelope.extracted_objects else "missing_input" if pending_findings else "no_validator",
+            details={"matched_binding_count": len(eligible_matches)})
     return ActiveValidatorDispatchResult(
         envelope=updated_envelope,
         registry=validation_registry,
@@ -1146,6 +1167,7 @@ def _replace_evidence_records_in_mapping(
 def _run_validator_jobs(
     jobs: list[ValidatorDispatchJob],
     *,
+    history_binding,
     agent_runner: DomainValidatorAgentRunner,
     batch_runner: DomainValidatorBatchAgentRunner,
     event_emitter: ValidatorDispatchEventEmitter | None,
@@ -1196,6 +1218,7 @@ def _run_validator_jobs(
             result = _execute_validator_run_group(
                 run_group,
                 grouped_jobs=grouped_jobs,
+                history_binding=history_binding,
                 agent_runner=agent_runner,
                 batch_runner=batch_runner,
                 event_emitter=event_emitter,
@@ -1217,6 +1240,7 @@ def _run_validator_jobs(
                     _execute_validator_run_group,
                     run_group,
                     grouped_jobs=grouped_jobs,
+                    history_binding=history_binding,
                     agent_runner=agent_runner,
                     batch_runner=batch_runner,
                     event_emitter=event_emitter,
@@ -1349,7 +1373,29 @@ def _batch_group_key_for_deduped_job_group(group: list[ValidatorDispatchJob]) ->
     )
 
 
-def _execute_validator_run_group(
+def _execute_validator_run_group(run_group, *, grouped_jobs, agent_runner, batch_runner, event_emitter, history_binding):
+    from uuid import uuid4
+    from src.lib.validation_history.runtime import begin_jobs, complete_jobs, fail_jobs, ACTIVE_VALIDATION_EXECUTION
+    jobs = [job for index in run_group.dedupe_group_indexes for job in grouped_jobs[index]]
+    invocation = begin_jobs(history_binding, jobs, operation_id=str(uuid4()), receipt={
+        "batch": run_group.batch_key is not None,
+        "agent": jobs[0].request.validator_agent.model_dump(mode="json"),
+    })
+    token = ACTIVE_VALIDATION_EXECUTION.set((history_binding, invocation))
+    try:
+        result = _execute_validator_run_group_uncaptured(run_group, grouped_jobs=grouped_jobs,
+            agent_runner=agent_runner, batch_runner=batch_runner, event_emitter=event_emitter)
+    except BaseException as error:
+        fail_jobs(history_binding, invocation, error)
+        raise
+    finally:
+        ACTIVE_VALIDATION_EXECUTION.reset(token)
+    complete_jobs(history_binding, invocation, [answer for index in run_group.dedupe_group_indexes
+        for answer in result.dedupe_group_results[index]])
+    return result
+
+
+def _execute_validator_run_group_uncaptured(
     run_group: _ValidatorRunGroup,
     *,
     grouped_jobs: list[list[ValidatorDispatchJob]],
@@ -1889,6 +1935,8 @@ def run_package_scoped_validator_agent(
     sentry_span = sentry_span_context_manager.__enter__()
     run_failed = False
     try:
+        from src.lib.validation_history.runtime import record_runner_receipt
+        record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
         run_failed = True
@@ -2158,6 +2206,8 @@ def run_package_scoped_validator_agent_batch(
     sentry_span = sentry_span_context_manager.__enter__()
     run_failed = False
     try:
+        from src.lib.validation_history.runtime import record_runner_receipt
+        record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
         run_failed = True
@@ -3527,7 +3577,7 @@ def _unresolved_result_for_dispatch_problem(
     reason: str,
     explanation: str,
 ) -> DomainValidatorResultBase:
-    return DomainValidatorResultBase(
+    result = DomainValidatorResultBase(
         status="unresolved",
         request_id=request.request_id,
         validator_binding_id=request.validator_binding_id,
@@ -3553,6 +3603,9 @@ def _unresolved_result_for_dispatch_problem(
         curator_message=explanation,
         explanation=explanation,
     )
+
+    result._execution_failure = reason
+    return result
 
 
 def preflight_unresolved_validator_result(

@@ -166,7 +166,7 @@ def _compute_candidate_validation(
     field_keys: Sequence[str] | None = None,
 ) -> CandidateValidationComputation:
     require_candidate_conformance(db, candidate)
-    _ensure_manual_profile_envelope(db, candidate)
+    _ensure_manual_profile_envelope(db, candidate, runtime_context=runtime_context)
     profile_cache_current = _profile_validation_cache_is_current(db, candidate, runtime_context)
     requested_field_keys = set(field_keys or [])
     draft_fields = [
@@ -322,7 +322,7 @@ def _compute_candidate_validation(
     )
 
 
-def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate) -> None:
+def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate, *, runtime_context: ValidatorRuntimeContext | None) -> None:
     """Give manual profile records the normal durable validation/patch surface.
 
     The record is explicitly curator-created using a saved output contract, not
@@ -354,6 +354,16 @@ def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate) -
             "extraction_metadata": {"provenance": {"produced_by": receipt.agent_key,
                 "execution_receipt": receipt.model_dump(mode="json"), "generic_profile_ref": pin,
                 "record_source": "curator_manual", "candidate_id": str(candidate.id)}}},
+    )
+    from src.lib.validation_history.runtime import capture_extraction
+    from src.lib.validation_history.store import HistoryScope
+    if runtime_context is None:
+        raise ValueError("Curator-authored history requires an authenticated source context")
+    envelope = capture_extraction(
+        scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, str(candidate.session_id)),
+        producer_id=f"manual:{candidate.id}", typed=envelope.model_dump(mode="json"), envelope=envelope,
+        provenance={"source": "curator_manual", "execution_receipt": receipt.model_dump(mode="json")},
+        subject_kind="curator_authored",
     )
     checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
         project_key=envelope.domain_pack_id, envelope=envelope, expected_revision=0,

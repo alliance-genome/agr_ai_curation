@@ -111,7 +111,7 @@ def _sample_persisted_domain_envelope_payload() -> dict:
         ],
         "validation_findings": [],
         "history": [],
-        "metadata": {},
+        "metadata": {"validation_history": {"artifact_id": "unit-artifact", "session_id": "unit-run"}},
     }
 
 
@@ -849,7 +849,7 @@ def test_persist_inline_validated_extraction_result_reloads_existing_idempotent_
         conversation_summary=None,
         payload_json=_sample_persisted_domain_envelope_payload(),
         idempotency_key="inline-extraction:existing",
-        payload_hash="existing-hash",
+        payload_hash=canonical_extraction_payload_hash(module._validated_inline_domain_envelope_payload(_sample_persisted_domain_envelope_payload())),
         extraction_metadata={"persistence_phase": "inline_validated_extraction"},
         created_at=datetime.now(timezone.utc),
     )
@@ -964,7 +964,7 @@ def test_persist_inline_validated_extraction_result_reloads_after_insert_conflic
         conversation_summary=None,
         payload_json=_sample_persisted_domain_envelope_payload(),
         idempotency_key="inline-extraction:race-winner",
-        payload_hash="race-winner-hash",
+        payload_hash=canonical_extraction_payload_hash(module._validated_inline_domain_envelope_payload(_sample_persisted_domain_envelope_payload())),
         extraction_metadata={"persistence_phase": "inline_validated_extraction"},
         created_at=datetime.now(timezone.utc),
     )
@@ -1383,3 +1383,11 @@ def test_list_extraction_results_applies_filters_and_ordering(monkeypatch):
     assert results[1].metadata == {"tool_name": "ask_disease_specialist"}
     assert session.execute_calls == 1
     assert [field.field_name for field in session.last_statement.order_fields] == ["created_at", "id"]
+
+
+@pytest.fixture(autouse=True)
+def isolated_history_reference_authorization(monkeypatch):
+    # Ownership/reference integrity is exercised against PostgreSQL; this file
+    # isolates extraction-result persistence and uses a fake database session.
+    from src.lib.validation_history import runtime
+    monkeypatch.setattr(runtime, "require_captured_envelope", lambda *args, **kwargs: None)

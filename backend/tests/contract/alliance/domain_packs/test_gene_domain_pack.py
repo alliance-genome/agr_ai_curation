@@ -10,6 +10,8 @@ export/submission adapters and is intentionally left untouched (envelope legacy 
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -253,7 +255,7 @@ def test_gene_validator_resolution_projects_materialized_fields():
             ValidatorResultMaterializationInput(
                 match=matches[0],
                 request=request,
-                result=DomainValidatorResultBase(
+                result=result_with_history_receipt(DomainValidatorResultBase(
                     status="resolved",
                     request_id=request.request_id,
                     validator_binding_id=request.validator_binding_id,
@@ -285,7 +287,7 @@ def test_gene_validator_resolution_projects_materialized_fields():
                     ],
                     curator_message="Resolved daf-16.",
                     explanation="Resolved by gene validation fixture.",
-                ),
+                )),
             )
         ],
     )
@@ -586,7 +588,7 @@ def _gene_validator_result(envelope: DomainEnvelope, **result_fields: Any):
     )
     request = build_domain_validation_request(match).request
     assert request is not None
-    result = DomainValidatorResultBase(
+    result = result_with_history_receipt(DomainValidatorResultBase(
         request_id=request.request_id,
         validator_binding_id=request.validator_binding_id,
         validator_agent=request.validator_agent,
@@ -598,7 +600,7 @@ def _gene_validator_result(envelope: DomainEnvelope, **result_fields: Any):
             "lookup_attempts": [],
             **result_fields,
         },
-    )
+    ))
     return materialize_validator_results_into_envelope(
         envelope,
         pack.metadata,

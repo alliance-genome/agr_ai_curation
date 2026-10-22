@@ -585,9 +585,13 @@ class DomainEnvelopeTraceAnalyzer:
                     "target": _short_value(result.get("target")),
                     "source_envelope_revision": _short_value(snapshot.get("source_envelope_revision")),
                     "recorded_order": _short_value(snapshot.get("recorded_order")),
-                    "output_complete": not bool(result["output_issues"]) if isinstance(result.get("output_issues"), list) else None,
-                    "original_available": True,
-                    "follow_up_question_count": len(result.get("unresolved_questions") or []),
+                    "output_complete": snapshot.get("output_complete", not bool(result["output_issues"]) if isinstance(result.get("output_issues"), list) else None),
+                    "original_available": snapshot.get("schema_version", 1) == 1,
+                    "body_availability": "external" if snapshot.get("schema_version") == 2 else "inline",
+                    "body_available_via_authorized_read": snapshot.get("original_available", True),
+                    "history_ref": _short_value(snapshot.get("history_ref")),
+                    "review_status": snapshot.get("review_status", "historical_unknown"),
+                    "follow_up_question_count": snapshot.get("follow_up_question_count", len(result.get("unresolved_questions") or [])),
                     "unresolved_questions": _short_value(result.get("unresolved_questions", [])),
                     "source_path": source_path + ".validator_results",
                 },
@@ -735,7 +739,9 @@ class DomainEnvelopeTraceAnalyzer:
             "object_type": object_type,
             "field_path": field_path,
             "validation_result_ref": _short_value(original_ref),
-            "original_available": isinstance(original_ref, str) and original_refs is not None and original_ref in original_refs,
+            "original_available": (isinstance(original_ref, str) and original_refs is not None
+                and original_ref in original_refs and original_refs[original_ref].get("schema_version", 1) == 1),
+            "history_ref": _short_value((original_refs or {}).get(original_ref, {}).get("history_ref")) if isinstance(original_ref, str) else None,
             "source_path": source_path,
         }
         cls._add_detail(

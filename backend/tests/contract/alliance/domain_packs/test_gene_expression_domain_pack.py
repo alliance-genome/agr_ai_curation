@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 import copy
 import hashlib
 import sys
@@ -276,7 +278,7 @@ def _validator_result(
     candidates: list[dict[str, Any]] | None = None,
     curator_message: str | None = None,
 ) -> DomainValidatorResultBase:
-    return DomainValidatorResultBase(
+    return result_with_history_receipt(DomainValidatorResultBase(
         status=status,
         request_id=request.request_id,
         validator_binding_id=request.validator_binding_id,
@@ -303,7 +305,7 @@ def _validator_result(
         ],
         curator_message=curator_message or f"Fixture {status} ontology result.",
         explanation="Fixture-backed validator result for gene-expression contract tests.",
-    )
+    ))
 
 
 def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():

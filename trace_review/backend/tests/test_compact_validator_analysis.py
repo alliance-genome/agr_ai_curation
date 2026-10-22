@@ -136,3 +136,21 @@ def test_original_validator_output_completeness_is_structural_and_missing_is_unk
         summary = DomainEnvelopeTraceAnalyzer.analyze_payload({"envelope_id": "env", "objects": [],
             "validator_results": {"ref": {"result": {"status": "resolved", "output_issues": issues}}}})
         assert summary["validator_results"][0]["output_complete"] is complete
+
+
+def test_external_history_reference_is_visible_without_claiming_inline_body():
+    history = {"artifact_id": "artifact-1", "fact_id": "fact-1", "body_sha256": "body-hash",
+               "attempt_id": "attempt-1", "execution_state": "completed", "sequence": 9}
+    envelope = {"envelope_id": "env", "objects": [], "validator_results": {
+        "validation-fact:fact-1": {"schema_version": 2, "recorded_order": 9,
+            "history_ref": history, "original_available": True, "output_complete": True,
+            "follow_up_question_count": 1, "review_status": "pending",
+            "result": {"status": "resolved", "validator_binding_id": "binding"}}}}
+    summary = DomainEnvelopeTraceAnalyzer.analyze_payload(envelope)
+    row = summary["validator_results"][0]
+    assert row["original_available"] is False
+    assert row["body_availability"] == "external"
+    assert row["body_available_via_authorized_read"] is True
+    assert row["review_status"] == "pending"
+    assert row["history_ref"] == history
+    assert row["follow_up_question_count"] == 1
