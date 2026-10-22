@@ -627,6 +627,12 @@ def _projection_plan_from_tool_payload(
     return plan.model_copy(update={"format": output_format})
 
 
+def _is_intentional_empty_projection(projection: FlowOutputProjectionResult) -> bool:
+    accounting = projection.export_accounting
+    return bool(accounting and accounting.candidate_row_count > 0
+                and accounting.rows_removed_by_filters > 0)
+
+
 def _field_label(bundle: FlowOutputArtifactBundle, field_ref: str) -> str:
     for field in bundle.field_catalog:
         if field.ref == field_ref:
@@ -1462,7 +1468,7 @@ def build_output_formatter_tools(
         contents: list[str] = []
         summaries: list[dict[str, Any]] = []
         total_rows = 0
-        has_filtered_source = False
+        all_sections_filtered_from_source = True
         total_chars = 0
         for index, (heading, plan) in enumerate(plans, 1):
             try:
@@ -1471,11 +1477,7 @@ def build_output_formatter_tools(
                 raise
             except Exception as exc:
                 raise ValueError(f"Section {index}: {exc}") from exc
-            has_filtered_source |= bool(
-                projection.export_accounting
-                and projection.export_accounting.candidate_row_count > 0
-                and projection.export_accounting.rows_removed_by_filters > 0
-            )
+            all_sections_filtered_from_source &= _is_intentional_empty_projection(projection)
             total_rows += projection.total_count
             row_limit = get_flow_projection_max_rows()
             if total_rows > row_limit:
@@ -1495,7 +1497,7 @@ def build_output_formatter_tools(
                 )
             contents.append(content)
             summaries.append({"section": index, "heading": heading, **_projection_summary(projection)})
-        if not total_rows and not has_filtered_source:
+        if not total_rows and not all_sections_filtered_from_source:
             raise ValueError("Report matched no saved rows; inspect the bundle or call formatter_cannot_complete.")
         return "\n\n".join(contents), {
             "section_count": len(plans), "total_count": total_rows, "sections": summaries,
@@ -2088,9 +2090,7 @@ def build_output_formatter_tools(
                     )
                 projection = finalize_output_projection(bundle, plan)
                 if (projection.total_count < 1 and locked_plan is None
-                        and not (projection.export_accounting is not None
-                                 and projection.export_accounting.candidate_row_count > 0
-                                 and projection.export_accounting.rows_removed_by_filters > 0)):
+                        and not _is_intentional_empty_projection(projection)):
                     return _tool_json(
                         {
                             "status": "invalid",
@@ -2251,9 +2251,7 @@ def build_output_formatter_tools(
                         )
                     projection = finalize_output_projection(bundle, plan)
                     if (projection.total_count < 1 and locked_plan is None
-                        and not (projection.export_accounting is not None
-                                 and projection.export_accounting.candidate_row_count > 0
-                                 and projection.export_accounting.rows_removed_by_filters > 0)):
+                        and not _is_intentional_empty_projection(projection)):
                         return _tool_json(
                             {
                                 "status": "invalid",

@@ -367,3 +367,39 @@ async def test_multisection_chat_all_filtered_is_intentional_empty():
     )
     assert out["status"] == "ok", out
     assert len(delivered) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_report_requires_each_section_to_be_intentionally_filtered():
+    delivered = []
+
+    async def deliver(content, receipt):
+        delivered.append(content)
+        return receipt
+
+    tools = build_output_formatter_tools(
+        bundle=bundle(5, 5),
+        output_format="chat",
+        formatter_agent_id="chat_output",
+        deliver_chat_output=deliver,
+    )
+    tool = next(t for t in tools if t.name == "finalize_chat_output")
+    missing = plan("chat", filters=[]).model_dump(mode="json")
+    missing["overrides"] = [
+        {"row_ref": f"object#{i}", "exclude": True} for i in range(1, 6)
+    ]
+    report = {
+        "sections": [
+            {"heading": "Filtered", "plan": plan("chat").model_dump(mode="json")},
+            {"heading": "Missing", "plan": missing},
+        ]
+    }
+    out = json.loads(
+        await tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name),
+            json.dumps({"report_json": json.dumps(report)}),
+        )
+    )
+    assert out["status"] == "invalid"
+    assert "Report matched no saved rows" in str(out)
+    assert delivered == []

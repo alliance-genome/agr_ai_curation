@@ -682,7 +682,8 @@ async def test_measured_projection_persists_written_count_and_complete_diagnosti
         field_catalog=[FlowOutputField(ref='object.attribute.name', label='Name', row_source='object', value_type='string')],
         warnings=['full warning Ω' * 100])
     plan = FlowOutputProjectionPlan.model_validate({'format':'csv', 'row_source':'object', 'row_strategy':'wide_union',
-        'columns':[{'key':'name', 'field_ref':'object.attribute.name'}], 'max_rows':2})
+        'columns':[{'key':'name', 'field_ref':'object.attribute.name'}], 'max_rows':2,
+        'filters':[{'field_ref':'object.attribute.name','op':'ne','value':1e16}]})
     projection = finalize_output_projection(source, plan)
     try:
         await file_output_tools.save_projected_file_output('csv', projection, 'counts', 'csv_formatter')
@@ -696,7 +697,11 @@ async def test_measured_projection_persists_written_count_and_complete_diagnosti
         from src.lib.export_accounting import diagnostics_sha256
         from src.lib.openai_agents import export_details_tool
         from unittest.mock import MagicMock
-        old_digest = diagnostics_sha256(json.loads(saved.file_metadata['export_diagnostics']))
+        from src.lib.export_accounting import export_details_reference
+        assert isinstance(saved.file_metadata['export_diagnostics'], str)
+        assert '1e+16' in saved.file_metadata['export_diagnostics']
+        old_digest = export_details_reference(str(saved.id), projection)['read']['diagnostics_sha256']
+        assert old_digest == diagnostics_sha256(json.loads(saved.file_metadata['export_diagnostics']))
         plan.max_rows = 1
         replacement = finalize_output_projection(source, plan)
         await file_output_tools.save_projected_file_output('csv', replacement, 'counts', 'csv_formatter')
