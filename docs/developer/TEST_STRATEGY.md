@@ -393,3 +393,11 @@ link validation:
 ```
 
 The harness includes a Markdown link check and a required-doc presence check.
+
+### Saved-flow catalog evolution
+
+Before releasing catalog removals, renames, or binding changes, run the
+[saved-flow catalog regression gate](guides/SAVED_FLOW_CATALOG_GATE.md).
+It is included in Backend Unit Tests and uses immutable historical selection
+fixtures, explicit repair checks, and API/strict-validation/execution-preparation
+coverage without live model calls.

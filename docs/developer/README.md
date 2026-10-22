@@ -50,6 +50,7 @@ Start here for new developers:
 | [AGENT_CONTEXT_CONTINUATION.md](guides/AGENT_CONTEXT_CONTINUATION.md) | Native Responses compaction, durable working context, coverage and recovery limitations |
 | [CHAT_OUTPUT_REPORTS.md](guides/CHAT_OUTPUT_REPORTS.md) | Program-rendered chat reports with independent source-backed tables, validation and delivery limits |
 | [COMPACT_VALIDATOR_DECISIONS.md](guides/COMPACT_VALIDATOR_DECISIONS.md) | Model-owned scientific decisions, runtime-owned source facts and canonical validator assembly |
+| [SAVED_FLOW_CATALOG_GATE.md](guides/SAVED_FLOW_CATALOG_GATE.md) | Historical saved-flow fixtures and catalog-change regression gate |
 | [GENERIC_PROFILE_REVISIONS.md](guides/GENERIC_PROFILE_REVISIONS.md) | Closed generic profile contracts, immutable executable custom-agent revisions, output transitions, authorization, and migration |
 | [GENE_EXPRESSION_0_7_0.md](guides/GENE_EXPRESSION_0_7_0.md) | Gene Expression 0.7.0 release contract: LinkML pin, fixtures, validation behavior, export handoff, known limitations, and non-Alliance domain-pack pattern |
 | [TEST_STRATEGY.md](TEST_STRATEGY.md) | Docker-first test commands plus domain-envelope contract, LinkML, live DB, fixture, and release-gate expectations |

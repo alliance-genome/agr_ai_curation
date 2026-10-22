@@ -9,6 +9,7 @@ When adding a new invariant guard, add it here in the same change as the test.
 
 | Guard ID | Guard name | Protects | Trace | Test module / guard file |
 |---|---|---|---|---|
+| F1 | Saved-flow catalog evolution | Fixed historical selections, explicit upgrade wiring, preserved flow structure, and executable preparation across catalog changes. | ALL-1053 / KANBAN-1640 | `backend/tests/unit/lib/flows/test_catalog_compatibility_gate.py` |
 | B1 | Synthetic v2 benchmark replacement canary | Signed authorization, frozen owned inputs, PostgreSQL worker isolation, result/event replay, explicit rerun/cancel/delete and immutable handoff compose without private services or paid providers. | ALL-996 / wave-86.6 | `backend/tests/integration/persistence/test_benchmark_replacement_canary.py` |
 | B2 | Explicit snapshot delivery recovery | Original immutable bytes/identity, nonblocking cross-process delivery lock, lost-ack recovery and no automatic replay. | ALL-1127 / failed DNS delivery | `backend/tests/integration/persistence/test_benchmark_handoff_retry.py` |
 | B3 | Compatible provider operation-owned HTTP lifetime | Real parallel validator loops never borrow the caller's pooled connections; provider policy, route telemetry and same-loop cleanup survive success and failure. | ALL-1152 / worker cross-loop APIConnectionError | `backend/tests/unit/lib/openai_agents/test_compatible_client_lifetime.py` |
