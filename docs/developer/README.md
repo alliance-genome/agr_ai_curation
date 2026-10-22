@@ -48,6 +48,7 @@ Start here for new developers:
 | [DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md) | Forward-only development policy: remove fallbacks, avoid compatibility shims, prefer explicit migrations |
 | [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide for repo contributors -- package loading, database runtime, loaders, deployment |
 | [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) | Domain-envelope architecture: source of truth, field paths, structural checks, validator dispatch, lookup attempts, curator review, materialization, export/submission, and Agent Studio metadata |
+| [VALIDATION_HISTORY.md](guides/VALIDATION_HISTORY.md) | Immutable validation baseline/attempt contracts, retirement, exact readers, and coordinated cutover |
 | [AGENT_HISTORY_AND_CONTEXT.md](guides/AGENT_HISTORY_AND_CONTEXT.md) | Exact retained history, versioned object reads, model context checkpoints and cost measurements |
 | [AGENT_CONTEXT_CONTINUATION.md](guides/AGENT_CONTEXT_CONTINUATION.md) | Native Responses compaction, durable working context, coverage and recovery limitations |
 | [CHAT_OUTPUT_REPORTS.md](guides/CHAT_OUTPUT_REPORTS.md) | Program-rendered chat reports with independent source-backed tables, validation and delivery limits |

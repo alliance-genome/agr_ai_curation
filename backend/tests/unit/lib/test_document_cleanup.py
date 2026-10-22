@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
+
+
+@pytest.fixture(autouse=True)
+def isolated_history_retirement(monkeypatch):
+    # This suite tests projection cleanup SQL ordering. Real retirement is tested
+    # with PostgreSQL, including rollback and owner-only historical reads.
+    monkeypatch.setattr("src.lib.validation_history.store.retire_document_history", lambda *args: 0)
 
 
 class _ScalarsResult:

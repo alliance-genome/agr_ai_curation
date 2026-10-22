@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 import copy
 import sys
 from pathlib import Path
 
 import pytest
+
 
 from src.lib.curation_workspace import pipeline as workspace_pipeline
 from src.lib.curation_workspace.adapter_registry import CurationAdapterRegistry
@@ -45,6 +48,10 @@ from agr_ai_curation_alliance.domain_packs.go.legacy import (  # noqa: E402
 from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     load_alliance_domain_pack_registry,
 )
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 GO_PACK_DIR = REPO_ROOT / "packages" / "alliance" / "domain_packs" / "go"

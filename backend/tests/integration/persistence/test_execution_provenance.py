@@ -109,6 +109,16 @@ def test_extraction_checkpoint_revisions_and_export_keep_original_context(db_ses
     payload["execution_context"] = forged.model_dump(mode="json")
     metadata = {} if historical else {"execution_context": original.model_dump(mode="json")}
     if source_kind == "chat":
+        from src.lib.validation_history.runtime import capture_extraction
+        from src.lib.validation_history.store import HistoryScope
+
+        db.commit()  # Independent capture transactions must see the source owner.
+        payload = capture_extraction(
+            scope=HistoryScope(subject, str(document.id), uuid4().hex),
+            producer_id="fixture-provenance", typed=payload,
+            envelope=DomainEnvelope.model_validate(payload),
+            provenance={"fixture": "execution-provenance"},
+        ).model_dump(mode="json")
         record = persist_inline_validated_extraction_result(
             document_id=str(document.id), agent_key="gene", adapter_key="gene",
             tool_name="ask_gene_specialist", source_kind=CurationExtractionSourceKind.CHAT,

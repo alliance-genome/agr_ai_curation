@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
@@ -16,6 +18,10 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 @pytest.fixture(autouse=True)

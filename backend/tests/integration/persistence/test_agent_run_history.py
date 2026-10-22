@@ -19,7 +19,7 @@ from src.models.sql.database import SessionLocal
 def test_history_downgrade_cannot_remove_retained_originals():
     config = Config(str(Path(__file__).resolve().parents[3] / "alembic.ini"))
     command.upgrade(config, "head")
-    with pytest.raises(RuntimeError, match="canonical retained data"):
+    with pytest.raises(RuntimeError, match="retained"):
         command.downgrade(config, "b8a2d3f4e5c6")
 
 

@@ -1578,6 +1578,8 @@ async def _run_custom_flow_validator_agent(
     )
     payload = json.dumps(provider_payload, sort_keys=True)
     from src.lib.openai_agents.streaming_tools import SpecialistOutputError
+    from src.lib.validation_history.runtime import record_runner_receipt
+    await asyncio.to_thread(record_runner_receipt, agent, model=validator_model, input_payload=provider_payload)
     try:
         if hasattr(streaming_tool, "on_invoke_tool"):
             # Pass the parent RunConfig only as a trace/template source. The flow tool
@@ -1854,6 +1856,20 @@ async def _collect_flow_validator_materialization_inputs(
                 )
                 continue
 
+            if validator_node is None:
+                from src.lib.validation_history.runtime import bind_artifact, record_preflight
+                from uuid import uuid4
+                validator_result = unresolved_validator_result_for_dispatch_problem(request,
+                    reason="missing_validator_node", explanation="Custom validator node is missing from the flow definition.")
+                await asyncio.to_thread(record_preflight, bind_artifact(source_envelope, runtime_context),
+                    ValidatorDispatchJob(match=match, request=request), validator_result,
+                    operation_id="missing-flow-node:" + str(uuid4()))
+                materialization_units.append(ValidatorResultMaterializationInput(match=match, request=request,
+                    result=validator_result, dispatch_context=dispatch_context if match.binding.required_any_active_group else None))
+                result_metadata.append(_flow_validator_result_metadata(validator_result, request=request,
+                    base={"group_id": group.get("group_id"), "state": state, "validator_binding_id": binding_id}))
+                continue
+
             from src.lib.benchmarks.stage_measurements import (
                 measure_bound_validator, record_handled_stage_failure,
             )
@@ -1861,11 +1877,14 @@ async def _collect_flow_validator_materialization_inputs(
             async with measure_bound_validator(
                 binding_id, node_id=str(validator_node["id"]) if validator_node is not None else None,
             ):
+                from src.lib.validation_history.runtime import bind_artifact, begin_jobs, complete_jobs, fail_jobs, ACTIVE_VALIDATION_EXECUTION
+                from uuid import uuid4
+                history_binding = bind_artifact(source_envelope, runtime_context)
+                captured = await asyncio.to_thread(begin_jobs, history_binding,
+                    [ValidatorDispatchJob(match=match, request=request)], operation_id=str(uuid4()),
+                    receipt={"attachment": dict(validator_node), "source_revision": source_envelope_revision})
+                history_token = ACTIVE_VALIDATION_EXECUTION.set((history_binding, captured))
                 try:
-                    if validator_node is None:
-                        raise ValueError(
-                            "custom validator node is missing from the flow definition"
-                        )
                     validator_result = await _run_custom_flow_validator_agent(
                         request,
                         binding_match=match,
@@ -1874,9 +1893,14 @@ async def _collect_flow_validator_materialization_inputs(
                         source_envelope_id=source_envelope.envelope_id,
                         source_envelope_revision=source_envelope_revision,
                     )
-                    # The custom runner returns an identity-checked, finalized
-                    # typed result. Do not reclassify its accepted field scope.
+                except asyncio.CancelledError as exc:
+                    await asyncio.shield(asyncio.to_thread(fail_jobs, history_binding, captured, exc))
+                    raise
                 except Exception as exc:
+                    await asyncio.to_thread(fail_jobs, history_binding, captured, exc)
+                    from src.lib.validation_history.store import HistoryRecordingError
+                    if isinstance(exc, HistoryRecordingError):
+                        raise
                     raise_if_document_read_failed(exc)
                     record_handled_stage_failure(exc)
                     logger.warning(
@@ -1890,6 +1914,16 @@ async def _collect_flow_validator_materialization_inputs(
                         reason="validator_agent_error",
                         explanation=f"Validator agent execution failed: {exc}",
                     )
+                    from src.lib.validation_history.runtime import attach_failed_completion
+                    await asyncio.to_thread(attach_failed_completion, history_binding,
+                        captured["attempt_ids"][0], validator_result)
+
+                else:
+                    # Persistence failures propagate. They are not a validator
+                    # answer and must not be rewritten as a second completion.
+                    await asyncio.to_thread(complete_jobs, history_binding, captured, [validator_result])
+                finally:
+                    ACTIVE_VALIDATION_EXECUTION.reset(history_token)
 
             materialization_units.append(
                 ValidatorResultMaterializationInput(
@@ -1916,9 +1950,12 @@ async def _collect_flow_validator_materialization_inputs(
             )
 
     if automatic_jobs:
+        from src.lib.validation_history.runtime import bind_artifact
+        history_binding = bind_artifact(source_envelope, runtime_context)
         job_dispatch = await asyncio.to_thread(
             dispatch_validator_jobs,
             automatic_jobs,
+            history_binding=history_binding,
             event_emitter=_emit_flow_runtime_event,
             runtime_context=runtime_context,
         )
@@ -2277,7 +2314,11 @@ async def _execute_validation_groups_for_step(
                     actor_id="flow_validator_group",
                     source_envelope_revision=source_envelope_revision,
                 )
-            working_envelope = materialization_result.envelope
+            from src.lib.validation_history.runtime import bind_artifact, capture_derived_objects
+            working_envelope = capture_derived_objects(
+                bind_artifact(source_envelope, _validator_runtime_context_for_flow(document_id=document_id,
+                    user_id=user_id, authenticated_groups=_authenticated_groups_from_agent_context(agent_context))),
+                materialization_result.envelope, [item.result for item in materialization_inputs], previous_envelope=working_envelope)
             appended_findings.extend(materialization_result.appended_findings)
             phase_timings_ms["materialize_validator_results_ms"] = _elapsed_ms(
                 result_materialization_started_at

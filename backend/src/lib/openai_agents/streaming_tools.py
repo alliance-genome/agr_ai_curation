@@ -3763,6 +3763,8 @@ def _append_live_evidence_record(
 async def _dispatch_domain_envelope_validators_for_chat(
     final_output: str,
     *,
+    history_scope_id: str,
+    producer_id: str,
     expected_output_type: Any,
     specialist_name: str,
     tool_name: Optional[str],
@@ -3862,8 +3864,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
     try:
         envelope_started_at = time.monotonic()
         extraction_record = CurationExtractionResultRecord(
-            extraction_result_id=f"chat-runtime:{uuid.uuid4()}",
-            document_id="chat-runtime",
+            extraction_result_id=f"producer:{producer_id}",
+            document_id=runtime_context.document_id or "chat-runtime",
             adapter_key=candidate.adapter_key,
             agent_key=candidate.agent_key,
             source_kind=CurationExtractionSourceKind.CHAT,
@@ -3874,7 +3876,11 @@ async def _dispatch_domain_envelope_validators_for_chat(
             metadata=dict(candidate.metadata),
             execution_receipt=candidate.execution_receipt,
         )
-        envelope = domain_envelope_from_extraction_result(extraction_record, stored=False)
+        envelope = domain_envelope_from_extraction_result(
+            extraction_record, stored=False, include_persistence_history=False,
+        )
+        envelope.metadata.pop("source_extraction_result_id", None)
+        envelope.metadata["producer_id"] = producer_id
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
             envelope_started_at
@@ -3951,6 +3957,18 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     "validatorBatchUnresolvedCount": event.get("unresolved_count"),
                 },
             })
+
+        from src.lib.validation_history.runtime import capture_extraction
+        from src.lib.validation_history.store import HistoryScope
+        if runtime_context is None:
+            raise ValueError("Extraction history requires authenticated source context")
+        envelope = await asyncio.to_thread(
+            capture_extraction,
+            scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, history_scope_id),
+            producer_id=producer_id,
+            typed=json.loads(final_output), envelope=envelope,
+            provenance={"agent_key": agent_key, "execution_receipt": execution_receipt},
+        )
 
         core_dispatch_started_at = time.monotonic()
         dispatch_kwargs: Dict[str, Any] = {
@@ -6340,6 +6358,8 @@ async def run_specialist_with_events(
         try:
             final_output = await _dispatch_domain_envelope_validators_for_chat(
                 final_output,
+                history_scope_id=builder_workspace.run_id,
+                producer_id=builder_workspace.builder_invocation_id,
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
@@ -6401,6 +6421,8 @@ async def run_specialist_with_events(
         try:
             validated_builder_output = await _dispatch_domain_envelope_validators_for_chat(
                 json.dumps(builder_finalization.payload),
+                history_scope_id=builder_workspace.run_id,
+                producer_id=builder_workspace.builder_invocation_id,
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
@@ -6683,17 +6705,15 @@ def _validator_runtime_context_for_chat(
 ) -> Optional[Any]:
     normalized_document_id = str(document_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
-    if (
-        not normalized_document_id
-        or not normalized_user_id
-        or normalized_document_id == "chat-runtime"
-    ):
+    if not normalized_user_id:
         return None
+    if normalized_document_id == "chat-runtime":
+        normalized_document_id = ""
 
     from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
 
     return ValidatorRuntimeContext(
-        document_id=normalized_document_id,
+        document_id=normalized_document_id or None,
         user_id=normalized_user_id,
         authenticated_groups=(
             tuple(authenticated_groups) if authenticated_groups is not None else None

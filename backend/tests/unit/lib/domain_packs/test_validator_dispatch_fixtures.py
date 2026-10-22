@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 import yaml
 from pydantic import ValidationError
 
@@ -21,6 +24,10 @@ from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bi
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.schemas.domain_envelope import DomainEnvelope
 from src.schemas.domain_validator import DomainValidatorResultBase
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 FIXTURE_PATH = (

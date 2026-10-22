@@ -1846,6 +1846,9 @@ async def test_listing_never_reconciles_incomplete_inventory(monkeypatch, scenar
 
 @pytest.fixture(autouse=True)
 def async_provisioning_boundary(monkeypatch):
+    # These endpoint tests use a fake SQL session; real retirement is covered
+    # in PostgreSQL persistence tests.
+    monkeypatch.setattr("src.lib.validation_history.store.retire_document_history", lambda *args: 0)
     monkeypatch.setattr(documents, "provision_user", lambda *_args: SimpleNamespace(id=7))
     async def provision(principal):
         return documents.provision_user(None, principal)

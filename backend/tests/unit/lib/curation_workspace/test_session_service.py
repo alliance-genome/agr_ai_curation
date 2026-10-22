@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -50,6 +51,7 @@ from src.lib.curation_workspace.models import (
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
+from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
@@ -104,6 +106,8 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
 
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 @compiles(PostgresUUID, "sqlite")
 def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
@@ -115,7 +119,10 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
     return "JSON"
 
 
+
 TEST_TABLES = [
+    ValidationBody.__table__,
+    ValidationCheckpoint.__table__,
     User.__table__,
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
@@ -150,6 +157,8 @@ def db_session():
         table.indexes.clear()
         for column in table.columns:
             restored_defaults.append((column, column.server_default))
+            if table.name == "validation_checkpoints" and column.name == "created_at":
+                continue
             column.server_default = None
 
     Base.metadata.create_all(bind=engine, tables=TEST_TABLES)
@@ -813,6 +822,13 @@ def _create_domain_envelope_submission_session(
             checkpointed_at=now,
         )
     )
+    from src.lib.validation_history.store import _body
+    db_session.add(ValidationCheckpoint(
+        envelope_id=envelope.envelope_id, revision=1,
+        document_id=str(session_row.document_id),
+        body_sha=_body(db_session, envelope.model_dump(mode="json")),
+        provenance="test_known_checkpoint",
+    ))
     db_session.add(
         DomainEnvelopeProjectionIndex(
             id=uuid4(),
@@ -2184,6 +2200,13 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
             checkpointed_at=_now(),
         )
     )
+    from src.lib.validation_history.store import _body
+    db_session.add(ValidationCheckpoint(
+        envelope_id=envelope.envelope_id, revision=1,
+        document_id=str(session_row.document_id),
+        body_sha=_body(db_session, envelope.model_dump(mode="json")),
+        provenance="test_known_checkpoint",
+    ))
     candidate = CurationCandidate(
         id=uuid4(),
         session_id=session_row.id,
@@ -2494,7 +2517,15 @@ def test_workspace_validation_passes_document_user_runtime_context(
     persisted_metadata = dict(persisted_envelope.get("metadata", {}))
     persisted_metadata["authenticated_group_snapshot"] = ["RGD"]
     persisted_envelope["metadata"] = persisted_metadata
-    envelope_row.envelope_json = persisted_envelope
+    from src.lib.domain_envelopes.persistence import (
+        DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint,
+    )
+    write_domain_envelope_checkpoint(db_session, DomainEnvelopeCheckpointRequest(
+        project_key=envelope_row.project_key,
+        envelope=DomainEnvelope.model_validate(persisted_envelope),
+        expected_revision=envelope_row.revision,
+        document_id=envelope_row.document_id, session_id=envelope_row.session_id,
+    ))
     db_session.flush()
     commit_calls = 0
 

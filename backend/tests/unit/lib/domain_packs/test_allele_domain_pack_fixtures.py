@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+import pytest
+
+
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -25,6 +29,10 @@ from agr_ai_curation_alliance.domain_packs.allele import (  # noqa: E402
     ALLELE_DOMAIN_PACK_ID,
     validate_pending_allele_envelope,
 )
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 LEGACY_SEMANTIC_KEYS = {

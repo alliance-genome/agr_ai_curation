@@ -9,6 +9,7 @@ import json
 import pytest
 
 from src.lib.openai_agents import runner, streaming_tools
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
 from src.lib.openai_agents.models import AlleleExtractionResultEnvelope
 
@@ -1843,7 +1844,10 @@ async def test_allele_specialist_rejects_empty_evidence_after_section_label_reco
 
 
 @pytest.mark.asyncio
-async def test_specialist_accepts_schema_defined_retained_collection_without_items(monkeypatch):
+async def test_specialist_accepts_schema_defined_retained_collection_without_items(monkeypatch, isolated_validation_history):
+    from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
+    monkeypatch.setattr(streaming_tools, "_validator_runtime_context_for_chat",
+                        lambda **kwargs: ValidatorRuntimeContext(user_id="unit-owner"))
     verified_quote = "Actin 5C was the focal allele examined in the study."
     expected_record = _build_expected_evidence_record(
         entity="Actin 5C",

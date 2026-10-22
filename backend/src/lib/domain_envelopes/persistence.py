@@ -287,11 +287,37 @@ def write_domain_envelope_checkpoint(
     envelope_row.schema_ref_json = _schema_ref_json(envelope.schema_ref)
     envelope_row.object_model_ref_json = dict(request.object_model_ref_json)
     envelope_row.model_field_ref_json = dict(request.model_field_ref_json)
+    from src.lib.validation_history.checkpoints import write_checkpoint_body
+    from src.models.sql.validation_history import ValidationCheckpoint
+    # Same caller transaction as the current projection: a rolled-back workspace
+    # write must not leave a supposedly committed revision in the archive.
+    previous_checkpoint = db.get(ValidationCheckpoint, (envelope.envelope_id, next_revision - 1)) if next_revision > 1 else None
+    if next_revision > 1 and previous_checkpoint is None:
+        raise DomainEnvelopePersistenceError("Previous checkpoint must be imported before history-aware writes")
+    db.add(ValidationCheckpoint(
+        envelope_id=envelope.envelope_id, revision=next_revision,
+        document_id=str(envelope_row.document_id),
+        source_extraction_result_id=source_extraction_result_id,
+        body_sha=write_checkpoint_body(db, envelope_json,
+            previous_payload=envelope_row.envelope_json if previous_checkpoint is not None else None,
+            previous_sha=previous_checkpoint.body_sha if previous_checkpoint is not None else None),
+        provenance="runtime_checkpoint",
+    ))
     envelope_row.envelope_json = envelope_json
     envelope_row.updated_at = now
     envelope_row.checkpointed_at = now
     db.flush()
 
+    if "validation_history" in envelope.metadata:
+        from src.lib.validation_history import store as history_store
+        reference = envelope.metadata["validation_history"]
+        for obj in envelope.extracted_objects:
+            if obj.pending_ref_id is not None:
+                history_store._append(db, reference["artifact_id"],
+                    operation_id="durable-reference:" + obj.metadata["validation_history"]["target_id"],
+                    kind="reference_mapping", target_id=obj.metadata["validation_history"]["target_id"],
+                    body={"pending_ref_id": obj.pending_ref_id, "durable_object_id": _stable_object_id(obj),
+                          "envelope_id": envelope.envelope_id})
     index_counts = _regenerate_indexes_for_row(db, envelope_row)
     inserted_history_event_count = _append_history_events_for_row(db, envelope_row)
     db.flush()
@@ -402,18 +428,20 @@ def load_domain_envelope(
     *,
     revision: int | None = None,
 ) -> DomainEnvelope:
-    """Load an envelope JSON snapshot at the current stored revision."""
+    """Load the current projection or an immutable exact historical revision."""
 
     normalized_envelope_id = _required_string(envelope_id, field_name="envelope_id")
+    if revision is not None:
+        from src.models.sql.validation_history import ValidationCheckpoint
+        checkpoint = db.get(ValidationCheckpoint, (normalized_envelope_id, revision))
+        if checkpoint is None:
+            raise DomainEnvelopePersistenceError("The requested historical envelope revision was not preserved")
+        from src.lib.validation_history.checkpoints import read_checkpoint_body
+        return DomainEnvelope.model_validate(read_checkpoint_body(db, checkpoint.body_sha))
     envelope_row = db.get(DomainEnvelopeModel, normalized_envelope_id)
     if envelope_row is None:
         raise DomainEnvelopePersistenceError(
             f"Domain envelope {normalized_envelope_id} was not found"
-        )
-    if revision is not None and envelope_row.revision != revision:
-        raise DomainEnvelopePersistenceError(
-            f"Domain envelope {normalized_envelope_id} is at revision "
-            f"{envelope_row.revision}, not requested revision {revision}"
         )
     return DomainEnvelope.model_validate(envelope_row.envelope_json)
 
@@ -546,20 +574,94 @@ def _append_history_events_for_row(
 ) -> int:
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
     indexed_at = datetime.now(timezone.utc)
-    existing_event_ids = set(
-        db.scalars(
-            select(DomainEnvelopeHistory.event_id).where(
+    existing_events = {
+        row.event_id: row.event_json for row in db.scalars(
+            select(DomainEnvelopeHistory).where(
                 DomainEnvelopeHistory.envelope_id == envelope_row.envelope_id
             )
-        ).all()
-    )
+        )
+    }
     object_id_by_ref = _object_id_by_ref(envelope)
 
     inserted_count = 0
     for event_index, event in enumerate(envelope.history):
         event_id = _history_event_id(envelope.envelope_id, event_index, event)
-        if event_id in existing_event_ids:
+        if event_id in existing_events:
+            if existing_events[event_id] != event.model_dump(mode="json"):
+                raise DomainEnvelopePersistenceError("History event identity was reused with different content")
             continue
+        retirement = event.details.get("validation_history_retirement")
+        if retirement is not None and event.event_type.value == "curator_field_patch_accepted":
+            from src.lib.validation_history import store as history_store
+            from src.models.sql.validation_history import ValidationArtifact
+            reference = envelope.metadata["validation_history"]
+            artifact = db.get(ValidationArtifact, reference["artifact_id"])
+            if artifact is None or artifact.document_id != str(envelope_row.document_id):
+                raise DomainEnvelopePersistenceError("Retirement artifact does not belong to this document")
+            if retirement["actor_id"] != artifact.owner_id:
+                raise DomainEnvelopePersistenceError("Retirement actor does not own this artifact")
+            scope = history_store.HistoryScope(artifact.owner_id, artifact.document_id, reference["session_id"])
+            current = history_store._current(db, artifact.id, retirement["target_id"])
+            entries = [{
+                "target_id": retirement["target_id"], "expected_version": current["version"],
+                "action": "retire", "reason": retirement["reason"],
+            }]
+            parent = history_store._fact(db, artifact.id, retirement["target_id"], kind="target").parent_id
+            while parent:
+                entries.append({
+                    "target_id": parent,
+                    "expected_version": history_store._current(db, artifact.id, parent)["version"],
+                    "action": "invalidate", "reason": retirement["reason"],
+                })
+                parent = history_store._fact(db, artifact.id, parent, kind="target").parent_id
+            history_store.apply_decisions_in_transaction(db, scope, artifact.id,
+                operation_id="curator-retirement:" + event_id,
+                actor={"type": "curator", "id": retirement["actor_id"]}, entries=entries)
+        edits = event.details.get("validation_history_edits")
+        if edits is not None and event.event_type.value == "curator_field_patch_accepted":
+            from src.lib.validation_history import store as history_store
+            from src.models.sql.validation_history import ValidationArtifact
+            reference = envelope.metadata["validation_history"]
+            artifact = db.get(ValidationArtifact, reference["artifact_id"])
+            if artifact is None or artifact.document_id != str(envelope_row.document_id) or edits["actor_id"] != artifact.owner_id:
+                raise DomainEnvelopePersistenceError("Source edit artifact scope mismatch")
+            scope = history_store.HistoryScope(artifact.owner_id, artifact.document_id, reference["session_id"])
+            changes = [change for obj in edits["objects"] for change in obj["changes"]]
+            changed_ids = {change["target_id"] for change in changes}
+            ancestors = set()
+            for change in changes:
+                target = history_store._fact(db, artifact.id, change["target_id"], kind="target")
+                parent = target.parent_id
+                while parent:
+                    ancestors.add(parent)
+                    parent = history_store._fact(db, artifact.id, parent, kind="target").parent_id
+            additions = [item for obj in edits["objects"] for item in obj["additions"]]
+            new_parents = {item["id"]: item["parent_id"] for item in additions}
+            for change in changes:
+                if "replacement_target_id" in change:
+                    new_parents[change["replacement_target_id"]] = history_store._fact(
+                        db, artifact.id, change["target_id"], kind="target").parent_id
+            for addition in additions:
+                parent = addition["parent_id"]
+                while parent:
+                    if parent in new_parents:
+                        parent = new_parents[parent]
+                    else:
+                        ancestors.add(parent)
+                        parent = history_store._fact(db, artifact.id, parent, kind="target").parent_id
+            entries = [{**change, "expected_version": history_store._current(db, artifact.id, change["target_id"])["version"],
+                "action": change.get("action", "replace"), "reason": edits["reason"]} for change in changes]
+            entries.extend({"target_id": tid, "expected_version": history_store._current(db, artifact.id, tid)["version"],
+                "action": "invalidate", "reason": edits["reason"]} for tid in sorted(ancestors - changed_ids))
+            if entries:
+                history_store.apply_decisions_in_transaction(db, scope, artifact.id,
+                    operation_id="curator-source-edit:" + event_id,
+                    actor={"type": "curator", "id": edits["actor_id"]}, entries=entries)
+            for obj in edits["objects"]:
+                for addition in obj["additions"]:
+                    history_store._append(db, artifact.id,
+                        operation_id="curator-addition:" + addition["id"], kind="target",
+                        fact_id=addition["id"], parent_id=addition["parent_id"], body=addition["original"])
         object_id, field_path = _history_target(event, object_id_by_ref)
         db.add(
             DomainEnvelopeHistory(
@@ -578,7 +680,7 @@ def _append_history_events_for_row(
                 created_at=indexed_at,
             )
         )
-        existing_event_ids.add(event_id)
+        existing_events[event_id] = event.model_dump(mode="json")
         inserted_count += 1
 
     db.flush()

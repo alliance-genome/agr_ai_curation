@@ -1,11 +1,10 @@
 """Resolve exact validation views from existing durable envelope checkpoints."""
-from copy import deepcopy
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
 
-from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.models.sql.validation_history import ValidationCheckpoint
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
@@ -45,12 +44,13 @@ def validation_view(record: Any, *, revision: int | None, user_id: str) -> dict[
     if str(_attr(record, "document_id")) not in readable_document_ids([record], user_id=user_id):
         raise InspectionViewUnavailable("This result is no longer accessible.")
     with SessionLocal() as db:
-        row = db.get(DomainEnvelopeModel, checkpoint["envelope_id"])
-        if (row is None or row.revision != pinned
+        row = db.get(ValidationCheckpoint, (checkpoint["envelope_id"], pinned))
+        if (row is None
                 or row.source_extraction_result_id != str(_attr(record, "extraction_result_id"))
                 or str(row.document_id) != str(_attr(record, "document_id"))):
-            raise InspectionViewUnavailable("The exact post-validation checkpoint is unavailable or superseded.")
-        payload = deepcopy(row.envelope_json)
+            raise InspectionViewUnavailable("The exact post-validation checkpoint is unavailable.")
+        from src.lib.validation_history.checkpoints import read_checkpoint_body
+        payload = read_checkpoint_body(db, row.body_sha)
     if isinstance(record, Mapping):
         result = dict(record)
     else:

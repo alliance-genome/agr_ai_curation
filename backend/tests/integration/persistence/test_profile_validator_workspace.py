@@ -17,7 +17,7 @@ from src.lib.curation_workspace import session_validation_service as validation
 from src.lib.curation_workspace.models import (
     CurationCandidate, CurationDraft, CurationSessionAgentRevision, DomainEnvelopeModel,
 )
-from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
+from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings, ValidatorRuntimeContext
 from src.models.sql.agent import Agent
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
@@ -45,6 +45,7 @@ def manual_profile_record(migrated_database, example, monkeypatch, request):
         try:
             review = _create_review_session_for_action_log(db)
             owner = db.get(PDFDocument, review.document_id).user_id
+            db.commit()  # Source document/owner must be visible to independent capture transactions.
             _, revision = generic_profile_service.create_profile(db, owner, raw)
             agent = Agent(id=uuid4(), agent_key="ca_" + uuid4().hex, user_id=owner,
                 name="Profile validation fixture", instructions="Fixture", model_id="test-model",
@@ -90,7 +91,7 @@ def test_manual_profile_validation_persists_receipt_findings_and_current_draft(m
 
     monkeypatch.setattr(validation, "dispatch_active_validator_bindings", dispatch)
     snapshot, changed = validation._apply_candidate_validation(
-        db, candidate, force=True, validated_at=datetime.now(timezone.utc))
+        db, candidate, force=True, validated_at=datetime.now(timezone.utc), runtime_context=_history_context(candidate))
     assert changed
     candidate_id = candidate.id
     db.flush()
@@ -131,13 +132,17 @@ def test_manual_profile_validation_persists_receipt_findings_and_current_draft(m
 def test_profile_validation_refreshes_sibling_drafts_in_same_envelope(manual_profile_record, monkeypatch):
     from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint
     db, candidate, receipt = manual_profile_record
-    validation._ensure_manual_profile_envelope(db, candidate)
+    validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
     row = db.get(DomainEnvelopeModel, candidate.envelope_id)
     envelope = DomainEnvelope.model_validate(row.envelope_json)
     second = envelope.extracted_objects[0].model_copy(deep=True)
     second.object_id = "second"
+    second.metadata.pop("validation_history")
     second.payload["attributes"] = {"paper_name": "B"}
     envelope.extracted_objects.append(second)
+    from src.lib.validation_history.runtime import bind_artifact, capture_curator_objects
+    envelope = capture_curator_objects(bind_artifact(envelope, _history_context(candidate)), envelope,
+                                      actor_id="test_pdf_owner_domain_envelope")
     checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
         project_key=row.project_key, envelope=envelope, expected_revision=row.revision,
         document_id=row.document_id, session_id=row.session_id, flow_run_id=row.flow_run_id))
@@ -159,7 +164,7 @@ def test_profile_validation_refreshes_sibling_drafts_in_same_envelope(manual_pro
             runner=lambda request, **kw: by_request[request.request_id].model_dump(mode="json"))
 
     monkeypatch.setattr(validation, "dispatch_active_validator_bindings", dispatch)
-    validation._apply_candidate_validation(db, candidate, force=True, validated_at=datetime.now(timezone.utc))
+    validation._apply_candidate_validation(db, candidate, force=True, validated_at=datetime.now(timezone.utc), runtime_context=_history_context(candidate))
     candidate_id, sibling_id = candidate.id, sibling.id
     db.flush()
     db.expire_all()
@@ -168,3 +173,30 @@ def test_profile_validation_refreshes_sibling_drafts_in_same_envelope(manual_pro
     assert candidate.draft.fields[0]["value"]["resolved_id"] == "EX:1"
     assert sibling.draft.fields[0]["value"]["resolved_id"] == "EX:2"
     assert sibling.validation_snapshots == []
+
+
+def _history_context(candidate):
+    return ValidatorRuntimeContext(document_id=str(candidate.session.document_id),
+        user_id="test_pdf_owner_domain_envelope", authenticated_groups=())
+
+
+def test_manual_capture_retry_after_checkpoint_rollback_and_draft_edit(manual_profile_record):
+    from copy import deepcopy
+    from src.lib.validation_history import store
+    db, candidate, _ = manual_profile_record
+    with db.begin_nested() as savepoint:
+        validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
+        row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+        first = row.envelope_json["metadata"]["validation_history"]
+        savepoint.rollback()
+    assert candidate.envelope_id is None
+    fields = deepcopy(candidate.draft.fields)
+    fields[0]["value"]["paper_name"] = "Edited after rollback"
+    candidate.draft.fields = fields
+    validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
+    row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+    second = row.envelope_json["metadata"]["validation_history"]
+    assert first["artifact_id"] != second["artifact_id"]
+    scope = store.HistoryScope(_history_context(candidate).user_id, str(candidate.session.document_id), str(candidate.session_id))
+    assert store.read_baseline(scope, first["artifact_id"])["typed"]["extracted_objects"][0]["payload"]["attributes"]["paper_name"] == "A"
+    assert store.read_baseline(scope, second["artifact_id"])["typed"]["extracted_objects"][0]["payload"]["attributes"]["paper_name"] == "Edited after rollback"

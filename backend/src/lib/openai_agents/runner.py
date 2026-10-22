@@ -2077,6 +2077,8 @@ async def _run_agent_with_owned_resources(
             # specialists while run context and validator event delivery remain active.
             validated_output = await _dispatch_domain_envelope_validators_for_chat(
                 json.dumps(finalization.payload),
+                history_scope_id=builder_workspace.run_id,
+                producer_id=builder_workspace.builder_invocation_id,
                 expected_output_type=getattr(agent, "output_type", None),
                 specialist_name=current_agent,
                 tool_name=canonical_agent_key,

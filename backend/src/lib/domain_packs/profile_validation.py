@@ -246,6 +246,9 @@ def _compile_binding(profile, mapping, capability) -> tuple[ValidatorBinding, st
         source_field_path=array_path, applies_to_domain_pack_id="generic",
         object_types=("generic_object",), object_roles=(), field_paths=(array_path,) if array_path else (),
         field_types=(), input_fields=inputs, expected_result_fields=result_fields,
+        decision_units=tuple({"key": unit.key,
+            "fields": [reuse.outputs[name].result_path for name in unit.fields]}
+            for unit in (mapping.decision_units or [])),
         provider_value_field_paths=provider_paths,
         blocking=mapping.policy.blocks_readiness, required=source.required or mapping.policy.blocks_readiness,
         allow_opt_out=False, curator_override_allowed=False,

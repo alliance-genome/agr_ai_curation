@@ -18,6 +18,8 @@ export/submission adapters and is intentionally left untouched (envelope legacy 
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 import copy
 import sys
 from collections.abc import Mapping
@@ -697,7 +699,7 @@ def _validate_allele_mention(envelope, **result_fields):
     request = build_domain_validation_request(match).request
     assert request is not None
     assert request.selected_inputs["mention"] == "unc-54(e190)"
-    result = DomainValidatorResultBase(
+    result = result_with_history_receipt(DomainValidatorResultBase(
         request_id=request.request_id,
         validator_binding_id=request.validator_binding_id,
         validator_agent=request.validator_agent,
@@ -709,7 +711,7 @@ def _validate_allele_mention(envelope, **result_fields):
             "lookup_attempts": [],
             **result_fields,
         },
-    )
+    ))
     return materialize_validator_results_into_envelope(
         envelope,
         pack.metadata,

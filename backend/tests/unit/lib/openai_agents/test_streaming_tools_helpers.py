@@ -11,6 +11,11 @@ from types import SimpleNamespace
 import pytest
 from agents import AgentOutputSchema
 from pydantic import BaseModel
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
+
+
+
 
 from src.lib.curation_workspace import adapter_registry
 import src.lib.curation_workspace.domain_envelope_normalization as domain_envelope_normalization
@@ -30,6 +35,21 @@ from src.lib.prompts.context import (
 from src.models.sql.prompts import PromptTemplate
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history", "isolated_baseline_capture")
+
+
+@pytest.fixture
+def isolated_baseline_capture(monkeypatch):
+    from src.lib.validation_history import runtime
+    captured = []
+    def capture(**kwargs):
+        captured.append(copy.deepcopy(kwargs["typed"]))
+        return kwargs["envelope"]
+    monkeypatch.setattr(runtime, "capture_extraction", capture)
+    return captured
+
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -3563,12 +3583,13 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     )
 
     source_envelope = SimpleNamespace(
+        metadata={},
         domain_pack_id="gene",
         extracted_objects=[SimpleNamespace()],
     )
     observed_record = {}
 
-    def fake_envelope_normalizer(record, *, stored):
+    def fake_envelope_normalizer(record, *, stored, include_persistence_history=True):
         assert stored is False  # the chat runtime normalizes fresh output
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
@@ -3636,6 +3657,8 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         extractor_output,
+        history_scope_id="unit-run", producer_id="unit-invocation",
+        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Gene Extraction",
         tool_name="ask_gene_extractor_specialist",
@@ -3686,12 +3709,13 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     )
 
     source_envelope = SimpleNamespace(
+        metadata={},
         domain_pack_id="gene",
         extracted_objects=[SimpleNamespace()],
     )
     observed_record = {}
 
-    def fake_envelope_normalizer(record, *, stored):
+    def fake_envelope_normalizer(record, *, stored, include_persistence_history=True):
         assert stored is False  # the chat runtime normalizes fresh output
         observed_record["agent_key"] = record.agent_key
         observed_record["adapter_key"] = record.adapter_key
@@ -3740,6 +3764,8 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
 
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         _gene_extractor_domain_output(),
+        history_scope_id="unit-run", producer_id="unit-invocation",
+        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Custom Gene Extraction",
         tool_name="ask_ca_11111111_2222_3333_4444_555555555555_specialist",
@@ -3777,7 +3803,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
 
     captured_requests = []
 
-    def _fake_validator_agent(request, *, binding):
+    def _fake_validator_agent(request, *, binding, runtime_context=None):
         captured_requests.append(request)
         return _resolved_gene_validator_payload(request)
 
@@ -3789,6 +3815,8 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
 
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         _gene_extractor_domain_output(),
+        history_scope_id="unit-run", producer_id="unit-invocation",
+        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Gene Extraction",
         tool_name="ask_gene_extractor_specialist",
@@ -3864,12 +3892,12 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     monkeypatch.setattr(
         domain_envelope_normalization,
         "domain_envelope_from_extraction_result",
-        lambda _record, *, stored: envelope,
+        lambda _record, *, stored, include_persistence_history=True: envelope,
     )
 
     captured_requests = []
 
-    def _fake_validator_agent(request, *, binding):
+    def _fake_validator_agent(request, *, binding, runtime_context=None):
         captured_requests.append(request)
         return _generic_unresolved_validator_payload(request)
 
@@ -3881,6 +3909,8 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
 
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         _chat_dispatch_probe_output(),
+        history_scope_id="unit-run", producer_id="unit-invocation",
+        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=DomainEnvelopeExtractionResult,
         specialist_name=f"{agent_key} chat extraction",
         tool_name=tool_name,
@@ -3932,7 +3962,7 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
     monkeypatch.setattr(
         validator_dispatch,
         "run_package_scoped_validator_agent",
-        lambda request, *, binding: _errored_gene_validator_payload(request),
+        lambda request, *, binding, runtime_context=None: _errored_gene_validator_payload(request),
     )
 
     # A validator that could not RUN its lookup is NOT fatal: the dispatch records a
@@ -3940,6 +3970,8 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
     serialized_envelope = (
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
+            history_scope_id="unit-run", producer_id="unit-invocation",
+            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
@@ -4011,6 +4043,8 @@ async def test_chat_domain_envelope_dispatch_honors_conformance_issue_limit(
     with pytest.raises(streaming_tools.SpecialistOutputError):
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
+            history_scope_id="unit-run", producer_id="unit-invocation",
+            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
@@ -4024,13 +4058,15 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_tool_agent_key
     with pytest.raises(streaming_tools.SpecialistOutputError, match="source agent"):
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
+            history_scope_id="unit-run", producer_id="unit-invocation",
+            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name=None,
         )
 
 
-def test_chat_validator_runtime_context_requires_real_document_and_user():
+def test_chat_validator_runtime_context_requires_user_and_preserves_documentless_chat():
     context = streaming_tools._validator_runtime_context_for_chat(
         document_id="document-1",
         user_id="curator-1",
@@ -4045,8 +4081,7 @@ def test_chat_validator_runtime_context_requires_real_document_and_user():
         streaming_tools._validator_runtime_context_for_chat(
             document_id="chat-runtime",
             user_id="curator-1",
-        )
-        is None
+        ).document_id is None
     )
     assert (
         streaming_tools._validator_runtime_context_for_chat(
@@ -4072,6 +4107,8 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_curation_adapt
     with pytest.raises(streaming_tools.SpecialistOutputError, match="adapter ownership"):
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
+            history_scope_id="unit-run", producer_id="unit-invocation",
+            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
@@ -4218,13 +4255,15 @@ async def test_inline_validator_pdf_failure_reaches_terminal_owner_without_gener
         wrapper = RuntimeError("sensitive validator wrapper")
     wrapper.__cause__ = source_error
 
-    def fail_validator(request, *, binding):
+    def fail_validator(request, *, binding, runtime_context=None):
         raise wrapper
 
     monkeypatch.setattr(validator_dispatch, "run_package_scoped_validator_agent", fail_validator)
     with pytest.raises(type(wrapper)) as raised:
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
+            history_scope_id="unit-run", producer_id="unit-invocation",
+            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",

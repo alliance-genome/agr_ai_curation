@@ -22,6 +22,7 @@ from .agent_run_history import AgentHistoryEvent, AgentHistoryPayload
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .validator_result import ValidatorResultRecord
+from .validation_history import ValidationArtifact, ValidationBody, ValidationFact, ValidationHead, ValidationCheckpoint
 from .cost_ledger import CostAttempt, CostFactRevision, CostSourceReference, RuntimeCostRequest
 from .chat_route_preference import ChatRoutePreference
 from .flow_shortcut_preference import FlowShortcutPreference
@@ -48,6 +49,7 @@ __all__ = [
     "AgentHistoryEvent",
     "AgentHistoryPayload",
     "ValidatorResultRecord",
+    "ValidationArtifact", "ValidationBody", "ValidationFact", "ValidationHead", "ValidationCheckpoint",
     "CostAttempt",
     "CostFactRevision",
     "CostSourceReference",

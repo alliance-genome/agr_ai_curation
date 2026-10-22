@@ -7,12 +7,19 @@ from unittest.mock import Mock
 
 import pytest
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
+
 from src.lib.domain_packs.profile_validation import compile_profile_validation, profile_validation_attachment_options
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.lib.flows import executor, validation_attachments
 from .test_profile_validation import example as example, profile_envelope, resolve
 from .test_profile_materialization import prepared, results
 from ..flows.test_validation_attachments import _flow_definition, _validator_node
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 @pytest.mark.asyncio

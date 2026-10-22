@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -30,6 +34,10 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
 from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     load_alliance_domain_pack_registry,
 )
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 SOURCE_MENTIONS_EXTRACTOR_CONTRACT = (
     "`source_mentions` are the exact paper phrases that name or anchor the "

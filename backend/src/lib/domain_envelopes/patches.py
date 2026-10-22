@@ -334,6 +334,10 @@ def apply_curator_field_patch(
 
     updated_objects = list(envelope.extracted_objects)
     object_metadata = dict(domain_object.metadata)
+    retired_target_id = None
+    if patch.operation is EnvelopeFieldPatchOperation.REMOVE:
+        from src.lib.validation_history.runtime import retire_element_projection
+        object_metadata, retired_target_id = retire_element_projection(object_metadata, patch.field_path, payload=domain_object.payload)
     if override_audit is not None:
         # Audit trail of curator validation overrides: who, when, what was there before.
         object_metadata[CURATOR_OVERRIDE_METADATA_KEY] = [
@@ -359,6 +363,26 @@ def apply_curator_field_patch(
         # follow the curator's identity now, as the next validator run would.
         settled_envelope = _follow_mirrors(settled_envelope, updated_object, domain_pack, validation_registry)
 
+    history_edits = []
+    from src.lib.validation_history.runtime import replace_projection_targets
+    rewritten = []
+    originals = {obj.object_id or obj.pending_ref_id: obj for obj in envelope.extracted_objects}
+    for obj in settled_envelope.extracted_objects:
+        prior = originals[obj.object_id or obj.pending_ref_id]
+        is_removed_object = (
+            patch.operation is EnvelopeFieldPatchOperation.REMOVE
+            and (obj.object_id or obj.pending_ref_id) == (updated_object.object_id or updated_object.pending_ref_id)
+        )
+        if "validation_history" in prior.metadata and not is_removed_object:
+            replacement_path = None
+            if (obj.object_id or obj.pending_ref_id) == (updated_object.object_id or updated_object.pending_ref_id):
+                replacement_path = override_audit["value_path"] if override_audit is not None else patch.field_path
+            obj, edits = replace_projection_targets(prior, obj, replacement_path=replacement_path)
+            if edits["changes"] or edits["additions"]:
+                history_edits.append(edits)
+        rewritten.append(obj)
+    settled_envelope = settled_envelope.model_copy(update={"extracted_objects": rewritten})
+
     field_ref = FieldRef(
         object_ref=updated_object.to_object_ref(),
         # A removal changed the list; the removed element's path stays in the details.
@@ -381,6 +405,14 @@ def apply_curator_field_patch(
         "after": patch.value,
         "reason": patch.reason,
     }
+    if history_edits:
+        details["validation_history_edits"] = {"actor_id": actor_id,
+            "reason": patch.reason or "Curator changed source values", "objects": history_edits}
+    if retired_target_id is not None:
+        details["validation_history_retirement"] = {
+            "target_id": retired_target_id, "actor_id": actor_id,
+            "reason": patch.reason or "Curator retired the item",
+        }
     field_event = _curator_event(
         envelope=envelope,
         event_type=HistoryEventKind.FIELD_UPDATED,

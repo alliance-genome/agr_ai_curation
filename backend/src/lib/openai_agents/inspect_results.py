@@ -660,6 +660,7 @@ def _inspect(
         )
     return _validator_results_response(
         result,
+        user_id=user_id,
         object_ref=normalized_ref,
         field_path=normalized_path,
         object_type=_optional_text(object_type),
@@ -2173,6 +2174,7 @@ def _standalone_validator_response(
 def _validator_results_response(
     result: _Result,
     *,
+    user_id: str,
     object_ref: str | None,
     field_path: str | None,
     object_type: str | None,
@@ -2197,6 +2199,10 @@ def _validator_results_response(
             )
         full = {"validator_result_key": key, **entry}
         original = result.envelope.validator_results.get(entry.get("original_ref"))
+        if original is not None:
+            from src.lib.domain_packs.validator_result_records import read_validator_original
+            original = read_validator_original(original, user_id=user_id,
+                document_id=str(_record_attr(result.record, "document_id")))
         full["original"] = original
         if detail_path and detail_path.startswith("original") and original is None:
             raise _RequestError(

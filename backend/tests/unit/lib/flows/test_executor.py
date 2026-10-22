@@ -11,9 +11,15 @@ import logging
 from types import SimpleNamespace
 from uuid import UUID
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents import Agent, ModelSettings, function_tool
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 def _executor_module():
     """Load flow executor lazily so monkeypatches target the active module instance."""

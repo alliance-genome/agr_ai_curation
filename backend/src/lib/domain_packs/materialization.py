@@ -3044,8 +3044,6 @@ def _validation_result_finding_projection(
 ) -> dict[str, Any]:
     """Display/patch-lifecycle projection; the complete original is saved separately."""
     payload = result.model_dump(mode="json", exclude_none=True)
-    if not result.is_complete:
-        return result.model_dump(mode="json")
     compact: dict[str, Any] = {
         key: payload[key]
         for key in (
@@ -3056,6 +3054,7 @@ def _validation_result_finding_projection(
             "target",
             "resolved_values",
             "missing_expected_fields",
+            "output_issues",
             "curator_message",
             "explanation",
         )

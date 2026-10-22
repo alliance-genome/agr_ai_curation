@@ -1061,3 +1061,11 @@ def test_pdfx_wait_settings_reach_backend(name, default):
     assert dev[name] == prod[name] == "${" + name + ":-" + str(default) + "}"
     for template in (ENV_TEMPLATE_PATH, ENV_EXAMPLE_PATH):
         assert f"{name}={default}" in template.read_text()
+
+
+def test_validation_history_pagination_has_deployment_parity():
+    key = "VALIDATION_HISTORY_PAGE_SIZE"
+    expected = "${VALIDATION_HISTORY_PAGE_SIZE:-5}"
+    assert _load_compose()["services"]["backend"]["environment"][key] == expected
+    assert _list_environment(_load_dev_compose()["services"]["backend"]["environment"])[key] == expected
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "5"

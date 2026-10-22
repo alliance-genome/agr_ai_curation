@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 import copy
 import sys
 from collections.abc import Mapping
@@ -9,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 import yaml
 
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
@@ -62,6 +66,10 @@ from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _iter_linkml_provider_refs,
     _load_linkml_index,
 )
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 PHENOTYPE_FIXTURE_PATH = (
     REPO_ROOT
@@ -641,7 +649,7 @@ def test_phenotype_term_materializes_only_after_validator_resolution():
     selector_result = build_domain_validation_request(match)
     assert selector_result.request is not None
 
-    unresolved = DomainValidatorResultBase(
+    unresolved = result_with_history_receipt(DomainValidatorResultBase(
         status="unresolved",
         request_id=selector_result.request.request_id,
         validator_binding_id=selector_result.request.validator_binding_id,
@@ -662,7 +670,7 @@ def test_phenotype_term_materializes_only_after_validator_resolution():
         ],
         curator_message="Phenotype term remains unresolved.",
         explanation="No ontology term resolved from tool evidence.",
-    )
+    ))
     unresolved_result = materialize_validator_results_into_envelope(
         envelope,
         pack.metadata,
@@ -684,7 +692,7 @@ def test_phenotype_term_materializes_only_after_validator_resolution():
         "domain_pack.validator_unresolved"
     )
 
-    resolved = DomainValidatorResultBase(
+    resolved = result_with_history_receipt(DomainValidatorResultBase(
         status="resolved",
         request_id=selector_result.request.request_id,
         validator_binding_id=selector_result.request.validator_binding_id,
@@ -721,7 +729,7 @@ def test_phenotype_term_materializes_only_after_validator_resolution():
         ],
         curator_message="Resolved phenotype term.",
         explanation="Resolved from ontology lookup evidence.",
-    )
+    ))
     resolved_result = materialize_validator_results_into_envelope(
         envelope,
         pack.metadata,

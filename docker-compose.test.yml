@@ -35,6 +35,7 @@ services:
       - ./config:/runtime/config:ro
       - ./packages:/runtime/packages:ro
     environment:
+      VALIDATION_HISTORY_PAGE_SIZE: ${VALIDATION_HISTORY_PAGE_SIZE:-5}
       PYTHONUNBUFFERED: "1"
       POSTGRES_HOST: postgres-test
       POSTGRES_PORT: "5432"
@@ -172,6 +173,7 @@ services:
       - ./alliance_config:/app/alliance_config:ro
       - ./scripts/one_off:/app/scripts/one_off:ro
     environment:
+      - VALIDATION_HISTORY_PAGE_SIZE=${VALIDATION_HISTORY_PAGE_SIZE:-5}
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
       - OPENAI_API_KEY=test-key
@@ -237,6 +239,7 @@ services:
       - ./scripts/testing:/app/scripts/testing:ro
       - ./scripts/testing:/workspace/scripts/testing:ro
     environment:
+      - VALIDATION_HISTORY_PAGE_SIZE=${VALIDATION_HISTORY_PAGE_SIZE:-5}
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
@@ -290,6 +293,7 @@ services:
       - ./packages:/app/packages:ro
       - ./scripts/testing:/app/scripts/testing:ro
     environment:
+      - VALIDATION_HISTORY_PAGE_SIZE=${VALIDATION_HISTORY_PAGE_SIZE:-5}
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
@@ -417,6 +421,7 @@ services:
       # one-off script's main() against its isolated schema.
       - ./scripts/one_off:/app/scripts/one_off:ro
     environment:
+      - VALIDATION_HISTORY_PAGE_SIZE=${VALIDATION_HISTORY_PAGE_SIZE:-5}
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
@@ -460,6 +465,7 @@ services:
       - ./packages:/app/packages:ro
       - ./scripts/testing:/app/scripts/testing:ro
     environment:
+      - VALIDATION_HISTORY_PAGE_SIZE=${VALIDATION_HISTORY_PAGE_SIZE:-5}
       - PYTHONUNBUFFERED=1
       - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
