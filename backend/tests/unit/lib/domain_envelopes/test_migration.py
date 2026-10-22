@@ -38,6 +38,7 @@ from src.lib.domain_envelopes.migration import (
     migrate_legacy_curation_workspace_to_domain_envelopes,
 )
 from src.models.sql.database import Base
+from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
     CurationActionType,
@@ -69,6 +70,8 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 
 TEST_TABLES = [
+    ValidationBody.__table__,
+    ValidationCheckpoint.__table__,
     PDFDocument.__table__,
     CurationReviewSession.__table__,
     CurationSessionAgentRevision.__table__,
@@ -102,6 +105,8 @@ def db_session():
         table.indexes.clear()
         for column in table.columns:
             restored_defaults.append((column, column.server_default))
+            if table.name == "validation_checkpoints" and column.name == "created_at":
+                continue
             if table.name.startswith("domain_") and column.name in {
                 "created_at",
                 "updated_at",

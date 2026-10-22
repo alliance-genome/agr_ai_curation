@@ -2517,7 +2517,15 @@ def test_workspace_validation_passes_document_user_runtime_context(
     persisted_metadata = dict(persisted_envelope.get("metadata", {}))
     persisted_metadata["authenticated_group_snapshot"] = ["RGD"]
     persisted_envelope["metadata"] = persisted_metadata
-    envelope_row.envelope_json = persisted_envelope
+    from src.lib.domain_envelopes.persistence import (
+        DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint,
+    )
+    write_domain_envelope_checkpoint(db_session, DomainEnvelopeCheckpointRequest(
+        project_key=envelope_row.project_key,
+        envelope=DomainEnvelope.model_validate(persisted_envelope),
+        expected_revision=envelope_row.revision,
+        document_id=envelope_row.document_id, session_id=envelope_row.session_id,
+    ))
     db_session.flush()
     commit_calls = 0
 

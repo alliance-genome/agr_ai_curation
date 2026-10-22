@@ -89,6 +89,8 @@ def test_workspace_revalidation_uses_profile_registry_and_atomic_writer(example,
 
 @pytest.mark.parametrize("available", [True, False])
 def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(example, monkeypatch, available):
+    monkeypatch.setattr("src.lib.agent_studio.custom_profile_validators.runtime_validator_user_id",
+                        lambda user_id: 1)
     monkeypatch.setattr("src.lib.curation_workspace.session_mutation_service.load_envelope_candidates_for_patch",
                         lambda *args, **kwargs: [])
     from uuid import uuid4
