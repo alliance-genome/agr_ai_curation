@@ -6059,6 +6059,11 @@ class TestCreateFlowSupervisorNoTools:
         assert "do not call any configured" in supervisor.instructions
         assert "flow-step tool" in supervisor.instructions
 
+        for action in ("help", "Help", " HELP "):
+            supervisor._flow_execution_state["inspected_result_refs"].clear()
+            await inspect_tool.on_invoke_tool(tool_ctx, json.dumps({"action": action, "result_ref": result_ref}))
+            assert supervisor._flow_execution_state["inspected_result_refs"] == set()
+
         async def _inaccessible_result(**_kwargs):
             return json.dumps({"status": "no_context", "error_code": "no_context"})
 
@@ -6078,7 +6083,7 @@ class TestCreateFlowSupervisorNoTools:
             )
 
         monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.inspect_results", _empty_result)
-        for action in ("list", "search"):
+        for action in ("list", "search", " List", "SEARCH "):
             empty = await inspect_tool.on_invoke_tool(
                 tool_ctx,
                 json.dumps({"action": action, "result_ref": result_ref}),
@@ -9737,3 +9742,39 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id
     await tools["ask_csv_formatter_specialist"].on_invoke_tool(ctx, json.dumps({"query": "format"}))
     assert len(calls) == 2
     assert len(supervisor._flow_execution_state["completed_steps"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", [False, True])
+async def test_inspection_manifest_eligibility_is_checked_before_persistence(monkeypatch, canonical):
+    from tests.unit.lib.openai_agents.test_inspect_results import _payload, DOCUMENT_ID
+    executor = _executor_module()
+    payload = _payload() if canonical else _structured_step_output("legacy result")
+    @function_tool(name_override="ask_gene_specialist")
+    async def specialist(query: str) -> str:
+        return json.dumps(payload)
+    monkeypatch.setattr(executor, "get_agent_by_id", lambda *a, **kw: MagicMock(spec=Agent, instructions="Base"))
+    monkeypatch.setattr(executor, "_create_streaming_tool", lambda **kw: specialist)
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda key: None)
+    persist = MagicMock(side_effect=AssertionError("Must not persist before manifest validation"))
+    monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", persist)
+    reports = []
+    monkeypatch.setattr(executor, "report_runtime_exception", lambda exc, **kw: reports.append(exc))
+    tools, _, _, state = executor.get_all_agent_tools(
+        _make_flow([_agent_node("first", "gene")]), include_unavailable=True,
+        user_id="owner", session_id="chat", document_id=DOCUMENT_ID,
+        doc_context=DocumentContext(document_id=DOCUMENT_ID, user_id="owner"),
+    )
+    ctx = SimpleNamespace(tool_name="test", run_config=None)
+    if canonical:
+        with pytest.raises(RuntimeError, match="manifest is unavailable"):
+            await tools[0].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
+        assert state["completed_steps"] == []
+        assert len(reports) == 1
+        assert reports[0].__context__ is None
+    else:
+        result = await tools[0].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
+        assert result == json.dumps(payload)
+        assert len(state["completed_steps"]) == 1
+        assert "inspection_result_ref" not in state["completed_steps"][0]
+    persist.assert_not_called()

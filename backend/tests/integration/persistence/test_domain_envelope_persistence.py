@@ -565,7 +565,8 @@ def test_checkpoint_flushes_without_committing_caller_session(db_session, monkey
 
 
 @pytest.mark.integration
-def test_validation_group_worker_commits_materialized_checkpoint(db_session, monkeypatch):
+@pytest.mark.parametrize("commit_fails", [False, True])
+def test_validation_group_worker_commits_materialized_checkpoint(db_session, monkeypatch, commit_fails):
     """The flow validator worker must commit the transaction for the session it opens."""
     from src.lib.flows import executor
 
@@ -580,7 +581,7 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
     db_session.flush()
     write_domain_envelope_checkpoint(
         db_session,
-        _checkpoint_request(source_envelope, expected_revision=0),
+        replace(_checkpoint_request(source_envelope, expected_revision=0), source_extraction_result_id=str(result_id)),
     )
     db_session.commit()
 
@@ -625,46 +626,96 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
         _collect_materialization_inputs,
     )
 
-    result = asyncio.run(
-        executor._execute_validation_groups_for_step(
-            flow=executor.CurationFlow(
-                user_id=1,
-                name="Validation persistence test",
-                flow_definition={"nodes": [], "edges": []},
-            ),
-            candidate=executor.ExtractionEnvelopeCandidate(
-                agent_key="fixture-extractor",
-                payload_json=source_envelope.model_dump(mode="json"),
-            ),
-            node_data={
-                "validation_groups": [
-                    {
-                        "group_id": "automatic-symbol-check",
-                        "state": "automatic",
-                        "binding_id": "fixture.symbol-check",
-                    }
-                ]
-            },
-            document_id=str(uuid4()),
-            user_id="curator-1",
-            session_id=str(uuid4()),
-            flow_run_id="flow-run-validator",
-            agent_context={"user_id": "curator-1"},
-            flow_conversation_summary="Validated the extracted symbol.",
-        )
-    )
+    if commit_fails:
+        from sqlalchemy import event
+        worker = SessionLocal()
+        def reject_commit(session):
+            raise RuntimeError("fixture checkpoint commit rejected")
+        event.listen(worker, "before_commit", reject_commit)
+        monkeypatch.setattr(executor, "SessionLocal", lambda: worker)
+        with pytest.raises(RuntimeError, match="fixture checkpoint commit rejected"):
+            result = asyncio.run(
+                executor._execute_validation_groups_for_step(
+                    flow=executor.CurationFlow(
+                        user_id=1,
+                        name="Validation persistence test",
+                        flow_definition={"nodes": [], "edges": []},
+                    ),
+                    candidate=executor.ExtractionEnvelopeCandidate(
+                        agent_key="fixture-extractor",
+                        payload_json=source_envelope.model_dump(mode="json"),
+                    ),
+                    node_data={
+                        "validation_groups": [
+                            {
+                                "group_id": "automatic-symbol-check",
+                                "state": "automatic",
+                                "binding_id": "fixture.symbol-check",
+                            }
+                        ]
+                    },
+                    document_id=str(uuid4()),
+                    user_id="curator-1",
+                    session_id=str(uuid4()),
+                    flow_run_id="flow-run-validator",
+                    agent_context={"user_id": "curator-1"},
+                    flow_conversation_summary="Validated the extracted symbol.",
+                )
+            )
 
-    assert result["validation_group_results"]["materialized_envelope_revision"] == 2
+    else:
+        result = asyncio.run(
+            executor._execute_validation_groups_for_step(
+                flow=executor.CurationFlow(
+                    user_id=1,
+                    name="Validation persistence test",
+                    flow_definition={"nodes": [], "edges": []},
+                ),
+                candidate=executor.ExtractionEnvelopeCandidate(
+                    agent_key="fixture-extractor",
+                    payload_json=source_envelope.model_dump(mode="json"),
+                ),
+                node_data={
+                    "validation_groups": [
+                        {
+                            "group_id": "automatic-symbol-check",
+                            "state": "automatic",
+                            "binding_id": "fixture.symbol-check",
+                        }
+                    ]
+                },
+                document_id=str(uuid4()),
+                user_id="curator-1",
+                session_id=str(uuid4()),
+                flow_run_id="flow-run-validator",
+                agent_context={"user_id": "curator-1"},
+                flow_conversation_summary="Validated the extracted symbol.",
+            )
+        )
+
+        assert result["validation_group_results"]["materialized_envelope_revision"] == 2
     fresh_session = SessionLocal()
     try:
         persisted = fresh_session.get(DomainEnvelopeModel, source_envelope.envelope_id)
         assert persisted is not None
-        assert persisted.revision == 2
         saved_source = fresh_session.get(ExtractionRow, result_id)
+        if commit_fails:
+            assert persisted.revision == 1
+            assert saved_source.extraction_metadata == {}
+            assert saved_source.payload_json == source_envelope.model_dump(mode="json")
+            return
+        assert persisted.revision == 2
         assert saved_source.extraction_metadata["inspection_checkpoint"] == {
             "envelope_id": source_envelope.envelope_id, "revision": 2,
         }
         assert saved_source.payload_json == source_envelope.model_dump(mode="json")
+        from src.lib.openai_agents.result_inspection_views import validation_view, InspectionViewUnavailable
+        record = {"extraction_result_id": str(result_id), "document_id": str(OWNER_DOCUMENT_ID),
+                  "metadata": saved_source.extraction_metadata, "payload_json": saved_source.payload_json}
+        view = validation_view(record, revision=2, user_id="test_pdf_owner_domain_envelope")
+        assert view["payload_json"] == result["validated_candidate"].payload_json
+        with pytest.raises(InspectionViewUnavailable):
+            validation_view(record, revision=2, user_id="another-user")
         assert {
             finding["code"] for finding in persisted.envelope_json["validation_findings"]
         } == {
@@ -799,3 +850,25 @@ def test_missing_stable_object_id_fails_loudly():
         match="CuratableObjectEnvelope has neither object_id nor pending_ref_id",
     ):
         _stable_object_id(object_without_identity)
+
+
+@pytest.mark.integration
+def test_flow_inspection_rechecks_current_document_ownership(db_session):
+    from src.lib.openai_agents.result_inspection_views import readable_document_ids
+    record = {"document_id": str(OWNER_DOCUMENT_ID)}
+    owner = "test_pdf_owner_domain_envelope"
+    document = db_session.get(PDFDocument, OWNER_DOCUMENT_ID)
+    original_owner = document.user_id
+    other = "test_inspection_new_document_owner"
+    other_id = ensure_test_pdf_owner(db_session, auth_sub=other)
+    db_session.commit()
+    assert readable_document_ids([record], user_id=owner) == {str(OWNER_DOCUMENT_ID)}
+    assert readable_document_ids([record], user_id=other) == set()
+    try:
+        document.user_id = other_id
+        db_session.commit()
+        assert readable_document_ids([record], user_id=owner) == set()
+        assert readable_document_ids([record], user_id=other) == {str(OWNER_DOCUMENT_ID)}
+    finally:
+        document.user_id = original_owner
+        db_session.commit()

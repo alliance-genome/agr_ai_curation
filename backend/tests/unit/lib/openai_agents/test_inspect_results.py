@@ -940,3 +940,18 @@ async def test_latest_missing_version_never_selects_an_older_extraction(monkeypa
     search = json.loads(await inspect_results_module.inspect_results(action="search", result_view="post_validation"))
     assert search["matches"] == []
     assert len(search["unavailable_views"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_flow_capability_ignores_unrelated_metadata_but_pins_validation_view(monkeypatch):
+    from src.lib.openai_agents import result_inspection_views as views
+    record = _InspectRecord(metadata={"idempotency_key": "step-key", "flow_step_key": "step-1", "later_link": "new"})
+    _patch_records(monkeypatch, [record])
+    monkeypatch.setattr(views, "readable_document_ids", lambda *a, **kw: {DOCUMENT_ID})
+    ref = f"extraction-result:{RESULT_ID}"
+    scope = {ref: {"metadata": {"idempotency_key": "step-key", "flow_step_key": "step-1"},
+                   "post_validation_checkpoint": {"envelope_id": "checkpoint", "revision": 2}}}
+    original = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=ref, authorized_refs=scope))
+    assert original["status"] == "ok"
+    unavailable = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=ref, result_view="post_validation", authorized_refs=scope))
+    assert unavailable["error_code"] == "result_view_unavailable"

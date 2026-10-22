@@ -58,3 +58,20 @@ def test_runtime_uses_frozen_supervisor_and_fails_if_a_step_disappears(monkeypat
         with pytest.raises(ValueError, match="no longer executable"):
             executor.create_flow_supervisor(NS(id="fixture-flow", name="Flow", flow_definition={}), document_id="paper", benchmark_routes=routes, doc_context=DocumentContext(document_id="paper", user_id="user"))
     forbidden.assert_not_called()
+
+
+def test_benchmark_without_supervisor_snapshot_still_excludes_inspection(monkeypatch):
+    monkeypatch.setattr(executor, "get_agent_config", lambda key: NS(model="fixture", temperature=0, reasoning=None))
+    monkeypatch.setattr(executor, "resolve_model_provider", lambda *a, **kw: "openai")
+    monkeypatch.setattr(executor, "get_model_for_agent", lambda *a, **kw: "fixture-model")
+    monkeypatch.setattr(executor, "build_model_settings", lambda **kw: kw)
+    monkeypatch.setattr(executor, "Agent", lambda **kw: NS(**kw))
+    monkeypatch.setattr(executor, "build_supervisor_instructions", lambda *a, **kw: "Benchmark instructions")
+    tools = Mock(return_value=([object()], {"ask_extractor_specialist"}, [], {}))
+    monkeypatch.setattr(executor, "get_all_agent_tools", tools)
+    routes = {"supervisor": BenchmarkSuiteRoute(provider="openai", model="experiment", reasoning_effort="high")}
+    with benchmark_route_plan(routes), benchmark_source_revisions({}, supervisor=None):
+        built = executor.create_flow_supervisor(NS(id="fixture-flow", name="Flow", flow_definition={}), benchmark_routes=routes)
+    assert built.tools == tools.return_value[0]
+    assert built.instructions == "Benchmark instructions"
+    assert tools.call_args.kwargs["enable_result_inspection"] is False

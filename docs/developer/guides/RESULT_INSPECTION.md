@@ -26,7 +26,7 @@ snapshots, and inspection never silently substitutes the latest curator edits.
 Older extractions without a recorded checkpoint pointer report that view as
 unavailable. Discovery reports unavailable views separately.
 
-Successful extraction steps persist through existing idempotent FLOW storage
+Successful canonical extraction steps persist through existing idempotent FLOW storage
 before returning their real result reference. A later formatter failure does not
 remove the completed extraction. Failed/in-flight steps never publish inspection
 capabilities. Inline CHAT persistence remains disabled for flow specialists.
@@ -36,6 +36,10 @@ run a specialist, or make a scientific judgment on behalf of an LLM. System-owne
 runtime instructions explain view choice and exact reads consistently; curator
 prompts do not own this contract. Existing operational pagination settings apply.
 
-Frozen benchmark runs deliberately retain their captured tools and instructions;
-they do not receive this new inspection registration. Extending their snapshot
-contract is separate work.
+Noncanonical outputs retain their existing execution and persistence behavior;
+they do not receive the new completed-step inspection capability. Canonical
+manifest eligibility is checked before validation or extraction writes.
+
+All benchmark runs are excluded from this new inspection registration, including
+benchmark routes without a supervisor snapshot. Frozen runs retain their captured
+tools and instructions. Extending benchmark inspection is separate work.

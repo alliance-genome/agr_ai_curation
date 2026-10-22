@@ -13,6 +13,7 @@ curator's authorized records (session, document or flow run).
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
@@ -66,6 +67,8 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.domain_pack_metadata import DomainPackMetadata
 
+
+logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "inspect_results"
 _RESULT_REF_PREFIX = "extraction-result:"
@@ -273,6 +276,8 @@ async def inspect_results(
     except _RequestError as exc:
         response = exc.response
     except Exception:
+        logger.warning("Saved result inspection failed", exc_info=True,
+                       extra={"sentry_skip_event": True})
         report_runtime_exception(
             sanitized_runtime_error("Saved result inspection failed"), component="result_inspection", operation="inspect_results_failed",
             context={"action": normalized_action, "result_view": result_view},
@@ -481,9 +486,10 @@ def _inspect(
     if authorized_refs is not None:
         records = [record for record in records if _record_result_ref(record) in authorized_refs]
         records = [record for record in records if all(
-            (_record_attr(record, key) == value if isinstance(value, Mapping)
-             else str(_record_attr(record, key)) == str(value))
+            (all((_record_attr(record, key) or {}).get(k) == v for k, v in value.items())
+             if isinstance(value, Mapping) else str(_record_attr(record, key)) == str(value))
             for key, value in authorized_refs[_record_result_ref(record)].items()
+            if key != "post_validation_checkpoint"
         )]
         from src.lib.openai_agents.result_inspection_views import readable_document_ids
         readable = readable_document_ids(records, user_id=user_id)
@@ -498,6 +504,9 @@ def _inspect(
         projected = []
         for record in records:
             try:
+                binding = authorized_refs.get(_record_result_ref(record), {}) if authorized_refs is not None else {}
+                if "post_validation_checkpoint" in binding and binding["post_validation_checkpoint"] != (_record_attr(record, "metadata") or {}).get("inspection_checkpoint"):
+                    raise InspectionViewUnavailable("The completed step's pinned validation checkpoint changed.")
                 projected.append(validation_view(record, revision=envelope_revision, user_id=user_id))
             except InspectionViewUnavailable as exc:
                 # Explicit reads fail; discovery omits unavailable views without substituting originals.

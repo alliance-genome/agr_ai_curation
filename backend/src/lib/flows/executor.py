@@ -163,7 +163,10 @@ from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool, INSPECTION_GUIDANCE
-from src.lib.openai_agents.extraction_manifest import build_and_render_extraction_manifest
+from src.lib.openai_agents.extraction_manifest import (
+    build_extraction_manifest_page, bind_extraction_manifest_reference,
+    render_extraction_manifest_page, ExtractionManifestError,
+)
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
@@ -3375,6 +3378,25 @@ def get_all_agent_tools(
             phase_timings_ms["evidence_accumulation_ms"] = _elapsed_ms(
                 evidence_accumulation_started_at
             )
+            inspectable_candidate = bool(
+                enable_result_inspection and candidate is not None
+                and is_canonical_domain_envelope_payload(candidate.payload_json)
+            )
+            inspection_manifest = None
+            manifest_error = None
+            if inspectable_candidate and candidate is not None:
+                try:
+                    inspection_manifest = build_extraction_manifest_page(
+                        _sanitize_flow_extraction_candidate_payload(candidate.payload_json),
+                        adapter_key=_resolve_flow_candidate_adapter_key(candidate), agent_key=candidate.agent_key,
+                    )
+                except ExtractionManifestError:
+                    logger.warning("Flow result inspection manifest is unavailable", exc_info=True,
+                                   extra={"sentry_skip_event": True})
+                    manifest_error = sanitized_runtime_error("Flow result inspection manifest is unavailable")
+                    report_runtime_exception(manifest_error, component="flow_executor", operation="inspection_manifest_failed")
+                if manifest_error is not None:
+                    raise manifest_error
             validation_started_at = time.monotonic()
             validation_group_metadata = await _execute_validation_groups_for_step(
                 flow=flow,
@@ -3453,7 +3475,7 @@ def get_all_agent_tools(
             }
             if extraction_handoff_audit is not None:
                 completed_step["extraction_handoff_audit"] = extraction_handoff_audit
-            if enable_result_inspection and candidate is not None:
+            if inspectable_candidate and candidate is not None:
                 if not document_id or not user_id or not session_id:
                     raise ValueError("Completed extraction inspection requires document, owner and session identity.")
                 if not _resolve_flow_candidate_adapter_key(candidate):
@@ -3469,6 +3491,8 @@ def get_all_agent_tools(
                     if len(records) != 1:
                         raise RuntimeError("Completed extraction did not yield one saved result.")
                 except Exception:
+                    logger.warning("Completed flow extraction persistence failed", exc_info=True,
+                                   extra={"sentry_skip_event": True})
                     persistence_error = sanitized_runtime_error("Completed flow extraction persistence failed")
                     _report_flow_extraction_persistence_failure(
                         persistence_error, operation="extraction_persistence_failed", document_id=document_id,
@@ -3479,10 +3503,11 @@ def get_all_agent_tools(
                     raise persistence_error
                 record = records[0]
                 result_ref = _flow_extraction_result_ref(record)["result_ref"]
-                result = build_and_render_extraction_manifest(
-                    cast(Mapping[str, Any], record.payload_json), extraction_result_id=str(record.extraction_result_id),
-                    result_ref=result_ref, adapter_key=record.adapter_key, agent_key=record.agent_key,
-                )
+                if inspection_manifest is None:
+                    raise RuntimeError("Completed canonical extraction has no prepared inspection manifest.")
+                result = render_extraction_manifest_page(bind_extraction_manifest_reference(
+                    inspection_manifest, str(record.extraction_result_id),
+                ))
                 checkpoint = record.metadata.get("inspection_checkpoint")
                 if checkpoint:
                     result += ("\nPost-validation view: inspect_results(result_ref="
@@ -3493,7 +3518,8 @@ def get_all_agent_tools(
                 completed_step["inspection_scope"] = {
                     "user_id": user_id, "origin_session_id": session_id,
                     "document_id": document_id, "flow_run_id": flow_run_id,
-                    "metadata": deepcopy(record.metadata),
+                    "metadata": {key: record.metadata[key] for key in ("idempotency_key", "flow_step_key")},
+                    "post_validation_checkpoint": deepcopy(checkpoint),
                 }
                 _merge_persisted_flow_extraction_results(execution_state, records)
                 if extraction_handoff_audit is not None:
@@ -4339,7 +4365,7 @@ def create_flow_supervisor(
         model_id_override=model_id_override,
         model_provider_override=model_provider_override,
         benchmark_routes=benchmark_routes,
-        enable_result_inspection=frozen_supervisor is None,
+        enable_result_inspection=benchmark_routes is None,
     )
     if frozen_supervisor is not None:
         if unavailable_steps or created_tool_names != set(frozen_supervisor.available_tools):
@@ -4360,7 +4386,7 @@ def create_flow_supervisor(
             f"Check that all agent IDs resolve in the unified agents table and required documents are provided."
         )
 
-    if frozen_supervisor is None:
+    if benchmark_routes is None:
         def inspection_scope():
             refs = {}
             if inspection_context is not None:
@@ -4378,6 +4404,7 @@ def create_flow_supervisor(
             return refs
 
         def record_inspection(action, result_ref, output):
+            action = str(action or "").strip().lower()
             # Only prior-result reads can satisfy an inspection-only follow-up.
             if inspection_context is None or result_ref not in inspection_context.result_refs or action == "help":
                 return
@@ -4409,7 +4436,7 @@ def create_flow_supervisor(
             flow, has_document=has_document, document_name=document_name,
             available_tools=created_tool_names,
         )
-    if frozen_supervisor is None:
+    if benchmark_routes is None:
         instructions += INSPECTION_GUIDANCE
     if inspection_context is not None:
         refs = "\n".join(f"- {result_ref}" for result_ref in inspection_context.result_refs)

@@ -9,6 +9,7 @@ from src.lib.curation_workspace.models import DomainEnvelopeModel
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
+from src.services.document_access import owned_documents_select
 
 
 class InspectionViewUnavailable(ValueError):
@@ -24,12 +25,13 @@ def readable_document_ids(records: Sequence[Any], *, user_id: str) -> set[str]:
     if not ids:
         return set()
     with SessionLocal() as db:
+        owner_id = db.scalar(select(User.id).where(User.auth_sub == user_id))
+        if owner_id is None:
+            return set()
         return {str(value) for value in db.scalars(
-            select(PDFDocument.id).join(User, PDFDocument.user_id == User.id).where(
-                User.auth_sub == user_id, PDFDocument.id.in_(ids),
-                PDFDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
-            )
+            owned_documents_select(owner_id).with_only_columns(PDFDocument.id).where(PDFDocument.id.in_(ids))
         )}
+
 
 
 def validation_view(record: Any, *, revision: int | None, user_id: str) -> dict[str, Any]:
