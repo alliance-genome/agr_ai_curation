@@ -55,6 +55,9 @@ def read_export_details_payload(
                     "status": "unavailable",
                     "reason": "This file has no recorded export diagnostics",
                 }
+            # Store the exact JSON text inside JSONB so numeric normalization
+            # cannot change a receipt digest (for example 1e16 -> an integer).
+            diagnostics = json.loads(diagnostics)
             actual_hash = hash_diagnostics(diagnostics)
             if actual_hash != diagnostics_sha256:
                 return {

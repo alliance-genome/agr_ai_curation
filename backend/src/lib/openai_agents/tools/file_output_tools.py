@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.lib.flows.output_projection import FlowOutputProjectionResult
-from src.lib.export_accounting import projection_summary, export_diagnostics
+from src.lib.export_accounting import projection_summary, export_diagnostics, exact_diagnostics_json
 from src.lib.file_outputs.storage import FileOutputStorageService, sanitize_output_descriptor
 from src.lib.openai_agents.config import (
     get_flow_output_branch_descriptor_prefix_chars,
@@ -271,7 +271,7 @@ async def save_projected_file_output(
             branch_identity=branch_identity,
         )
         saved_summary = projection_summary(projection)
-        diagnostics = export_diagnostics(projection)
+        diagnostics = exact_diagnostics_json(export_diagnostics(projection))
         branch_metadata = {
             key: value
             for key, value in flow_output_attachment.items()

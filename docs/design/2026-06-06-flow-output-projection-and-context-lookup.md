@@ -556,6 +556,7 @@ Add the new projection tests to the targeted pytest invocation once the filename
 Projection results measure candidate rows after source selection, sequential filter
 removals, explicit override exclusions, retained rows, and actual exported rows.
 The row unit is explicit (object, evidence, validation finding, or artifact).
+Literal-only generated rows have a separate synthetic row count, never a fabricated source count.
 Grouped JSON reports group count separately; split-list columns do not multiply
 rows. Preview paging, explicit `max_rows`, and export truncation are distinct.
 The persisted `projection_summary.row_count` is the number written, while
@@ -569,7 +570,8 @@ instructions to explain measured counts and describe filters neutrally; filters
 are not necessarily curator-authored. A valid nonempty source filtered to zero
 can intentionally produce an empty file. Missing source data remains an error.
 
-The file metadata contains complete `export_diagnostics`: stage counts, applied
+The file metadata contains complete `export_diagnostics` as exact JSON text inside
+JSONB, preserving numeric representations used by the digest: stage counts, applied
 filter specifications with sequential removals, and full warnings. Warning scope
 is the source bundle plus projection, which can include unselected artifacts;
 warnings alone do not establish missing export data. Compact warning previews use
@@ -584,3 +586,7 @@ a file replacement. Missing historical diagnostics remain unavailable. The tool
 is read-only and must never cause another save or extraction to recover metadata.
 Benchmark-frozen tool surfaces are unchanged. TraceReview preserves these JSON
 receipts and detail windows through its generic tool-result parser.
+
+Replacing a file under the same existing trace/descriptor identity makes older
+diagnostic references stale. Compact receipts describe the save at receipt time;
+this change does not redesign the existing file replacement lifecycle.

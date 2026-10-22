@@ -1462,6 +1462,7 @@ def build_output_formatter_tools(
         contents: list[str] = []
         summaries: list[dict[str, Any]] = []
         total_rows = 0
+        has_filtered_source = False
         total_chars = 0
         for index, (heading, plan) in enumerate(plans, 1):
             try:
@@ -1470,6 +1471,11 @@ def build_output_formatter_tools(
                 raise
             except Exception as exc:
                 raise ValueError(f"Section {index}: {exc}") from exc
+            has_filtered_source |= bool(
+                projection.export_accounting
+                and projection.export_accounting.candidate_row_count > 0
+                and projection.export_accounting.rows_removed_by_filters > 0
+            )
             total_rows += projection.total_count
             row_limit = get_flow_projection_max_rows()
             if total_rows > row_limit:
@@ -1489,7 +1495,7 @@ def build_output_formatter_tools(
                 )
             contents.append(content)
             summaries.append({"section": index, "heading": heading, **_projection_summary(projection)})
-        if not total_rows:
+        if not total_rows and not has_filtered_source:
             raise ValueError("Report matched no saved rows; inspect the bundle or call formatter_cannot_complete.")
         return "\n\n".join(contents), {
             "section_count": len(plans), "total_count": total_rows, "sections": summaries,

@@ -196,7 +196,7 @@ def setup_read(monkeypatch, diagnostics):
     db = MagicMock()
     db.__enter__.return_value = db
     db.query.return_value.filter.return_value.one_or_none.return_value = (
-        SimpleNamespace(file_metadata={"export_diagnostics": diagnostics})
+        SimpleNamespace(file_metadata={"export_diagnostics": json.dumps(diagnostics)})
     )
     monkeypatch.setattr(export_details_tool, "SessionLocal", lambda: db)
     monkeypatch.setattr(export_details_tool, "get_current_user_id", lambda: "owner")
@@ -320,3 +320,50 @@ async def test_parallel_formatter_receipts_keep_counts_and_warnings_isolated():
         assert receipt["export_accounting"]["counts"]["exported_row_count"] == count
         assert receipt["export_accounting"]["warnings"] == [warning]
         assert receipt["export_details"]["read"]["file_id"] == payload["file_id"]
+
+
+def test_literal_only_projection_counts_synthetic_row_without_inventing_source():
+    p = FlowOutputProjectionPlan.model_validate(
+        {
+            "format": "json",
+            "row_source": "object",
+            "row_strategy": "wide_union",
+            "columns": [
+                {"key": "note", "transform": {"type": "literal", "value": "No source"}}
+            ],
+        }
+    )
+    result = finalize_output_projection(bundle(0, 0), p)
+    assert result.export_accounting.candidate_row_count == 0
+    assert result.export_accounting.synthetic_row_count == 1
+    assert result.export_accounting.exported_row_count == 1
+
+
+@pytest.mark.asyncio
+async def test_multisection_chat_all_filtered_is_intentional_empty():
+    delivered = []
+
+    async def deliver(content, receipt):
+        delivered.append(content)
+        return receipt
+
+    tools = build_output_formatter_tools(
+        bundle=bundle(5, 5),
+        output_format="chat",
+        formatter_agent_id="chat_output",
+        deliver_chat_output=deliver,
+    )
+    tool = next(t for t in tools if t.name == "finalize_chat_output")
+    report = {
+        "sections": [
+            {"heading": "Results", "plan": plan("chat").model_dump(mode="json")}
+        ]
+    }
+    out = json.loads(
+        await tool.on_invoke_tool(
+            SimpleNamespace(tool_name=tool.name),
+            json.dumps({"report_json": json.dumps(report)}),
+        )
+    )
+    assert out["status"] == "ok", out
+    assert len(delivered) == 1

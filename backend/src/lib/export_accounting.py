@@ -17,6 +17,7 @@ from src.lib.openai_agents.config import (
 EXPORT_ACCOUNTING_GUIDANCE = (
     "EXPORT ACCOUNTING: Use export_accounting from the successful save receipt to explain "
     "candidate rows, applied-filter removals, explicit override exclusions and exported rows. "
+    "Synthetic literal-only rows are separate from measured source candidates. "
     "Keep object, evidence, finding and group counts distinct; source rows are not necessarily "
     "the extractor's primary annotation count. Say applied filters, not curator-requested filters "
     "unless their origin is known. Preview paging is not export truncation. An intentional empty "
@@ -33,6 +34,7 @@ class ExportAccounting(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     row_unit: Literal["artifact", "object", "evidence", "validation_finding"]
     candidate_row_count: int = Field(ge=0)
+    synthetic_row_count: int = Field(default=0, ge=0)
     rows_removed_by_filters: int = Field(ge=0)
     rows_removed_by_overrides: int = Field(ge=0)
     matched_row_count: int = Field(ge=0)
@@ -50,7 +52,7 @@ class ExportAccounting(BaseModel):
     @model_validator(mode="after")
     def consistent_counts(self):
         if (
-            self.candidate_row_count
+            self.candidate_row_count + self.synthetic_row_count
             != self.rows_removed_by_filters
             + self.rows_removed_by_overrides
             + self.matched_row_count
