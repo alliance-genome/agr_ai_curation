@@ -126,6 +126,9 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # ALL-1367 reproduces saved-flow authorization with the shipped restricted
+    # RGD agent and provider-group mapping; generic lifecycle tests stay separate.
+    Path("backend/tests/integration/test_alliance_flow_group_context.py"),
     # Direct-run context isolation exercises the real packaged expression builder.
     Path("backend/tests/unit/lib/openai_agents/test_runner_direct_builder.py"),
     # Benchmark identity integration verifies the shipped provider-group mapping.
