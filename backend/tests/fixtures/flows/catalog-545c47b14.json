@@ -1,0 +1,1869 @@
+{
+  "source_commit": "545c47b14f6b2db61eab3cc6d429633859cd199b",
+  "catalog": {
+    "agm": [],
+    "agm_validation": [],
+    "allele_extractor": [
+      {
+        "attachment_id": "agr.alliance.allele:binding:allele_mention_reference_validation:field:AlleleMention:mention.text",
+        "domain_pack_id": "agr.alliance.allele",
+        "validator_id": "agr.alliance:allele_validation",
+        "validator_binding_id": "allele_mention_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "allele_validation",
+        "scope": "field",
+        "object_type": "AlleleMention",
+        "object_role": "metadata_only",
+        "field_path": "mention.text",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.allele:binding:source_reference_validation:field:Reference:reference_id",
+        "domain_pack_id": "agr.alliance.allele",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "Reference",
+        "object_role": "validated_reference",
+        "field_path": "reference_id",
+        "field_type": "integer"
+      },
+      {
+        "attachment_id": "agr.alliance.allele:binding:source_reference_validation:field:Reference:title",
+        "domain_pack_id": "agr.alliance.allele",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "Reference",
+        "object_role": "validated_reference",
+        "field_path": "title",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.allele:metadata:allele_mention_reference_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.allele",
+        "validator_id": "allele_mention_reference_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.allele:metadata:source_reference_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.allele",
+        "validator_id": "source_reference_validation",
+        "scope": "pack"
+      }
+    ],
+    "allele_validation": [],
+    "chat_output": [],
+    "chat_output_formatter": [],
+    "chemical_validation": [],
+    "controlled_vocabulary": [],
+    "controlled_vocabulary_validation": [],
+    "csv_formatter": [],
+    "curation_handoff": [],
+    "curation_prep": [],
+    "data_provider": [],
+    "data_provider_validation": [],
+    "disease_extractor": [
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_annotation_type_cv_lookup:field:AGMDiseaseAnnotation:annotation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_annotation_type_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "annotation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_annotation_type_cv_lookup:field:AlleleDiseaseAnnotation:annotation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_annotation_type_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "annotation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_annotation_type_cv_lookup:field:DiseaseAnnotation:annotation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_annotation_type_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "annotation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_annotation_type_cv_lookup:field:GeneDiseaseAnnotation:annotation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_annotation_type_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "annotation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_condition_relation_lookup:field:AGMDiseaseAnnotation:condition_relations.condition_relation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_condition_relation_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.condition_relation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_condition_relation_lookup:field:AlleleDiseaseAnnotation:condition_relations.condition_relation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_condition_relation_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.condition_relation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_condition_relation_lookup:field:DiseaseAnnotation:condition_relations.condition_relation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_condition_relation_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.condition_relation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_condition_relation_lookup:field:GeneDiseaseAnnotation:condition_relations.condition_relation_type.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_condition_relation_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.condition_relation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_data_provider_lookup:field:AGMDiseaseAnnotation:data_provider.abbreviation",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:data_provider_validation",
+        "validator_binding_id": "disease_data_provider_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "data_provider_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "data_provider.abbreviation",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_data_provider_lookup:field:AlleleDiseaseAnnotation:data_provider.abbreviation",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:data_provider_validation",
+        "validator_binding_id": "disease_data_provider_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "data_provider_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "data_provider.abbreviation",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_data_provider_lookup:field:DiseaseAnnotation:data_provider.abbreviation",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:data_provider_validation",
+        "validator_binding_id": "disease_data_provider_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "data_provider_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "data_provider.abbreviation",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_data_provider_lookup:field:GeneDiseaseAnnotation:data_provider.abbreviation",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:data_provider_validation",
+        "validator_binding_id": "disease_data_provider_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "data_provider_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "data_provider.abbreviation",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_evidence_code_lookup:field:AGMDiseaseAnnotation:evidence_code_curies",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_evidence_code_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "evidence_code_curies",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_evidence_code_lookup:field:AlleleDiseaseAnnotation:evidence_code_curies",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_evidence_code_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "evidence_code_curies",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_evidence_code_lookup:field:DiseaseAnnotation:evidence_code_curies",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_evidence_code_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "evidence_code_curies",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_evidence_code_lookup:field:GeneDiseaseAnnotation:evidence_code_curies",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_evidence_code_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "evidence_code_curies",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_genetic_sex_cv_lookup:field:AGMDiseaseAnnotation:genetic_sex.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_genetic_sex_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "genetic_sex.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_genetic_sex_cv_lookup:field:AlleleDiseaseAnnotation:genetic_sex.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_genetic_sex_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "genetic_sex.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_genetic_sex_cv_lookup:field:DiseaseAnnotation:genetic_sex.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_genetic_sex_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "genetic_sex.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_genetic_sex_cv_lookup:field:GeneDiseaseAnnotation:genetic_sex.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_genetic_sex_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "genetic_sex.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:AGMDiseaseAnnotation:disease_annotation_object.curie",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:AGMDiseaseAnnotation:disease_annotation_object.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:AlleleDiseaseAnnotation:disease_annotation_object.curie",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:AlleleDiseaseAnnotation:disease_annotation_object.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:DiseaseAnnotation:disease_annotation_object.curie",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:DiseaseAnnotation:disease_annotation_object.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:GeneDiseaseAnnotation:disease_annotation_object.curie",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_ontology_term_lookup:field:GeneDiseaseAnnotation:disease_annotation_object.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "disease_ontology_term_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_object.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_qualifier_cv_lookup:field:AGMDiseaseAnnotation:disease_qualifier_names",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_qualifier_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_qualifier_names",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_qualifier_cv_lookup:field:AlleleDiseaseAnnotation:disease_qualifier_names",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_qualifier_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_qualifier_names",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_qualifier_cv_lookup:field:DiseaseAnnotation:disease_qualifier_names",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_qualifier_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_qualifier_names",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_qualifier_cv_lookup:field:GeneDiseaseAnnotation:disease_qualifier_names",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_qualifier_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_qualifier_names",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_reference_materialization:field:DiseaseAnnotation:single_reference.curie",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "disease_reference_materialization",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "single_reference.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_relation_cv_lookup:field:AGMDiseaseAnnotation:disease_relation.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_relation_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_relation.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_relation_cv_lookup:field:AlleleDiseaseAnnotation:disease_relation.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_relation_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_relation.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_relation_cv_lookup:field:DiseaseAnnotation:disease_relation.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_relation_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_relation.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_relation_cv_lookup:field:GeneDiseaseAnnotation:disease_relation.name",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "disease_relation_cv_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_relation.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:AGMDiseaseAnnotation:disease_annotation_subject.subject_identifier",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_identifier",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:AGMDiseaseAnnotation:disease_annotation_subject.subject_type",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_type",
+        "field_type": "enum"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:AlleleDiseaseAnnotation:disease_annotation_subject.subject_identifier",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_identifier",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:AlleleDiseaseAnnotation:disease_annotation_subject.subject_type",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_type",
+        "field_type": "enum"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:DiseaseAnnotation:disease_annotation_subject.subject_identifier",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_identifier",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:DiseaseAnnotation:disease_annotation_subject.subject_type",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_type",
+        "field_type": "enum"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:GeneDiseaseAnnotation:disease_annotation_subject.subject_identifier",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_identifier",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_subject_materialization:field:GeneDiseaseAnnotation:disease_annotation_subject.subject_type",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "validator_binding_id": "disease_subject_materialization",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "disease_annotation_subject.subject_type",
+        "field_type": "enum"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_with_gene_validation:field:AGMDiseaseAnnotation:with_gene_identifiers",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "disease_with_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "with_gene_identifiers",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_with_gene_validation:field:AlleleDiseaseAnnotation:with_gene_identifiers",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "disease_with_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "with_gene_identifiers",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_with_gene_validation:field:DiseaseAnnotation:with_gene_identifiers",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "disease_with_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "with_gene_identifiers",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:disease_with_gene_validation:field:GeneDiseaseAnnotation:with_gene_identifiers",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "disease_with_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "with_gene_identifiers",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:experimental_condition_validation:field:AGMDiseaseAnnotation:condition_relations.conditions",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:experimental_condition_validation",
+        "validator_binding_id": "experimental_condition_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "experimental_condition_validation",
+        "scope": "field",
+        "object_type": "AGMDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.conditions",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:experimental_condition_validation:field:AlleleDiseaseAnnotation:condition_relations.conditions",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:experimental_condition_validation",
+        "validator_binding_id": "experimental_condition_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "experimental_condition_validation",
+        "scope": "field",
+        "object_type": "AlleleDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.conditions",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:experimental_condition_validation:field:DiseaseAnnotation:condition_relations.conditions",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:experimental_condition_validation",
+        "validator_binding_id": "experimental_condition_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "experimental_condition_validation",
+        "scope": "field",
+        "object_type": "DiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.conditions",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:binding:experimental_condition_validation:field:GeneDiseaseAnnotation:condition_relations.conditions",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "agr.alliance:experimental_condition_validation",
+        "validator_binding_id": "experimental_condition_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "experimental_condition_validation",
+        "scope": "field",
+        "object_type": "GeneDiseaseAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.conditions",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease.domain_envelope_shape:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease.domain_envelope_shape",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease.no_legacy_semantic_lists:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease.no_legacy_semantic_lists",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease.required_payload_fields:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease.required_payload_fields",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease.tool_verified_evidence_links:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease.tool_verified_evidence_links",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_annotation_type_cv_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_annotation_type_cv_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_condition_relation_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_condition_relation_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_data_provider_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_data_provider_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_evidence_code_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_evidence_code_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_genetic_sex_cv_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_genetic_sex_cv_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_ontology_term_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_ontology_term_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_qualifier_cv_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_qualifier_cv_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_reference_materialization:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_reference_materialization",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_relation_cv_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_relation_cv_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_subject_materialization:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_subject_materialization",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:disease_with_gene_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "disease_with_gene_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.disease:metadata:experimental_condition_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.disease",
+        "validator_id": "experimental_condition_validation",
+        "scope": "pack"
+      }
+    ],
+    "disease_validation": [],
+    "experimental_condition": [],
+    "experimental_condition_validation": [],
+    "gene_expression": [
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:data_provider_validation:field:GeneExpressionAnnotation:data_provider.abbreviation",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:data_provider_validation",
+        "validator_binding_id": "data_provider_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "data_provider_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "data_provider.abbreviation",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:experimental_condition_validation:field:GeneExpressionAnnotation:condition_relations.conditions",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:experimental_condition_validation",
+        "validator_binding_id": "experimental_condition_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "experimental_condition_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.conditions",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_anatomical_structure_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.anatomical_structure",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_anatomical_structure_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.anatomical_structure",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_anatomical_uberon_slim_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_anatomical_uberon_slim_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_assay_ontology_validation:field:GeneExpressionAnnotation:expression_experiment.expression_assay_used",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_assay_ontology_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.expression_assay_used",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_cellular_component_qualifier_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.cellular_component_qualifiers",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_cellular_component_qualifier_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.cellular_component_qualifiers",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_cellular_component_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.cellular_component",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_cellular_component_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.cellular_component",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_stage_ontology_validation:field:GeneExpressionAnnotation:expression_pattern.when_expressed.developmental_stage_start",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_stage_ontology_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.when_expressed.developmental_stage_start",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_stage_uberon_slim_validation:field:GeneExpressionAnnotation:expression_pattern.when_expressed.stage_uberon_slim_terms",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "expression_stage_uberon_slim_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:gene_expression_condition_relation_lookup:field:GeneExpressionAnnotation:condition_relations.condition_relation_type.name",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "gene_expression_condition_relation_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.condition_relation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:reagent_context_materialization:field:GeneExpressionAnnotation:expression_experiment.detection_reagents",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "reagent_context_materialization",
+        "validator_binding_id": "reagent_context_materialization",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.detection_reagents",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:reagent_context_materialization:field:GeneExpressionAnnotation:expression_experiment.specimen_alleles",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "reagent_context_materialization",
+        "validator_binding_id": "reagent_context_materialization",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.specimen_alleles",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:reagent_context_materialization:field:GeneExpressionAnnotation:expression_experiment.specimen_genomic_model",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "reagent_context_materialization",
+        "validator_binding_id": "reagent_context_materialization",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.specimen_genomic_model",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:relation_vocabulary_validation:field:GeneExpressionAnnotation:relation.name",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "relation_vocabulary_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "relation.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:source_reference_validation:field:GeneExpressionAnnotation:single_reference.curie",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "single_reference.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:source_reference_validation:field:GeneExpressionAnnotation:single_reference.reference_id",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "single_reference.reference_id",
+        "field_type": "integer"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:source_reference_validation:field:GeneExpressionAnnotation:single_reference.title",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "single_reference.title",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:subject_gene_validation:field:GeneExpressionAnnotation:expression_annotation_subject.gene_symbol",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "subject_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_annotation_subject.gene_symbol",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:subject_gene_validation:field:GeneExpressionAnnotation:expression_annotation_subject.primary_external_id",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "subject_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_annotation_subject.primary_external_id",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:data_provider_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "data_provider_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:experimental_condition_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "experimental_condition_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_anatomical_structure_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_anatomical_structure_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_anatomical_uberon_slim_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_anatomical_uberon_slim_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_assay_ontology_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_assay_ontology_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_cellular_component_qualifier_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_cellular_component_qualifier_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_cellular_component_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_cellular_component_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_stage_ontology_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_stage_ontology_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_stage_uberon_slim_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_stage_uberon_slim_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.domain_envelope_shape:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.domain_envelope_shape",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.export_submission_projection:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.export_submission_projection",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.extractor_output_migration:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.extractor_output_migration",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.linkml_extraction_contract:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.linkml_extraction_contract",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.live_write_transport:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.live_write_transport",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.no_legacy_semantic_lists:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.no_legacy_semantic_lists",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.reagent_context_materialization:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.reagent_context_materialization",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.required_payload_fields:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.required_payload_fields",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression_condition_relation_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression_condition_relation_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:relation_vocabulary_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "relation_vocabulary_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:source_reference_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "source_reference_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:subject_gene_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "subject_gene_validation",
+        "scope": "pack"
+      }
+    ],
+    "gene_expression_extraction": [
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:data_provider_validation:field:GeneExpressionAnnotation:data_provider.abbreviation",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:data_provider_validation",
+        "validator_binding_id": "data_provider_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "data_provider_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "data_provider.abbreviation",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:experimental_condition_validation:field:GeneExpressionAnnotation:condition_relations.conditions",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:experimental_condition_validation",
+        "validator_binding_id": "experimental_condition_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "experimental_condition_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.conditions",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_anatomical_structure_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.anatomical_structure",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_anatomical_structure_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.anatomical_structure",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_anatomical_uberon_slim_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_anatomical_uberon_slim_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.anatomical_structure_uberon_terms",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_assay_ontology_validation:field:GeneExpressionAnnotation:expression_experiment.expression_assay_used",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_assay_ontology_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.expression_assay_used",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_cellular_component_qualifier_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.cellular_component_qualifiers",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_cellular_component_qualifier_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.cellular_component_qualifiers",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_cellular_component_validation:field:GeneExpressionAnnotation:expression_pattern.where_expressed.cellular_component",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_cellular_component_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.where_expressed.cellular_component",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_stage_ontology_validation:field:GeneExpressionAnnotation:expression_pattern.when_expressed.developmental_stage_start",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "expression_stage_ontology_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.when_expressed.developmental_stage_start",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:expression_stage_uberon_slim_validation:field:GeneExpressionAnnotation:expression_pattern.when_expressed.stage_uberon_slim_terms",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "expression_stage_uberon_slim_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_pattern.when_expressed.stage_uberon_slim_terms",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:gene_expression_condition_relation_lookup:field:GeneExpressionAnnotation:condition_relations.condition_relation_type.name",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "gene_expression_condition_relation_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.condition_relation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:reagent_context_materialization:field:GeneExpressionAnnotation:expression_experiment.detection_reagents",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "reagent_context_materialization",
+        "validator_binding_id": "reagent_context_materialization",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.detection_reagents",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:reagent_context_materialization:field:GeneExpressionAnnotation:expression_experiment.specimen_alleles",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "reagent_context_materialization",
+        "validator_binding_id": "reagent_context_materialization",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.specimen_alleles",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:reagent_context_materialization:field:GeneExpressionAnnotation:expression_experiment.specimen_genomic_model",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "reagent_context_materialization",
+        "validator_binding_id": "reagent_context_materialization",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_experiment.specimen_genomic_model",
+        "field_type": "object"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:relation_vocabulary_validation:field:GeneExpressionAnnotation:relation.name",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "relation_vocabulary_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "relation.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:source_reference_validation:field:GeneExpressionAnnotation:single_reference.curie",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "single_reference.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:source_reference_validation:field:GeneExpressionAnnotation:single_reference.reference_id",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "single_reference.reference_id",
+        "field_type": "integer"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:source_reference_validation:field:GeneExpressionAnnotation:single_reference.title",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "source_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "single_reference.title",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:subject_gene_validation:field:GeneExpressionAnnotation:expression_annotation_subject.gene_symbol",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "subject_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_annotation_subject.gene_symbol",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:binding:subject_gene_validation:field:GeneExpressionAnnotation:expression_annotation_subject.primary_external_id",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "subject_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GeneExpressionAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "expression_annotation_subject.primary_external_id",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:data_provider_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "data_provider_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:experimental_condition_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "experimental_condition_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_anatomical_structure_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_anatomical_structure_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_anatomical_uberon_slim_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_anatomical_uberon_slim_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_assay_ontology_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_assay_ontology_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_cellular_component_qualifier_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_cellular_component_qualifier_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_cellular_component_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_cellular_component_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_stage_ontology_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_stage_ontology_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:expression_stage_uberon_slim_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "expression_stage_uberon_slim_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.domain_envelope_shape:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.domain_envelope_shape",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.export_submission_projection:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.export_submission_projection",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.extractor_output_migration:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.extractor_output_migration",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.linkml_extraction_contract:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.linkml_extraction_contract",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.live_write_transport:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.live_write_transport",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.no_legacy_semantic_lists:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.no_legacy_semantic_lists",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.reagent_context_materialization:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.reagent_context_materialization",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression.required_payload_fields:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression.required_payload_fields",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:gene_expression_condition_relation_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "gene_expression_condition_relation_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:relation_vocabulary_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "relation_vocabulary_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:source_reference_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "source_reference_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.gene_expression:metadata:subject_gene_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.gene_expression",
+        "validator_id": "subject_gene_validation",
+        "scope": "pack"
+      }
+    ],
+    "gene_extractor": [
+      {
+        "attachment_id": "gene:binding:alliance_gene_reference_lookup:object:gene_mention_evidence:*",
+        "domain_pack_id": "gene",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "alliance_gene_reference_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "object",
+        "object_type": "gene_mention_evidence",
+        "object_role": "validated_reference"
+      }
+    ],
+    "gene_ontology": [],
+    "gene_ontology_lookup": [],
+    "gene_validation": [],
+    "go_annotations": [],
+    "go_annotations_lookup": [],
+    "json_formatter": [],
+    "ontology_term_validation": [],
+    "orthologs": [],
+    "orthologs_lookup": [],
+    "pdf_extraction": [],
+    "phenotype_extractor": [
+      {
+        "attachment_id": "agr.alliance.phenotype:binding:experimental_condition_validation:field:PhenotypeAnnotation:condition_relations.conditions",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "agr.alliance:experimental_condition_validation",
+        "validator_binding_id": "experimental_condition_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "experimental_condition_validation",
+        "scope": "field",
+        "object_type": "PhenotypeAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.conditions",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:binding:phenotype_condition_relation_lookup:field:PhenotypeAnnotation:condition_relations.condition_relation_type.name",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "agr.alliance:controlled_vocabulary_validation",
+        "validator_binding_id": "phenotype_condition_relation_lookup",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "controlled_vocabulary_validation",
+        "scope": "field",
+        "object_type": "PhenotypeAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "condition_relations.condition_relation_type.name",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:binding:phenotype_reference_validator:field:Reference:reference_id",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "phenotype_reference_validator",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "Reference",
+        "object_role": "validated_reference",
+        "field_path": "reference_id",
+        "field_type": "integer"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:binding:phenotype_reference_validator:field:Reference:title",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "phenotype_reference_validator",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "Reference",
+        "object_role": "validated_reference",
+        "field_path": "title",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:binding:phenotype_subject_entity_validator:field:PhenotypeSubject:subject_identifier",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype_subject_entity_validator",
+        "validator_binding_id": "phenotype_subject_entity_validator",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "PhenotypeSubject",
+        "object_role": "validated_reference",
+        "field_path": "subject_identifier",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:binding:phenotype_subject_entity_validator:field:PhenotypeSubject:subject_type",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype_subject_entity_validator",
+        "validator_binding_id": "phenotype_subject_entity_validator",
+        "validator_package_id": "agr.alliance",
+        "scope": "field",
+        "object_type": "PhenotypeSubject",
+        "object_role": "validated_reference",
+        "field_path": "subject_type",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:binding:phenotype_term_ontology_validator:field:PhenotypeAnnotation:phenotype_terms",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "phenotype_term_ontology_validator",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "PhenotypeAnnotation",
+        "object_role": "curatable_unit",
+        "field_path": "phenotype_terms",
+        "field_type": "object_ref"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:experimental_condition_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "experimental_condition_validation",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype.additional_provider_ontology_mappings:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype.additional_provider_ontology_mappings",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype.domain_envelope_shape:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype.domain_envelope_shape",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype.export_submission_projection:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype.export_submission_projection",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype.extractor_output_migration:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype.extractor_output_migration",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype.no_legacy_semantic_lists:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype.no_legacy_semantic_lists",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype.pending_envelope_policy:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype.pending_envelope_policy",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype.subject_entity_resolution:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype.subject_entity_resolution",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype_condition_relation_lookup:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype_condition_relation_lookup",
+        "scope": "pack"
+      },
+      {
+        "attachment_id": "agr.alliance.phenotype:metadata:phenotype_term_ontology_validator:pack:*:*",
+        "domain_pack_id": "agr.alliance.phenotype",
+        "validator_id": "phenotype_term_ontology_validator",
+        "scope": "pack"
+      }
+    ],
+    "reference": [],
+    "reference_validation": [],
+    "rgd_go_evidence_policy": [],
+    "rgd_go_evidence_policy_validation": [],
+    "rgd_go_paper_curator": [
+      {
+        "attachment_id": "agr.alliance.go:binding:go_gene_product_validation:field:GOCuratableObject:gene_product.curie",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "go_gene_product_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GOCuratableObject",
+        "object_role": "curatable_unit",
+        "field_path": "gene_product.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.go:binding:go_gene_product_validation:field:GOCuratableObject:gene_product.label",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "go_gene_product_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GOCuratableObject",
+        "object_role": "curatable_unit",
+        "field_path": "gene_product.label",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.go:binding:go_reference_validation:field:GOCuratableObject:reference_curie.curie",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "agr.alliance:reference_validation",
+        "validator_binding_id": "go_reference_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "reference_validation",
+        "scope": "field",
+        "object_type": "GOCuratableObject",
+        "object_role": "curatable_unit",
+        "field_path": "reference_curie.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.go:binding:go_term_validation:field:GOCuratableObject:go_term.curie",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "go_term_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GOCuratableObject",
+        "object_role": "curatable_unit",
+        "field_path": "go_term.curie",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.go:binding:go_term_validation:field:GOCuratableObject:go_term.label",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "agr.alliance:ontology_term_validation",
+        "validator_binding_id": "go_term_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "ontology_term_validation",
+        "scope": "field",
+        "object_type": "GOCuratableObject",
+        "object_role": "curatable_unit",
+        "field_path": "go_term.label",
+        "field_type": "string"
+      },
+      {
+        "attachment_id": "agr.alliance.go:binding:go_with_from_gene_validation:field:GOCuratableObject:with_from",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "agr.alliance:gene_validation",
+        "validator_binding_id": "go_with_from_gene_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "gene_validation",
+        "scope": "field",
+        "object_type": "GOCuratableObject",
+        "object_role": "curatable_unit",
+        "field_path": "with_from",
+        "field_type": "array"
+      },
+      {
+        "attachment_id": "agr.alliance.go:binding:rgd_go_evidence_policy_validation:object:GOCuratableObject:*",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "agr.alliance:rgd_go_evidence_policy_validation",
+        "validator_binding_id": "rgd_go_evidence_policy_validation",
+        "validator_package_id": "agr.alliance",
+        "validator_agent_id": "rgd_go_evidence_policy_validation",
+        "scope": "object",
+        "object_type": "GOCuratableObject",
+        "object_role": "curatable_unit"
+      },
+      {
+        "attachment_id": "agr.alliance.go:metadata:rgd_go_evidence_policy_validation:pack:*:*",
+        "domain_pack_id": "agr.alliance.go",
+        "validator_id": "rgd_go_evidence_policy_validation",
+        "scope": "pack"
+      }
+    ],
+    "supervisor": [],
+    "task_input": [],
+    "tsv_formatter": []
+  }
+}
