@@ -43,8 +43,12 @@ def capture_flow_supervisor(frozen: FrozenBenchmarkFlow, curator) -> FrozenFlowS
             flow, db_user_id=curator.db_user_id, active_groups=list(curator.active_groups),
         ),
         available_tools=tuple(names),
-        instructions=executor.build_supervisor_instructions(flow, available_tools=set(names)),
+        instructions=executor.build_supervisor_instructions(
+            flow, available_tools=set(names),
+            db_user_id=curator.db_user_id, active_groups=list(curator.active_groups),
+        ),
         instructions_with_document=executor.build_supervisor_instructions(
             flow, has_document=True, available_tools=set(names),
+            db_user_id=curator.db_user_id, active_groups=list(curator.active_groups),
         ),
     )

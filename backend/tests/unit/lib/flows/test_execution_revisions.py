@@ -380,7 +380,7 @@ def test_executor_builds_each_exact_pin_without_mutable_metadata(monkeypatch):
     first, second = receipt(None), receipt("unprofiled_generic")
     second.agent_id = first.agent_id
     second.revision = 5
-    install_resolver(monkeypatch, [first, second])
+    authorize, _ = install_resolver(monkeypatch, [first, second])
     monkeypatch.setattr(executor, "SessionLocal", lambda: nullcontext(Mock()))
     lookup = Mock(side_effect=AssertionError("Mutable metadata lookup"))
     monkeypatch.setattr(executor, "get_agent_metadata", lookup)
@@ -400,6 +400,8 @@ def test_executor_builds_each_exact_pin_without_mutable_metadata(monkeypatch):
         first.model_dump(mode="json"), second.model_dump(mode="json"),
     ]
     assert saved_flow.flow_definition == original
+    assert all(call.kwargs["authenticated_groups"] == ["TEAM_C"] for call in build.call_args_list)
+    assert all(call.kwargs["active_group_ids"] == ["TEAM_C"] for call in authorize.call_args_list)
     lookup.assert_not_called()
 
 
