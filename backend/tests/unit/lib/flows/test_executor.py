@@ -1589,7 +1589,7 @@ def _mock_executor_agent_metadata(monkeypatch):
     """Default test metadata source for flow agents under test."""
     monkeypatch.setattr(
         "src.lib.flows.executor.get_agent_metadata",
-        lambda agent_id: _metadata_from_registry(agent_id),
+        lambda agent_id, **_kwargs: _metadata_from_registry(agent_id),
     )
     # These runtime tests use synthetic document IDs and no SQL document store.
     monkeypatch.setattr("src.lib.flows.executor.capture_source_document", lambda *_: None)
@@ -5373,7 +5373,7 @@ class TestGetAllAgentToolsCreatedNames:
         """Agent requiring document should be skipped when no document_id provided."""
         monkeypatch.setattr(
             "src.lib.flows.executor.get_agent_metadata",
-            lambda agent_id: _metadata_from_registry(
+            lambda agent_id, **_kwargs: _metadata_from_registry(
                 agent_id,
                 {
                     **MOCK_REGISTRY,
@@ -5450,7 +5450,7 @@ class TestGetAllAgentToolsCreatedNames:
         """Duplicate agent_id where one step is skipped should only include created tool."""
         monkeypatch.setattr(
             "src.lib.flows.executor.get_agent_metadata",
-            lambda agent_id: _metadata_from_registry(
+            lambda agent_id, **_kwargs: _metadata_from_registry(
                 agent_id,
                 {
                     **MOCK_REGISTRY,
@@ -5908,7 +5908,7 @@ class TestCreateFlowSupervisorNoTools:
         """Even an all-unavailable flow reaches the actionable preflight outcome."""
         monkeypatch.setattr(
             "src.lib.flows.executor.get_agent_metadata",
-            lambda agent_id: _metadata_from_registry(
+            lambda agent_id, **_kwargs: _metadata_from_registry(
                 agent_id,
                 {
                     "pdf_extraction": {
@@ -9778,3 +9778,47 @@ async def test_inspection_manifest_eligibility_is_checked_before_persistence(mon
         assert len(state["completed_steps"]) == 1
         assert "inspection_result_ref" not in state["completed_steps"][0]
     persist.assert_not_called()
+
+
+@pytest.mark.parametrize("groups", [[], ["TEAM_A"]])
+def test_flow_metadata_context_reaches_document_and_instruction_lookup(monkeypatch, groups):
+    executor = _executor_module()
+    calls = []
+    def metadata(agent_id, **kwargs):
+        calls.append(kwargs)
+        assert kwargs == {"db_user_id": 17, "authenticated_groups": groups}
+        return {"display_name": "Authorized label", "requires_document": True,
+                "category": "Extraction", "required_params": []}
+    monkeypatch.setattr(executor, "get_agent_metadata", metadata)
+    node = _agent_node("extract", "fixture_extractor")
+    node["data"].pop("agent_display_name", None)
+    flow = _make_flow([node])
+    assert executor.flow_requires_document(flow, db_user_id=17, active_groups=groups)
+    instructions = executor.build_supervisor_instructions(
+        flow, available_tools={"ask_fixture_extractor_specialist"},
+        db_user_id=17, active_groups=groups,
+    )
+    assert "Authorized label" in instructions
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("unavailable", ["source", "output"])
+def test_output_role_lookup_reports_unavailable_before_category(monkeypatch, unavailable):
+    executor = _executor_module()
+    flow = _make_output_attachment_flow(
+        [_agent_node("source", "fixture_extractor"), _agent_node("output", "chat_output")],
+        source_node_id="source", output_node_id="output",
+    )
+    def metadata(agent_id, **kwargs):
+        assert kwargs == {"db_user_id": 17, "authenticated_groups": ["TEAM_A"]}
+        if agent_id == ("fixture_extractor" if unavailable == "source" else "chat_output"):
+            raise ValueError("not visible")
+        return {"display_name": agent_id, "category": "Extraction" if agent_id == "fixture_extractor" else "Output",
+                "subcategory": "Formatter" if agent_id == "chat_output" else "", "is_active": True}
+    monkeypatch.setattr(executor, "get_agent_metadata", metadata)
+    with pytest.raises(executor.FlowTerminalOutputProjectionError) as error:
+        executor._runtime_output_sources_by_node_id(flow, db_user_id=17, active_groups=["TEAM_A"])
+    assert f"{unavailable} node" in str(error.value)
+    assert "unavailable to this user" in str(error.value)
+    assert "not an extraction" not in str(error.value)
+    assert "not an output formatter" not in str(error.value)

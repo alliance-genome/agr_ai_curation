@@ -2736,10 +2736,17 @@ def _resolve_flow_agent_entry(
     agent_id: str,
     *,
     db_user_id: Optional[int] = None,
+    active_groups: list[str] | None = None,
 ) -> Optional[Dict[str, Any]]:
-    """Resolve agent_id to execution metadata from unified agent records."""
+    """Resolve metadata with the same trusted identity used for agent construction.
+
+    active_groups comes from authenticated request or server-owned run context,
+    never editable flow node data. No groups grants no group-restricted access.
+    """
     try:
-        metadata_kwargs: Dict[str, Any] = {}
+        metadata_kwargs: Dict[str, Any] = {
+            "authenticated_groups": list(active_groups or []),
+        }
         if db_user_id is not None:
             metadata_kwargs["db_user_id"] = db_user_id
         metadata = get_agent_metadata(agent_id, **metadata_kwargs)
@@ -2856,6 +2863,7 @@ def _runtime_output_sources_by_node_id(
     *,
     db_user_id: int | None,
     entries_by_node: dict[str, dict[str, Any] | None] | None = None,
+    active_groups: list[str] | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Validate runtime output roles and return formatter→extractors bindings."""
 
@@ -2878,8 +2886,10 @@ def _runtime_output_sources_by_node_id(
             (output_data.get("agent_id") or "") if isinstance(output_data, Mapping) else ""
         )
         output_entry = (entries_by_node[output_node_id] if entries_by_node is not None and output_node_id in entries_by_node
-                        else _resolve_flow_agent_entry(output_agent_id, db_user_id=db_user_id))
-        if (
+                        else _resolve_flow_agent_entry(output_agent_id, db_user_id=db_user_id, active_groups=active_groups))
+        if output_entry is None:
+            errors.append(f"output node '{output_node_id}' agent '{output_agent_id}' is unavailable to this user")
+        elif (
             not _is_output_formatter_entry(output_entry)
             or _resolve_flow_terminal_output_format(output_agent_id, output_entry) is None
         ):
@@ -2897,9 +2907,11 @@ def _runtime_output_sources_by_node_id(
             source_entry = (
                 entries_by_node[source_node_id]
                 if entries_by_node is not None and source_node_id in entries_by_node
-                else _resolve_flow_agent_entry(source_agent_id, db_user_id=db_user_id)
+                else _resolve_flow_agent_entry(source_agent_id, db_user_id=db_user_id, active_groups=active_groups)
             )
-            if not agent_can_source_output_attachment(source_entry):
+            if source_entry is None:
+                errors.append(f"source node '{source_node_id}' agent '{source_agent_id}' is unavailable to this user")
+            elif not agent_can_source_output_attachment(source_entry):
                 errors.append(
                     f"source node '{source_node_id}' agent '{source_agent_id}' is not "
                     "an extraction agent or a typed validation agent"
@@ -2914,7 +2926,7 @@ def _runtime_output_sources_by_node_id(
         entry = (
             entries_by_node[node_id]
             if entries_by_node is not None and node_id in entries_by_node
-            else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id)
+            else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id, active_groups=active_groups)
         )
         if _is_output_formatter_entry(entry) and node_id not in bindings:
             errors.append(
@@ -2992,7 +3004,7 @@ def flow_requires_document(
         node_id = str(node.get("id") or "")
         agent_id = node.get("data", {}).get("agent_id")
         entry = (custom_entries[node_id] if node_id in custom_entries
-                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id))
+                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id, active_groups=active_groups))
         if entry and entry.get("requires_document", False):
             return True
     return False
@@ -3073,6 +3085,7 @@ def get_all_agent_tools(
         flow,
         db_user_id=db_user_id,
         entries_by_node=custom_entries,
+        active_groups=active_groups,
     )
     agent_id_counts = _count_agent_ids(flow)
     total_steps = len(nodes)
@@ -3694,7 +3707,7 @@ def get_all_agent_tools(
             continue
 
         entry = (custom_entries[node_id] if node_id in custom_entries
-                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id))
+                 else _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id, active_groups=active_groups))
         if not entry:
             logger.warning("[Flow Executor] Agent '%s' in flow but not resolvable, skipping", agent_id)
             unavailable_steps.append({
@@ -4054,6 +4067,8 @@ def build_supervisor_instructions(
     document_name: Optional[str] = None,
     *,
     available_tools: set[str],
+    db_user_id: int | None = None,
+    active_groups: list[str] | None = None,
 ) -> str:
     """Build supervisor system instructions that list all flow steps.
 
@@ -4094,7 +4109,7 @@ def build_supervisor_instructions(
         # Custom display labels are saved on the node; do not read mutable custom
         # metadata while rendering instructions after exact runtime authorization.
         resolved_entry = (
-            _resolve_flow_agent_entry(agent_id)
+            _resolve_flow_agent_entry(agent_id, db_user_id=db_user_id, active_groups=active_groups)
             if agent_id and not agent_id.startswith("ca_") else None
         )
         agent_name = data.get("agent_display_name")
@@ -4436,6 +4451,7 @@ def create_flow_supervisor(
         instructions = build_supervisor_instructions(
             flow, has_document=has_document, document_name=document_name,
             available_tools=created_tool_names,
+            db_user_id=db_user_id, active_groups=active_groups,
         )
     if benchmark_routes is None:
         instructions += INSPECTION_GUIDANCE

@@ -18,7 +18,15 @@ def test_capture_uses_normal_prompt_generator_without_constructing_agents(monkey
     monkeypatch.setattr(executor, "flow_requires_document", lambda *a, **kw: True)
     forbidden = Mock(side_effect=AssertionError("No agent construction at capture"))
     monkeypatch.setattr(executor, "get_all_agent_tools", forbidden)
-    frozen = capture_flow_supervisor(snapshot(), NS(db_user_id=7, active_groups=()))
+    original_instructions = executor.build_supervisor_instructions
+    prompt_calls = []
+    def instructions(*args, **kwargs):
+        prompt_calls.append(kwargs)
+        return original_instructions(*args, **kwargs)
+    monkeypatch.setattr(executor, "build_supervisor_instructions", instructions)
+    frozen = capture_flow_supervisor(snapshot(), NS(db_user_id=7, active_groups=("TEAM_C",)))
+    assert len(prompt_calls) == 2
+    assert all(call["db_user_id"] == 7 and call["active_groups"] == ["TEAM_C"] for call in prompt_calls)
     assert frozen.available_tools == ("ask_ca_fixture_specialist",)
     assert "ask_ca_fixture_specialist" in frozen.instructions
     assert "Document Available" not in frozen.instructions
