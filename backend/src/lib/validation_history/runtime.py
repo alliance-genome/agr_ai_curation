@@ -142,7 +142,13 @@ def bind_artifact(envelope, runtime_context) -> CapturedArtifact:
         raise store.HistoryAccessError(
             "Validator capture requires authenticated runtime context"
         )
-    ref = envelope.metadata["validation_history"]
+    ref = envelope.metadata.get("validation_history")
+    if not isinstance(ref, dict) or not all(
+        ref.get(key) for key in ("session_id", "artifact_id")
+    ):
+        raise store.HistoryAccessError(
+            "Validation requires a captured extraction history"
+        )
     scope = store.HistoryScope(
         runtime_context.user_id, runtime_context.document_id, ref["session_id"]
     )
@@ -722,7 +728,13 @@ def reorder_element_projection(
 
 
 def require_captured_envelope(payload: dict, *, user_id: str, document_id: str) -> None:
-    reference = payload["metadata"]["validation_history"]
+    reference = (payload.get("metadata") or {}).get("validation_history")
+    if not isinstance(reference, dict) or not all(
+        reference.get(key) for key in ("session_id", "artifact_id")
+    ):
+        raise store.HistoryAccessError(
+            "Persistence requires a captured extraction history"
+        )
     baseline = store.read_baseline(
         store.HistoryScope(user_id, document_id, reference["session_id"]),
         reference["artifact_id"],

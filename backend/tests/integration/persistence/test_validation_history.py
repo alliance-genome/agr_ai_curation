@@ -500,6 +500,35 @@ def test_existing_curator_remove_retires_atomically_and_keeps_exact_revision(sco
     first, second = envelope.extracted_objects[0].metadata["validation_history"][
         "elements"
     ]["sites"]
+    refs = envelope.extracted_objects[0].metadata["validation_history"]
+    list_target, object_target = refs["fields"]["sites"], refs["target_id"]
+    list_attempt = attempt(scope, aid, list_target, "list-before-remove")
+    object_attempt = attempt(scope, aid, object_target, "object-before-remove")
+    list_answer = h.complete_attempt(
+        scope, aid, list_attempt, state="completed", result={}, diagnostics={}
+    )
+    selection = decision(scope, aid, list_target, 0, "accept", subject=list_answer)[0]
+    independent = target(scope, aid, "independent")
+    dependent_request = {
+        "target_id": independent,
+        "binding_id": "dependent",
+        "request": {},
+        "prerequisites": [
+            {
+                "artifact_id": aid,
+                "target_id": list_target,
+                "selection_id": selection,
+                "selection_generation": 1,
+            }
+        ],
+    }
+    dependent = h.begin_execution(
+        scope,
+        aid,
+        operation_id="dependent-before-remove",
+        receipt={},
+        requests=[dependent_request],
+    )["attempt_ids"][0]
     source_id = str(uuid4())
 
     def checkpoint(db, current, version):
@@ -553,8 +582,39 @@ def test_existing_curator_remove_retires_atomically_and_keeps_exact_revision(sco
             )
             == 2
         )
+    # Rollback keeps the selected enclosing answer usable as a prerequisite.
+    h.begin_execution(
+        scope,
+        aid,
+        operation_id="dependent-after-rollback",
+        receipt={},
+        requests=[dependent_request],
+    )
     with SessionLocal.begin() as db:
         checkpoint(db, result.envelope, 1)
+    object_answer = h.complete_attempt(
+        scope, aid, object_attempt, state="completed", result={}, diagnostics={}
+    )
+    dependent_answer = h.complete_attempt(
+        scope, aid, dependent, state="completed", result={}, diagnostics={}
+    )
+    for tid, answer in [
+        (list_target, list_answer),
+        (object_target, object_answer),
+        (independent, dependent_answer),
+    ]:
+        with SessionLocal() as db:
+            version = h._current(db, aid, tid)["version"]
+        with pytest.raises(h.HistoryConflict):
+            decision(scope, aid, tid, version, "accept", subject=answer)
+    with pytest.raises(h.HistoryConflict):
+        h.begin_execution(
+            scope,
+            aid,
+            operation_id="dependent-after-remove",
+            receipt={},
+            requests=[dependent_request],
+        )
     with SessionLocal() as db:
         assert h._current(db, aid, first)["active"] is False
         assert h._current(db, aid, second)["active"] is True

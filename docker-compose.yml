@@ -188,7 +188,7 @@ services:
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     environment:
-      VALIDATION_HISTORY_PAGE_SIZE: ${VALIDATION_HISTORY_PAGE_SIZE:-5}
+      - VALIDATION_HISTORY_PAGE_SIZE=${VALIDATION_HISTORY_PAGE_SIZE:-5}
       - PYTHONUNBUFFERED=1
       - AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START=${AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START:-true}
       - DEV_MODE=${DEV_MODE:-false}  # Set to true to bypass Cognito auth for local development

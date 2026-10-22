@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -67,7 +67,9 @@ def migrated_database():
 
 
 @pytest.fixture
-def db_session():
+def db_session(monkeypatch):
+    # Immutable checkpoints retain identities after projection cleanup.
+    monkeypatch.setitem(globals(), "ENVELOPE_ID", "legacy-payload-repair-" + uuid4().hex)
     db = SessionLocal()
     _cleanup(db)
     owner_id = ensure_test_pdf_owner(db, auth_sub="legacy_payload_repair_owner")

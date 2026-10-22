@@ -602,12 +602,21 @@ def _append_history_events_for_row(
                 raise DomainEnvelopePersistenceError("Retirement actor does not own this artifact")
             scope = history_store.HistoryScope(artifact.owner_id, artifact.document_id, reference["session_id"])
             current = history_store._current(db, artifact.id, retirement["target_id"])
+            entries = [{
+                "target_id": retirement["target_id"], "expected_version": current["version"],
+                "action": "retire", "reason": retirement["reason"],
+            }]
+            parent = history_store._fact(db, artifact.id, retirement["target_id"], kind="target").parent_id
+            while parent:
+                entries.append({
+                    "target_id": parent,
+                    "expected_version": history_store._current(db, artifact.id, parent)["version"],
+                    "action": "invalidate", "reason": retirement["reason"],
+                })
+                parent = history_store._fact(db, artifact.id, parent, kind="target").parent_id
             history_store.apply_decisions_in_transaction(db, scope, artifact.id,
                 operation_id="curator-retirement:" + event_id,
-                actor={"type": "curator", "id": retirement["actor_id"]}, entries=[{
-                    "target_id": retirement["target_id"], "expected_version": current["version"],
-                    "action": "retire", "reason": retirement["reason"],
-                }])
+                actor={"type": "curator", "id": retirement["actor_id"]}, entries=entries)
         edits = event.details.get("validation_history_edits")
         if edits is not None and event.event_type.value == "curator_field_patch_accepted":
             from src.lib.validation_history import store as history_store

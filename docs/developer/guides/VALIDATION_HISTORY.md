@@ -22,8 +22,8 @@ selection versions. Bodies are content addressed in `validation_bodies`.
 PostgreSQL triggers reject updates and deletes, including deletes of archived
 checkpoints. Current `validation_heads` are mutable indexes, not historical
 truth. Application document/envelope deletion does not cascade into history.
-Access to document-backed history still requires the existing owned source
-document. Whole-document deletion policy remains a release blocker (see below).
+Access requires ownership of the live source or an owner-scoped retirement
+marker after source removal (see the document retirement contract below).
 
 A producer identity is unique within owner/source scope. Retries must reuse it
 only for the same baseline. Each real dispatch has a distinct operation identity;
@@ -72,7 +72,7 @@ the server runtime and enforce curator override and review-episode policies.
    status, explanation words or caveats. Completed unresolved answers can be
    selected. An incomplete/failed execution cannot be accepted as an answer.
 5. `read_fact` returns an immutable exact version; `list_history` paginates by
-   monotonically increasing sequence using `INSPECT_RESULTS_VALIDATION_PAGE_SIZE`.
+   monotonically increasing sequence using `VALIDATION_HISTORY_PAGE_SIZE`.
    All reads recheck owner/document/source scope. Do not read bodies by hash through
    an unauthenticated endpoint.
 

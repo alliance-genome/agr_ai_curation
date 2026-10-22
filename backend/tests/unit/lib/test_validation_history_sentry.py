@@ -73,3 +73,20 @@ def test_receipt_failure_is_operational_unknown_and_cannot_call_provider():
         assert completions[0]["state"] == "unknown" and completions[0]["result"] is None
     finally:
         ACTIVE_VALIDATION_EXECUTION.reset(token)
+
+
+@pytest.mark.parametrize("sidecar", [None, {}, {"artifact_id": "missing-session"}])
+def test_missing_capture_is_an_explicit_access_failure(sidecar):
+    from src.lib.validation_history.runtime import (
+        bind_artifact,
+        require_captured_envelope,
+    )
+    from src.lib.validation_history.store import HistoryAccessError
+
+    metadata = {} if sidecar is None else {"validation_history": sidecar}
+    with pytest.raises(HistoryAccessError, match="captured extraction"):
+        bind_artifact(SimpleNamespace(metadata=metadata), SimpleNamespace())
+    with pytest.raises(HistoryAccessError, match="captured extraction"):
+        require_captured_envelope(
+            {"metadata": metadata}, user_id="owner", document_id="doc"
+        )
