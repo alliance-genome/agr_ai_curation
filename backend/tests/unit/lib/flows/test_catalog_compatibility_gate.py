@@ -181,6 +181,12 @@ async def test_repaired_historical_flow_lists_opens_validates_and_reaches_execut
     assert names == {"ask_allele_extractor_specialist"}
     assert len(tools) == 1
     assert execution["ordered_tool_names"] == ["ask_allele_extractor_specialist"]
+    from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+    schedule = validation_schedule_from_node_data(validated["nodes"][1]["data"])
+    scheduled_ids = {item["attachment_id"] for items in schedule.values() for item in items}
+    kept_id = repaired["nodes"][1]["data"]["validation_attachments"][0]["attachment_id"]
+    assert kept_id in scheduled_ids
+    assert not scheduled_ids.intersection(attachment for _, attachment in tested_removals)
     before = deepcopy(flow.flow_definition)
     reached = []
 

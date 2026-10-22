@@ -12,8 +12,12 @@ bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests \
 The gate compares the installed package catalog with a fixed baseline of saved
 selection identities. Display text and package version changes are intentionally
 excluded; attachment identity, validator target, binding, scope, and field target
-are checked. Additions are allowed. Removals, renames, and rebindings fail with
-the affected agent and attachment identifier. Agent removal also fails.
+are checked. Additions are allowed. Unhandled removals and changes to an existing identity fail with
+the affected agent and attachment identifier. Agent removal also fails. A new
+identifier plus a removed identifier is treated as addition plus removal; the
+gate does not infer that these represent a rename. The removal must still have
+fixed upgrade evidence. When authoring such a case, explicitly preserve saved
+choices (including opt-outs), or document the approved intentional removal.
 
 The baseline `catalog-545c47b14.json` was captured from main before v0.11.0.
 `retired-allele-v094.json` is a synthetic reproduction of the retired-selection
@@ -41,8 +45,9 @@ or a database upgrade test.
    is not sufficient.
 4. For a rename or rebinding, extend the test harness with the actual new explicit
    migration and its before/after lifecycle fixture. Do not add a blanket
-   allowlist or runtime compatibility behavior. The current gate intentionally
-   blocks these changes until that upgrade is tested.
+   allowlist or runtime compatibility behavior. An existing identifier cannot silently change bindings. A rename represented
+   as removal plus addition needs an explicit before/after case that verifies
+   the intended handling of saved choices.
 5. At release, add a new immutable baseline if the supported catalog gained
    selections; retain earlier baselines for the supported upgrade window and
    parameterize the gate over them. Record the source commit. Use current
