@@ -907,5 +907,19 @@ async def test_checkpoint_store_failure_is_reported_without_sensitive_response(m
     assert json.loads(response)["error_code"] == "inspection_failed"
     assert "fake-secret" not in response
     assert len(reports) == 1
-    assert reports[0][0] is failure
+    assert "fake-secret" not in str(reports[0][0])
+    assert reports[0][0].__cause__ is None
+    assert reports[0][0].__context__ is None
     assert "fake-secret" not in json.dumps(reports[0][1])
+
+
+@pytest.mark.asyncio
+async def test_search_retains_supported_matches_alongside_legacy_list_payload(monkeypatch):
+    _patch_records(monkeypatch, [
+        _InspectRecord(),
+        _InspectRecord(extraction_result_id="33333333-3333-3333-3333-333333333333", payload_json=[{"legacy": "payload"}]),
+    ])
+    response = json.loads(await inspect_results_module.inspect_results(action="search", target="this_chat"))
+    assert response["status"] == "ok"
+    assert response["matches"]
+    assert response["unsupported_result_count"] == 1

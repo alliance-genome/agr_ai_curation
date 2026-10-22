@@ -9705,7 +9705,9 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id
     if persistence_fails:
         with pytest.raises(RuntimeError) as caught:
             await tools["ask_gene_specialist"].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
-        assert caught.value is failure
+        assert str(caught.value) == "Completed flow extraction persistence failed"
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
         assert len(reports) == 1
         assert "fake-secret" not in json.dumps(reports[0][1])
         assert supervisor._flow_execution_state["completed_steps"] == []

@@ -20,7 +20,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
@@ -272,9 +272,9 @@ async def inspect_results(
         )
     except _RequestError as exc:
         response = exc.response
-    except Exception as exc:
+    except Exception:
         report_runtime_exception(
-            exc, component="result_inspection", operation="inspect_results_failed",
+            sanitized_runtime_error("Saved result inspection failed"), component="result_inspection", operation="inspect_results_failed",
             context={"action": normalized_action, "result_view": result_view},
         )
         response = _error("inspection_failed", "Saved result inspection failed. No alternate result was substituted.")
@@ -1152,7 +1152,7 @@ def _search_response(
             "unsupported_result_count": unsupported_count,
         },
         call={**carry, "action": "search", **({"query": query} if query else {})},
-        sha=content_sha256({"search": identities, "results": [content_sha256(dict(_record_payload_mapping(record))) for record in records], "view": {**carry, "query": query}}),
+        sha=content_sha256({"search": identities, "results": [content_sha256(_record_attr(record, "payload_json")) for record in records], "view": {**carry, "query": query}}),
         expected_sha=expected_sha,
         cursor=cursor,
         limit=limit,

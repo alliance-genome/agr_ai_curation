@@ -137,7 +137,7 @@ from src.lib.domain_packs.flow_validator_selection import (
     set_flow_validator_selections,
     reset_flow_validator_selections,
 )
-from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
 from src.schemas.flows import FlowDefinition
@@ -3458,6 +3458,8 @@ def get_all_agent_tools(
                     raise ValueError("Completed extraction inspection requires document, owner and session identity.")
                 if not _resolve_flow_candidate_adapter_key(candidate):
                     raise ValueError("Completed extraction has no adapter key.")
+                persistence_error = None
+                records = []
                 try:
                     records = _persist_flow_extraction_candidates(
                         candidates=[candidate], document_id=document_id,
@@ -3466,13 +3468,15 @@ def get_all_agent_tools(
                     )
                     if len(records) != 1:
                         raise RuntimeError("Completed extraction did not yield one saved result.")
-                except Exception as exc:
+                except Exception:
+                    persistence_error = sanitized_runtime_error("Completed flow extraction persistence failed")
                     _report_flow_extraction_persistence_failure(
-                        exc, operation="extraction_persistence_failed", document_id=document_id,
+                        persistence_error, operation="extraction_persistence_failed", document_id=document_id,
                         session_id=session_id, trace_id=get_current_trace_id(),
                         flow_run_id=flow_run_id, candidate_count=1, extraction_output_required=True,
                     )
-                    raise
+                if persistence_error is not None:
+                    raise persistence_error
                 record = records[0]
                 result_ref = _flow_extraction_result_ref(record)["result_ref"]
                 result = build_and_render_extraction_manifest(
