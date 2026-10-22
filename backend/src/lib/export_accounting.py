@@ -1,4 +1,5 @@
 """Measured export facts, separate from scientific rows and download metadata."""
+
 from __future__ import annotations
 
 import hashlib
@@ -28,6 +29,7 @@ EXPORT_ACCOUNTING_GUIDANCE = (
 
 class ExportAccounting(BaseModel):
     """Counts use the selected row source, before any JSON grouping."""
+
     model_config = ConfigDict(extra="forbid", strict=True)
     row_unit: Literal["artifact", "object", "evidence", "validation_finding"]
     candidate_row_count: int = Field(ge=0)
@@ -41,17 +43,27 @@ class ExportAccounting(BaseModel):
     limited_by_max_rows: bool
     filter_count: int = Field(ge=0)
     warning_count: int = Field(ge=0)
-    warning_scope: Literal["source_bundle_and_projection"] = "source_bundle_and_projection"
+    warning_scope: Literal["source_bundle_and_projection"] = (
+        "source_bundle_and_projection"
+    )
 
     @model_validator(mode="after")
     def consistent_counts(self):
-        if self.candidate_row_count != self.rows_removed_by_filters + self.rows_removed_by_overrides + self.matched_row_count:
+        if (
+            self.candidate_row_count
+            != self.rows_removed_by_filters
+            + self.rows_removed_by_overrides
+            + self.matched_row_count
+        ):
             raise ValueError("Export stages do not reconcile")
         if self.exported_row_count > self.matched_row_count:
             raise ValueError("Exported rows exceed matched rows")
         if self.truncated != (self.exported_row_count < self.matched_row_count):
             raise ValueError("Truncation disagrees with measured rows")
-        if self.limited_by_max_rows != (self.requested_max_rows is not None and self.matched_row_count > self.requested_max_rows):
+        if self.limited_by_max_rows != (
+            self.requested_max_rows is not None
+            and self.matched_row_count > self.requested_max_rows
+        ):
             raise ValueError("Requested limit disagrees with measured rows")
         if self.group_count is not None and self.group_count > self.exported_row_count:
             raise ValueError("Groups exceed exported rows")
@@ -59,7 +71,13 @@ class ExportAccounting(BaseModel):
 
 
 def exact_diagnostics_json(diagnostics: dict[str, Any]) -> str:
-    return json.dumps(diagnostics, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(
+        diagnostics,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def diagnostics_sha256(diagnostics: dict[str, Any]) -> str:
@@ -68,7 +86,9 @@ def diagnostics_sha256(diagnostics: dict[str, Any]) -> str:
 
 def export_diagnostics(result: Any) -> dict[str, Any]:
     return {
-        "accounting": result.export_accounting.model_dump(mode="json") if result.export_accounting is not None else None,
+        "accounting": result.export_accounting.model_dump(mode="json")
+        if result.export_accounting is not None
+        else None,
         "filters": result.applied_filters,
         "warnings": list(result.warnings),
         "warning_scope": "source_bundle_and_projection",
@@ -77,7 +97,10 @@ def export_diagnostics(result: Any) -> dict[str, Any]:
 
 def compact_accounting(result: Any) -> dict[str, Any]:
     if result.export_accounting is None:
-        return {"status": "unavailable", "reason": "Projection stage accounting was not recorded"}
+        return {
+            "status": "unavailable",
+            "reason": "Projection stage accounting was not recorded",
+        }
     limit = get_flow_projection_max_list_items()
     text_limit = get_flow_projection_max_text_chars()
     warnings = result.warnings[:limit]
@@ -86,7 +109,9 @@ def compact_accounting(result: Any) -> dict[str, Any]:
         "counts": result.export_accounting.model_dump(mode="json"),
         "warnings": [warning[:text_limit] for warning in warnings],
         "warnings_omitted": len(result.warnings) - len(warnings),
-        "warning_text_truncated": any(len(warning) > text_limit for warning in warnings),
+        "warning_text_truncated": any(
+            len(warning) > text_limit for warning in warnings
+        ),
     }
 
 
@@ -95,20 +120,39 @@ def projection_summary(result: Any) -> dict[str, Any]:
     headers = [column.header or column.key for column in result.columns]
     column_limit = get_output_tool_catalog_page_size()
     return {
-        "format": result.format, "row_source": result.row_source,
-        "columns": headers[:column_limit], "column_count": len(headers),
-        **({"columns_omitted": len(headers) - column_limit} if len(headers) > column_limit else {}),
-        "total_count": result.total_count, "row_count": len(result.rows),
-        "truncated": result.truncated, "limited_by_max_rows": result.limited_by_max_rows,
-        "overrides_applied": result.overrides_applied, "rows_excluded": result.rows_excluded,
-        "group_by": list(result.group_by), "warning_count": len(result.warnings),
-        "warnings": [warning[:get_flow_projection_max_text_chars()] for warning in result.warnings[:get_flow_projection_max_list_items()]],
+        "format": result.format,
+        "row_source": result.row_source,
+        "columns": headers[:column_limit],
+        "column_count": len(headers),
+        **(
+            {"columns_omitted": len(headers) - column_limit}
+            if len(headers) > column_limit
+            else {}
+        ),
+        "total_count": result.total_count,
+        "row_count": len(result.rows),
+        "truncated": result.truncated,
+        "limited_by_max_rows": result.limited_by_max_rows,
+        "overrides_applied": result.overrides_applied,
+        "rows_excluded": result.rows_excluded,
+        "group_by": list(result.group_by),
+        "warning_count": len(result.warnings),
+        "warnings": [
+            warning[: get_flow_projection_max_text_chars()]
+            for warning in result.warnings[: get_flow_projection_max_list_items()]
+        ],
         "export_accounting": compact_accounting(result),
     }
 
 
 def export_details_reference(file_id: str, result: Any) -> dict[str, Any]:
-    return {"read": {"file_id": file_id, "diagnostics_sha256": diagnostics_sha256(export_diagnostics(result)), "offset": 0}}
+    return {
+        "read": {
+            "file_id": file_id,
+            "diagnostics_sha256": diagnostics_sha256(export_diagnostics(result)),
+            "offset": 0,
+        }
+    }
 
 
 class AccountingReceipt(BaseModel):
@@ -129,10 +173,14 @@ class AccountingReceipt(BaseModel):
 def validated_accounting_handoff(file_info: dict[str, Any]) -> dict[str, Any]:
     """Whitelist accounting independently of the safe FILE_READY identity fields."""
     from pydantic import ValidationError
+
     try:
         receipt = AccountingReceipt.model_validate(file_info.get("export_accounting"))
         # Even a structurally valid unexpected payload cannot widen the preview.
-        limit, chars = get_flow_projection_max_list_items(), get_flow_projection_max_text_chars()
+        limit, chars = (
+            get_flow_projection_max_list_items(),
+            get_flow_projection_max_text_chars(),
+        )
         warnings = receipt.warnings[:limit]
         receipt.warnings_omitted += len(receipt.warnings) - len(warnings)
         receipt.warning_text_truncated |= any(len(w) > chars for w in warnings)
@@ -140,11 +188,33 @@ def validated_accounting_handoff(file_info: dict[str, Any]) -> dict[str, Any]:
         details = file_info.get("export_details")
         read = details.get("read") if isinstance(details, dict) else None
         digest = read.get("diagnostics_sha256") if isinstance(read, dict) else None
-        if (not isinstance(read, dict) or read.get("file_id") != file_info.get("file_id")
-                or not isinstance(digest, str) or len(digest) != 64
-                or any(c not in "0123456789abcdef" for c in digest)):
-            return {"export_accounting": {"status": "unavailable", "reason": "Export diagnostic reference is incomplete"}}
-        return {"export_accounting": receipt.model_dump(mode="json"),
-                "export_details": {"read": {"file_id": file_info["file_id"], "diagnostics_sha256": digest, "offset": 0}}}
+        if (
+            not isinstance(read, dict)
+            or read.get("file_id") != file_info.get("file_id")
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+        ):
+            return {
+                "export_accounting": {
+                    "status": "unavailable",
+                    "reason": "Export diagnostic reference is incomplete",
+                }
+            }
+        return {
+            "export_accounting": receipt.model_dump(mode="json"),
+            "export_details": {
+                "read": {
+                    "file_id": file_info["file_id"],
+                    "diagnostics_sha256": digest,
+                    "offset": 0,
+                }
+            },
+        }
     except (ValidationError, TypeError):
-        return {"export_accounting": {"status": "unavailable", "reason": "Export accounting is missing or invalid"}}
+        return {
+            "export_accounting": {
+                "status": "unavailable",
+                "reason": "Export accounting is missing or invalid",
+            }
+        }
