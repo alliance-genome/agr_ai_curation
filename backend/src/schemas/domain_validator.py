@@ -239,6 +239,7 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
     # components whose possible destination fields also appear in the binding.
     _assembled_field_completeness: bool = PrivateAttr(default=False)
     _execution_failure: str | None = PrivateAttr(default=None)
+    _raw_output: dict | None = PrivateAttr(default=None)
     _history_ref: dict[str, Any] | None = PrivateAttr(default=None)
 
     status: DomainValidatorStatus = Field(

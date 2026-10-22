@@ -178,3 +178,25 @@ def test_profile_validation_refreshes_sibling_drafts_in_same_envelope(manual_pro
 def _history_context(candidate):
     return ValidatorRuntimeContext(document_id=str(candidate.session.document_id),
         user_id="test_pdf_owner_domain_envelope", authenticated_groups=())
+
+
+def test_manual_capture_retry_after_checkpoint_rollback_and_draft_edit(manual_profile_record):
+    from copy import deepcopy
+    from src.lib.validation_history import store
+    db, candidate, _ = manual_profile_record
+    with db.begin_nested() as savepoint:
+        validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
+        row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+        first = row.envelope_json["metadata"]["validation_history"]
+        savepoint.rollback()
+    assert candidate.envelope_id is None
+    fields = deepcopy(candidate.draft.fields)
+    fields[0]["value"]["paper_name"] = "Edited after rollback"
+    candidate.draft.fields = fields
+    validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
+    row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+    second = row.envelope_json["metadata"]["validation_history"]
+    assert first["artifact_id"] != second["artifact_id"]
+    scope = store.HistoryScope(_history_context(candidate).user_id, str(candidate.session.document_id), str(candidate.session_id))
+    assert store.read_baseline(scope, first["artifact_id"])["typed"]["extracted_objects"][0]["payload"]["attributes"]["paper_name"] == "A"
+    assert store.read_baseline(scope, second["artifact_id"])["typed"]["extracted_objects"][0]["payload"]["attributes"]["paper_name"] == "Edited after rollback"

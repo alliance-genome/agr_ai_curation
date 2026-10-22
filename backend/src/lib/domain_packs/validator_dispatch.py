@@ -17,7 +17,7 @@ import dataclasses
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Collection, Literal, Mapping, Protocol, cast
 
 if TYPE_CHECKING:
@@ -240,6 +240,8 @@ class ValidatorDispatchJob:
     match: ValidatorBindingMatch
     request: DomainValidationRequest
     dispatch_context: Mapping[str, Any] | None = None
+    history_wave: int | None = None
+    history_prior_completions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -498,6 +500,12 @@ def dispatch_active_validator_bindings(
         )
     dispatch_context = group_dispatch_context(authenticated_groups)
     flow_selections = current_flow_validator_selections()
+    from src.lib.validation_history.runtime import record_match_scheduling
+    for match in validation_registry.match_bindings(envelope, states=[ValidationBindingState.UNDER_DEVELOPMENT]):
+        record_match_scheduling(history_binding, match, "inactive")
+    for match in matches:
+        if match not in eligible_matches:
+            record_match_scheduling(history_binding, match, "ineligible")
     suppressed_bindings = []
     not_validatable = not_validatable_object_keys(envelope)
 
@@ -508,10 +516,13 @@ def dispatch_active_validator_bindings(
         findings: list[ValidationFinding] = []
         for match in wave_matches:
             if is_not_validatable(match.object_envelope, not_validatable):
+                record_match_scheduling(history_binding, match, "not_validatable")
                 # A package validator's one "not validatable" finding speaks for the object.
                 continue
             selection = flow_selections.get(match.binding.binding_id)
             if selection is not None:
+                record_match_scheduling(history_binding, match,
+                    "opted_out" if selection["state"] == "skipped" else "custom_replacement", details={"selection": selection})
                 suppressed_bindings.append({
                     "validator_binding_id": match.binding.binding_id,
                     "target": match.target_details(),
@@ -520,6 +531,7 @@ def dispatch_active_validator_bindings(
                 })
                 continue
             if not _binding_has_dispatch_contract(match.binding):
+                record_match_scheduling(history_binding, match, "no_contract")
                 LOGGER.info(
                     "Skipping active validator binding %s because it declares no "
                     "input_fields or expected_result_fields",
@@ -528,6 +540,7 @@ def dispatch_active_validator_bindings(
                 continue
             selector_result = build_domain_validation_request(match)
             if selector_result.findings:
+                record_match_scheduling(history_binding, match, "missing_input", details={"finding_codes": [f.code for f in selector_result.findings]})
                 if profile_context is not None:
                     from .profile_validation import profile_policy_finding
                     mapping_id = match.binding.raw["profile_validation"]["mapping"]["mapping_id"]
@@ -539,6 +552,7 @@ def dispatch_active_validator_bindings(
                     findings.extend(selector_result.findings)
                 continue
             if selector_result.request is None:
+                record_match_scheduling(history_binding, match, "missing_input")
                 continue
 
             jobs.append(
@@ -570,6 +584,9 @@ def dispatch_active_validator_bindings(
         if wave_index:
             wave_matches = [_match_on_envelope(match, updated_envelope) for match in wave_matches]
         jobs, selector_findings = wave_jobs(wave_matches)
+        jobs = [replace(job, history_wave=wave_index,
+            history_prior_completions=tuple(r._history_ref["fact_id"] for r in validator_results
+                if r._history_ref and r._history_ref.get("attempt_id"))) for job in jobs]
         pending_findings.extend(selector_findings)
         job_dispatch = dispatch_validator_jobs(
             jobs,
@@ -643,15 +660,11 @@ def dispatch_active_validator_bindings(
 
     from src.lib.validation_history.store import record_scheduling
     from uuid import uuid4
-    if suppressed_bindings:
-        record_scheduling(history_binding.scope, history_binding.artifact_id,
-            operation_id="flow-scheduling:" + str(uuid4()), outcome="flow_skipped",
-            details={"suppressed_bindings": suppressed_bindings})
-    if not validator_results:
+    if not matches:
         record_scheduling(history_binding.scope, history_binding.artifact_id,
             operation_id="empty-scheduling:" + str(uuid4()),
-            outcome="zero_item" if not envelope.extracted_objects else "missing_input" if pending_findings else "no_validator",
-            details={"matched_binding_count": len(eligible_matches)})
+            outcome="zero_item" if not envelope.extracted_objects else "no_validator",
+            details={"matched_binding_count": 0})
     return ActiveValidatorDispatchResult(
         envelope=updated_envelope,
         registry=validation_registry,
@@ -1250,6 +1263,9 @@ def _run_validator_jobs(
                 try:
                     result = future.result()
                 except Exception as exc:
+                    from src.lib.validation_history.store import HistoryRecordingError
+                    if isinstance(exc, HistoryRecordingError):
+                        raise
                     from agr_ai_curation_runtime.document_errors import document_read_failure
                     if not isinstance(exc, BenchmarkInvocationBudgetExceeded) and document_read_failure(exc) is None:
                         raise
@@ -1588,6 +1604,9 @@ def _execute_validator_job_batch(
     except BenchmarkInvocationBudgetExceeded:
         raise
     except Exception as exc:
+        from src.lib.validation_history.store import HistoryRecordingError
+        if isinstance(exc, HistoryRecordingError):
+            raise
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
         from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
@@ -1682,6 +1701,9 @@ def _execute_single_validator_job(
     except BenchmarkInvocationBudgetExceeded:
         raise
     except Exception as exc:
+        from src.lib.validation_history.store import HistoryRecordingError
+        if isinstance(exc, HistoryRecordingError):
+            raise
         from src.lib.benchmarks.stage_measurements import record_handled_stage_failure
 
         from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
@@ -1939,6 +1961,9 @@ def run_package_scoped_validator_agent(
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
+        from src.lib.validation_history.store import HistoryRecordingError
+        if isinstance(exc, HistoryRecordingError):
+            raise
         run_failed = True
         set_redacted_ai_span_data(
             sentry_span,
@@ -1997,10 +2022,9 @@ def run_package_scoped_validator_agent(
         )
     if finalization_state.incomplete_result:
         return _ValidatorAgentRunOutput(raw_output=result, accepted_result=finalization_state.incomplete_result)
-    raise ValueError(
-        "Validator agent did not complete mandatory finalize_validator_result "
-        "tool call with status accepted."
-    )
+    return _ValidatorAgentRunOutput(raw_output=result, accepted_result=_unresolved_result_for_dispatch_problem(
+        request, reason="invalid_schema", raw_output=_extract_structured_output(result),
+        explanation="Validator agent did not complete mandatory finalize_validator_result tool call with status accepted."))
 
 
 def run_package_scoped_validator_agent_batch(
@@ -2210,6 +2234,9 @@ def run_package_scoped_validator_agent_batch(
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
+        from src.lib.validation_history.store import HistoryRecordingError
+        if isinstance(exc, HistoryRecordingError):
+            raise
         run_failed = True
         set_redacted_ai_span_data(
             sentry_span,
@@ -2275,10 +2302,11 @@ def run_package_scoped_validator_agent_batch(
         )
     if finalization_state.incomplete_results:
         return _ValidatorBatchAgentRunOutput(raw_output=result, accepted_results=finalization_state.incomplete_results)
-    raise ValueError(
-        "Validator batch agent did not complete mandatory "
-        "finalize_validator_batch_results tool call with status accepted."
-    )
+    return _ValidatorBatchAgentRunOutput(raw_output=result, accepted_results=tuple(
+        _unresolved_result_for_dispatch_problem(job.request, reason="invalid_schema",
+            raw_output=_extract_structured_output(result),
+            explanation="Validator batch agent did not complete mandatory finalize_validator_batch_results tool call with status accepted.")
+        for job in jobs))
 
 
 def _copy_agent_for_validator_runtime(agent: Any) -> Any:
@@ -3229,6 +3257,7 @@ def _validated_result_from_agent_output(
         return _unresolved_result_for_dispatch_problem(
             request,
             reason="invalid_schema",
+            raw_output=payload,
             explanation=f"Validator agent returned incompatible output: {exc}",
         )
 
@@ -3250,6 +3279,7 @@ def _validated_result_from_agent_output(
         return _unresolved_result_for_dispatch_problem(
             request,
             reason="invalid_schema",
+            raw_output=payload,
             explanation=(
                 "Validator agent returned output for a different request, "
                 "binding, validator agent, or target."
@@ -3279,6 +3309,7 @@ def _validated_results_from_agent_batch_output(
                 _unresolved_result_for_dispatch_problem(
                     job.request,
                     reason="invalid_schema",
+                    raw_output=raw_results,
                     explanation=(
                         "Validator batch returned incompatible output: expected "
                         "a results list with one result per request."
@@ -3313,6 +3344,7 @@ def _validated_results_from_agent_batch_output(
                 _unresolved_result_for_dispatch_problem(
                     job.request,
                     reason="invalid_schema",
+                    raw_output=raw_results,
                     explanation=(
                         "Validator batch returned result(s) for unexpected "
                         f"request IDs: {unexpected_text}."
@@ -3335,12 +3367,14 @@ def _validated_results_from_agent_batch_output(
             validator_result = _unresolved_result_for_dispatch_problem(
                 request,
                 reason="invalid_schema",
+                    raw_output=raw_results,
                 explanation=explanation,
             )
         elif request.request_id in duplicate_request_ids:
             validator_result = _unresolved_result_for_dispatch_problem(
                 request,
                 reason="invalid_schema",
+                    raw_output=raw_results,
                 explanation=(
                     "Validator batch returned duplicate results for request "
                     f"{request.request_id}."
@@ -3576,6 +3610,7 @@ def _unresolved_result_for_dispatch_problem(
     *,
     reason: str,
     explanation: str,
+    raw_output: Any = None,
 ) -> DomainValidatorResultBase:
     result = DomainValidatorResultBase(
         status="unresolved",
@@ -3604,7 +3639,11 @@ def _unresolved_result_for_dispatch_problem(
         explanation=explanation,
     )
 
-    result._execution_failure = reason
+    if reason == "validator_agent_error":
+        result._execution_failure = reason
+    else:
+        result.output_issues = [explanation]
+        result._raw_output = {"raw_output": raw_output}
     return result
 
 
@@ -3778,6 +3817,7 @@ def _ensure_classifiable_validator_result(
         return _unresolved_result_for_dispatch_problem(
             request,
             reason="invalid_schema",
+            raw_output=result.model_dump(mode="json"),
             explanation=(
                 "Validator agent returned incompatible output: "
                 f"{classifiability_error}"

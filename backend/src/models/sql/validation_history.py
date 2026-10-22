@@ -23,7 +23,7 @@ class ValidationArtifact(Base):
     __tablename__ = "validation_artifacts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     owner_id: Mapped[str] = mapped_column(String, nullable=False)
-    document_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_id: Mapped[str | None] = mapped_column(String, nullable=True)
     session_id: Mapped[str] = mapped_column(String, nullable=False)
     producer_id: Mapped[str] = mapped_column(String, nullable=False)
     subject_kind: Mapped[str] = mapped_column(String, nullable=False)

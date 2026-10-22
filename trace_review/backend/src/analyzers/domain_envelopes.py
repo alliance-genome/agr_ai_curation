@@ -590,9 +590,9 @@ class DomainEnvelopeTraceAnalyzer:
                     "body_availability": "external" if snapshot.get("schema_version") == 2 else "inline",
                     "body_available_via_authorized_read": snapshot.get("original_available", True),
                     "history_ref": _short_value(snapshot.get("history_ref")),
-                    "review_status": snapshot.get("review_status", "historical_unknown"),
+                    "review_status": "requires_history_read" if snapshot.get("schema_version") == 2 else "historical_unknown",
                     "follow_up_question_count": snapshot.get("follow_up_question_count", len(result.get("unresolved_questions") or [])),
-                    "unresolved_questions": _short_value(result.get("unresolved_questions", [])),
+                    "unresolved_questions": _short_value(result.get("unresolved_questions") if snapshot.get("schema_version") == 2 else result.get("unresolved_questions", [])),
                     "source_path": source_path + ".validator_results",
                 },
             )

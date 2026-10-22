@@ -31,9 +31,26 @@ def import_historical_envelope(envelope_id: str) -> bool:
         )
         if row is None:
             raise ValueError("Historical envelope no longer exists")
+        from src.models.sql.validation_history import ValidationCheckpoint
+        from .store import _body
+
+        checkpoint = db.get(ValidationCheckpoint, (row.envelope_id, row.revision))
+        observed_checkpoint = checkpoint is None
+        if observed_checkpoint:
+            db.add(
+                ValidationCheckpoint(
+                    envelope_id=row.envelope_id,
+                    revision=row.revision,
+                    document_id=str(row.document_id),
+                    source_extraction_result_id=row.source_extraction_result_id,
+                    body_sha=_body(db, row.envelope_json),
+                    provenance="historically_observed_current_revision",
+                )
+            )
+            db.flush()
         envelope = DomainEnvelope.model_validate(row.envelope_json)
         if "validation_history" in envelope.metadata:
-            return False
+            return observed_checkpoint
         document = db.get(PDFDocument, row.document_id)
         owner = (
             db.get(User, document.user_id)

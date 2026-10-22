@@ -743,7 +743,7 @@ def test_a_curator_removes_one_list_element_and_its_findings_follow():
     first, second = unresolved_value("a", identity_keys=KEYS), unresolved_value("b", identity_keys=KEYS)
     envelope = _envelope_with({"sites": [first, second]},
                               findings=[_finding("sites[0].curie"), _finding("sites[1].curie")])
-    envelope.extracted_objects[0].metadata["validation_history"] = {"elements": {"sites": ["first", "second"]}}
+    envelope.extracted_objects[0].metadata["validation_history"] = {"fields": {}, "elements": {"sites": ["first", "second"]}}
     remove = EnvelopeFieldPatchOperation.REMOVE
 
     result = _patch(envelope, "sites[0]", None, before=first, operation=remove, pack=_list_pack())
@@ -882,7 +882,7 @@ def test_removing_the_last_or_only_element_validates_and_keeps_its_history(store
 
     elements = [unresolved_value(f"code {n}", identity_keys=KEYS) for n in range(stored)]
     envelope = _envelope_with({"sites": elements}, findings=[_finding(f"sites[{index}].curie")])
-    envelope.extracted_objects[0].metadata["validation_history"] = {"elements": {"sites": [f"item-{n}" for n in range(stored)]}}
+    envelope.extracted_objects[0].metadata["validation_history"] = {"fields": {}, "elements": {"sites": [f"item-{n}" for n in range(stored)]}}
     pack = _list_pack()
     overridden = _patch(envelope, f"sites[{index}].curie", {"curie": "ONT:1", "name": "one"},
                         before={"curie": None, "name": None}, operation=IDENTITY, pack=pack)

@@ -36,6 +36,10 @@ class HistoryConflict(ValueError):
     """Conflicting immutable identity or stale current version."""
 
 
+class HistoryRecordingError(RuntimeError):
+    """Audit capture failed before model execution; not a validator answer."""
+
+
 class HistoryAccessError(ValueError):
     """History is not accessible in the authenticated source scope."""
 
@@ -43,18 +47,18 @@ class HistoryAccessError(ValueError):
 @dataclass(frozen=True)
 class HistoryScope:
     owner_id: str
-    document_id: str
+    document_id: str | None
     session_id: str
 
     def __post_init__(self):
         if not all(
-            isinstance(v, str) and v.strip()
-            for v in (self.owner_id, self.document_id, self.session_id)
+            isinstance(v, str) and v.strip() for v in (self.owner_id, self.session_id)
         ):
             raise ValueError(
                 "Validation history requires an authenticated document/session scope"
             )
-        UUID(self.document_id)
+        if self.document_id is not None:
+            UUID(self.document_id)
 
 
 def canonical(value: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -66,6 +70,10 @@ def canonical(value: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 def _authorize(db, scope: HistoryScope):
     user = db.scalar(select(User.id).where(User.auth_sub == scope.owner_id))
+    if user is None:
+        raise HistoryAccessError("Validation history owner is not accessible")
+    if scope.document_id is None:
+        return None
     document = (
         None
         if user is None
@@ -132,6 +140,7 @@ def _append(
     body: dict,
     target_id: str | None = None,
     parent_id: str | None = None,
+    fact_id: str | None = None,
 ) -> ValidationFact:
     if not operation_id.strip():
         raise ValueError("History operation identity is required")
@@ -144,7 +153,7 @@ def _append(
         insert(ValidationFact)
         .values(
             artifact_id=artifact_id,
-            id=str(uuid4()),
+            id=fact_id or str(uuid4()),
             operation_id=operation_id,
             kind=kind,
             target_id=target_id,
@@ -159,6 +168,8 @@ def _append(
             ValidationFact.operation_id == operation_id,
         )
     )
+    if fact_id is not None and row.id != fact_id:
+        raise HistoryConflict("History identity conflict")
     if (row.kind, row.target_id, row.parent_id, row.body_sha) != (
         kind,
         target_id,
@@ -199,7 +210,9 @@ def capture_baseline(
                     "id": str(document.id),
                     "file_hash": document.file_hash,
                     "viewer_mode": document.viewer_mode,
-                },
+                }
+                if document is not None
+                else None,
             }
         )
         db.execute(
@@ -259,19 +272,67 @@ def register_target(
     """Identity is assigned at capture, never derived from mutable label/index content."""
     with SessionLocal.begin() as db:
         _artifact(db, artifact_id, scope)
-        if not identity.strip():
-            raise ValueError("Stable target identity is required")
-        if parent_target_id is not None:
-            _fact(db, artifact_id, parent_target_id, kind="target")
-        target = _append(
+        return register_target_in_transaction(
             db,
             artifact_id,
-            operation_id="target:" + identity,
-            kind="target",
-            body=original,
-            parent_id=parent_target_id,
+            identity=identity,
+            original=original,
+            parent_target_id=parent_target_id,
         )
-        return target.id
+
+
+def register_target_in_transaction(
+    db, artifact_id, *, identity, original, parent_target_id=None
+):
+    if not identity.strip():
+        raise ValueError("Stable target identity is required")
+    return _append(
+        db,
+        artifact_id,
+        operation_id="target:" + identity,
+        kind="target",
+        body=original,
+        parent_id=parent_target_id,
+    ).id
+
+
+def _prerequisites_current(db, scope, references):
+    for reference in references:
+        aid, tid = reference["artifact_id"], reference["target_id"]
+        _artifact(db, aid, scope)
+        _require_active_target(db, aid, tid)
+        selection = _fact(db, aid, reference["selection_id"], kind="selection")
+        pinned, current = _content(db, selection), _current(db, aid, tid)
+        if (
+            selection.target_id != tid
+            or pinned["selected"] is None
+            or pinned["action"] != "accept"
+            or pinned["selection_generation"] != reference["selection_generation"]
+            or current["selection_generation"] != reference["selection_generation"]
+            or current["selected"] != pinned["selected"]
+            or _content(db, selection).get("lineage_generations")
+            != _target_lineage(db, aid, tid)
+        ):
+            raise HistoryConflict("Prerequisite selection is stale or ineligible")
+
+        if pinned["selected"] != "baseline":
+            completion = _fact(db, aid, pinned["selected"], kind="completion")
+            attempt = _fact(db, aid, completion.parent_id, kind="attempt")
+            if not _attempt_is_current(db, scope, aid, _content(db, attempt), tid):
+                raise HistoryConflict("Prerequisite inputs are no longer current")
+
+
+def _attempt_is_current(db, scope, artifact_id, attempt_content, target_id=None):
+    for tid, generations in attempt_content["coverage_lineages"].items():
+        if target_id is not None and tid != target_id:
+            continue
+        if generations != _target_lineage(db, artifact_id, tid):
+            return False
+    try:
+        _prerequisites_current(db, scope, attempt_content["input"]["prerequisites"])
+    except HistoryConflict:
+        return False
+    return True
 
 
 def begin_execution(
@@ -332,6 +393,13 @@ def begin_execution(
             return {"execution_id": existing.id, "attempt_ids": attempts}
         for request in requests:
             _require_active_target(db, artifact_id, request["target_id"])
+            # Prerequisites stay within the same artifact; one artifact lock makes
+            # snapshotting and grouped selection updates atomic without lock cycles.
+            if any(p["artifact_id"] != artifact_id for p in request["prerequisites"]):
+                raise HistoryConflict("Prerequisites must belong to the same artifact")
+            _prerequisites_current(db, scope, request["prerequisites"])
+            for fact_id in request["available_prior_completions"]:
+                _fact(db, artifact_id, fact_id, kind="completion")
         execution = _append(
             db,
             artifact_id,
@@ -341,6 +409,20 @@ def begin_execution(
         )
         attempts = []
         for request in requests:
+            coverage = []
+            for unit in request["decision_units"]:
+                unit_target = _append(
+                    db,
+                    artifact_id,
+                    operation_id="unit:" + request["target_id"] + ":" + unit["key"],
+                    kind="target",
+                    parent_id=request["target_id"],
+                    body={"decision_unit": unit, "binding_id": request["binding_id"]},
+                )
+                _require_active_target(db, artifact_id, unit_target.id)
+                coverage.append(unit_target.id)
+            if not coverage:
+                coverage = [request["target_id"]]
             attempt = _append(
                 db,
                 artifact_id,
@@ -350,6 +432,13 @@ def begin_execution(
                 parent_id=execution.id,
                 body={
                     "input": request,
+                    "coverage": coverage,
+                    "coverage_lineages": {
+                        tid: _target_lineage(db, artifact_id, tid) for tid in coverage
+                    },
+                    "budget_scope_id": canonical(
+                        {"artifact": artifact_id, "target": request["target_id"]}
+                    )[0],
                     "target_version": _current(db, artifact_id, request["target_id"])[
                         "version"
                     ],
@@ -387,9 +476,7 @@ def complete_attempt(
             parent_id=attempt.id,
             body={"state": state, "result": result, "diagnostics": diagnostics},
         )
-        if _content(db, attempt)["lineage_versions"] != _target_lineage(
-            db, artifact_id, attempt.target_id
-        ):
+        if not _attempt_is_current(db, scope, artifact_id, _content(db, attempt)):
             _append(
                 db,
                 artifact_id,
@@ -418,6 +505,10 @@ def record_scheduling(
         "missing_input",
         "unsupported_preflight",
         "flow_skipped",
+        "not_validatable",
+        "no_contract",
+        "ineligible",
+        "custom_replacement",
     }:
         raise ValueError("Unknown scheduling outcome")
     with SessionLocal.begin() as db:
@@ -434,7 +525,14 @@ def record_scheduling(
 def _current(db, artifact_id: str, target_id: str) -> dict:
     head = db.get(ValidationHead, (artifact_id, target_id))
     if head is None:
-        return {"version": 0, "active": True, "selected": None, "review": "pending"}
+        return {
+            "version": 0,
+            "lifecycle_generation": 0,
+            "selection_generation": 0,
+            "active": True,
+            "selected": None,
+            "review": "pending",
+        }
     return {
         **_content(db, _fact(db, artifact_id, head.fact_id)),
         "version": head.version,
@@ -445,7 +543,9 @@ def _target_lineage(db, artifact_id: str, target_id: str) -> dict[str, int]:
     versions = {}
     while target_id is not None:
         target = _fact(db, artifact_id, target_id, kind="target")
-        versions[target_id] = _current(db, artifact_id, target_id)["version"]
+        versions[target_id] = _current(db, artifact_id, target_id)[
+            "lifecycle_generation"
+        ]
         target_id = target.parent_id
     return versions
 
@@ -566,6 +666,7 @@ def apply_decisions_in_transaction(
             "restore",
             "revoke",
             "replace",
+            "invalidate",
         } or not isinstance(entry["reason"], str):
             raise ValueError("Explicit decision action and reason are required")
         if not state["active"] and action != "restore":
@@ -589,10 +690,12 @@ def apply_decisions_in_transaction(
             else:
                 completion = _fact(db, artifact_id, subject, kind="completion")
                 attempt = _fact(db, artifact_id, completion.parent_id, kind="attempt")
-                if completion.target_id != target.id or (
+                attempt_content = _content(db, attempt)
+                if target.id not in attempt_content["coverage"] or (
                     action == "accept"
-                    and _content(db, attempt)["lineage_versions"]
-                    != _target_lineage(db, artifact_id, target.id)
+                    and not _attempt_is_current(
+                        db, scope, artifact_id, attempt_content, target.id
+                    )
                 ):
                     raise HistoryConflict(
                         "Review subject is stale or belongs to another target"
@@ -609,9 +712,9 @@ def apply_decisions_in_transaction(
                 selected = subject
             elif selected == subject:
                 selected = None
-        elif action in {"defer", "revoke", "restore"}:
+        elif action in {"defer", "revoke", "restore", "invalidate"}:
             review = "pending"
-            if action in {"revoke", "restore"}:
+            if action in {"revoke", "restore", "invalidate"}:
                 selected = None
             if action == "restore":
                 active = True
@@ -624,7 +727,12 @@ def apply_decisions_in_transaction(
             "action": action,
             "reason": entry["reason"],
             "actor": actor,
+            "lineage_generations": _target_lineage(db, artifact_id, target.id),
             "version": state["version"] + 1,
+            "lifecycle_generation": state["lifecycle_generation"]
+            + (action in {"retire", "restore", "replace", "invalidate"}),
+            "selection_generation": state["selection_generation"]
+            + (selected != state["selected"]),
         }
         if action == "replace":
             if not isinstance(entry.get("replacement_original"), dict):
@@ -635,6 +743,7 @@ def apply_decisions_in_transaction(
                 operation_id="replacement-target:" + operation_id + ":" + target.id,
                 kind="target",
                 body=entry["replacement_original"],
+                fact_id=entry.get("replacement_target_id"),
                 parent_id=target.parent_id,
             )
             _append(
@@ -692,7 +801,7 @@ def read_fact(scope: HistoryScope, artifact_id: str, fact_id: str) -> dict:
 def list_history(
     scope: HistoryScope, artifact_id: str, *, after: int = 0
 ) -> list[dict]:
-    from src.lib.openai_agents.config import get_inspect_results_validation_page_size
+    from src.lib.openai_agents.config import get_validation_history_page_size
 
     with SessionLocal() as db:
         _artifact(db, artifact_id, scope)
@@ -703,7 +812,7 @@ def list_history(
                 ValidationFact.sequence > after,
             )
             .order_by(ValidationFact.sequence)
-            .limit(get_inspect_results_validation_page_size())
+            .limit(get_validation_history_page_size())
         )
         return [
             {

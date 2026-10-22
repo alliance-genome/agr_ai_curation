@@ -51,7 +51,6 @@ def retain_validator_original(
                    if name in {"status", "request_id", "validator_binding_id", "target"}},
         "output_complete": not bool(result.output_issues),
         "follow_up_question_count": len(result.unresolved_questions),
-        "review_status": "pending",
     }
     original["result"]["target"] = {name: value for name, value in original["result"]["target"].items()
                                     if name in {"object_type", "object_id", "field_path", "domain_pack_id"}}

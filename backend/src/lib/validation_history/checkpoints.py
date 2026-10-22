@@ -41,6 +41,20 @@ def write_checkpoint_body(
         raise HistoryConflict(
             "Checkpoint predecessor and payload must be supplied together"
         )
+    if previous_sha is not None:
+        previous = db.get(ValidationBody, previous_sha)
+        if previous is None:
+            raise HistoryConflict("Checkpoint predecessor is unavailable")
+        content = previous.content
+        expected = (
+            content["payload_sha256"]
+            if content.get("checkpoint_encoding") == "delta/v1"
+            else canonical(content)[0]
+        )
+        if canonical(previous_payload)[0] != expected:
+            raise HistoryConflict(
+                "Current projection differs from its immutable checkpoint"
+            )
     return _body(
         db,
         {

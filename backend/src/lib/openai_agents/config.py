@@ -2128,6 +2128,11 @@ def get_inspect_results_validation_page_size() -> int:
     return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", 5))
 
 
+def get_validation_history_page_size() -> int:
+    """Maximum immutable history facts per page (default 5)."""
+    return max(1, _get_env_int_with_fallback("VALIDATION_HISTORY_PAGE_SIZE", 5))
+
+
 def get_list_recorded_evidence_limit() -> int:
     """Default cap on records returned by list_recorded_evidence (LIST_RECORDED_EVIDENCE_LIMIT).
 

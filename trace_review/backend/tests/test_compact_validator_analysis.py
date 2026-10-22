@@ -151,6 +151,6 @@ def test_external_history_reference_is_visible_without_claiming_inline_body():
     assert row["original_available"] is False
     assert row["body_availability"] == "external"
     assert row["body_available_via_authorized_read"] is True
-    assert row["review_status"] == "pending"
+    assert row["review_status"] == "requires_history_read"
     assert row["history_ref"] == history
     assert row["follow_up_question_count"] == 1

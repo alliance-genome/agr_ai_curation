@@ -932,6 +932,7 @@ def _parent_validator_findings(result):
             "domain_pack.validator_resolved",
             "domain_pack.validator_unresolved",
             "domain_pack.validator_error",
+            "domain_pack.validator_output_incomplete",
         }
         and not finding.details.get("validation_metadata", {}).get(
             "generated_from_expected_result_field"
@@ -1588,10 +1589,14 @@ def test_bad_batch_result_identity_becomes_controlled_unresolved_result(
     assert result.validator_results[1].status == "resolved"
     findings = _parent_validator_findings(result)
     assert [finding.code for finding in findings] == [
-        "domain_pack.validator_error",
+        "domain_pack.validator_output_incomplete",
         "domain_pack.validator_resolved",
     ]
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_bad_batch_extra_request_id_becomes_controlled_unresolved_results(
     tmp_path: Path,
@@ -2220,10 +2225,14 @@ def test_invalid_validator_schema_becomes_controlled_unresolved_result(
     )
 
     finding = _single_result_finding(result)
-    assert finding.code == "domain_pack.validator_error"
-    assert finding.details["failure_classification"] == "invalid_schema"
+    assert finding.code == "domain_pack.validator_output_incomplete"
+    assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert "incompatible output" in result.validator_results[0].explanation
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_active_package_validator_envelopes_project_across_dispatch_and_finalization():
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -2372,13 +2381,17 @@ def test_dispatch_rejects_identity_mismatch_without_materializing(tmp_path: Path
 
     finding = _single_result_finding(result)
     assert result.validator_results[0].status == "unresolved"
-    assert finding.details["failure_classification"] == "invalid_schema"
+    assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert "different request" in result.validator_results[0].explanation
     assert not any(
         domain_object.object_type == "Gene"
         for domain_object in result.envelope.extracted_objects
     )
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
@@ -2399,9 +2412,13 @@ def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
 
     finding = _single_result_finding(result)
     assert result.validator_results[0].status == "unresolved"
-    assert finding.details["failure_classification"] == "invalid_schema"
+    assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert "incompatible output" in result.validator_results[0].explanation
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_resolved_validator_without_lookup_preserves_judgment(
     tmp_path: Path,
@@ -3367,11 +3384,11 @@ def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
-    with pytest.raises(ValueError, match="mandatory finalize_validator_result"):
-        run_package_scoped_validator_agent(
-            request,
-            binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
-        )
+    output = run_package_scoped_validator_agent(
+        request, binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+    assert output.accepted_result.output_issues
+    assert output.accepted_result._execution_failure is None
+    assert output.accepted_result._raw_output["raw_output"] == _result_payload(request)
 
 
 def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
@@ -3404,11 +3421,11 @@ def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
         lambda agent, **kwargs: _result_payload(request),
     )
 
-    with pytest.raises(ValueError, match="mandatory finalize_validator_result"):
-        run_package_scoped_validator_agent(
-            request,
-            binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
-        )
+    output = run_package_scoped_validator_agent(
+        request, binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+    assert output.accepted_result.output_issues
+    assert output.accepted_result._execution_failure is None
+    assert output.accepted_result._raw_output["raw_output"] == _result_payload(request)
 
 
 def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
@@ -3995,14 +4012,12 @@ def test_package_scoped_validator_batch_agent_requires_accepted_finalization_too
         lambda agent, **kwargs: {"results": [_result_payload(request)]},
     )
 
-    with pytest.raises(
-        ValueError,
-        match="mandatory finalize_validator_batch_results",
-    ):
-        run_package_scoped_validator_agent_batch(
-            cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-            binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
-        )
+    output = run_package_scoped_validator_agent_batch(
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
+        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+    assert output.accepted_results[0].output_issues
+    assert output.accepted_results[0]._execution_failure is None
+    assert output.accepted_results[0]._raw_output["raw_output"] == {"results": [_result_payload(request)]}
 
 
 def _multivalued_dispatch_pack(tmp_path: Path) -> LoadedDomainPack:

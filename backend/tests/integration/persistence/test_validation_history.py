@@ -383,7 +383,12 @@ def test_runtime_captures_baseline_and_request_before_runner_mutates_them(
         evidence=[{"quote": "original"}],
     )
     job = dispatch.ValidatorDispatchJob(
-        match=SimpleNamespace(object_envelope=obj, envelope=captured), request=request
+        match=SimpleNamespace(
+            object_envelope=obj,
+            envelope=captured,
+            binding=SimpleNamespace(decision_units=()),
+        ),
+        request=request,
     )
     seen = []
     fake_result = []
@@ -411,6 +416,8 @@ def test_runtime_captures_baseline_and_request_before_runner_mutates_them(
         )
         # Model a real unresolved scientific answer, not an operational failure.
         result._execution_failure = None
+        result._raw_output = None
+        result.output_issues = []
         fake_result.append(result)
         return dispatch._ValidatorRunGroupResult(
             dedupe_group_results={0: [result]},
@@ -966,3 +973,498 @@ def test_extraction_only_selection_cannot_claim_a_later_contribution_as_original
     added = updated.extracted_objects[-1].metadata["validation_history"]["target_id"]
     with pytest.raises(h.HistoryConflict, match="no attested extraction baseline"):
         decision(scope, aid, added, 0, "accept", subject="baseline")
+
+
+def test_defer_reject_and_revoke_do_not_stale_unchanged_answers(scope):
+    aid, tid = artifact(scope), None
+    tid = target(scope, aid)
+    answers = [
+        h.complete_attempt(
+            scope,
+            aid,
+            attempt(scope, aid, tid, key),
+            state="completed",
+            result={"answer": key},
+            diagnostics={},
+        )
+        for key in ("one", "two")
+    ]
+    decision(scope, aid, tid, 0, "defer")
+    decision(scope, aid, tid, 1, "reject", subject=answers[0])
+    selected = decision(scope, aid, tid, 2, "accept", subject=answers[1])[0]
+    decision(scope, aid, tid, 3, "revoke")
+    decision(scope, aid, tid, 4, "accept", subject=answers[1])
+    assert h.read_fact(scope, aid, selected)["content"]["selected"] == answers[1]
+
+
+def test_composite_units_and_pinned_prerequisite_selections(scope):
+    aid = artifact(scope)
+    tid = target(scope, aid)
+    request = {
+        "target_id": tid,
+        "binding_id": "composite",
+        "request": {},
+        "result_fields": ["id", "label", "context"],
+        "decision_units": [
+            {"key": "identity", "fields": ["id", "label"]},
+            {"key": "context", "fields": ["context"]},
+        ],
+    }
+    invocation = h.begin_execution(
+        scope, aid, operation_id="composite", receipt={}, requests=[request]
+    )
+    att = invocation["attempt_ids"][0]
+    frozen = h.read_fact(scope, aid, att)["content"]
+    first, second = frozen["coverage"]
+    assert frozen["budget_scope_id"]
+    answer = h.complete_attempt(
+        scope,
+        aid,
+        att,
+        state="completed",
+        result={"id": "a", "label": "A", "context": "c"},
+        diagnostics={},
+    )
+    selection = decision(scope, aid, first, 0, "accept", subject=answer)[0]
+    decision(scope, aid, second, 0, "reject", subject=answer)
+    with pytest.raises(h.HistoryConflict):
+        decision(scope, aid, tid, 0, "accept", subject=answer)
+    outsider = target(scope, aid, "outsider")
+    with pytest.raises(h.HistoryConflict):
+        decision(scope, aid, outsider, 0, "accept", subject=answer)
+    dependent = {
+        "target_id": outsider,
+        "binding_id": "dependent",
+        "request": {},
+        "prerequisites": [
+            {
+                "artifact_id": aid,
+                "target_id": first,
+                "selection_id": selection,
+                "selection_generation": 1,
+            }
+        ],
+    }
+    started = h.begin_execution(
+        scope, aid, operation_id="dependent", receipt={}, requests=[dependent]
+    )
+    result = h.complete_attempt(
+        scope,
+        aid,
+        started["attempt_ids"][0],
+        state="completed",
+        result={},
+        diagnostics={},
+    )
+    decision(scope, aid, first, 1, "defer")  # No input change.
+    decision(scope, aid, outsider, 0, "accept", subject=result)
+    decision(scope, aid, first, 2, "revoke")
+    with pytest.raises(h.HistoryConflict):
+        decision(scope, aid, outsider, 1, "accept", subject=result)
+    with pytest.raises(h.HistoryConflict):
+        h.begin_execution(
+            scope,
+            aid,
+            operation_id="stale-dependency",
+            receipt={},
+            requests=[dependent],
+        )
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        h.begin_execution(
+            scope,
+            aid,
+            operation_id="split",
+            receipt={},
+            requests=[
+                {**request, "decision_units": [{"key": "only-id", "fields": ["id"]}]}
+            ],
+        )
+
+
+def test_curator_identity_replacement_is_atomic_and_stales_inflight_answer(scope):
+    from src.lib.validation_history.runtime import capture_extraction
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch,
+        EnvelopeFieldPatchOperation,
+        apply_curator_field_patch,
+    )
+    from src.lib.domain_envelopes.persistence import (
+        DomainEnvelopeCheckpointRequest,
+        write_domain_envelope_checkpoint,
+    )
+    from tests.unit.lib.domain_packs.test_curator_override import (
+        _envelope_with,
+        _list_pack,
+        unresolved_value,
+        KEYS,
+    )
+
+    value = unresolved_value("same", identity_keys=KEYS)
+    envelope = _envelope_with({"sites": [value.copy()]})
+    envelope.envelope_id = "replace-" + uuid4().hex
+    envelope = capture_extraction(
+        scope=scope,
+        producer_id="replace",
+        typed=envelope.model_dump(mode="json"),
+        envelope=envelope,
+        provenance={},
+    )
+    aid = envelope.metadata["validation_history"]["artifact_id"]
+    old = envelope.extracted_objects[0].metadata["validation_history"]["elements"][
+        "sites"
+    ][0]
+    att = attempt(scope, aid, old)
+    source = str(uuid4())
+
+    def save(db, env, rev):
+        write_domain_envelope_checkpoint(
+            db,
+            DomainEnvelopeCheckpointRequest(
+                project_key="fixture",
+                envelope=env,
+                expected_revision=rev,
+                document_id=scope.document_id,
+                adapter_key="fixture",
+                source_extraction_result_id=source,
+            ),
+        )
+
+    with SessionLocal.begin() as db:
+        save(db, envelope, 0)
+    patch = EnvelopeFieldPatch(
+        envelope_id=envelope.envelope_id,
+        expected_revision=1,
+        object_id="obs-1",
+        field_path="sites[0].curie",
+        before={"curie": value.get("curie"), "name": value.get("name")},
+        value={"curie": "NEW:1", "name": "new"},
+        operation=EnvelopeFieldPatchOperation.REPLACE_IDENTITY,
+        reason="Use corrected identity",
+    )
+    edited = apply_curator_field_patch(
+        envelope,
+        _list_pack(),
+        patch,
+        current_revision=1,
+        actor_id=scope.owner_id,
+        actor_display_name="Curator",
+    )
+    assert edited.accepted, edited.errors
+    new = edited.envelope.extracted_objects[0].metadata["validation_history"][
+        "elements"
+    ]["sites"][0]
+    assert new != old
+    with SessionLocal() as db:
+        save(db, edited.envelope, 1)
+        db.rollback()
+    with SessionLocal() as db:
+        assert h._current(db, aid, old)["active"]
+    with SessionLocal.begin() as db:
+        save(db, edited.envelope, 1)
+    answer = h.complete_attempt(
+        scope, aid, att, state="completed", result={"old": True}, diagnostics={}
+    )
+    with pytest.raises(h.HistoryConflict):
+        decision(scope, aid, old, 1, "accept", subject=answer)
+    assert h.read_fact(scope, aid, old)["content"]["value"] == value
+    with SessionLocal() as db:
+        assert (
+            db.scalar(
+                select(ValidationFact).where(
+                    ValidationFact.artifact_id == aid,
+                    ValidationFact.kind == "replacement",
+                    ValidationFact.target_id == new,
+                )
+            )
+            is not None
+        )
+
+
+def test_documentless_chat_history_uses_owner_scope_without_fake_pdf(scope):
+    from src.lib.openai_agents.streaming_tools import (
+        _validator_runtime_context_for_chat,
+    )
+    from src.lib.validation_history import runtime
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+
+    context = _validator_runtime_context_for_chat(
+        document_id=None, user_id=scope.owner_id
+    )
+    assert context.document_id is None
+    chat_scope = h.HistoryScope(scope.owner_id, None, "chat-" + uuid4().hex)
+    envelope = DomainEnvelope(
+        envelope_id="chat-" + uuid4().hex,
+        domain_pack_id="fixture",
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_id="one", object_type="gene", payload={"name": "given in chat"}
+            )
+        ],
+    )
+    captured = runtime.capture_extraction(
+        scope=chat_scope,
+        producer_id="chat",
+        typed=envelope.model_dump(mode="json"),
+        envelope=envelope,
+        provenance={"source": "chat"},
+    )
+    bound = runtime.bind_artifact(captured, context)
+    assert (
+        h.read_baseline(chat_scope, bound.artifact_id)["provenance"]["source_document"]
+        is None
+    )
+    with pytest.raises(h.HistoryAccessError):
+        h.read_baseline(scope, bound.artifact_id)
+
+
+def test_malformed_model_output_is_retained_as_incomplete(scope):
+    from src.lib.domain_packs.validator_dispatch import (
+        _validated_result_from_agent_output,
+    )
+    from src.lib.validation_history.runtime import CapturedArtifact, complete_jobs
+    from src.schemas.domain_validator import DomainValidationRequest
+
+    request = DomainValidationRequest(
+        request_id="malformed",
+        validator_binding_id="fixture",
+        validator_agent={"package_id": "fixture", "agent_id": "validator"},
+        target={"domain_pack_id": "fixture"},
+    )
+    raw = {
+        "status": "unexpected",
+        "explanation": "Preserve this scientific judgment",
+        "valid_part": "A",
+    }
+    result = _validated_result_from_agent_output(raw, request=request)
+    assert result.output_issues and result._execution_failure is None
+    aid = artifact(scope)
+    tid = target(scope, aid)
+    att = attempt(scope, aid, tid)
+    complete_jobs(CapturedArtifact(scope, aid), {"attempt_ids": [att]}, [result])
+    completion = h.read_fact(scope, aid, result._history_ref["fact_id"])["content"]
+    assert completion["state"] == "incomplete"
+    assert completion["result"]["raw_output"] == raw
+    with pytest.raises(h.HistoryConflict):
+        decision(scope, aid, tid, 0, "accept", subject=result._history_ref["fact_id"])
+
+
+def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed_writes(
+    scope,
+):
+    from src.lib.validation_history import runtime
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+
+    envelope = DomainEnvelope(
+        envelope_id="collections-" + uuid4().hex,
+        domain_pack_id="fixture",
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_id="one",
+                object_type="gene",
+                payload={"terms": [{"label": "A"}, {"label": "B"}]},
+            )
+        ],
+    )
+    envelope = runtime.capture_extraction(
+        scope=scope,
+        producer_id="collections",
+        typed=envelope.model_dump(mode="json"),
+        envelope=envelope,
+        provenance={},
+    )
+    binding = runtime.CapturedArtifact(
+        scope, envelope.metadata["validation_history"]["artifact_id"]
+    )
+    for values in (
+        [{"label": "B"}, {"label": "A"}],
+        [{"label": "C"}, {"label": "D"}],
+        [{"label": "A"}],
+    ):
+        changed = envelope.model_copy(deep=True)
+        changed.extracted_objects[0].payload["terms"] = values
+        with pytest.raises(h.HistoryConflict, match="materialization"):
+            runtime.capture_derived_objects(
+                binding, changed, [], previous_envelope=envelope
+            )
+    changed = envelope.model_copy(deep=True)
+    obj = changed.extracted_objects[0]
+    obj.payload["terms"][0]["label"] = "resolved A"
+    obj.metadata["validator_resolved_value_materialization"] = [
+        {"materialized_field_paths": ["terms[0].label"]}
+    ]
+    result = runtime.capture_derived_objects(
+        binding, changed, [], previous_envelope=envelope
+    )
+    assert (
+        result.extracted_objects[0].metadata["validation_history"]
+        == envelope.extracted_objects[0].metadata["validation_history"]
+    )
+    corrupted = envelope.model_copy(deep=True)
+    corrupted.extracted_objects[0].payload["terms"].pop()
+    with pytest.raises(h.HistoryConflict):
+        runtime.retire_element_projection(
+            corrupted.extracted_objects[0].metadata,
+            "terms[0]",
+            payload=corrupted.extracted_objects[0].payload,
+        )
+
+
+def test_checkpoint_rejects_divergent_projection_before_committing(scope):
+    from src.lib.validation_history.checkpoints import write_checkpoint_body
+
+    with SessionLocal.begin() as db:
+        sha = write_checkpoint_body(
+            db, {"initial": True}, previous_payload=None, previous_sha=None
+        )
+        with pytest.raises(h.HistoryConflict):
+            write_checkpoint_body(
+                db, {"later": True}, previous_payload={"wrong": True}, previous_sha=sha
+            )
+
+
+def test_published_transition_fixture(scope):
+    import json
+
+    fixture = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures/validation_history/transitions.json"
+    )
+    for case in json.loads(fixture.read_text())["cases"]:
+        aid = artifact(scope)
+        tid = target(scope, aid, case["name"])
+        subjects = {
+            key: h.complete_attempt(
+                scope,
+                aid,
+                attempt(scope, aid, tid, case["name"] + key),
+                state="completed",
+                result={"answer": key},
+                diagnostics={},
+            )
+            for key in ("answer", "other")
+        }
+        version = 0
+        for step in case["steps"]:
+            kwargs = {"subject": subjects[step["subject"]]} if "subject" in step else {}
+            if step.get("conflict"):
+                with pytest.raises(h.HistoryConflict):
+                    decision(scope, aid, tid, version, step["action"], **kwargs)
+            else:
+                decision(scope, aid, tid, version, step["action"], **kwargs)
+                version += 1
+
+
+def test_history_page_size_is_environment_configurable(scope, monkeypatch):
+    aid = artifact(scope)
+    for index in range(6):
+        target(scope, aid, str(index))
+    monkeypatch.delenv("VALIDATION_HISTORY_PAGE_SIZE", raising=False)
+    assert len(h.list_history(scope, aid)) == 5
+    monkeypatch.setenv("VALIDATION_HISTORY_PAGE_SIZE", "2")
+    first = h.list_history(scope, aid)
+    second = h.list_history(scope, aid, after=first[-1]["sequence"])
+    assert len(first) == len(second) == 2
+    assert {r["id"] for r in first}.isdisjoint({r["id"] for r in second})
+
+
+@pytest.mark.parametrize("whole_list", [False, True])
+def test_real_two_wave_materializer_preserves_elements_or_rejects_rewrite(
+    scope, tmp_path, whole_list
+):
+    from copy import deepcopy
+    from dataclasses import replace
+    from src.lib.validation_history import runtime
+    from src.lib.domain_packs.validator_dispatch import (
+        dispatch_active_validator_bindings,
+        ValidatorRuntimeContext,
+    )
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+    from src.schemas.domain_pack_metadata import DomainPackMetadata
+    from tests.unit.lib.domain_packs.test_validator_dispatch import (
+        _multivalued_dispatch_pack,
+        _result_payload,
+    )
+
+    pack = _multivalued_dispatch_pack(tmp_path)
+    data = pack.metadata.model_dump(mode="json")
+    first = data["metadata"]["validator_bindings"]["active"][0]
+    if whole_list:
+        field = data["object_definitions"][0]["fields"][0]
+        field["field_type"] = "array"
+        field["metadata"] = {}
+        first["input_fields"]["curie"]["allow_multiple"] = True
+    second = deepcopy(first)
+    second["binding_id"] = "fixture.second"
+    second["runs_after"] = [first["binding_id"]]
+    data["metadata"]["validator_bindings"]["active"].append(second)
+    pack = replace(pack, metadata=DomainPackMetadata.model_validate(data))
+    envelope = DomainEnvelope(
+        envelope_id="waves-" + uuid4().hex,
+        domain_pack_id=pack.pack_id,
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="Annotation",
+                pending_ref_id="one",
+                payload={"evidence_code_curies": ["eco:1", "eco:2"]},
+            )
+        ],
+    )
+    envelope = runtime.capture_extraction(
+        scope=scope,
+        producer_id="waves",
+        typed=envelope.model_dump(mode="json"),
+        envelope=envelope,
+        provenance={},
+    )
+    old_ids = envelope.extracted_objects[0].metadata["validation_history"]["elements"][
+        "evidence_code_curies"
+    ]
+    calls = []
+
+    def runner(request, *, binding):
+        calls.append(binding.binding_id)
+        value = request.selected_inputs["curie"]
+        resolved = list(reversed(value)) if whole_list else value.upper()
+        result = _result_payload(request, resolved_values={"curie": resolved})
+        result["resolved_objects"] = []
+        return result
+
+    kwargs = dict(
+        runner=runner,
+        runtime_context=ValidatorRuntimeContext(
+            user_id=scope.owner_id, document_id=scope.document_id
+        ),
+        max_parallel_validators=1,
+    )
+    if whole_list:
+        with pytest.raises(h.HistoryConflict, match="materialization"):
+            dispatch_active_validator_bindings(envelope, pack, **kwargs)
+        assert calls == [first["binding_id"]]
+    else:
+        result = dispatch_active_validator_bindings(envelope, pack, **kwargs)
+        assert calls.count("fixture.second") == 2
+        obj = result.envelope.extracted_objects[0]
+        assert obj.payload["evidence_code_curies"] == ["ECO:1", "ECO:2"]
+        assert (
+            obj.metadata["validation_history"]["elements"]["evidence_code_curies"]
+            == old_ids
+        )
+        with SessionLocal() as db:
+            attempts = list(
+                db.scalars(
+                    select(ValidationFact).where(
+                        ValidationFact.artifact_id
+                        == envelope.metadata["validation_history"]["artifact_id"],
+                        ValidationFact.kind == "attempt",
+                    )
+                )
+            )
+            waves = [h._content(db, row)["input"] for row in attempts]
+            assert {item["dispatch_wave"] for item in waves} == {0, 1}
+            assert all(
+                item["available_prior_completions"]
+                for item in waves
+                if item["dispatch_wave"] == 1
+            )

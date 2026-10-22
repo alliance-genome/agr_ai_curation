@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from src.schemas.validation_history import DecisionUnit
 from .generic_extraction_profile import ValueSchema
 
 from .domain_envelope import (
@@ -625,6 +626,7 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     validator_agent: Optional[DomainPackValidatorAgentRef] = None
     applies_to: DomainPackValidatorAppliesTo
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
+    decision_units: list[DecisionUnit] | None = Field(default=None, exclude_if=lambda value: value is None)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
     route_by: Optional[DomainPackValidatorRouteSelector] = None
     routes: Optional[dict[str, DomainPackValidatorRoute]] = None
@@ -657,6 +659,18 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         default_factory=DomainPackValidatorCuratorOverride
     )
     definition_state: DefinitionState = DefinitionState.STABLE
+
+    @model_validator(mode="after")
+    def decision_coverage(self):
+        if self.decision_units:
+            keys = [unit.key for unit in self.decision_units]
+            fields = [field for unit in self.decision_units for field in unit.fields]
+            coverages = [set(self.expected_result_fields) | set(self.optional_result_fields or {})]
+            if self.routes:
+                coverages = [set(route.expected_result_fields) | set(self.optional_result_fields or {}) for route in self.routes.values()]
+            if len(set(keys)) != len(keys) or len(set(fields)) != len(fields) or any(set(fields) != coverage for coverage in coverages):
+                raise ValueError("Decision units must partition the binding result coverage")
+        return self
 
     @field_validator("max_tool_calls", mode="before")
     @classmethod

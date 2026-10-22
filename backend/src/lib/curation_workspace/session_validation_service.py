@@ -356,12 +356,12 @@ def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate, *
                 "record_source": "curator_manual", "candidate_id": str(candidate.id)}}},
     )
     from src.lib.validation_history.runtime import capture_extraction
-    from src.lib.validation_history.store import HistoryScope
+    from src.lib.validation_history.store import HistoryScope, canonical
     if runtime_context is None:
         raise ValueError("Curator-authored history requires an authenticated source context")
     envelope = capture_extraction(
         scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, str(candidate.session_id)),
-        producer_id=f"manual:{candidate.id}", typed=envelope.model_dump(mode="json"), envelope=envelope,
+        producer_id=f"manual:{candidate.id}:" + canonical(envelope.model_dump(mode="json"))[0], typed=envelope.model_dump(mode="json"), envelope=envelope,
         provenance={"source": "curator_manual", "execution_receipt": receipt.model_dump(mode="json")},
         subject_kind="curator_authored",
     )

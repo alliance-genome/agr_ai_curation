@@ -178,6 +178,7 @@ class ValidatorBinding:
     field_types: tuple[DomainPackFieldType, ...] = ()
     input_fields: dict[str, DomainPackInputSelector] = field(default_factory=dict)
     expected_result_fields: dict[str, Any] = field(default_factory=dict)
+    decision_units: tuple[dict, ...] = ()
     # Result fields written only when the validator confirms them; never required.
     optional_result_fields: dict[str, Any] = field(default_factory=dict)
     # Bindings whose written results this binding reads; it dispatches after them.
@@ -1228,6 +1229,7 @@ def _collect_validator_bindings(
                         "optional_result_fields",
                     )
                 ),
+                decision_units=tuple(raw_item.get("decision_units") or ()),
                 runs_after=_coerce_string_tuple(raw_item.get("runs_after")),
                 max_tool_calls=_optional_int(raw_item.get("max_tool_calls")),
                 preflight_policy=_optional_string(raw_item.get("preflight_policy")),

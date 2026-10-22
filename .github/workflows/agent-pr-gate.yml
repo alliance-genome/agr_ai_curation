@@ -2,7 +2,7 @@ name: Agent PR Gate
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, integration/validation-review]
 
 permissions:
   contents: read

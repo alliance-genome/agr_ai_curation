@@ -58,58 +58,73 @@ def capture_extraction(
 
 
 def _attach_object_targets(updated, scope, artifact_id, root_target, *, origin):
-    for obj in updated.extracted_objects:
-        if "validation_history" in obj.metadata:
-            continue
-        object_key = obj.object_id or obj.pending_ref_id
-        if object_key is None:
-            raise store.HistoryConflict(
-                "Extraction object requires a stable source identity"
+    # One transaction for all objects/fields/elements; no per-element auth round trips.
+    with store.SessionLocal.begin() as db:
+        store._artifact(db, artifact_id, scope)
+
+        def register(identity, original, parent):
+            return store.register_target_in_transaction(
+                db,
+                artifact_id,
+                identity=identity,
+                original=original,
+                parent_target_id=parent,
             )
-        object_target = store.register_target(
-            scope,
-            artifact_id,
-            identity="object:" + object_key,
-            original={
-                "object_ref": object_key,
-                "object_type": obj.object_type,
-                "payload": obj.payload,
-                "origin": origin,
-            },
-            parent_target_id=root_target,
-        )
-        elements = {}
 
-        def walk(value, path, parent_target):
-            if isinstance(value, dict):
-                for key, child in value.items():
-                    walk(child, f"{path}.{key}" if path else key, parent_target)
-            elif isinstance(value, list):
-                ids = []
-                for index, child in enumerate(value):
-                    # Ordinal is only the initial producer idempotency key; identity
-                    # thereafter is the persisted target ID, independent of content.
-                    key = f"element:{object_target}:{path}:{index}"
-                    tid = store.register_target(
-                        scope,
-                        artifact_id,
-                        identity=key,
-                        original={
-                            "object_target": object_target,
-                            "initial_path": f"{path}[{index}]",
-                            "value": child,
-                        },
-                        parent_target_id=parent_target,
-                    )
-                    ids.append(tid)
-                    walk(child, f"{path}[{index}]", tid)
-                elements[path] = ids
+        for obj in updated.extracted_objects:
+            if "validation_history" in obj.metadata:
+                continue
+            object_key = obj.object_id or obj.pending_ref_id
+            if object_key is None:
+                raise store.HistoryConflict(
+                    "Extraction object requires a stable source identity"
+                )
+            object_target = register(
+                "object:" + object_key,
+                {
+                    "object_ref": object_key,
+                    "object_type": obj.object_type,
+                    "payload": obj.payload,
+                    "origin": origin,
+                },
+                root_target,
+            )
+            fields, elements = {}, {}
 
-        walk(obj.payload, "", object_target)
-        obj.metadata["validation_history"] = {
-            "target_id": object_target,
-            "elements": elements,
-        }
+            def walk(value, path, parent):
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        child_path = f"{path}.{key}" if path else key
+                        tid = register(
+                            f"field:{parent}:{key}",
+                            {"initial_path": child_path, "value": child},
+                            parent,
+                        )
+                        fields[child_path] = tid
+                        walk(child, child_path, tid)
+                elif isinstance(value, list):
+                    ids = []
+                    for index, child in enumerate(value):
+                        child_path = f"{path}[{index}]"
+                        tid = register(
+                            f"element:{parent}:{index}",
+                            {
+                                "object_target": object_target,
+                                "initial_path": child_path,
+                                "value": child,
+                            },
+                            parent,
+                        )
+                        ids.append(tid)
+                        walk(child, child_path, tid)
+                    elements[path] = ids
+
+            walk(obj.payload, "", object_target)
+            obj.metadata["validation_history"] = {
+                "target_id": object_target,
+                "fields": fields,
+                "elements": elements,
+            }
     return updated
 
 
@@ -156,25 +171,40 @@ def request_target(binding: CapturedArtifact, job) -> str:
     stable = []
     prefix = ""
     current = obj.payload
+    parent_target = refs["target_id"]
     for part in parts:
         if isinstance(part, int):
             if not isinstance(current, list) or len(current) != len(
-                refs["elements"][prefix]
+                refs["elements"].get(prefix, [])
             ):
                 raise store.HistoryConflict(
                     "Collection mutation requires an explicit stable-identity update"
                 )
-            stable.append(refs["elements"][prefix][part])
+            if part >= len(current) or part < 0:
+                raise store.HistoryConflict("Collection target is no longer present")
+            parent_target = refs["elements"][prefix][part]
+            stable.append(parent_target)
             prefix += f"[{part}]"
         else:
-            stable.append(part)
             prefix = f"{prefix}.{part}" if prefix else part
+            if prefix not in refs["fields"]:
+                raise store.HistoryConflict(
+                    "Field requires an explicit stable-identity update"
+                )
+            parent_target = refs["fields"][prefix]
+            stable.append(parent_target)
         current = (
             current.get(part)
             if isinstance(current, dict)
             else current[part]
             if isinstance(current, list)
             else None
+        )
+    if isinstance(current, list) and len(current) != len(
+        refs["elements"].get(prefix, [])
+    ):
+        raise store.HistoryConflict(
+            "Collection mutation requires an explicit stable-identity update"
         )
     identity = store.canonical(
         {
@@ -192,14 +222,7 @@ def request_target(binding: CapturedArtifact, job) -> str:
             "binding_id": job.request.validator_binding_id,
             "stable_path": stable,
         },
-        parent_target_id=next(
-            (
-                part
-                for part in reversed(stable)
-                if part in {tid for ids in refs["elements"].values() for tid in ids}
-            ),
-            refs["target_id"],
-        ),
+        parent_target_id=parent_target,
     )
 
 
@@ -211,6 +234,13 @@ def begin_jobs(
             "target_id": request_target(binding, j),
             "binding_id": j.request.validator_binding_id,
             "request": j.request.model_dump(mode="json"),
+            "result_fields": [
+                *j.request.target.expected_fields,
+                *(j.request.target.optional_fields or []),
+            ],
+            "decision_units": list(j.match.binding.decision_units),
+            "dispatch_wave": j.history_wave,
+            "available_prior_completions": list(j.history_prior_completions),
         }
         for j in jobs
     ]
@@ -232,7 +262,11 @@ def complete_jobs(binding: CapturedArtifact, invocation: dict, results) -> list[
             diagnostics = {"failure_kind": result._execution_failure}
         else:
             state = "incomplete" if result.output_issues else "completed"
-            body = result.model_dump(mode="json")
+            body = (
+                result._raw_output
+                if result._raw_output is not None
+                else result.model_dump(mode="json")
+            )
             diagnostics = {}
         completion_id = store.complete_attempt(
             binding.scope,
@@ -257,6 +291,21 @@ def complete_jobs(binding: CapturedArtifact, invocation: dict, results) -> list[
     return refs
 
 
+class _HistoryCaptureError(RuntimeError):
+    """Fixed-message audit failure safe for Sentry."""
+
+
+def _sanitized_capture_error(error_type: str) -> _HistoryCaptureError:
+    try:
+        raise _HistoryCaptureError(
+            f"Validation history write failed ({error_type})"
+        ) from None
+    except _HistoryCaptureError as sanitized:
+        sanitized.__context__ = None
+        sanitized.__cause__ = None
+        return sanitized
+
+
 def fail_jobs(
     binding: CapturedArtifact, invocation: dict, error: BaseException
 ) -> None:
@@ -269,7 +318,9 @@ def fail_jobs(
     from src.lib.observability.runtime import report_runtime_exception
 
     state = (
-        "interrupted"
+        "unknown"
+        if isinstance(error, store.HistoryRecordingError)
+        else "interrupted"
         if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt, SystemExit))
         else "failed"
     )
@@ -285,13 +336,15 @@ def fail_jobs(
             )
         except Exception as capture_error:
             report_runtime_exception(
-                capture_error,
+                _sanitized_capture_error(type(capture_error).__name__),
                 component="validation_history",
                 operation="record_execution_failure",
             )
 
 
-def retire_element_projection(metadata: dict, field_path: str) -> tuple[dict, str]:
+def retire_element_projection(
+    metadata: dict, field_path: str, *, payload: dict
+) -> tuple[dict, str]:
     """Remove only the active index mapping; immutable target/content stay stored.
 
     Nested list paths are presentation addresses. Rebase them after removal while
@@ -319,7 +372,15 @@ def retire_element_projection(metadata: dict, field_path: str) -> tuple[dict, st
     updated = deepcopy(metadata)
     refs = updated["validation_history"]
     elements = refs["elements"]
-    retired = elements[format_path(parent)][index]
+    values = payload
+    for part in parent:
+        values = values[part]
+    ids = elements.get(format_path(parent), [])
+    if not isinstance(values, list) or len(ids) != len(values) or index >= len(ids):
+        raise store.HistoryConflict(
+            "Collection no longer matches its stable identity mapping"
+        )
+    retired = ids[index]
     new_elements = {}
     for path, ids in elements.items():
         path_tokens = list(parse_field_path(path))
@@ -335,7 +396,207 @@ def retire_element_projection(metadata: dict, field_path: str) -> tuple[dict, st
         new_elements[format_path(path_tokens)] = ids
     new_elements[format_path(parent)].pop(index)
     refs["elements"] = new_elements
+    fields = {}
+    for path, tid in refs["fields"].items():
+        parts = list(parse_field_path(path))
+        if tuple(parts[: len(parent)]) == parent and len(parts) > len(parent):
+            position = parts[len(parent)]
+            if isinstance(position, int):
+                if position == index:
+                    continue
+                if position > index:
+                    parts[len(parent)] -= 1
+        fields[format_path(parts)] = tid
+    refs["fields"] = fields
     return updated, retired
+
+
+def replace_projection_targets(before, after, *, replacement_path=None):
+    """Plan source edits without IO; checkpoint commits new IDs and links atomically.
+
+    Explicit identity replacements replace the entire declared value. Other
+    curator source edits replace changed fields; equality only detects edits,
+    never matches one list element to another.
+    """
+    from copy import deepcopy
+    from uuid import uuid4
+    from src.schemas.domain_envelope import parse_field_path
+
+    refs = deepcopy(before.metadata["validation_history"])
+    changes, additions = [], []
+
+    def descendant(path, root):
+        return (
+            not root
+            or path == root
+            or path.startswith(root + ".")
+            or path.startswith(root + "[")
+        )
+
+    def target_at(path):
+        if not path:
+            return refs["target_id"]
+        parts = parse_field_path(path)
+        if isinstance(parts[-1], int):
+            prefix = path[: path.rfind("[")]
+            ids = refs["elements"].get(prefix, [])
+            if parts[-1] >= len(ids):
+                raise store.HistoryConflict("Element identity is unavailable")
+            return ids[parts[-1]]
+        return refs["fields"].get(path)
+
+    def set_target(path, tid):
+        if not path:
+            refs["target_id"] = tid
+            return
+        parts = parse_field_path(path)
+        if isinstance(parts[-1], int):
+            refs["elements"][path[: path.rfind("[")]][parts[-1]] = tid
+        else:
+            refs["fields"][path] = tid
+
+    def walk_new(value, path, parent):
+        if isinstance(value, dict):
+            children = [
+                (f"{path}.{key}" if path else key, child)
+                for key, child in value.items()
+            ]
+        elif isinstance(value, list):
+            children = [(f"{path}[{i}]", child) for i, child in enumerate(value)]
+            refs["elements"][path] = []
+        else:
+            return
+        for child_path, child in children:
+            tid = str(uuid4())
+            additions.append(
+                {
+                    "id": tid,
+                    "parent_id": parent,
+                    "original": {
+                        "initial_path": child_path,
+                        "value": deepcopy(child),
+                        "origin": {"kind": "curator_authored"},
+                    },
+                }
+            )
+            if isinstance(value, list):
+                refs["elements"][path].append(tid)
+            else:
+                refs["fields"][child_path] = tid
+            walk_new(child, child_path, tid)
+
+    def replace(path, value):
+        old = target_at(path)
+        if old is None:
+            # New source field: no fictitious predecessor.
+            parts = parse_field_path(path)
+            parent_path = path.rsplit(".", 1)[0] if len(parts) > 1 else ""
+            parent = target_at(parent_path) if parent_path else refs["target_id"]
+            tid = str(uuid4())
+            additions.append(
+                {
+                    "id": tid,
+                    "parent_id": parent,
+                    "original": {
+                        "initial_path": path,
+                        "value": deepcopy(value),
+                        "origin": {"kind": "curator_authored"},
+                    },
+                }
+            )
+        else:
+            tid = str(uuid4())
+            original = {
+                "initial_path": path,
+                "value": deepcopy(value),
+                "origin": {"kind": "curator_authored"},
+            }
+            if not path:
+                original.update(
+                    object_ref=after.object_id or after.pending_ref_id,
+                    object_type=after.object_type,
+                    payload=deepcopy(value),
+                )
+            changes.append(
+                {
+                    "target_id": old,
+                    "replacement_target_id": tid,
+                    "replacement_original": original,
+                }
+            )
+        refs["fields"] = {
+            p: t for p, t in refs["fields"].items() if not descendant(p, path)
+        }
+        refs["elements"] = {
+            p: ids for p, ids in refs["elements"].items() if not descendant(p, path)
+        }
+        set_target(path, tid)
+        walk_new(value, path, tid)
+
+    def diff(old, new, path=""):
+        if path == replacement_path:
+            replace(path, new)
+        elif old == new:
+            return
+        elif (
+            isinstance(old, list)
+            and isinstance(new, list)
+            and len(old) == len(new)
+            and replacement_path
+            and replacement_path.startswith(path + "[")
+        ):
+            for index, (a, b) in enumerate(zip(old, new, strict=True)):
+                diff(a, b, f"{path}[{index}]")
+        elif isinstance(old, dict) and isinstance(new, dict):
+            for key in old.keys() | new.keys():
+                child_path = f"{path}.{key}" if path else key
+                if key not in new:
+                    tid = target_at(child_path)
+                    if tid:
+                        changes.append({"target_id": tid, "action": "retire"})
+                    refs["fields"] = {
+                        p: t
+                        for p, t in refs["fields"].items()
+                        if not descendant(p, child_path)
+                    }
+                    refs["elements"] = {
+                        p: ids
+                        for p, ids in refs["elements"].items()
+                        if not descendant(p, child_path)
+                    }
+                elif key not in old:
+                    replace(child_path, new[key])
+                else:
+                    diff(old[key], new[key], child_path)
+        else:
+            # Whole list assignment is an explicit replacement, never a guessed reorder.
+            replace(path, new)
+
+    diff(before.payload, after.payload)
+    result = after.model_copy(deep=True)
+    result.metadata["validation_history"] = refs
+    return result, {"changes": changes, "additions": additions}
+
+
+def record_match_scheduling(binding, match, outcome, *, details=None):
+    from uuid import uuid4
+
+    obj = match.object_envelope
+    ref = (obj.metadata if obj is not None else match.envelope.metadata)[
+        "validation_history"
+    ]
+    return store.record_scheduling(
+        binding.scope,
+        binding.artifact_id,
+        operation_id="scheduling:" + str(uuid4()),
+        outcome=outcome,
+        details={
+            "target_id": ref["target_id"],
+            "binding_id": match.binding.binding_id,
+            "target": match.target_details(),
+            **(details or {}),
+        },
+    )
 
 
 def record_preflight(
@@ -350,7 +611,7 @@ def record_preflight(
         details={
             "target_id": target,
             "request": job.request.model_dump(mode="json"),
-            "reason": result._execution_failure,
+            "reason": result.explanation,
         },
     )
     fact = store.read_fact(binding.scope, binding.artifact_id, fact_id)
@@ -437,6 +698,17 @@ def reorder_element_projection(
         remapped[format_path(nested)] = ids
     remapped[field_path] = list(ordered_target_ids)
     refs["elements"] = remapped
+    fields = {}
+    for path, tid in refs["fields"].items():
+        parts = list(parse_field_path(path))
+        if (
+            tuple(parts[: len(tokens)]) == tokens
+            and len(parts) > len(tokens)
+            and isinstance(parts[len(tokens)], int)
+        ):
+            parts[len(tokens)] = new_positions[parts[len(tokens)]]
+        fields[format_path(parts)] = tid
+    refs["fields"] = fields
     return updated
 
 
@@ -452,6 +724,56 @@ def require_captured_envelope(payload: dict, *, user_id: str, document_id: str) 
         )
 
 
+def _check_collection_materialization(before, after):
+    """Permit declared descendant writes, never treat whole-list assignment as identity."""
+    from src.schemas.domain_envelope import parse_field_path
+
+    allowed = []
+    for key, path_key in (
+        ("validator_resolved_value_materialization", "materialized_field_paths"),
+        ("profile_validator_materialization", "field_paths"),
+    ):
+        prior_count = len(before.metadata.get(key, []))
+        for event in after.metadata.get(key, [])[prior_count:]:
+            allowed.extend(parse_field_path(path) for path in event.get(path_key, []))
+
+    def walk(old, new, parts=()):
+        if isinstance(old, list) or isinstance(new, list):
+            if old == new:
+                return
+            if (
+                not isinstance(old, list)
+                or not isinstance(new, list)
+                or len(old) != len(new)
+            ):
+                raise store.HistoryConflict(
+                    "Collection materialization requires explicit stable identities"
+                )
+            for index, (a, b) in enumerate(zip(old, new, strict=True)):
+                child = (*parts, index)
+                if a != b and not any(
+                    tuple(path[: len(child)]) == child
+                    and (
+                        len(path) > len(child)
+                        or (
+                            len(path) == len(child)
+                            and not isinstance(a, (dict, list))
+                            and not isinstance(b, (dict, list))
+                        )
+                    )
+                    for path in allowed
+                ):
+                    raise store.HistoryConflict(
+                        "Whole-element materialization requires explicit stable identities"
+                    )
+                walk(a, b, child)
+        elif isinstance(old, dict) and isinstance(new, dict):
+            for key in old.keys() | new.keys():
+                walk(old.get(key), new.get(key), (*parts, key))
+
+    walk(before.payload, after.payload)
+
+
 def capture_derived_objects(
     binding: CapturedArtifact, envelope, results, *, previous_envelope
 ):
@@ -464,13 +786,17 @@ def capture_derived_objects(
 
     envelope = envelope.model_copy(deep=True)
     previous_targets = {
-        obj.object_id or obj.pending_ref_id: obj.metadata.get("validation_history")
+        obj.object_id or obj.pending_ref_id: obj
         for obj in previous_envelope.extracted_objects
     }
     for obj in envelope.extracted_objects:
         prior = previous_targets.get(obj.object_id or obj.pending_ref_id)
-        if "validation_history" not in obj.metadata and prior is not None:
-            obj.metadata["validation_history"] = deepcopy(prior)
+        if prior is not None:
+            _check_collection_materialization(prior, obj)
+            if "validation_history" not in obj.metadata:
+                obj.metadata["validation_history"] = deepcopy(
+                    prior.metadata["validation_history"]
+                )
     if all("validation_history" in obj.metadata for obj in envelope.extracted_objects):
         return envelope
     contributions = [
@@ -488,7 +814,11 @@ def capture_derived_objects(
         binding.scope,
         binding.artifact_id,
         root,
-        origin={"kind": "validator_contribution", "fact_ids": contributions},
+        origin={
+            "kind": "validator_contribution",
+            "available_wave_fact_ids": contributions,
+            "exact_contributor_available": False,
+        },
     )
 
 
@@ -547,16 +877,26 @@ def record_runner_receipt(agent, *, model: str, input_payload: dict) -> None:
         else None,
     }
     receipt = to_jsonable_python(receipt)
-    with store.SessionLocal.begin() as db:
-        store._artifact(db, binding.artifact_id, binding.scope)
-        store._fact(
-            db, binding.artifact_id, invocation["execution_id"], kind="execution"
-        )
-        store._append(
-            db,
-            binding.artifact_id,
-            operation_id="runner-receipt:" + invocation["execution_id"],
-            kind="runner_receipt",
-            parent_id=invocation["execution_id"],
-            body=receipt,
-        )
+    try:
+        with store.SessionLocal.begin() as db:
+            store._artifact(db, binding.artifact_id, binding.scope)
+            store._fact(
+                db, binding.artifact_id, invocation["execution_id"], kind="execution"
+            )
+            store._append(
+                db,
+                binding.artifact_id,
+                operation_id="runner-receipt:" + invocation["execution_id"],
+                kind="runner_receipt",
+                parent_id=invocation["execution_id"],
+                body=receipt,
+            )
+    except Exception:
+        try:
+            raise store.HistoryRecordingError(
+                "Validation execution receipt could not be recorded"
+            ) from None
+        except store.HistoryRecordingError as sanitized:
+            sanitized.__context__ = None
+            sanitized.__cause__ = None
+            raise

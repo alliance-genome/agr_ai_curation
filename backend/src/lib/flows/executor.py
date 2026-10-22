@@ -1856,6 +1856,20 @@ async def _collect_flow_validator_materialization_inputs(
                 )
                 continue
 
+            if validator_node is None:
+                from src.lib.validation_history.runtime import bind_artifact, record_preflight
+                from uuid import uuid4
+                validator_result = unresolved_validator_result_for_dispatch_problem(request,
+                    reason="missing_validator_node", explanation="Custom validator node is missing from the flow definition.")
+                await asyncio.to_thread(record_preflight, bind_artifact(source_envelope, runtime_context),
+                    ValidatorDispatchJob(match=match, request=request), validator_result,
+                    operation_id="missing-flow-node:" + str(uuid4()))
+                materialization_units.append(ValidatorResultMaterializationInput(match=match, request=request,
+                    result=validator_result, dispatch_context=dispatch_context if match.binding.required_any_active_group else None))
+                result_metadata.append(_flow_validator_result_metadata(validator_result, request=request,
+                    base={"group_id": group.get("group_id"), "state": state, "validator_binding_id": binding_id}))
+                continue
+
             from src.lib.benchmarks.stage_measurements import (
                 measure_bound_validator, record_handled_stage_failure,
             )
@@ -1865,8 +1879,6 @@ async def _collect_flow_validator_materialization_inputs(
             ):
                 from src.lib.validation_history.runtime import bind_artifact, begin_jobs, complete_jobs, fail_jobs, ACTIVE_VALIDATION_EXECUTION
                 from uuid import uuid4
-                if validator_node is None:
-                    raise ValueError("custom validator node is missing from the flow definition")
                 history_binding = bind_artifact(source_envelope, runtime_context)
                 captured = await asyncio.to_thread(begin_jobs, history_binding,
                     [ValidatorDispatchJob(match=match, request=request)], operation_id=str(uuid4()),
@@ -1886,6 +1898,9 @@ async def _collect_flow_validator_materialization_inputs(
                     raise
                 except Exception as exc:
                     await asyncio.to_thread(fail_jobs, history_binding, captured, exc)
+                    from src.lib.validation_history.store import HistoryRecordingError
+                    if isinstance(exc, HistoryRecordingError):
+                        raise
                     raise_if_document_read_failed(exc)
                     record_handled_stage_failure(exc)
                     logger.warning(

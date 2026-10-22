@@ -4066,7 +4066,7 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_tool_agent_key
         )
 
 
-def test_chat_validator_runtime_context_requires_real_document_and_user():
+def test_chat_validator_runtime_context_requires_user_and_preserves_documentless_chat():
     context = streaming_tools._validator_runtime_context_for_chat(
         document_id="document-1",
         user_id="curator-1",
@@ -4081,8 +4081,7 @@ def test_chat_validator_runtime_context_requires_real_document_and_user():
         streaming_tools._validator_runtime_context_for_chat(
             document_id="chat-runtime",
             user_id="curator-1",
-        )
-        is None
+        ).document_id is None
     )
     assert (
         streaming_tools._validator_runtime_context_for_chat(

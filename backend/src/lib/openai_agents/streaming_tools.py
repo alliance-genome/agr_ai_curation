@@ -3865,7 +3865,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         envelope_started_at = time.monotonic()
         extraction_record = CurationExtractionResultRecord(
             extraction_result_id=f"producer:{producer_id}",
-            document_id=runtime_context.document_id if runtime_context is not None else "chat-runtime",
+            document_id=runtime_context.document_id or "chat-runtime",
             adapter_key=candidate.adapter_key,
             agent_key=candidate.agent_key,
             source_kind=CurationExtractionSourceKind.CHAT,
@@ -6705,17 +6705,15 @@ def _validator_runtime_context_for_chat(
 ) -> Optional[Any]:
     normalized_document_id = str(document_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
-    if (
-        not normalized_document_id
-        or not normalized_user_id
-        or normalized_document_id == "chat-runtime"
-    ):
+    if not normalized_user_id:
         return None
+    if normalized_document_id == "chat-runtime":
+        normalized_document_id = ""
 
     from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
 
     return ValidatorRuntimeContext(
-        document_id=normalized_document_id,
+        document_id=normalized_document_id or None,
         user_id=normalized_user_id,
         authenticated_groups=(
             tuple(authenticated_groups) if authenticated_groups is not None else None

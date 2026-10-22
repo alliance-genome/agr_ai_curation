@@ -60,6 +60,7 @@ def isolated_validation_history(monkeypatch):
             for attempt, result in zip(invocation["attempt_ids"], results, strict=True)
         ]
 
+    monkeypatch.setattr(runtime, "record_match_scheduling", lambda *args, **kwargs: str(uuid4()))
     monkeypatch.setattr(runtime, "capture_extraction", lambda **kwargs: kwargs["envelope"])
     monkeypatch.setattr(runtime, "bind_artifact", lambda envelope, context: binding)
     monkeypatch.setattr(runtime, "capture_derived_objects", lambda bound, envelope, results, **kwargs: envelope)

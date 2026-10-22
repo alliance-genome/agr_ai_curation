@@ -2164,7 +2164,7 @@ def test_a_curator_removes_the_lone_disease_evidence_code():
     envelope = _override_envelope()
     envelope.extracted_objects[0].payload["evidence_code_curies"] = _staged_list(["IMP"], ("curie",))
     [element] = envelope.extracted_objects[0].payload["evidence_code_curies"]
-    envelope.extracted_objects[0].metadata["validation_history"] = {"elements": {"evidence_code_curies": ["evidence-1"]}}
+    envelope.extracted_objects[0].metadata["validation_history"] = {"fields": {}, "elements": {"evidence_code_curies": ["evidence-1"]}}
 
     result = apply_curator_field_patch(
         envelope, _disease_pack(),

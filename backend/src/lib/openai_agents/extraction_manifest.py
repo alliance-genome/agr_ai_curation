@@ -522,7 +522,7 @@ def validator_result_entries(
         }
         decisions[ref].update({
             "original_available": snapshot.get("original_available", True),
-            "review_status": snapshot.get("review_status", "historical_unknown"),
+            "review_status": "requires_history_read" if snapshot.get("schema_version") == 2 else "historical_unknown",
             "history_ref": snapshot.get("history_ref"),
             "original_ref": ref,
             "source_envelope_revision": snapshot.get("source_envelope_revision"),
