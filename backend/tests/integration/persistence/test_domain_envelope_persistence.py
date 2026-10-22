@@ -569,7 +569,15 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
     """The flow validator worker must commit the transaction for the session it opens."""
     from src.lib.flows import executor
 
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord as ExtractionRow
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
+    result_id = uuid4()
     source_envelope = _envelope()
+    extraction = ExtractionRow(id=result_id, document_id=OWNER_DOCUMENT_ID,
+        agent_key="fixture-extractor", source_kind=CurationExtractionSourceKind.FLOW,
+        payload_json=source_envelope.model_dump(mode="json"), extraction_metadata={})
+    db_session.add(extraction)
+    db_session.flush()
     write_domain_envelope_checkpoint(
         db_session,
         _checkpoint_request(source_envelope, expected_revision=0),
@@ -592,7 +600,7 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
     monkeypatch.setattr(
         executor,
         "_persist_flow_extraction_candidates",
-        lambda **_kwargs: [SimpleNamespace(extraction_result_id="result-1")],
+        lambda **_kwargs: [SimpleNamespace(extraction_result_id=str(result_id))],
     )
     monkeypatch.setattr(
         executor,
@@ -652,6 +660,11 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
         persisted = fresh_session.get(DomainEnvelopeModel, source_envelope.envelope_id)
         assert persisted is not None
         assert persisted.revision == 2
+        saved_source = fresh_session.get(ExtractionRow, result_id)
+        assert saved_source.extraction_metadata["inspection_checkpoint"] == {
+            "envelope_id": source_envelope.envelope_id, "revision": 2,
+        }
+        assert saved_source.payload_json == source_envelope.model_dump(mode="json")
         assert {
             finding["code"] for finding in persisted.envelope_json["validation_findings"]
         } == {
@@ -660,6 +673,8 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
         }
     finally:
         fresh_session.close()
+        db_session.execute(delete(ExtractionRow).where(ExtractionRow.id == result_id))
+        db_session.commit()
 
 
 @pytest.mark.integration

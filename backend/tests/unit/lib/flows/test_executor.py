@@ -34,6 +34,9 @@ def flow_requires_document(*args, **kwargs):
 
 
 def get_all_agent_tools(*args, **kwargs):
+    # Isolated step tests use synthetic noncanonical payloads/no persistence store.
+    # Fresh inspection integration tests call the production wrapper explicitly.
+    kwargs.setdefault("enable_result_inspection", False)
     return _executor_module().get_all_agent_tools(*args, **kwargs)
 
 
@@ -5928,7 +5931,7 @@ class TestCreateFlowSupervisorNoTools:
         mock_settings.return_value = ModelSettings()
         supervisor = create_flow_supervisor(flow, document_id=None)
         assert len(supervisor._flow_unavailable_steps) == 2
-        assert supervisor.tools == []
+        assert [tool.name for tool in supervisor.tools] == ["inspect_results"]
 
     @patch("src.lib.flows.executor.build_model_settings")
     @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.1-sol")
@@ -5984,7 +5987,7 @@ class TestCreateFlowSupervisorNoTools:
             inspection_calls.append(kwargs)
             return json.dumps({"status": "ok", "result_ref": kwargs["result_ref"]})
 
-        monkeypatch.setattr(executor, "inspect_results", _inspect_results)
+        monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.inspect_results", _inspect_results)
         mock_config.return_value = MagicMock(
             model="gpt-6.1-sol", temperature=0.0, reasoning=None
         )
@@ -6021,14 +6024,19 @@ class TestCreateFlowSupervisorNoTools:
             json.dumps({"action": "summary", "result_ref": result_ref}),
         )
 
-        assert json.loads(rejected)["status"] == "unauthorized_bound_ref"
+        assert json.loads(rejected)["error_code"] == "unauthorized_bound_ref"
         assert json.loads(accepted)["status"] == "ok"
         assert inspection_calls == [
             {
                 "action": "summary",
                 "query": None,
                 "result_ref": result_ref,
-                "target": "this_chat",
+                "target": "latest",
+                "result_view": "original",
+                "envelope_revision": None,
+                "authorized_refs": {result_ref: {"user_id": None, "origin_session_id": None, "document_id": None, "flow_run_id": "prior-run"}},
+                "adapter_keys": None,
+                "flow_run_id": None,
                 "object_ref": None,
                 "field_path": None,
                 "limit": None,
@@ -6055,7 +6063,7 @@ class TestCreateFlowSupervisorNoTools:
             return json.dumps({"status": "no_context", "error_code": "no_context"})
 
         supervisor._flow_execution_state["inspected_result_refs"].clear()
-        monkeypatch.setattr(executor, "inspect_results", _inaccessible_result)
+        monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.inspect_results", _inaccessible_result)
         inaccessible = await inspect_tool.on_invoke_tool(
             tool_ctx,
             json.dumps({"action": "summary", "result_ref": result_ref}),
@@ -6069,7 +6077,7 @@ class TestCreateFlowSupervisorNoTools:
                 {"status": "ok", "total_count": 0, collection_key: []}
             )
 
-        monkeypatch.setattr(executor, "inspect_results", _empty_result)
+        monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.inspect_results", _empty_result)
         for action in ("list", "search"):
             empty = await inspect_tool.on_invoke_tool(
                 tool_ctx,
@@ -6534,7 +6542,7 @@ class TestExecuteFlowTermination:
                 {"status": "ok", "total_count": 0, "matches": []}
             )
 
-        monkeypatch.setattr(executor, "inspect_results", _empty_search)
+        monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.inspect_results", _empty_search)
         mock_config.return_value = MagicMock(
             model="gpt-6.1-sol", temperature=0.0, reasoning=None
         )
@@ -9628,3 +9636,102 @@ def test_document_builder_requires_prepared_context_before_construction(monkeypa
     with pytest.raises(ValueError, match="requires prepared doc_context"):
         executor.get_all_agent_tools(SimpleNamespace(), document_id="doc", user_id=user_id)
     fetch.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persistence_fails", [False, True])
+@pytest.mark.parametrize("session_id,run_id", [("chat-inspection", "interactive-run"), ("batch-b1-doc-22222222", "b1")])
+async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id, run_id, persistence_fails):
+    """Exercise the real ordered wrapper, manifest and shared inspector together."""
+    from tests.unit.lib.openai_agents.test_inspect_results import _payload, _metadata, DOCUMENT_ID
+    from src.lib.openai_agents import inspect_results as inspector
+    from src.lib.openai_agents import result_inspection_views as views
+    executor = _executor_module()
+    payload = _payload()
+    payload["specialist_explanation"] = "Exact original explanation"
+    objects = []
+    for index in range(105):
+        obj = deepcopy(payload["extracted_objects"][0])
+        obj["pending_ref_id"] = f"assertion-{index}"
+        obj["payload"]["label"] = f"Object {index}"
+        objects.append(obj)
+    payload["extracted_objects"] = objects
+    payload["validation_findings"] = []
+    payload["extracted_objects"][0]["payload"]["symbol"] = "X" * 16000
+    calls = []
+    records = []
+    def streaming(agent, tool_name, tool_description, specialist_name, **kwargs):
+        @function_tool(name_override=tool_name)
+        async def step(query: str) -> str:
+            calls.append(tool_name)
+            if len(calls) == 1:
+                return json.dumps(payload)
+            assert len(agent.runtime_kwargs["formatter_bundle"].artifacts) == 1
+            return json.dumps({"status": "ok", "file_id": "fixture-file", "filename": "results.csv", "format": "csv"})
+        return step
+    def build_agent(*args, **kwargs):
+        agent = MagicMock(spec=Agent, instructions="Base")
+        agent.runtime_kwargs = kwargs
+        return agent
+    monkeypatch.setattr(executor, "get_agent_by_id", build_agent)
+    monkeypatch.setattr(executor, "_create_streaming_tool", streaming)
+    monkeypatch.setattr(executor, "get_agent_config", lambda *a: SimpleNamespace(model="gpt-6.1-sol", temperature=0.0, reasoning=None))
+    monkeypatch.setattr(executor, "get_model_for_agent", lambda *a, **kw: "gpt-6.1-sol")
+    monkeypatch.setattr(executor, "build_model_settings", lambda **kw: ModelSettings())
+    persist = _recording_persist_idempotent_extraction_results()
+    failure = RuntimeError("fake-secret-database-error")
+    reports = []
+    monkeypatch.setattr(executor, "report_runtime_exception", lambda exc, **kwargs: reports.append((exc, kwargs)))
+    def save(requests):
+        if persistence_fails:
+            raise failure
+        responses = persist(requests)
+        records.extend(r.extraction_result for r in responses)
+        return responses
+    monkeypatch.setattr(executor, "persist_idempotent_extraction_results", save)
+    monkeypatch.setattr(executor, "_materialize_flow_domain_envelope_records", lambda *a, **kw: None)
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda key: _metadata())
+    monkeypatch.setattr(inspector, "get_current_session_id", lambda: session_id)
+    monkeypatch.setattr(inspector, "get_current_user_id", lambda: "curator-1")
+    monkeypatch.setattr(inspector, "list_extraction_results", lambda **kw: records)
+    monkeypatch.setattr(views, "readable_document_ids", lambda *a, **kw: {DOCUMENT_ID})
+    flow = _make_output_attachment_flow([_agent_node("first", "gene"), _agent_node("second", "csv_formatter")], source_node_id="first", output_node_id="second")
+    supervisor = create_flow_supervisor(flow, document_id=DOCUMENT_ID, user_id="curator-1", session_id=session_id, flow_run_id=run_id, doc_context=DocumentContext(document_id=DOCUMENT_ID, user_id="curator-1"))
+    tools = {t.name: t for t in supervisor.tools}
+    inspect = tools["inspect_results"]
+    ctx = SimpleNamespace(tool_name="test", run_config=None)
+    initial = json.loads(await inspect.on_invoke_tool(ctx, json.dumps({"action": "list", "target": "this_chat"})))
+    assert initial["results"] == []
+    if persistence_fails:
+        with pytest.raises(RuntimeError) as caught:
+            await tools["ask_gene_specialist"].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
+        assert caught.value is failure
+        assert len(reports) == 1
+        assert "fake-secret" not in json.dumps(reports[0][1])
+        assert supervisor._flow_execution_state["completed_steps"] == []
+        assert supervisor._flow_execution_state["next_tool_index"] == 0
+        listing = json.loads(await inspect.on_invoke_tool(ctx, json.dumps({"action": "list"})))
+        assert listing["results"] == []
+        return
+    manifest = await tools["ask_gene_specialist"].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
+    ref = supervisor._flow_execution_state["completed_steps"][0]["inspection_result_ref"]
+    assert ref in manifest
+    assert len(records) == 1
+    read = {"action": "objects", "result_ref": ref, "limit": 40}
+    seen = []
+    while read:
+        page = json.loads(await inspect.on_invoke_tool(ctx, json.dumps(read)))
+        assert page["status"] == "ok", page
+        seen.extend(page["objects"])
+        read = page.get("next_call")
+    assert len(seen) == 105
+    exact = json.loads(await inspect.on_invoke_tool(ctx, json.dumps({
+        "action": "field", "result_ref": ref,
+        "object_ref": seen[0]["object_ref"], "field_path": "symbol",
+    })))
+    assert exact["value"] == "X" * 16000
+    assert supervisor._flow_execution_state["next_tool_index"] == 1
+    assert supervisor._flow_execution_state["inspected_result_refs"] == set()
+    await tools["ask_csv_formatter_specialist"].on_invoke_tool(ctx, json.dumps({"query": "format"}))
+    assert len(calls) == 2
+    assert len(supervisor._flow_execution_state["completed_steps"]) == 2

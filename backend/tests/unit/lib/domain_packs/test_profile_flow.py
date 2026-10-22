@@ -217,10 +217,10 @@ async def test_flow_step_commits_profile_record_atomically(example, monkeypatch,
         lambda request, **kwargs: results_by_request[request.request_id].model_dump(mode="json"))
     monkeypatch.setattr(executor, "materialize_validator_results_into_envelope",
                         lambda *a, **kw: pytest.fail("Profile entered packaged writer"))
-    monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", lambda **kwargs: [object()])
+    monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", lambda **kwargs: [SimpleNamespace(extraction_result_id="11111111-1111-1111-1111-111111111111")])
     monkeypatch.setattr(executor, "ensure_domain_envelope_materialization",
                         lambda *args, **kwargs: SimpleNamespace(envelope_id=source.envelope_id))
-    row = SimpleNamespace(envelope_json=source.model_dump(mode="json"), revision=1,
+    row = SimpleNamespace(envelope_id=source.envelope_id, extraction_metadata={}, envelope_json=source.model_dump(mode="json"), revision=1,
         project_key="fixture", document_id=None, session_id=None, flow_run_id=None,
         object_model_ref_json={}, model_field_ref_json={})
     db = SimpleNamespace(get=lambda *args: row, commit=Mock(), rollback=Mock(), close=Mock())

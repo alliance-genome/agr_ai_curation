@@ -59,7 +59,7 @@ from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGE
 from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
-from src.lib.openai_agents.inspect_results import inspect_results
+from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool, INSPECTION_GUIDANCE
 from src.lib.openai_agents.tool_surface import canonical_tool_name
 from src.lib.openai_agents.supervisor_context_tools import (
     inspect_chat_traces,
@@ -80,13 +80,12 @@ logger = logging.getLogger(__name__)
 ReasoningEffort = Literal["minimal", "low", "medium", "high", "xhigh"]
 
 _CURATION_PREP_TOOL_NAME = "prepare_for_curation"
-_INSPECT_RESULTS_TOOL_NAME = "inspect_results"
 _INSPECT_CHAT_TRACES_TOOL_NAME = "inspect_chat_traces"
 _RECALL_CHAT_HISTORY_TOOL_NAME = "recall_chat_history"
 _SUPERVISOR_BUILTIN_TOOL_NAMES = frozenset(
     {
         _CURATION_PREP_TOOL_NAME,
-        _INSPECT_RESULTS_TOOL_NAME,
+        "inspect_results",
         _INSPECT_CHAT_TRACES_TOOL_NAME,
         _RECALL_CHAT_HISTORY_TOOL_NAME,
     }
@@ -1635,78 +1634,7 @@ def create_supervisor_agent(
 
     specialist_tools.append(prepare_for_curation_tool)
 
-    @function_tool(
-        name_override=_INSPECT_RESULTS_TOOL_NAME,
-        description_override=(
-            "Explore persisted canonical extraction results for this chat without "
-            "rerunning extraction. Use next_call to continue explicitly selected "
-            "row pages; exact detail reads return complete selected content. Start with "
-            "action=\"summary\" (counts by object type, status and validation state), "
-            "then action=\"objects\" filtered by object_type, status, validation_state "
-            "(open|resolved|none|any), severity, query (field text) or field_path, with "
-            "fields to select YAML manifest fields; action=\"object\" or \"field\" "
-            "for one object or one exact field value; action=\"validation\" (filters "
-            "plus finding_ref for one finding) and action=\"validator_results\" "
-            "(validator_result_key for one) for validation; action=\"evidence\" with "
-            "object_ref for evidence text; action=\"details\" with object_ref for saved "
-            "generic/custom attributes; action=\"list\" and action=\"search\" with "
-            "query/target to choose among results. Values shown withheld are read "
-            "exactly with their read call. Continue row pages with next_call; optional "
-            "detail cursors select exact suffixes and result_sha256 verifies the source. Address a specific "
-            "result with result_ref in extraction-result:<uuid> form. Direct validators use "
-            "validator-result:<uuid>; action=\"validator_runs\" lists this chat's runs. "
-            "For either kind, validator_results plus validator_result_key and "
-            "detail_path=\"original.result\" reads the complete saved validator output. "
-            "Historical projections explicitly report original_unavailable. This tool does not "
-            "export, prepare for curation, inspect files or review sessions, or debug traces."
-        ),
-    )
-    async def inspect_results_tool(
-        action: str = "help",
-        query: str | None = None,
-        result_ref: str | None = None,
-        target: str = "latest",
-        object_ref: str | None = None,
-        field_path: str | None = None,
-        adapter_keys: List[str] | None = None,
-        flow_run_id: str | None = None,
-        limit: int | None = None,
-        cursor: str | None = None,
-        object_type: str | None = None,
-        status: str | None = None,
-        validation_state: str | None = None,
-        severity: str | None = None,
-        fields: List[str] | None = None,
-        finding_ref: str | None = None,
-        validator_result_key: str | None = None,
-        detail_path: str | None = None,
-        result_sha256: str | None = None,
-    ) -> str:
-        """Inspect bounded persisted extraction results for the active chat."""
-
-        return await inspect_results(
-            action=action,
-            query=query,
-            result_ref=result_ref,
-            target=target,
-            object_ref=object_ref,
-            field_path=field_path,
-            adapter_keys=adapter_keys,
-            flow_run_id=flow_run_id,
-            limit=limit,
-            cursor=cursor,
-            object_type=object_type,
-            status=status,
-            validation_state=validation_state,
-            severity=severity,
-            fields=fields,
-            finding_ref=finding_ref,
-            validator_result_key=validator_result_key,
-            detail_path=detail_path,
-            result_sha256=result_sha256,
-        )
-
-    specialist_tools.append(inspect_results_tool)
+    specialist_tools.append(make_result_inspection_tool())
 
     @function_tool(
         name_override=_INSPECT_CHAT_TRACES_TOOL_NAME,
@@ -1878,7 +1806,7 @@ def create_supervisor_agent(
     # Compatible providers return a concrete SDK model; native OpenAI returns a name.
     supervisor = Agent(
         name="Query Supervisor",
-        instructions=instructions,
+        instructions=instructions + INSPECTION_GUIDANCE,
         model=model,
         model_settings=supervisor_settings,
         input_guardrails=input_guardrails,
@@ -1907,7 +1835,7 @@ def create_supervisor_agent(
     tool_names = [getattr(t, 'name', str(t)) for t in specialist_tools]
     log_agent_config_to_langfuse(
         agent_name="Query Supervisor",
-        instructions=instructions,
+        instructions=instructions + INSPECTION_GUIDANCE,
         model=effective_model,
         tools=tool_names,
         model_settings={
