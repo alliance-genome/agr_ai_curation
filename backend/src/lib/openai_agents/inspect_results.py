@@ -13,6 +13,7 @@ curator's authorized records (session, document or flow run).
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
@@ -20,7 +21,7 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
-from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.chat_state import document_state
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.curation_workspace.extraction_results import list_extraction_results
@@ -66,6 +67,8 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.domain_pack_metadata import DomainPackMetadata
 
+
+logger = logging.getLogger(__name__)
 
 _TOOL_NAME = "inspect_results"
 _RESULT_REF_PREFIX = "extraction-result:"
@@ -196,6 +199,9 @@ class _Result:
             "action": action,
             "result_ref": self.result_ref,
             "extraction_result_id": self.extraction_result_id,
+            "result_view": self.carry.get("result_view", "original"),
+            "envelope_revision": self.carry.get("envelope_revision"),
+            "post_validation_checkpoint": (_record_attr(self.record, "metadata") or {}).get("inspection_checkpoint"),
         }
 
     def call(self, action: str, **args: Any) -> dict[str, Any]:
@@ -232,6 +238,9 @@ async def inspect_results(
     validator_result_key: str | None = None,
     detail_path: str | None = None,
     result_sha256: str | None = None,
+    result_view: str = "original",
+    envelope_revision: int | None = None,
+    authorized_refs: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     """Inspect persisted canonical extraction results through bounded actions.
 
@@ -241,6 +250,9 @@ async def inspect_results(
     normalized_action = _normalize_action(action)
     try:
         response = _inspect(
+            result_view=result_view,
+            envelope_revision=envelope_revision,
+            authorized_refs=authorized_refs,
             action=normalized_action,
             query=query,
             result_ref=result_ref,
@@ -263,11 +275,22 @@ async def inspect_results(
         )
     except _RequestError as exc:
         response = exc.response
+    except Exception:
+        logger.warning("Saved result inspection failed", exc_info=True,
+                       extra={"sentry_skip_event": True})
+        report_runtime_exception(
+            sanitized_runtime_error("Saved result inspection failed"), component="result_inspection", operation="inspect_results_failed",
+            context={"action": normalized_action, "result_view": result_view},
+        )
+        response = _error("inspection_failed", "Saved result inspection failed. No alternate result was substituted.")
     return json.dumps(response, ensure_ascii=True, default=str)
 
 
 def _inspect(
     *,
+    result_view: str,
+    envelope_revision: int | None,
+    authorized_refs: Mapping[str, Mapping[str, Any]] | None,
     action: str,
     query: str | None,
     result_ref: str | None,
@@ -288,8 +311,15 @@ def _inspect(
     detail_path: str | None,
     result_sha256: str | None,
 ) -> dict[str, Any]:
+    if result_view not in {"original", "post_validation"}:
+        raise _RequestError("invalid_request", "result_view must be original or post_validation.")
+    if envelope_revision is not None and (result_view != "post_validation" or envelope_revision < 1):
+        raise _RequestError("invalid_request", "envelope_revision requires a positive post_validation revision.")
     if action == "help":
-        return _help_response()
+        return {**_help_response(), "result_views": {
+            "original": "Immutable extractor output before flow-attached validation.",
+            "post_validation": "Exact saved validation checkpoint used downstream; unavailable if superseded.",
+        }}
     if action not in _ACTIONS:
         raise _RequestError(
             "invalid_action",
@@ -387,12 +417,18 @@ def _inspect(
         },
         lists={"fields": fields, "adapter_keys": adapter_keys},
     )
+    if authorized_refs is not None and result_ref and result_ref not in authorized_refs:
+        raise _RequestError("unauthorized_bound_ref", "Result is not available in this execution.")
+    if result_view != "original" and (action == "validator_runs" or str(result_ref).startswith("validator-result:")):
+        raise _RequestError("invalid_request", "Direct validator originals do not have extraction views.")
     if action == "validator_runs":
         from src.lib.domain_packs.validator_result_storage import list_validator_results
 
         if target not in {"latest", "this_chat"} or result_ref or adapter_keys or flow_run_id:
             raise _RequestError("invalid_request", "validator_runs lists this chat's saved direct validator runs.")
         rows = list_validator_results(user_id=user_id, session_id=session_id)
+        if authorized_refs is not None:
+            rows = [row for row in rows if row["result_ref"] in authorized_refs]
         return _page(
             rows, view=lambda row, _index: {**row, "read": {
                 "action": "validator_results", "result_ref": row["result_ref"],
@@ -447,9 +483,43 @@ def _inspect(
             target=normalized_target,
         )
 
+    if authorized_refs is not None:
+        records = [record for record in records if _record_result_ref(record) in authorized_refs]
+        records = [record for record in records if all(
+            (all((_record_attr(record, key) or {}).get(k) == v for k, v in value.items())
+             if isinstance(value, Mapping) else str(_record_attr(record, key)) == str(value))
+            for key, value in authorized_refs[_record_result_ref(record)].items()
+            if key != "post_validation_checkpoint"
+        )]
+        from src.lib.openai_agents.result_inspection_views import readable_document_ids
+        readable = readable_document_ids(records, user_id=user_id)
+        records = [record for record in records if str(_record_attr(record, "document_id")) in readable]
+    # Choose the requested source before resolving its version. A missing view
+    # on the newest result must never select an older extraction instead.
+    if action not in {"list", "search"} or (action == "search" and normalized_target == "latest" and parsed_ref is None):
+        records = records[:1]
+    unavailable_views = []
+    if result_view == "post_validation":
+        from src.lib.openai_agents.result_inspection_views import validation_view, InspectionViewUnavailable
+        projected = []
+        for record in records:
+            try:
+                binding = authorized_refs.get(_record_result_ref(record), {}) if authorized_refs is not None else {}
+                if "post_validation_checkpoint" in binding and binding["post_validation_checkpoint"] != (_record_attr(record, "metadata") or {}).get("inspection_checkpoint"):
+                    raise InspectionViewUnavailable("The completed step's pinned validation checkpoint changed.")
+                projected.append(validation_view(record, revision=envelope_revision, user_id=user_id))
+            except InspectionViewUnavailable as exc:
+                # Explicit reads fail; discovery omits unavailable views without substituting originals.
+                if parsed_ref or action not in {"list", "search"}:
+                    raise _RequestError("result_view_unavailable", str(exc)) from exc
+                unavailable_views.append({"result_ref": _record_result_ref(record), "reason": str(exc)})
+        records = projected
+
     listing_carry = {
         key: value
         for key, value in {
+            "result_view": result_view,
+            "envelope_revision": envelope_revision,
             "target": normalized_target if normalized_target != "latest" else None,
             "flow_run_id": _optional_text(flow_run_id),
             "adapter_keys": list(adapter_keys) if adapter_keys else None,
@@ -458,20 +528,22 @@ def _inspect(
         if value is not None
     }
     if action == "list":
-        return _list_response(
+        response = _list_response(
             records,
             carry=listing_carry,
             cursor=cursor,
             limit=limit,
             expected_sha=result_sha256,
         )
+        response["unavailable_views"] = unavailable_views
+        return response
     if action == "search":
         search_records = (
             records[:1]
             if normalized_target == "latest" and parsed_ref is None
             else records
         )
-        return _search_response(
+        response = _search_response(
             search_records,
             target=normalized_target,
             carry=listing_carry,
@@ -480,6 +552,9 @@ def _inspect(
             limit=limit,
             expected_sha=result_sha256,
         )
+
+        response["unavailable_views"] = unavailable_views
+        return response
 
     if not records:
         raise _RequestError(
@@ -1035,7 +1110,7 @@ def _list_response(
         rows_key="results",
         head={"action": "list", "target": carry.get("target", "latest")},
         call={**carry, "action": "list"},
-        sha=content_sha256({"list": [_record_id(record) for record in records], "view": dict(carry)}),
+        sha=content_sha256({"list": [_record_summary(record) for record in records], "view": dict(carry)}),
         expected_sha=expected_sha,
         cursor=cursor,
         limit=limit,
@@ -1090,7 +1165,7 @@ def _search_response(
             "unsupported_result_count": unsupported_count,
         },
         call={**carry, "action": "search", **({"query": query} if query else {})},
-        sha=content_sha256({"search": identities, "view": {**carry, "query": query}}),
+        sha=content_sha256({"search": identities, "results": [content_sha256(_record_attr(record, "payload_json")) for record in records], "view": {**carry, "query": query}}),
         expected_sha=expected_sha,
         cursor=cursor,
         limit=limit,
@@ -2288,7 +2363,13 @@ def _authorized_records(
 def _result_carry(record: Any, *, target: str, flow_run_id: str | None) -> dict[str, Any]:
     """Arguments that authorize the same result again on a follow-up call."""
 
-    carry: dict[str, Any] = {"result_ref": _record_result_ref(record)}
+    carry: dict[str, Any] = {
+        "result_ref": _record_result_ref(record),
+        "result_view": _record_attr(record, "inspection_view") or "original",
+    }
+    revision = _record_attr(record, "inspection_revision")
+    if revision is not None:
+        carry["envelope_revision"] = revision
     if target not in {"latest", "this_chat"}:
         carry["target"] = target
     if target == "flow_run" and _optional_text(flow_run_id):
@@ -2382,6 +2463,9 @@ def _record_summary(record: Any) -> dict[str, Any]:
         "domain_pack_id": domain_pack_id,
         "result_status": result_status,
         "canonical_status": canonical_status,
+        "result_view": _record_attr(record, "inspection_view") or "original",
+        "envelope_revision": _record_attr(record, "inspection_revision"),
+        "post_validation_checkpoint": (_record_attr(record, "metadata") or {}).get("inspection_checkpoint"),
         "object_count": object_count,
         "validation_warning_count": validation_warning_count,
         "validation_error_count": validation_error_count,

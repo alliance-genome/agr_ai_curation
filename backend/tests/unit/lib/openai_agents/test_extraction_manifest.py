@@ -12,6 +12,7 @@ from src.lib.curation_workspace.extraction_results import InlineExtractionPersis
 from src.lib.openai_agents import streaming_tools
 from src.lib.openai_agents.extraction_manifest import (
     build_extraction_manifest_page,
+    bind_extraction_manifest_reference,
     render_extraction_manifest_page,
 )
 from src.schemas.domain_pack_metadata import (
@@ -405,3 +406,28 @@ def test_resolved_validator_notes_are_visible_without_marking_result_outstanding
     assert decision["read"]["validator_result_key"] == key
     assert decision["original_ref"] == key
     assert original["result"]["unresolved_questions"] == raw["unresolved_questions"]
+
+
+def test_binding_saved_reference_preserves_prevalidated_manifest():
+    payload = _payload(5)
+    payload["validation_findings"] = [{
+        "severity": "info", "status": "resolved", "message": "Resolved",
+        "details": {"validation_result": {
+            "status": "resolved", "request_id": "binding-check",
+            "validator_binding_id": "identity",
+            "target": {"object_id": "assertion-1"},
+            "resolved_values": {"curie": "TEST:1"},
+        }},
+    }]
+    page = build_extraction_manifest_page(payload, limit=2)
+    original = json.loads(json.dumps(page))
+    bound = bind_extraction_manifest_reference(page, "saved-result")
+    assert page == original
+    assert bound["result_ref"] == "extraction-result:saved-result"
+    assert bound["extraction_result_id"] == "saved-result"
+    assert bound["objects"] == page["objects"]
+    assert bound["page"] == page["page"]
+    assert bound["validator_results"]["inspect"]["result_ref"] == bound["result_ref"]
+    assert bound["validator_results"]["results"]
+    for entry in bound["validator_results"]["results"]:
+        assert entry["read"]["result_ref"] == bound["result_ref"]

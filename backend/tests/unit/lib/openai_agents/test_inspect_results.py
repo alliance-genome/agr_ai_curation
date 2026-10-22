@@ -819,3 +819,139 @@ async def test_saved_explanation_is_discoverable_and_exactly_readable(monkeypatc
             chunks.append(response["detail"]["content"])
         call = response.get("next_call")
     assert "".join(chunks) == explanation
+
+
+@pytest.mark.asyncio
+async def test_completed_scope_search_does_not_expose_same_session_other_run(monkeypatch):
+    from src.lib.openai_agents import result_inspection_views as views
+    allowed = _InspectRecord(flow_run_id="run-1")
+    foreign = _InspectRecord(extraction_result_id="33333333-3333-3333-3333-333333333333", flow_run_id="run-2")
+    _patch_records(monkeypatch, [allowed, foreign])
+    monkeypatch.setattr(views, "readable_document_ids", lambda records, **kw: {DOCUMENT_ID})
+    ref = f"extraction-result:{RESULT_ID}"
+    scope = {ref: {"user_id": "user-1", "origin_session_id": "session-1", "document_id": DOCUMENT_ID, "flow_run_id": "run-1"}}
+    response = json.loads(await inspect_results_module.inspect_results(action="list", target="this_chat", authorized_refs=scope))
+    assert [row["result_ref"] for row in response["results"]] == [ref]
+    rejected = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref="extraction-result:33333333-3333-3333-3333-333333333333", authorized_refs=scope))
+    assert rejected["error_code"] == "unauthorized_bound_ref"
+    for key in scope[ref]:
+        bad_scope = {ref: {**scope[ref], key: "foreign"}}
+        denied = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=ref, authorized_refs=bad_scope))
+        assert denied["error_code"] == "no_context"
+    monkeypatch.setattr(views, "readable_document_ids", lambda *args, **kw: set())
+    revoked = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=ref, authorized_refs=scope))
+    assert revoked["error_code"] == "no_context"
+
+
+@pytest.mark.asyncio
+async def test_post_validation_view_is_explicit_and_exact_with_pinned_reads(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from src.lib.openai_agents import result_inspection_views as views
+    original = vars(_InspectRecord())
+    original["payload_json"]["specialist_explanation"] = "Original extractor explanation"
+    original["metadata"] = {"inspection_checkpoint": {"envelope_id": "saved-envelope", "revision": 2}}
+    validated = deepcopy(original["payload_json"])
+    validated["specialist_explanation"] = "Validated checkpoint explanation"
+    row = SimpleNamespace(revision=2, envelope_json=validated, source_extraction_result_id=RESULT_ID, document_id=DOCUMENT_ID)
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.get.return_value = row
+    monkeypatch.setattr(views, "SessionLocal", lambda: db)
+    monkeypatch.setattr(views, "readable_document_ids", lambda *args, **kw: {DOCUMENT_ID})
+    _patch_records(monkeypatch, [original])
+    ref = f"extraction-result:{RESULT_ID}"
+    source = json.loads(await inspect_results_module.inspect_results(action="explanation", result_ref=ref))
+    result = json.loads(await inspect_results_module.inspect_results(action="explanation", result_ref=ref, result_view="post_validation"))
+    assert result["value"] == validated["specialist_explanation"]
+    assert source["value"] == original["payload_json"]["specialist_explanation"]
+    assert result["result_view"] == "post_validation"
+    assert result["envelope_revision"] == 2
+    page = json.loads(await inspect_results_module.inspect_results(action="objects", result_ref=ref, result_view="post_validation", limit=1))
+    assert page["result_view"] == "post_validation"
+    row.revision = 3
+    stale = json.loads(await inspect_results_module.inspect_results(action="explanation", result_ref=ref, result_view="post_validation", envelope_revision=2))
+    assert stale["error_code"] == "result_view_unavailable"
+    assert original["payload_json"] != validated
+
+
+@pytest.mark.asyncio
+async def test_missing_post_validation_never_substitutes_original(monkeypatch):
+    _patch_records(monkeypatch, [vars(_InspectRecord())])
+    response = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=f"extraction-result:{RESULT_ID}", result_view="post_validation"))
+    assert response["error_code"] == "result_view_unavailable"
+
+
+def test_shared_tool_schema_and_description_support_both_views():
+    from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool
+    chat = make_result_inspection_tool()
+    flow = make_result_inspection_tool(scope_provider=lambda: {})
+    assert chat.params_json_schema == flow.params_json_schema
+    assert chat.description == flow.description
+    assert "result_view" in chat.params_json_schema["properties"]
+    assert "envelope_revision" in chat.params_json_schema["properties"]
+    assert "authorized_refs" not in chat.params_json_schema["properties"]
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_store_failure_is_reported_without_sensitive_response(monkeypatch):
+    from src.lib.openai_agents import result_inspection_views as views
+    _patch_records(monkeypatch, [vars(_InspectRecord())])
+    failure = RuntimeError("fake-secret-document-content")
+    def fail(*args, **kwargs):
+        raise failure
+    monkeypatch.setattr(views, "validation_view", fail)
+    reports = []
+    monkeypatch.setattr(inspect_results_module, "report_runtime_exception", lambda exc, **kw: reports.append((exc, kw)))
+    response = await inspect_results_module.inspect_results(action="summary", result_ref=f"extraction-result:{RESULT_ID}", result_view="post_validation")
+    assert json.loads(response)["error_code"] == "inspection_failed"
+    assert "fake-secret" not in response
+    assert len(reports) == 1
+    assert "fake-secret" not in str(reports[0][0])
+    assert reports[0][0].__cause__ is None
+    assert reports[0][0].__context__ is None
+    assert "fake-secret" not in json.dumps(reports[0][1])
+
+
+@pytest.mark.asyncio
+async def test_search_retains_supported_matches_alongside_legacy_list_payload(monkeypatch):
+    _patch_records(monkeypatch, [
+        _InspectRecord(),
+        _InspectRecord(extraction_result_id="33333333-3333-3333-3333-333333333333", payload_json=[{"legacy": "payload"}]),
+    ])
+    response = json.loads(await inspect_results_module.inspect_results(action="search", target="this_chat"))
+    assert response["status"] == "ok"
+    assert response["matches"]
+    assert response["unsupported_result_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_latest_missing_version_never_selects_an_older_extraction(monkeypatch):
+    from src.lib.openai_agents import result_inspection_views as views
+    latest = vars(_InspectRecord(created_at=datetime(2026, 10, 22, tzinfo=timezone.utc)))
+    older = vars(_InspectRecord(extraction_result_id="33333333-3333-3333-3333-333333333333"))
+    _patch_records(monkeypatch, [older, latest])
+    def resolve(record, **kwargs):
+        assert record["extraction_result_id"] == RESULT_ID, "Must not substitute the older result"
+        raise views.InspectionViewUnavailable("Newest checkpoint unavailable")
+    monkeypatch.setattr(views, "validation_view", resolve)
+    response = json.loads(await inspect_results_module.inspect_results(action="summary", result_view="post_validation"))
+    assert response["error_code"] == "result_view_unavailable"
+    search = json.loads(await inspect_results_module.inspect_results(action="search", result_view="post_validation"))
+    assert search["matches"] == []
+    assert len(search["unavailable_views"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_flow_capability_ignores_unrelated_metadata_but_pins_validation_view(monkeypatch):
+    from src.lib.openai_agents import result_inspection_views as views
+    record = _InspectRecord(metadata={"idempotency_key": "step-key", "flow_step_key": "step-1", "later_link": "new"})
+    _patch_records(monkeypatch, [record])
+    monkeypatch.setattr(views, "readable_document_ids", lambda *a, **kw: {DOCUMENT_ID})
+    ref = f"extraction-result:{RESULT_ID}"
+    scope = {ref: {"metadata": {"idempotency_key": "step-key", "flow_step_key": "step-1"},
+                   "post_validation_checkpoint": {"envelope_id": "checkpoint", "revision": 2}}}
+    original = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=ref, authorized_refs=scope))
+    assert original["status"] == "ok"
+    unavailable = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=ref, result_view="post_validation", authorized_refs=scope))
+    assert unavailable["error_code"] == "result_view_unavailable"

@@ -20,6 +20,8 @@ Documentation for the AI Curation Platform developers.
 
 ## Quick Navigation
 
+See [Result inspection across chat and flows](guides/RESULT_INSPECTION.md) for saved-result views and authorization.
+
 ### Getting Started
 
 Start here for new developers:

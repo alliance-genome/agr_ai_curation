@@ -1622,6 +1622,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
         lambda **kwargs: SimpleNamespace(**kwargs),
     )
 
+    monkeypatch.setattr("src.lib.openai_agents.result_inspection_tool.function_tool", supervisor_agent.function_tool)
     created = supervisor_agent.create_supervisor_agent(document_id=None, user_id=None)
 
     assert "CORE-ONLY MODE" in created.instructions

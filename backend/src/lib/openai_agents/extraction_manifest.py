@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Mapping
 
 from pydantic import ValidationError
@@ -102,6 +103,22 @@ def build_extraction_manifest_page(
     }
     page["page"]["returned"] = len(page["objects"])
     return page
+
+
+def bind_extraction_manifest_reference(page: Mapping[str, Any], extraction_result_id: str) -> dict[str, Any]:
+    """Bind a prevalidated manifest to its actual durable result, without reloading configuration."""
+    bound = deepcopy(dict(page))
+    ref = _result_ref(extraction_result_id)
+    bound["result_ref"] = ref
+    bound["extraction_result_id"] = extraction_result_id
+    bound["validator_results"]["inspect"]["result_ref"] = ref
+    for entry in bound["validator_results"]["results"]:
+        entry["read"]["result_ref"] = ref
+    bound["next_actions"] = _next_actions(
+        result_ref=ref, has_objects=bool(bound["object_count"]),
+        next_cursor=bound["page"]["next_cursor"],
+    )
+    return bound
 
 
 def build_extraction_manifest_object(

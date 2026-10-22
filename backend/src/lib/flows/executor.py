@@ -32,7 +32,7 @@ from pathlib import Path
 import re
 from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, TYPE_CHECKING, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 if TYPE_CHECKING:
     from src.lib.domain_packs.profile_validation import ProfileValidationContext
@@ -76,7 +76,7 @@ from src.lib.curation_workspace.bootstrap_service import run_flow_curation_hando
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
-from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.lib.curation_workspace.models import DomainEnvelopeModel, CurationExtractionResultRecord as ExtractionResultModel
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
@@ -137,7 +137,7 @@ from src.lib.domain_packs.flow_validator_selection import (
     set_flow_validator_selections,
     reset_flow_validator_selections,
 )
-from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.models.sql.curation_flow import CurationFlow
 from src.models.sql.database import SessionLocal
 from src.schemas.flows import FlowDefinition
@@ -162,7 +162,11 @@ from src.lib.openai_agents.config import (
 from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
-from src.lib.openai_agents.inspect_results import inspect_results
+from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool, INSPECTION_GUIDANCE
+from src.lib.openai_agents.extraction_manifest import (
+    build_extraction_manifest_page, bind_extraction_manifest_reference,
+    render_extraction_manifest_page, ExtractionManifestError,
+)
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
@@ -2309,6 +2313,16 @@ async def _execute_validation_groups_for_step(
         # The checkpoint writer also normalizes authenticated context. Snapshot
         # its exact flushed row before commit expiration, but publish only on success.
         validated_payload = deepcopy(envelope_row.envelope_json)
+        extraction_row = session.get(ExtractionResultModel, UUID(str(persisted_records[0].extraction_result_id)))
+        if extraction_row is None:
+            raise RuntimeError("Validation source extraction disappeared before checkpoint commit.")
+        extraction_row.extraction_metadata = {
+            **extraction_row.extraction_metadata,
+            "inspection_checkpoint": {
+                "envelope_id": envelope_row.envelope_id,
+                "revision": materialized_revision,
+            },
+        }
         session.commit()
         _emit_validation_group_timing(
             status="success",
@@ -2999,6 +3013,7 @@ def get_all_agent_tools(
     model_id_override: str | None = None,
     model_provider_override: str | None = None,
     benchmark_routes: Mapping[str, Any] | None = None,
+    enable_result_inspection: bool = True,
 ) -> Any:
     """Get streaming-wrapped tools for agents in the flow.
 
@@ -3363,6 +3378,26 @@ def get_all_agent_tools(
             phase_timings_ms["evidence_accumulation_ms"] = _elapsed_ms(
                 evidence_accumulation_started_at
             )
+            inspectable_candidate = bool(
+                enable_result_inspection and candidate is not None
+                and isinstance(candidate.payload_json, Mapping)
+                and is_canonical_domain_envelope_payload(candidate.payload_json)
+            )
+            inspection_manifest = None
+            manifest_error = None
+            if inspectable_candidate and candidate is not None:
+                try:
+                    inspection_manifest = build_extraction_manifest_page(
+                        _sanitize_flow_extraction_candidate_payload(candidate.payload_json),
+                        adapter_key=_resolve_flow_candidate_adapter_key(candidate), agent_key=candidate.agent_key,
+                    )
+                except ExtractionManifestError:
+                    logger.warning("Flow result inspection manifest is unavailable", exc_info=True,
+                                   extra={"sentry_skip_event": True})
+                    manifest_error = sanitized_runtime_error("Flow result inspection manifest is unavailable")
+                    report_runtime_exception(manifest_error, component="flow_executor", operation="inspection_manifest_failed")
+                if manifest_error is not None:
+                    raise manifest_error
             validation_started_at = time.monotonic()
             validation_group_metadata = await _execute_validation_groups_for_step(
                 flow=flow,
@@ -3441,6 +3476,55 @@ def get_all_agent_tools(
             }
             if extraction_handoff_audit is not None:
                 completed_step["extraction_handoff_audit"] = extraction_handoff_audit
+            if inspectable_candidate and candidate is not None:
+                if not document_id or not user_id or not session_id:
+                    raise ValueError("Completed extraction inspection requires document, owner and session identity.")
+                if not _resolve_flow_candidate_adapter_key(candidate):
+                    raise ValueError("Completed extraction has no adapter key.")
+                persistence_error = None
+                records = []
+                try:
+                    records = _persist_flow_extraction_candidates(
+                        candidates=[candidate], document_id=document_id,
+                        user_id=user_id, session_id=session_id, trace_id=get_current_trace_id(),
+                        flow_run_id=flow_run_id,
+                    )
+                    if len(records) != 1:
+                        raise RuntimeError("Completed extraction did not yield one saved result.")
+                except Exception:
+                    logger.warning("Completed flow extraction persistence failed", exc_info=True,
+                                   extra={"sentry_skip_event": True})
+                    persistence_error = sanitized_runtime_error("Completed flow extraction persistence failed")
+                    _report_flow_extraction_persistence_failure(
+                        persistence_error, operation="extraction_persistence_failed", document_id=document_id,
+                        session_id=session_id, trace_id=get_current_trace_id(),
+                        flow_run_id=flow_run_id, candidate_count=1, extraction_output_required=True,
+                    )
+                if persistence_error is not None:
+                    raise persistence_error
+                record = records[0]
+                result_ref = _flow_extraction_result_ref(record)["result_ref"]
+                if inspection_manifest is None:
+                    raise RuntimeError("Completed canonical extraction has no prepared inspection manifest.")
+                result = render_extraction_manifest_page(bind_extraction_manifest_reference(
+                    inspection_manifest, str(record.extraction_result_id),
+                ))
+                checkpoint = record.metadata.get("inspection_checkpoint")
+                if checkpoint:
+                    result += ("\nPost-validation view: inspect_results(result_ref="
+                               + json.dumps(result_ref) + ', result_view="post_validation", envelope_revision='
+                               + str(checkpoint["revision"]) + ', action="summary").')
+                completed_step["extraction_result_id"] = str(record.extraction_result_id)
+                completed_step["inspection_result_ref"] = result_ref
+                completed_step["inspection_scope"] = {
+                    "user_id": user_id, "origin_session_id": session_id,
+                    "document_id": document_id, "flow_run_id": flow_run_id,
+                    "metadata": {key: record.metadata[key] for key in ("idempotency_key", "flow_step_key")},
+                    "post_validation_checkpoint": deepcopy(checkpoint),
+                }
+                _merge_persisted_flow_extraction_results(execution_state, records)
+                if extraction_handoff_audit is not None:
+                    extraction_handoff_audit.update(persistenceAttempted=True, persistedResultCount=1)
             execution_state["completed_steps"].append(completed_step)
             execution_state["next_tool_index"] = claimed_step_index + 1
             phase_timings_ms["state_update_ms"] = _elapsed_ms(
@@ -4282,6 +4366,7 @@ def create_flow_supervisor(
         model_id_override=model_id_override,
         model_provider_override=model_provider_override,
         benchmark_routes=benchmark_routes,
+        enable_result_inspection=benchmark_routes is None,
     )
     if frozen_supervisor is not None:
         if unavailable_steps or created_tool_names != set(frozen_supervisor.available_tools):
@@ -4302,94 +4387,35 @@ def create_flow_supervisor(
             f"Check that all agent IDs resolve in the unified agents table and required documents are provided."
         )
 
-    if inspection_context is not None:
-        bound_refs = frozenset(inspection_context.result_refs)
+    if benchmark_routes is None:
+        def inspection_scope():
+            refs = {}
+            if inspection_context is not None:
+                refs = {
+                    ref: {"user_id": user_id, "origin_session_id": session_id,
+                          "document_id": inspection_context.document_id,
+                          "flow_run_id": inspection_context.flow_run_id}
+                    for ref in inspection_context.result_refs
+                }
+            refs.update({
+                step["inspection_result_ref"]: step["inspection_scope"]
+                for step in execution_state["completed_steps"]
+                if "inspection_result_ref" in step
+            })
+            return refs
 
-        @function_tool(
-            name_override="inspect_results",
-            description_override=(
-                "Inspect one server-authorized persisted result from the immediately "
-                "available same-flow context. Supply only a result_ref listed in the "
-                "supervisor instructions. This tool cannot browse or authorize any "
-                "other result. Start with action=\"summary\" (counts), then filter "
-                "action=\"objects\", \"validation\" or \"validator_results\"; "
-                "use next_call to continue requested row pages and each previewed "
-                "value's read call for its complete exact content."
-            ),
-        )
-        async def inspect_bound_preferred_flow_result(
-            action: str = "summary",
-            query: str | None = None,
-            result_ref: str | None = None,
-            object_ref: str | None = None,
-            field_path: str | None = None,
-            limit: int | None = None,
-            cursor: str | None = None,
-            object_type: str | None = None,
-            status: str | None = None,
-            validation_state: str | None = None,
-            severity: str | None = None,
-            fields: list[str] | None = None,
-            finding_ref: str | None = None,
-            validator_result_key: str | None = None,
-            detail_path: str | None = None,
-            result_sha256: str | None = None,
-        ) -> str:
-            normalized_ref = str(result_ref or "").strip()
-            if normalized_ref not in bound_refs:
-                return json.dumps(
-                    {
-                        "status": "unauthorized_bound_ref",
-                        "message": (
-                            "result_ref must be one of the server-authorized refs "
-                            "bound to this preferred-flow follow-up."
-                        ),
-                    }
-                )
-
-            output = await inspect_results(
-                action=action,
-                query=query,
-                result_ref=normalized_ref,
-                target="this_chat",
-                object_ref=object_ref,
-                field_path=field_path,
-                limit=limit,
-                cursor=cursor,
-                object_type=object_type,
-                status=status,
-                validation_state=validation_state,
-                severity=severity,
-                fields=fields,
-                finding_ref=finding_ref,
-                validator_result_key=validator_result_key,
-                detail_path=detail_path,
-                result_sha256=result_sha256,
-            )
-            try:
-                payload = json.loads(output)
-            except (TypeError, ValueError):
-                payload = None
-            normalized_action = str(action or "").strip().lower()
-            resolved_record = bool(
-                isinstance(payload, Mapping)
-                and payload.get("status") == "ok"
-                and (
-                    normalized_action not in {"list", "search"}
-                    or (
-                        type(payload.get("total_count")) is int
-                        and payload["total_count"] > 0
-                    )
-                )
-            )
-            if (
-                normalized_action != "help"
-                and resolved_record
+        def record_inspection(action, result_ref, output):
+            action = str(action or "").strip().lower() or "help"
+            # Only prior-result reads can satisfy an inspection-only follow-up.
+            if inspection_context is None or result_ref not in inspection_context.result_refs or action == "help":
+                return
+            payload = json.loads(output)
+            if payload.get("status") == "ok" and (
+                action not in {"list", "search"} or payload.get("total_count", 0) > 0
             ):
-                execution_state["inspected_result_refs"].add(normalized_ref)
-            return output
+                execution_state["inspected_result_refs"].add(result_ref)
 
-        tools.append(inspect_bound_preferred_flow_result)
+        tools.append(make_result_inspection_tool(scope_provider=inspection_scope, on_inspected=record_inspection))
         created_tool_names.add("inspect_results")
 
     # Determine if document guidance should be included in system instructions
@@ -4411,6 +4437,8 @@ def create_flow_supervisor(
             flow, has_document=has_document, document_name=document_name,
             available_tools=created_tool_names,
         )
+    if benchmark_routes is None:
+        instructions += INSPECTION_GUIDANCE
     if inspection_context is not None:
         refs = "\n".join(f"- {result_ref}" for result_ref in inspection_context.result_refs)
         instructions += f"""
