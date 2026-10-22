@@ -163,6 +163,8 @@ from src.lib.runtime_payload_budget import provider_context_preflight
 from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
 from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool, INSPECTION_GUIDANCE
+from src.lib.openai_agents.export_details_tool import make_export_details_tool
+from src.lib.export_accounting import EXPORT_ACCOUNTING_GUIDANCE
 from src.lib.openai_agents.extraction_manifest import (
     build_extraction_manifest_page, bind_extraction_manifest_reference,
     render_extraction_manifest_page, ExtractionManifestError,
@@ -4433,6 +4435,10 @@ def create_flow_supervisor(
         tools.append(make_result_inspection_tool(scope_provider=inspection_scope, on_inspected=record_inspection))
         created_tool_names.add("inspect_results")
 
+    if benchmark_routes is None:
+        tools.append(make_export_details_tool())
+        created_tool_names.add("read_export_details")
+
     # Determine if document guidance should be included in system instructions
     # Only include when: 1) a document is provided AND 2) the flow has document-requiring agents
     # This prevents confusing the supervisor by mentioning documents when no PDF tools exist
@@ -4454,7 +4460,7 @@ def create_flow_supervisor(
             db_user_id=db_user_id, active_groups=active_groups,
         )
     if benchmark_routes is None:
-        instructions += INSPECTION_GUIDANCE
+        instructions += INSPECTION_GUIDANCE + "\n" + EXPORT_ACCOUNTING_GUIDANCE
     if inspection_context is not None:
         refs = "\n".join(f"- {result_ref}" for result_ref in inspection_context.result_refs)
         instructions += f"""

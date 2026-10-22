@@ -5931,7 +5931,7 @@ class TestCreateFlowSupervisorNoTools:
         mock_settings.return_value = ModelSettings()
         supervisor = create_flow_supervisor(flow, document_id=None)
         assert len(supervisor._flow_unavailable_steps) == 2
-        assert [tool.name for tool in supervisor.tools] == ["inspect_results"]
+        assert [tool.name for tool in supervisor.tools] == ["inspect_results", "read_export_details"]
 
     @patch("src.lib.flows.executor.build_model_settings")
     @patch("src.lib.flows.executor.get_model_for_agent", return_value="gpt-6.1-sol")

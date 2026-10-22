@@ -1634,6 +1634,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert [getattr(tool, "name", "") for tool in created.tools] == [
         "prepare_for_curation",
         "inspect_results",
+        "read_export_details",
         "inspect_chat_traces",
         "recall_chat_history",
     ]
@@ -1675,7 +1676,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     assert "action=\"summary\"" in tools_by_name["inspect_results"].description
     assert "next_call" in tools_by_name["inspect_results"].description
     assert "export_to_file" not in tools_by_name
-    assert captured_langfuse["metadata"]["specialist_count"] == 4
+    assert captured_langfuse["metadata"]["specialist_count"] == 5
 
 
 def test_create_supervisor_agent_with_document_extracts_sections_and_enables_guardrails(monkeypatch):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from agr_ai_curation_runtime.tool_result_bounds import requested_text_length
 from src.lib.context import get_current_trace_id, get_current_session_id
+from src.lib.export_accounting import projection_summary as _projection_summary, compact_accounting, export_details_reference
 
 import asyncio
 import hashlib
@@ -626,34 +627,10 @@ def _projection_plan_from_tool_payload(
     return plan.model_copy(update={"format": output_format})
 
 
-def _projection_summary(result: FlowOutputProjectionResult) -> dict[str, Any]:
-    """Compact receipt facts about a finalized projection; never its rows."""
-
-    headers = [column.header or column.key for column in result.columns]
-    column_limit = get_output_tool_catalog_page_size()
-    return {
-        "format": result.format,
-        "row_source": result.row_source,
-        "columns": headers[:column_limit],
-        **(
-            {"columns_omitted": len(headers) - column_limit}
-            if len(headers) > column_limit
-            else {}
-        ),
-        "column_count": len(headers),
-        "total_count": result.total_count,
-        "row_count": len(result.rows),
-        "truncated": result.truncated,
-        "limited_by_max_rows": result.limited_by_max_rows,
-        "overrides_applied": result.overrides_applied,
-        "rows_excluded": result.rows_excluded,
-        "group_by": list(result.group_by),
-        "warning_count": len(result.warnings),
-        "warnings": [
-            _bounded_text(warning)
-            for warning in result.warnings[:_MAX_LIST_ITEMS]
-        ],
-    }
+def _is_intentional_empty_projection(projection: FlowOutputProjectionResult) -> bool:
+    accounting = projection.export_accounting
+    return bool(accounting and accounting.candidate_row_count > 0
+                and accounting.rows_removed_by_filters > 0)
 
 
 def _field_label(bundle: FlowOutputArtifactBundle, field_ref: str) -> str:
@@ -1491,6 +1468,7 @@ def build_output_formatter_tools(
         contents: list[str] = []
         summaries: list[dict[str, Any]] = []
         total_rows = 0
+        all_sections_filtered_from_source = True
         total_chars = 0
         for index, (heading, plan) in enumerate(plans, 1):
             try:
@@ -1499,6 +1477,7 @@ def build_output_formatter_tools(
                 raise
             except Exception as exc:
                 raise ValueError(f"Section {index}: {exc}") from exc
+            all_sections_filtered_from_source &= _is_intentional_empty_projection(projection)
             total_rows += projection.total_count
             row_limit = get_flow_projection_max_rows()
             if total_rows > row_limit:
@@ -1518,7 +1497,7 @@ def build_output_formatter_tools(
                 )
             contents.append(content)
             summaries.append({"section": index, "heading": heading, **_projection_summary(projection)})
-        if not total_rows:
+        if not total_rows and not all_sections_filtered_from_source:
             raise ValueError("Report matched no saved rows; inspect the bundle or call formatter_cannot_complete.")
         return "\n\n".join(contents), {
             "section_count": len(plans), "total_count": total_rows, "sections": summaries,
@@ -2067,7 +2046,8 @@ def build_output_formatter_tools(
         description_override=(
             "Finalize a projection over all saved bundle rows and save one CSV/TSV/JSON file. "
             "Empty plan_json uses the validated default projection. Returns a compact "
-            "receipt; this tool never accepts raw rows or file text."
+            "receipt with measured export_accounting and export_details.read for full saved diagnostics. "
+            "Explain applied filters using these counts; this tool never accepts raw rows or file text."
         ),
         strict_mode=False,
     )
@@ -2109,7 +2089,8 @@ def build_output_formatter_tools(
                         },
                     )
                 projection = finalize_output_projection(bundle, plan)
-                if projection.total_count < 1 and locked_plan is None:
+                if (projection.total_count < 1 and locked_plan is None
+                        and not _is_intentional_empty_projection(projection)):
                     return _tool_json(
                         {
                             "status": "invalid",
@@ -2179,6 +2160,8 @@ def build_output_formatter_tools(
             file_info.setdefault("format", resolved_output_format)
             file_info["status"] = "ok"
             file_info["projection_summary"] = _projection_summary(projection)
+            file_info["export_accounting"] = compact_accounting(projection)
+            file_info["export_details"] = export_details_reference(file_info["file_id"], projection)
             finalized_file_info = {
                 key: _jsonable(value)
                 for key, value in file_info.items()
@@ -2189,6 +2172,8 @@ def build_output_formatter_tools(
                     "format",
                     "download_url",
                     "projection_summary",
+                    "export_accounting",
+                    "export_details",
                 }
             }
             return _tool_json(
@@ -2265,7 +2250,8 @@ def build_output_formatter_tools(
                             },
                         )
                     projection = finalize_output_projection(bundle, plan)
-                    if projection.total_count < 1 and locked_plan is None:
+                    if (projection.total_count < 1 and locked_plan is None
+                        and not _is_intentional_empty_projection(projection)):
                         return _tool_json(
                             {
                                 "status": "invalid",

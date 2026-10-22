@@ -304,6 +304,8 @@ class TestSaveProjectedFileOutput:
         assert saved.session_id == session_id
         assert saved.file_metadata["structured_projection"] is True
         assert saved.file_metadata["descriptor"] == "gene_results"
+        assert saved.file_metadata["projection_summary"]["export_accounting"]["status"] == "unavailable"
+        assert json.loads(saved.file_metadata["export_diagnostics"])["accounting"] is None
         assert saved.file_size == second["size_bytes"]
         assert saved.file_hash == second["hash_sha256"]
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
@@ -661,3 +663,56 @@ def test_cells_preserve_zero_false_whitespace_and_json_parts(format, delimiter):
     assert values["no"] == "False"
     assert values["name"] == row["name"]
     assert json.loads(values["parts"]) == row["parts"]
+
+
+@pytest.mark.asyncio
+async def test_measured_projection_persists_written_count_and_complete_diagnostics(tmp_path, monkeypatch):
+    from src.lib.file_outputs import FileOutputStorageService
+    from src.lib.flows.output_projection import FlowOutputArtifact, FlowOutputArtifactBundle, FlowOutputField, FlowOutputProjectionPlan, finalize_output_projection
+    from src.lib.export_accounting import export_diagnostics
+    from src.lib.openai_agents.tools import file_output_tools
+    clear_context()
+    set_current_trace_id(uuid4().hex)
+    set_current_session_id('accounting-session')
+    set_current_user_id('accounting-owner')
+    monkeypatch.setattr(file_output_tools, 'FileOutputStorageService', lambda: FileOutputStorageService(base_path=tmp_path))
+    store = _install_projected_file_output_store(monkeypatch, file_output_tools)
+    source = FlowOutputArtifactBundle(flow_name='counts', artifacts=[FlowOutputArtifact(
+        node_id='n', source_key='n', rows_by_source={'object': [{'object.attribute.name': str(i)} for i in range(5)]})],
+        field_catalog=[FlowOutputField(ref='object.attribute.name', label='Name', row_source='object', value_type='string')],
+        warnings=['full warning Ω' * 100])
+    plan = FlowOutputProjectionPlan.model_validate({'format':'csv', 'row_source':'object', 'row_strategy':'wide_union',
+        'columns':[{'key':'name', 'field_ref':'object.attribute.name'}], 'max_rows':2,
+        'filters':[{'field_ref':'object.attribute.name','op':'ne','value':1e16}]})
+    projection = finalize_output_projection(source, plan)
+    try:
+        await file_output_tools.save_projected_file_output('csv', projection, 'counts', 'csv_formatter')
+        saved = store.rows[0]
+        assert saved.file_metadata['projection_summary']['row_count'] == 2
+        assert saved.file_metadata['projection_summary']['total_count'] == 5
+        assert json.loads(saved.file_metadata['export_diagnostics']) == export_diagnostics(projection)
+        assert Path(saved.file_path).read_text().splitlines() == ['name','0','1']
+        # Real saver replacement retains file identity; the former receipt must
+        # never read the replacement's diagnostics as though they were its own.
+        from src.lib.export_accounting import diagnostics_sha256
+        from src.lib.openai_agents import export_details_tool
+        from unittest.mock import MagicMock
+        from src.lib.export_accounting import export_details_reference
+        assert isinstance(saved.file_metadata['export_diagnostics'], str)
+        assert '1e+16' in saved.file_metadata['export_diagnostics']
+        old_digest = export_details_reference(str(saved.id), projection)['read']['diagnostics_sha256']
+        assert old_digest == diagnostics_sha256(json.loads(saved.file_metadata['export_diagnostics']))
+        plan.max_rows = 1
+        replacement = finalize_output_projection(source, plan)
+        await file_output_tools.save_projected_file_output('csv', replacement, 'counts', 'csv_formatter')
+        assert len(store.rows) == 1
+        db = MagicMock()
+        db.__enter__.return_value = db
+        db.query.return_value.filter.return_value.one_or_none.return_value = saved
+        monkeypatch.setattr(export_details_tool, 'SessionLocal', lambda: db)
+        assert export_details_tool.read_export_details_payload(str(saved.id), old_digest)['status'] == 'stale'
+        digest = diagnostics_sha256(json.loads(saved.file_metadata['export_diagnostics']))
+        assert export_details_tool.read_export_details_payload(str(saved.id), digest)['status'] == 'ok'
+
+    finally:
+        clear_context()

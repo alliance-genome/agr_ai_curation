@@ -510,6 +510,12 @@ async def test_multi_table_report_uses_program_rendering_and_compact_model_recei
         assert "## Expression evidence" in delivery.output
         assert "## Summary fields" in delivery.output
         assert sum(line.startswith("| ---") for line in delivery.output.splitlines()) == 2
-        assert len(delivery.output) > len(json.dumps(receipt))
+        # A short table can be smaller than its measured accounting metadata.
+        # Bound each section receipt instead of comparing it to scientific text.
+        summaries = receipt["report_summary"]["sections"]
+        assert len(json.dumps(receipt)) < _MAX_RECEIPT_CHARS * len(summaries)
+        for summary in summaries:
+            assert len(json.dumps(summary)) < _MAX_RECEIPT_CHARS
+            assert summary["export_accounting"]["counts"]["exported_row_count"] == 7
     final_results = _tool_outputs(model.requests[-1]["input"])
     assert all("body wall musculature" not in value for value in final_results.values())

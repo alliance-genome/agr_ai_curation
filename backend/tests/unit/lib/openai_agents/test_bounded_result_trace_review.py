@@ -55,3 +55,17 @@ def test_sdk_bounded_details_survive_trace_analysis(monkeypatch, surface):
             break
     assert len(chunks) == 1
     assert "".join(chunks) == content
+
+
+def test_export_detail_json_survives_trace_review(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5]))
+    analyzer = importlib.import_module('trace_review.backend.src.analyzers.tool_calls').ToolCallAnalyzer
+    payload = {'status': 'ok', 'file_id': 'file-reference', 'diagnostics_sha256': 'a' * 64,
+               'offset': 0, 'text': '{"warnings":["Ω evidence association"]}', 'next_offset': None}
+    raw = json.dumps(payload, ensure_ascii=False)
+    observations = [{'id': 'gen', 'type': 'GENERATION', 'name': 'OpenAI-generation',
+        'input': [{'type': 'function_call', 'call_id': 'read', 'name': 'read_export_details', 'arguments': '{}'},
+                  {'type': 'function_call_output', 'call_id': 'read', 'output': raw}], 'output': {}}]
+    result = analyzer.extract_tool_calls(observations)['tool_calls'][0]['tool_result']
+    assert result['parse_status'] == 'full'
+    assert result['parsed'] == {'json_data': payload}

@@ -10,6 +10,7 @@ import re
 from typing import Any, Callable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, Field
+from src.lib.export_accounting import ExportAccounting
 
 from src.lib.config.agent_loader import get_agent_definition_for_package
 from src.lib.curation_workspace.domain_envelope_normalization import (
@@ -435,6 +436,9 @@ class FlowOutputArtifactBundle(BaseModel):
 
 
 class FlowOutputProjectionResult(BaseModel):
+    # None explicitly means a caller did not supply stage measurements.
+    export_accounting: ExportAccounting | None = None
+    applied_filters: list[dict[str, Any]] = Field(default_factory=list)
     format: FlowOutputFormat
     row_source: FlowOutputRowSource
     columns: list[FlowOutputColumnSpec]
@@ -3518,10 +3522,17 @@ def apply_projection_plan(
         raise ValueError("; ".join(errors))
 
     rows = _rows_for_plan(bundle, plan)
+    candidate_row_count = len(rows)
+    synthetic_row_count = 0
     if not rows and projection_plan_allows_empty_bundle(plan):
         rows = [{}]
+        synthetic_row_count = 1
+    applied_filters = []
     for filter_spec in plan.filters:
+        before = len(rows)
         rows = [row for row in rows if _row_matches_filter(row, filter_spec)]
+        applied_filters.append({**filter_spec.model_dump(mode="json"), "rows_removed_sequentially": before - len(rows)})
+    rows_removed_by_filters = candidate_row_count + synthetic_row_count - len(rows)
     rows = _sort_rows(rows, plan.sort)
     ref_by_row_id = bundle_row_refs(bundle, plan.row_source)
     excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
@@ -3675,7 +3686,22 @@ def apply_projection_plan(
                 truncated=truncated,
             )
 
+    group_count = None
+    if plan.format == "json" and plan.json_shape == "grouped":
+        group_count = len(json_data)
+    elif plan.format == "chat" and plan.group_by:
+        group_count = len(_group_projected_rows(limited_rows, projected_rows, plan.group_by,
+            group_value=lambda field_ref, value: display_text(value, specs.get(field_ref))))
+    accounting = ExportAccounting(
+        row_unit=plan.row_source, candidate_row_count=candidate_row_count,
+        synthetic_row_count=synthetic_row_count,
+        rows_removed_by_filters=rows_removed_by_filters, rows_removed_by_overrides=rows_excluded,
+        matched_row_count=total_count, exported_row_count=len(projected_rows), group_count=group_count,
+        requested_max_rows=plan.max_rows, truncated=truncated, limited_by_max_rows=limited_by_max_rows,
+        filter_count=len(plan.filters), warning_count=len(warnings),
+    )
     return FlowOutputProjectionResult(
+        export_accounting=accounting, applied_filters=applied_filters,
         format=plan.format,
         row_source=plan.row_source,
         columns=columns,
