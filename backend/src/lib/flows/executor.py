@@ -3380,6 +3380,7 @@ def get_all_agent_tools(
             )
             inspectable_candidate = bool(
                 enable_result_inspection and candidate is not None
+                and isinstance(candidate.payload_json, Mapping)
                 and is_canonical_domain_envelope_payload(candidate.payload_json)
             )
             inspection_manifest = None
@@ -4404,7 +4405,7 @@ def create_flow_supervisor(
             return refs
 
         def record_inspection(action, result_ref, output):
-            action = str(action or "").strip().lower()
+            action = str(action or "").strip().lower() or "help"
             # Only prior-result reads can satisfy an inspection-only follow-up.
             if inspection_context is None or result_ref not in inspection_context.result_refs or action == "help":
                 return

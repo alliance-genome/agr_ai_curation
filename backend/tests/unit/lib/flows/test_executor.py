@@ -6059,7 +6059,7 @@ class TestCreateFlowSupervisorNoTools:
         assert "do not call any configured" in supervisor.instructions
         assert "flow-step tool" in supervisor.instructions
 
-        for action in ("help", "Help", " HELP "):
+        for action in ("help", "Help", " HELP ", "", "   "):
             supervisor._flow_execution_state["inspected_result_refs"].clear()
             await inspect_tool.on_invoke_tool(tool_ctx, json.dumps({"action": action, "result_ref": result_ref}))
             assert supervisor._flow_execution_state["inspected_result_refs"] == set()

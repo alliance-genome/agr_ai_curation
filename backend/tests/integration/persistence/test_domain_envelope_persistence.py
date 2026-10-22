@@ -626,6 +626,7 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
         _collect_materialization_inputs,
     )
 
+    result = None
     if commit_fails:
         from sqlalchemy import event
         worker = SessionLocal()
@@ -713,6 +714,7 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
         record = {"extraction_result_id": str(result_id), "document_id": str(OWNER_DOCUMENT_ID),
                   "metadata": saved_source.extraction_metadata, "payload_json": saved_source.payload_json}
         view = validation_view(record, revision=2, user_id="test_pdf_owner_domain_envelope")
+        assert result is not None
         assert view["payload_json"] == result["validated_candidate"].payload_json
         with pytest.raises(InspectionViewUnavailable):
             validation_view(record, revision=2, user_id="another-user")
