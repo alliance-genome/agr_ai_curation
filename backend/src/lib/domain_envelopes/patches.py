@@ -403,7 +403,6 @@ def apply_curator_field_patch(
             "contributor_completion_id": domain_object.metadata.get("selected_contribution", {}).get("completion_id"),
             "reason": patch.reason,
         }
-    if curator_value is not None:
         curator_value = bind_patch_anchors(envelope, curator_value)
     history_edits = []
     from src.lib.validation_history.runtime import replace_projection_targets
@@ -1329,6 +1328,8 @@ def set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> N
             raise ValueError(
                 f"Cannot set '{field_path}' because a list index is missing"
             )
+        if current[part] is None:
+            current[part] = [] if isinstance(next_part, int) else {}
         current = current[part]
 
     final_part = parts[-1]

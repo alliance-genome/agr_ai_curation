@@ -609,3 +609,24 @@ def test_new_object_and_null_to_object_changes_are_independent_leaves():
     for before in ({}, {"term": None}):
         changes = c.payload_changes(before, {"term": {"name": "A", "rank": "R", "note": None}}, "root")
         assert {item["path"] for item in changes} == {"term.name", "term.rank", "term.note"}
+
+
+@pytest.mark.parametrize("requested", [["terms[0].label"], []])
+def test_null_parent_then_new_leaf_cannot_resurrect_old_aggregate(scope, requested):
+    from tests.integration.persistence.test_selected_value_authority import captured_source
+    env = captured_source(scope)
+    aid = env.metadata["validation_history"]["artifact_id"]
+    root = env.extracted_objects[0].metadata["validation_history"]["target_id"]
+    with h.SessionLocal.begin() as db:
+        for before, after in [({"label": "old"}, None), (None, {"label": "new"})]:
+            changes = c.payload_changes(before, after, root, "terms[0]")
+            c.record_patch(db, scope, aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+                body=c.bind_patch_anchors(env, {"target_id": root, "object_id": "one", "value_path": "terms[0]",
+                    "action": "override", "changes": changes}))
+    ep = s.start_episode(scope, aid, episode={"episode_id": uuid4().hex, "reason": "review",
+        "obligations": [{"target_id": root, "mode": "extraction_only"}]})
+    with pytest.raises(h.HistoryConflict, match="structural curator edit"):
+        c.record_revalidation_intent(runtime.CapturedArtifact(scope, aid), envelope=env, episode_id=ep,
+            object_id="one", field_paths=requested, actor_id=scope.owner_id)
+    with h.SessionLocal.begin() as db:
+        assert c.apply_overlays(db, aid, env).extracted_objects[0].payload["terms"][0]["label"] == "new"

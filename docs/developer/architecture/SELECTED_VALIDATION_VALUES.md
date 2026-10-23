@@ -106,6 +106,6 @@ attempt, not list positions. Reordering a list cannot authorize replacement of a
 different item's curator value. New or previously null objects are decomposed into
 independent leaf changes. Structural aggregate edits (such as changing a collection's
 length) cannot be safely replaced by leaf validator results: explicit revalidation
-returns a conflict naming the structural edit and asks the curator to restore its
-shape before revalidating individual values. It does not silently release a newer
+returns a conflict naming the structural edit; individual-field validation cannot
+replace that aggregate edit. It does not silently release a newer
 leaf edit and expose an older aggregate value.

@@ -188,9 +188,14 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
             continue
         if field_paths and not any(_overlap(current_path(body), path) for path in field_paths):
             continue
-        if any(not change["present"] or isinstance(change.get("value"), (dict, list)) for change in body["changes"]):
+        path = current_path(body)
+        nested_scope = any(path != requested and _covers(path, requested) for requested in field_paths)
+        nested_edit = not field_paths and any(other["object_id"] == object_id and current_path(other) != path
+            and _covers(path, current_path(other)) for _, other in active)
+        if nested_scope or nested_edit or any(change.get("structural") or not change["present"]
+                or isinstance(change.get("value"), (dict, list)) for change in body["changes"]):
             raise store.HistoryConflict("Revalidation cannot replace the structural curator edit at " + current_path(body)
-                + "; restore its object/collection shape before revalidating individual values")
+                + "; individual-field validation cannot replace this aggregate edit")
     overlays = [(fact, body) for fact, body in active if requested(body)]
     return store._append(db, binding.artifact_id,
         operation_id="curator-revalidation:" + episode_id + ":" + object_id,
@@ -327,4 +332,5 @@ def payload_changes(before, after, target_id, path=""):
             else:
                 changes.extend(payload_changes(before[key], after[key], target_id, child))
         return changes
-    return [{"target_id": target_id, "path": path, "present": True, "value": deepcopy(after)}]
+    return [{"target_id": target_id, "path": path, "present": True, "value": deepcopy(after),
+             "structural": isinstance(before, (dict, list))}]
