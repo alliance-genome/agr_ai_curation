@@ -82,7 +82,9 @@ def test_workspace_revalidation_uses_profile_registry_and_atomic_writer(example,
     )
     assert revision == candidate.envelope_revision == 2
     assert not warnings
-    assert updated.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert updated.extracted_objects[0].payload["attributes"] == {"paper_name": "A"}
+    assert updated.validator_results
+    assert updated.validation_findings[0].details["machine_review"] == "pending"
     assert checkpoints[0].envelope == updated
     assert source.extracted_objects[0].payload["attributes"] == {"paper_name": "A"}
 
@@ -149,7 +151,10 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
     assert final.metadata["source"] == "manual"
     assert final.metadata["extraction_metadata"]["provenance"]["record_source"] == "curator_manual"
     attributes = final.extracted_objects[0].payload["attributes"]
-    assert attributes == ({"paper_name": "A", "resolved_id": "EX:1"} if available else {"paper_name": "A"})
+    assert attributes == {"paper_name": "A"}
+    if available:
+        assert final.validator_results
+        assert final.validation_findings[0].details["machine_review"] == "pending"
     assert computation.updated_fields[0]["value"] == attributes
     assert computation.snapshot.envelope_id == candidate.envelope_id
     assert computation.snapshot.envelope_revision == 2

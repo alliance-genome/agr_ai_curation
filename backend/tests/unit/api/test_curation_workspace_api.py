@@ -1124,8 +1124,9 @@ async def test_post_candidate_validation_delegates_to_service(monkeypatch):
     captured: dict[str, object] = {}
 
     def _validate_candidate(
-        db, candidate_id, request, *, user_id=None, active_groups=None
+        db, candidate_id, request, *, user_id=None, active_groups=None, explicit_request=False
     ):
+        assert explicit_request is True
         captured["db"] = db
         captured["candidate_id"] = candidate_id
         captured["request"] = request
@@ -1197,7 +1198,8 @@ async def test_post_session_validation_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _validate_session(db, session_id, request, *, user_id=None, active_groups=None):
+    def _validate_session(db, session_id, request, *, user_id=None, active_groups=None, explicit_request=False):
+        assert explicit_request is True
         captured["db"] = db
         captured["session_id"] = session_id
         captured["request"] = request

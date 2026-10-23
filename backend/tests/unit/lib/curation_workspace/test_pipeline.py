@@ -796,6 +796,10 @@ metadata:
             )
         ],
     )
+    # Supply the durable identity input to this SQLite pipeline unit; real history
+    # reference persistence is covered by the PostgreSQL authority suite.
+    envelope.extracted_objects[0].metadata["validation_history"] = {"target_id": str(uuid4())}
+    monkeypatch.setattr("src.lib.validation_history.store._append", lambda *args, **kwargs: None)
     checkpoint = write_domain_envelope_checkpoint(
         db_session,
         DomainEnvelopeCheckpointRequest(
@@ -926,7 +930,7 @@ metadata:
     ).one()
     fields_by_key = {field["field_key"]: field for field in draft_row.fields}
     assert fields_by_key["gene.identifier"]["validation_result"]["status"] == (
-        FieldValidationStatus.NOT_FOUND.value
+        FieldValidationStatus.SKIPPED.value
     )
     assert fields_by_key["gene.symbol"]["validation_result"]["status"] == (
         FieldValidationStatus.SKIPPED.value
@@ -937,8 +941,8 @@ metadata:
             ValidationSnapshotModel.candidate_id == candidate_row.id,
         )
     ).one()
-    assert candidate_snapshot.summary["counts"]["not_found"] == 1
-    assert candidate_snapshot.summary["counts"]["skipped"] == 1
+    assert candidate_snapshot.summary["counts"].get("not_found", 0) == 0
+    assert candidate_snapshot.summary["counts"]["skipped"] == 2
 
 
 def test_execute_post_curation_pipeline_persists_domain_envelope_projection_ref_from_envelope_row(

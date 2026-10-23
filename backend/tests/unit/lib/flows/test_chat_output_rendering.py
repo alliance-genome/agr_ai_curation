@@ -14,6 +14,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from tests.reviewed_output_unit_support import (
+    mark_reviewed_output_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
 from agents import Agent, RunConfig, Runner
 from agents.items import ModelResponse
 from agents.models.interface import Model
@@ -40,6 +46,8 @@ from tests.fixtures.flows.semantic_chat_output import (
     build_semantic_output_bundle,
     build_semantic_output_step,
 )
+
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
 
 # Compact instructions: curator request, inventory counts and tool contract.
 _MAX_FORMATTER_INSTRUCTION_CHARS = 20_000
@@ -121,6 +129,7 @@ def _install_scripted_formatter(monkeypatch, executor, model: _ScriptedFormatter
     captured: dict[str, Any] = {}
 
     def fake_get_agent(agent_id, **kwargs):
+        mark_reviewed_output_bundle(kwargs["formatter_bundle"])
         definition = get_agent_definition(agent_id)
         assert definition is not None
         tools = resolve_tools(
@@ -266,7 +275,7 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     preview = json.loads(outputs["call-4"])["preview"]
     assert preview["total_count"] == 7
     finalize_receipt = json.loads(outputs["call-5"])
-    assert finalize_receipt["delivered"] is True
+    assert finalize_receipt.get("delivered") is True, finalize_receipt
     assert finalize_receipt["projection_summary"]["row_count"] == 7
     assert "body wall musculature" not in outputs["call-5"]
 

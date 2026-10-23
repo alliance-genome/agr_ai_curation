@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
 from agents import AgentOutputSchema
 from pydantic import BaseModel
 from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
@@ -3658,7 +3659,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         extractor_output,
         history_scope_id="unit-run", producer_id="unit-invocation",
-        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+        runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Gene Extraction",
         tool_name="ask_gene_extractor_specialist",
@@ -3765,7 +3766,7 @@ async def test_chat_domain_envelope_dispatch_uses_runtime_adapter_for_custom_age
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         _gene_extractor_domain_output(),
         history_scope_id="unit-run", producer_id="unit-invocation",
-        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+        runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Custom Gene Extraction",
         tool_name="ask_ca_11111111_2222_3333_4444_555555555555_specialist",
@@ -3816,7 +3817,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         _gene_extractor_domain_output(),
         history_scope_id="unit-run", producer_id="unit-invocation",
-        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+        runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=GeneExtractionResultEnvelope,
         specialist_name="Gene Extraction",
         tool_name="ask_gene_extractor_specialist",
@@ -3831,12 +3832,10 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(
     assert request.selected_inputs["data_provider_hint"] == "FB"
     assert request.selected_inputs["taxon_hint"] == "NCBITaxon:7227"
     assert request.selected_inputs["evidence_quotes"][0]["verified_quote"].startswith("Crumbs protein")
-    assert (
-        payload["extracted_objects"][0]["payload"]["primary_external_id"]
-        == "FB:FBgn0259685"
-    )
-    assert payload["extracted_objects"][0]["payload"]["gene_symbol"] == "crb"
-    assert payload["extracted_objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
+    # Dispatch retains the original extracted value until supervisor acceptance.
+    assert payload["extracted_objects"][0]["payload"]["primary_external_id"] is None
+    assert payload["validator_results"]
+    assert any(f["details"].get("machine_review") == "pending" for f in payload["validation_findings"])
     assert payload["validation_findings"]
     assert emitted[0]["details"]["toolArgs"]["domain_pack_id"] == "gene"
     lookup_events = [
@@ -3910,7 +3909,7 @@ async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_
     result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
         _chat_dispatch_probe_output(),
         history_scope_id="unit-run", producer_id="unit-invocation",
-        runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+        runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
         expected_output_type=DomainEnvelopeExtractionResult,
         specialist_name=f"{agent_key} chat extraction",
         tool_name=tool_name,
@@ -3971,7 +3970,7 @@ async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
             history_scope_id="unit-run", producer_id="unit-invocation",
-            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+            runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
@@ -4044,7 +4043,7 @@ async def test_chat_domain_envelope_dispatch_honors_conformance_issue_limit(
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
             history_scope_id="unit-run", producer_id="unit-invocation",
-            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+            runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
@@ -4059,7 +4058,7 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_tool_agent_key
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
             history_scope_id="unit-run", producer_id="unit-invocation",
-            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+            runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name=None,
@@ -4108,7 +4107,7 @@ async def test_chat_domain_envelope_dispatch_fails_closed_without_curation_adapt
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
             history_scope_id="unit-run", producer_id="unit-invocation",
-            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+            runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
@@ -4263,7 +4262,7 @@ async def test_inline_validator_pdf_failure_reaches_terminal_owner_without_gener
         await streaming_tools._dispatch_domain_envelope_validators_for_chat(
             _gene_extractor_domain_output(),
             history_scope_id="unit-run", producer_id="unit-invocation",
-            runtime_context=SimpleNamespace(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+            runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
             expected_output_type=GeneExtractionResultEnvelope,
             specialist_name="Gene Extraction",
             tool_name="ask_gene_extractor_specialist",
