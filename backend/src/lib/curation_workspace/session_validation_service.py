@@ -854,6 +854,7 @@ def validate_candidate(
         runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request)
     if request.replace_curator_override:
         _require_revalidation_context(runtime_context, candidate, user_id)
+        assert runtime_context is not None  # Established by the authority guard.
         runtime_context = replace(runtime_context, curator_revalidation={
             "actor_id": user_id, "object_id": candidate.object_id,
             "field_paths": _curator_revalidation_field_paths([
@@ -951,7 +952,7 @@ def validate_session(
             runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request and first,
                 dispatch_receipt=dispatch_receipt,
                 refresh_scopes=[(item.object_id, _candidate_validation_field_paths([
-                    CurationDraftFieldSchema.model_validate(field) for field in item.draft.fields])) for item in groups[key]])
+                    CurationDraftFieldSchema.model_validate(field) for field in (item.draft.fields or [])])) for item in groups[key]])
             if request.replace_curator_override and first:
                 runtime_context = replace(runtime_context, curator_revalidation=[{
                     "actor_id": user_id, "object_id": item.object_id,

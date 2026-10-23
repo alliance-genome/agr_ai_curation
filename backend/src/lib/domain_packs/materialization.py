@@ -152,6 +152,8 @@ class ValidatorResultMaterializationInput:
     result: DomainValidatorResultBase
     dispatch_context: Mapping[str, Any] | None = None
     selected_result_slots: frozenset[str] | None = None
+    original_result: DomainValidatorResultBase | None = None
+    original_source_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -482,8 +484,8 @@ def materialize_validator_results_into_envelope(
         from .validator_result_records import retain_validator_original
 
         working_envelope, original_ref = retain_validator_original(
-            working_envelope, result=item.result, request=item.request,
-            source_envelope_revision=source_envelope_revision,
+            working_envelope, result=item.original_result or item.result, request=item.request,
+            source_envelope_revision=item.original_source_revision if item.original_result is not None else source_envelope_revision,
         )
         if item.selected_result_slots is not None:
             from dataclasses import replace

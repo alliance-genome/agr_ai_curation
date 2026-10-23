@@ -256,6 +256,7 @@ def binding_target(binding: CapturedArtifact, match) -> str:
 def begin_jobs(
     binding: CapturedArtifact, jobs, *, operation_id: str, receipt: dict
 ) -> dict:
+    from .curator_authority import anchor_for_path
     requests = [
         {
             "target_id": request_target(binding, j),
@@ -265,6 +266,9 @@ def begin_jobs(
                 *j.request.target.expected_fields,
                 *(j.request.target.optional_fields or []),
             ],
+            "result_anchors": {slot: anchor_for_path(j.match.object_envelope.metadata["validation_history"], path)
+                for slot, path in {**j.request.expected_result_fields, **(j.request.optional_result_fields or {})}.items()
+                if j.match.object_envelope is not None and isinstance(path, str)},
             "decision_units": list(j.match.binding.decision_units),
             "dispatch_wave": j.history_wave,
             "review_episode_id": j.history_episode_id or j.match.envelope.metadata.get("review_episode_id"),

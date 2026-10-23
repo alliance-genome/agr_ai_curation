@@ -12,7 +12,8 @@ from tests.integration.persistence.test_validation_history import scope as scope
 
 @pytest.fixture
 def scenario(scope, tmp_path, monkeypatch, request):
-    include_support = getattr(request, "param", False)
+    fixture_mode = getattr(request, "param", False)
+    include_support = fixture_mode is True
     from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
     from src.lib.domain_packs.input_selectors import build_domain_validation_request
     from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
@@ -34,20 +35,21 @@ def scenario(scope, tmp_path, monkeypatch, request):
         pack = replace(pack, metadata=pack.metadata.model_copy(update={"object_definitions": [*pack.metadata.object_definitions, supporting]}))
     env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=pack.pack_id,
         extracted_objects=[CuratableObjectEnvelope(object_type="Annotation", pending_ref_id="one",
-            payload={"evidence_code_curies": ["eco:1"]})])
+            payload={"evidence_code_curies": ["eco:1", "eco:2"] if fixture_mode == "two" else ["eco:1"]})])
     env = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
         typed=env.model_dump(mode="json"), envelope=env, provenance={})
     aid = env.metadata["validation_history"]["artifact_id"]
     bound = runtime.CapturedArtifact(scope, aid)
-    match = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(env)[0]
+    matches = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(env)
+    match = matches[0]
     request = build_domain_validation_request(match).request
     job = ValidatorDispatchJob(match, request)
     target = runtime.request_target(bound, job)
     monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
-    state = SimpleNamespace(env=env, aid=aid, bound=bound, target=target, revision=0, source=uuid4())
+    state = SimpleNamespace(env=env, aid=aid, bound=bound, target=target, revision=0, source=uuid4(), pack=pack)
 
     def episode():
-        state.env = s.declare_envelope_episode(bound, state.env, [match])
+        state.env = s.declare_envelope_episode(bound, state.env, matches)
         state.episode = state.env.metadata["review_episode_id"]
         return state.episode
 
@@ -59,7 +61,8 @@ def scenario(scope, tmp_path, monkeypatch, request):
             "payload": {"primary_external_id": value, "name": value}}] if include_support and status == "resolved" else [])
         result = DomainValidatorResultBase.model_validate(data)
         runtime.complete_jobs(bound, invocation, [result])
-        retain_candidates(env, [ValidatorResultMaterializationInput(match, request, result)], scope=scope)
+        state.env = retain_candidates(state.env, [ValidatorResultMaterializationInput(match, request, result)],
+            scope=scope, source_envelope_revision=max(state.revision, 1)).envelope
         return result._history_ref["fact_id"]
 
     def publish(completion, action="accept"):
@@ -539,9 +542,70 @@ def test_child_scope_cannot_authorize_whole_collection_override(scope):
                 "action": "override", "changes": [{"target_id": root, "path": "terms", "present": True,
                     "value": [{"label": "new whole list"}]}]}))
     ep = s.start_episode(scope, aid, episode={"episode_id": uuid4().hex, "reason": "review", "obligations": [{"target_id": root, "mode": "extraction_only"}]})
-    child = c.record_revalidation_intent(bound, envelope=env, episode_id=ep, object_id="one",
-        field_paths=["terms[0].label"], actor_id=scope.owner_id)
-    assert h.read_fact(scope, aid, child)["content"]["overlay_ids"] == []
-    ep = s.start_episode(scope, aid, episode={"episode_id": uuid4().hex, "reason": "review", "obligations": [{"target_id": root, "mode": "extraction_only"}]})
-    parent = c.record_revalidation_intent(bound, envelope=env, episode_id=ep, object_id="one", field_paths=["terms"], actor_id=scope.owner_id)
-    assert h.read_fact(scope, aid, parent)["content"]["overlay_ids"] == [edit]
+    for fields in (["terms[0].label"], ["terms"], []):
+        with pytest.raises(h.HistoryConflict, match="structural curator edit"):
+            c.record_revalidation_intent(bound, envelope=env, episode_id=ep, object_id="one", field_paths=fields, actor_id=scope.owner_id)
+    assert h.read_fact(scope, aid, edit)["content"]["changes"][0]["value"] == [{"label": "new whole list"}]
+    # A newer leaf must not be released and expose the older aggregate value.
+    with h.SessionLocal.begin() as db:
+        c.record_patch(db, scope, aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+            body=c.bind_patch_anchors(env, {"target_id": root, "object_id": "one", "value_path": "terms[0].label",
+                "action": "override", "changes": [{"target_id": root, "path": "terms[0].label", "present": True, "value": "newer leaf"}]}))
+    with pytest.raises(h.HistoryConflict, match="structural curator edit"):
+        c.record_revalidation_intent(bound, envelope=env, episode_id=ep, object_id="one", field_paths=["terms[0].label"], actor_id=scope.owner_id)
+
+
+@pytest.mark.parametrize("scenario", ["two"], indirect=True)
+@pytest.mark.parametrize("freeze_before_reorder", [True, False])
+def test_revalidation_release_follows_stable_target_across_reorder(scope, scenario, freeze_before_reorder):
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
+    from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
+    from src.lib.validation_history.candidates import retain_candidates
+    from src.lib.validation_history.projection import read_dispatch_source
+    from src.schemas.domain_validator import DomainValidatorResultBase
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+    x = scenario
+    x.edit("ECO:CURATOR_A")
+    x.publish(x.first)
+    x.episode_fn()
+    c.record_revalidation_intent(x.bound, envelope=x.env, episode_id=x.episode, object_id="one",
+        field_paths=["evidence_code_curies[0]"], actor_id=scope.owner_id)
+    def freeze():
+        source = read_dispatch_source(x.bound, x.env)
+        match = DomainPackValidationRegistry.from_domain_pack(x.pack).match_bindings(source)[0]
+        request = build_domain_validation_request(match).request
+        job = ValidatorDispatchJob(match, request, history_episode_id=x.episode)
+        invocation = runtime.begin_jobs(x.bound, [job], operation_id=uuid4().hex, receipt={})
+        return match, request, job, invocation
+    if freeze_before_reorder:
+        match, request, job, invocation = freeze()
+    obj = x.env.extracted_objects[0]
+    ids = obj.metadata["validation_history"]["elements"]["evidence_code_curies"]
+    x.env.extracted_objects[0] = runtime.reorder_element_projection(obj, "evidence_code_curies", list(reversed(ids)))
+    if not freeze_before_reorder:
+        match, request, job, invocation = freeze()
+    payload = _result_payload(request, resolved_values={"curie": "ECO:NEW"})
+    payload["resolved_objects"] = []
+    result = DomainValidatorResultBase.model_validate(payload)
+    runtime.complete_jobs(x.bound, invocation, [result])
+    retain_candidates(x.env, [ValidatorResultMaterializationInput(match, request, result)], scope=scope)
+    target = runtime.request_target(x.bound, job)
+    with h.SessionLocal() as db:
+        version = h._current(db, x.aid, target)["version"]
+    env, _, _ = publish_decisions(scope, checkpoint_request=DomainEnvelopeCheckpointRequest(project_key="fixture",
+        envelope=x.env, expected_revision=x.revision, document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=x.source),
+        episode_id=x.episode, operation_id=uuid4().hex, actor={"type": "agent", "id": "supervisor"},
+        entries=[{"target_id": target, "expected_version": version, "action": "accept",
+            "subject": result._history_ref["fact_id"], "reason": "review stable target"}])
+    expected = ["eco:2", "ECO:NEW"] if freeze_before_reorder else ["ECO:NEW", "ECO:CURATOR_A"]
+    assert env.extracted_objects[0].payload["evidence_code_curies"] == expected
+    original = env.validator_results["validation-fact:" + result._history_ref["fact_id"]]
+    assert original["result"]["target"]["field_path"] == request.target.field_path
+
+
+def test_new_object_and_null_to_object_changes_are_independent_leaves():
+    for before in ({}, {"term": None}):
+        changes = c.payload_changes(before, {"term": {"name": "A", "rank": "R", "note": None}}, "root")
+        assert {item["path"] for item in changes} == {"term.name", "term.rank", "term.note"}

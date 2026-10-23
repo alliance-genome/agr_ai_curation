@@ -277,6 +277,7 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         })[0]
         if fingerprint != body["binding_fingerprint"]:
             raise store.HistoryConflict("Selected projection binding contract changed")
+        original_result = result
         # Stable identity survives reorder; only the derived view's address moves.
         if request.target.field_path != match.field_path:
             from src.lib.domain_packs.input_selectors import build_domain_validation_request
@@ -319,6 +320,7 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
             raise store.HistoryConflict("Partial selection cannot assign unpartitioned derived objects")
         items.append(ValidatorResultMaterializationInput(
             match=match, request=request, result=result, selected_result_slots=slots,
+            original_result=original_result, original_source_revision=body["source_envelope_revision"],
         ))
     # Profile materialization must compose all selected units as one record transaction.
     if profile_context is not None:

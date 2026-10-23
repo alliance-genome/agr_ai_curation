@@ -100,3 +100,12 @@ can replace only the authorized leaf covered by its accepted result. Declared
 compound identities and their explicit mirrors remain one atomic fact. A child-only
 request cannot authorize a whole-collection replacement. A newer edit creates new
 facts and remains protected from earlier intent.
+
+Replacement coverage uses stable destination anchors frozen with each validation
+attempt, not list positions. Reordering a list cannot authorize replacement of a
+different item's curator value. New or previously null objects are decomposed into
+independent leaf changes. Structural aggregate edits (such as changing a collection's
+length) cannot be safely replaced by leaf validator results: explicit revalidation
+returns a conflict naming the structural edit and asks the curator to restore its
+shape before revalidating individual values. It does not silently release a newer
+leaf edit and expose an older aggregate value.

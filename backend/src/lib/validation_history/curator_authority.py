@@ -182,7 +182,16 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
         destinations = {**frozen["request"]["expected_result_fields"], **(frozen["request"].get("optional_result_fields") or {})}
         return not field_paths or any(isinstance(destination, str) and _overlap(destination, path)
             for destination in destinations.values() for path in field_paths)
-    overlays = [(fact, body) for fact, body in active_overlays(db, binding.artifact_id) if requested(body)]
+    active = active_overlays(db, binding.artifact_id)
+    for _, body in active:
+        if body["object_id"] != object_id or body.get("atomic"):
+            continue
+        if field_paths and not any(_overlap(current_path(body), path) for path in field_paths):
+            continue
+        if any(not change["present"] or isinstance(change.get("value"), (dict, list)) for change in body["changes"]):
+            raise store.HistoryConflict("Revalidation cannot replace the structural curator edit at " + current_path(body)
+                + "; restore its object/collection shape before revalidating individual values")
+    overlays = [(fact, body) for fact, body in active if requested(body)]
     return store._append(db, binding.artifact_id,
         operation_id="curator-revalidation:" + episode_id + ":" + object_id,
         kind="curator_revalidation_intent", parent_id=episode_id,
@@ -200,6 +209,20 @@ def _covers(parent, child):
 def _overlap(left, right):
     a, b = tuple(parse_field_path(left)), tuple(parse_field_path(right))
     return a[:len(b)] == b or b[:len(a)] == a
+
+
+def _anchor_tokens(db, artifact_id, anchor):
+    lineage = []
+    target = store._fact(db, artifact_id, anchor["target_id"], kind="target")
+    while target is not None:
+        lineage.append(("target", target.id))
+        target = store._fact(db, artifact_id, target.parent_id, kind="target") if target.parent_id else None
+    return [*reversed(lineage), *(("path", part) for part in anchor["suffix"])]
+
+
+def _anchor_covers(db, artifact_id, parent, child, *, atomic=False):
+    a, b = _anchor_tokens(db, artifact_id, parent), _anchor_tokens(db, artifact_id, child)
+    return b[:len(a)] == a or (atomic and a[:len(b)] == b)
 
 
 def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_id, accepted_entries):
@@ -224,11 +247,11 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
             continue
         request = frozen["request"]
         target = store._content(db, store._fact(db, artifact_id, frozen["target_id"], kind="target"))
-        destinations = list(request["expected_result_fields"].values()) + list((request.get("optional_result_fields") or {}).values())
+        destinations = list(frozen.get("result_anchors", {}).values())
         unit = store._content(db, store._fact(db, artifact_id, entry["target_id"], kind="target"))
         if unit.get("decision_unit"):
             selected_slots = unit["decision_unit"]["fields"]
-            destinations = [path for slot, path in {**request["expected_result_fields"], **(request.get("optional_result_fields") or {})}.items() if slot in selected_slots]
+            destinations = [anchor for slot, anchor in frozen.get("result_anchors", {}).items() if slot in selected_slots]
         for fact, body in overlays:
             if fact.id not in authorized:
                 continue  # Includes a later curator edit: the older intent cannot consume it.
@@ -244,7 +267,7 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
                                  else [*request["expected_result_fields"], *(request.get("optional_result_fields") or {})])}
                 whole_result = set(request["expected_result_fields"]) | set(request.get("optional_result_fields") or {})
                 same_contributor = old_input["target_id"] == frozen["target_id"] and whole_result <= selected_slots
-            if same_contributor or (same_source and any(isinstance(path, str) and (_overlap(path, authorized[fact.id]) if body.get("atomic") else _covers(path, authorized[fact.id])) for path in destinations)):
+            if same_contributor or (same_source and any(_anchor_covers(db, artifact_id, destination, body["anchor"], atomic=body.get("atomic", False)) for destination in destinations)):
                 released.add(fact.id)
     if released:
         store._append(db, artifact_id, operation_id="curator-release:" + operation_id,
@@ -289,14 +312,18 @@ def payload_changes(before, after, target_id, path=""):
     if isinstance(before, list) and isinstance(after, list) and len(before) == len(after):
         return [change for index, (old, new) in enumerate(zip(before, after, strict=True))
                 for change in payload_changes(old, new, target_id, f"{path}[{index}]")]
-    if isinstance(before, dict) and isinstance(after, dict):
+    if isinstance(after, dict) and (isinstance(before, dict) or (before is None and after)):
+        before = before or {}
         changes = []
         for key in sorted(before.keys() | after.keys()):
             child = f"{path}.{key}" if path else key
             if key not in after:
                 changes.append({"target_id": target_id, "path": child, "present": False})
             elif key not in before:
-                changes.append({"target_id": target_id, "path": child, "present": True, "value": deepcopy(after[key])})
+                if isinstance(after[key], dict) and after[key]:
+                    changes.extend(payload_changes({}, after[key], target_id, child))
+                else:
+                    changes.append({"target_id": target_id, "path": child, "present": True, "value": deepcopy(after[key])})
             else:
                 changes.extend(payload_changes(before[key], after[key], target_id, child))
         return changes

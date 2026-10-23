@@ -60,11 +60,17 @@ class PrerequisiteSelection(HistoryContract):
     selection_generation: StrictInt = Field(ge=1)
 
 
+class StableValueAnchor(HistoryContract):
+    target_id: StrictStr = Field(min_length=1)
+    suffix: list[StrictStr | StrictInt] = Field(default_factory=list)
+
+
 class FrozenValidationInput(HistoryContract):
     target_id: StrictStr = Field(min_length=1)
     binding_id: StrictStr = Field(min_length=1)
     request: dict[str, Any]
     result_fields: list[StrictStr] = Field(default_factory=list)
+    result_anchors: dict[StrictStr, StableValueAnchor] = Field(default_factory=dict)
     decision_units: list[DecisionUnit] = Field(default_factory=list)
     prerequisites: list[PrerequisiteSelection] = Field(default_factory=list)
     dispatch_wave: StrictInt | None = Field(default=None, ge=0)
@@ -73,6 +79,8 @@ class FrozenValidationInput(HistoryContract):
 
     @model_validator(mode="after")
     def complete_partition(self):
+        if set(self.result_anchors) - set(self.result_fields):
+            raise ValueError("Destination anchors must name declared result fields")
         if len(set(self.result_fields)) != len(self.result_fields):
             raise ValueError("Result fields must be unique")
         if self.decision_units:
