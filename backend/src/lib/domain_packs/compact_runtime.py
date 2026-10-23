@@ -63,7 +63,6 @@ class CompactValidatorRuntime:
         self.adapter = adapter
         self.lookup_tool_names: frozenset[str] = frozenset()
         self.source_catalog: list[dict[str, Any]] = []
-        self.standalone_evidence_records: list[dict[str, Any]] | None = None
         # Model views of captured lookups keyed by lookup_ref (the concrete call
         # id), scoped to this invocation; the model pages them without a re-run.
         # The complete responses stay in the workspace ledger.
@@ -230,10 +229,6 @@ class CompactValidatorRuntime:
         request_id = raw_decision.get("request_id")
         if not isinstance(request_id, str) or request_id not in self.contracts:
             raise ValueError("Unknown validator decision request")
-        if self.standalone_evidence_records is not None:
-            # Standalone document tools may register evidence after construction.
-            # This list is runtime-owned, never part of the model's decision.
-            self.contracts[request_id].request.evidence = deepcopy(self.standalone_evidence_records)
         decision = self.contracts[request_id].decision_schema.model_validate(raw_decision)
         return self.workspace.assemble(decision)
 

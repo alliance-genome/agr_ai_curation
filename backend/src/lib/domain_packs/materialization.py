@@ -3302,7 +3302,7 @@ def project_evidence_anchor_projections(
             record_ids_by_metadata_path,
         ):
             evidence_record = records_by_id.get(evidence_record_id)
-            if evidence_record is None:
+            if evidence_record is None or evidence_record.get("evidence_link_issue"):
                 continue
             for field_path in _projection_field_paths(evidence_record, domain_object):
                 projection_key = (evidence_record_id, field_path)
@@ -4303,7 +4303,7 @@ def _evidence_record_indexes(
 ) -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
     from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
     snapshot = EvidenceSnapshot.from_payload(
-        envelope.model_dump(mode="json"),
+        {"metadata": envelope.metadata},
         [item.model_dump(mode="json") for item in envelope.extracted_objects],
     )
     metadata = envelope.metadata

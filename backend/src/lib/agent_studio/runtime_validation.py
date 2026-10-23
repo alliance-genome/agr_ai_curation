@@ -420,9 +420,13 @@ def build_agent_runtime_report(
             output_schema_key=getattr(row, "output_schema_key", None) if visibility == "system" else head_output_schema_key,
         )
         if validator_forbidden:
-            row_errors.append(validator_tool_message(
+            detail = validator_tool_message(
                 f"Agent '{getattr(row, 'agent_key', '')}'", validator_forbidden,
-            ))
+            )
+            if _should_warn_for_user_agent_contract_violation(strict=strict, visibility=visibility):
+                row_warnings.append(detail)
+            else:
+                row_errors.append(detail)
 
         if visibility == "project" and project_id is None:
             row_errors.append("project visibility requires project_id")

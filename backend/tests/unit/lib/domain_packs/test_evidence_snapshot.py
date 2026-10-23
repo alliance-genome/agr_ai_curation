@@ -61,3 +61,13 @@ def test_all_consumed_source_locations_participate_in_conflict_detection(source,
     assert index.resolve("E1") == (None, "ambiguous")
     # Faithful subset views still choose the complete saved source unchanged.
     assert EvidenceSnapshot([source, left]).resolve("E1") == (left, None)
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_unresolved_source_never_becomes_supporting_pdf_anchor(source, conflict):
+    from src.schemas.domain_envelope import DomainEnvelope
+    from src.lib.domain_packs.materialization import project_evidence_anchor_projections
+    records = [source, {**source, "page": 8}] if conflict else []
+    envelope = DomainEnvelope(envelope_id="snapshot", domain_pack_id="fixture", metadata={"evidence_records": records},
+        extracted_objects=[{"object_type": "Assertion", "object_id": "O1", "evidence_record_ids": ["E1"]}])
+    assert project_evidence_anchor_projections(envelope, envelope_revision=1, document_id="D1") == []

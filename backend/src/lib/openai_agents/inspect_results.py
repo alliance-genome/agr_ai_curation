@@ -1911,6 +1911,17 @@ def _evidence_response(
         ]
         if not missing:
             return {}
+        conflicts = [row for row in missing if row.get("evidence_link_issue") == "ambiguous"]
+        if conflicts:
+            return {
+                "status": "error",
+                "error_code": "evidence_conflict",
+                "conflicting_evidence_count": len(conflicts),
+                "message": (
+                    "Saved source evidence has conflicting quotes or locations. Conflicting content "
+                    "is withheld; do not choose a version or treat reference IDs as quotes."
+                ),
+            }
         return {
             "status": "error",
             "error_code": "evidence_unavailable",
@@ -1936,6 +1947,15 @@ def _evidence_response(
         message="Evidence text is ready.",
         overrides=overrides,
     )
+    if response.get("error_code") == "evidence_conflict":
+        report_runtime_exception(
+            RuntimeError("Saved source evidence contains conflicting provenance"),
+            component="extraction_result_inspection",
+            operation="evidence_integrity_conflict",
+            tags={"tool_name": _TOOL_NAME},
+            context={"extraction_result_id": result.extraction_result_id,
+                     "conflicting_evidence_count": response["conflicting_evidence_count"]},
+        )
     if response.get("error_code") == "evidence_unavailable":
         report_runtime_exception(
             RuntimeError("Saved extraction evidence references could not be resolved to text"),
@@ -2492,6 +2512,7 @@ def _search_matches_for_record(
 ) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     query_terms = _query_terms(query)
+    evidence_snapshot = _envelope_evidence_snapshot(envelope)
     for obj in envelope.extracted_objects:
         object_ref = _canonical_object_ref(obj)
         if not query_terms:
@@ -2520,6 +2541,7 @@ def _search_matches_for_record(
             _evidence_search_matches(
                 record,
                 envelope=envelope,
+                evidence_snapshot=evidence_snapshot,
                 obj=obj,
                 object_ref=object_ref,
                 query_terms=query_terms,
@@ -2577,9 +2599,10 @@ def _evidence_search_matches(
     object_ref: str,
     query_terms: Sequence[str],
     read_carry: Mapping[str, Any],
+    evidence_snapshot=None,
 ) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
-    for index, evidence_record in enumerate(_object_evidence_records(envelope, obj)):
+    for index, evidence_record in enumerate(_object_evidence_records(envelope, obj, evidence_snapshot=evidence_snapshot)):
         haystack = " ".join(
             str(value)
             for value in evidence_record.values()
@@ -2785,15 +2808,21 @@ def _is_evidence_path(field_path: str) -> bool:
     return False
 
 
+def _envelope_evidence_snapshot(envelope: DomainEnvelope):
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+    return EvidenceSnapshot.from_payload(
+        {"metadata": envelope.metadata},
+        [item.model_dump(mode="json") for item in envelope.extracted_objects],
+    )
+
+
 def _object_evidence_records(
     envelope: DomainEnvelope,
     obj: CuratableObjectEnvelope,
+    *,
+    evidence_snapshot=None,
 ) -> list[Mapping[str, Any]]:
-    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
-    snapshot = EvidenceSnapshot.from_payload(
-        envelope.model_dump(mode="json"),
-        [item.model_dump(mode="json") for item in envelope.extracted_objects],
-    )
+    snapshot = evidence_snapshot if evidence_snapshot is not None else _envelope_evidence_snapshot(envelope)
     records = []
     for identity in dict.fromkeys(obj.evidence_record_ids):
         record, problem = snapshot.resolve(identity)
