@@ -321,7 +321,10 @@ def declare_envelope_episode(binding, envelope, matches, *, unavailable_bindings
     for obj in envelope.extracted_objects:
         target_id = obj.metadata["validation_history"]["target_id"]
         if target_id not in covered_objects:
-            obligations.append({"target_id": target_id, "mode": "extraction_only"})
+            with store.SessionLocal.begin() as db:
+                store._artifact(db, binding.artifact_id, binding.scope)
+                mode = "curator" if store._has_curator_subject(db, binding.artifact_id, target_id) else "extraction_only"
+            obligations.append({"target_id": target_id, "mode": mode})
     if not envelope.extracted_objects and not obligations:
         obligations.append({
             "target_id": envelope.metadata["validation_history"]["target_id"],

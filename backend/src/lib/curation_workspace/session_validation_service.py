@@ -648,7 +648,8 @@ def _dispatch_workspace_envelope_validation(
         and _envelope_group_context_identity(envelope)
         != _runtime_group_context_identity(runtime_context)
     )
-    if not appended_findings and not stale_resolution.changed and not context_changed:
+    if (not appended_findings and not stale_resolution.changed and not context_changed
+            and stale_resolution.envelope.metadata == envelope.metadata):
         return stale_resolution.envelope, source_revision, []
 
     try:

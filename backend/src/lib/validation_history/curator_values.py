@@ -27,9 +27,6 @@ def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity
             return {key: None for key in identity_keys}
         # A retired/changed source has no eligible underlying selection. This is
         # explicitly a blank withdrawal, never an implicit restoration of history.
-        manifest = selections.read_manifest(scope, artifact_id, episode_id=reference["episode_id"])
-        if not manifest["ready"]:
-            return {key: None for key in identity_keys}
         try:
             chosen, _ = projection.read_published_projection(scope, reference, current=True)
         except store.HistoryConflict:

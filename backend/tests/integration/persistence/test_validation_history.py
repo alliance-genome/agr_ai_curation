@@ -1337,9 +1337,6 @@ def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed
         envelope=envelope,
         provenance={},
     )
-    binding = runtime.CapturedArtifact(
-        scope, envelope.metadata["validation_history"]["artifact_id"]
-    )
     for values in (
         [{"label": "B"}, {"label": "A"}],
         [{"label": "C"}, {"label": "D"}],
@@ -1348,8 +1345,8 @@ def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed
         changed = envelope.model_copy(deep=True)
         changed.extracted_objects[0].payload["terms"] = values
         with pytest.raises(h.HistoryConflict, match="materialization"):
-            runtime.capture_derived_objects(
-                binding, changed, [], previous_envelope=envelope
+            runtime._check_collection_materialization(
+                envelope.extracted_objects[0], changed.extracted_objects[0]
             )
     changed = envelope.model_copy(deep=True)
     obj = changed.extracted_objects[0]
@@ -1357,11 +1354,9 @@ def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed
     obj.metadata["validator_resolved_value_materialization"] = [
         {"materialized_field_paths": ["terms[0].label"]}
     ]
-    result = runtime.capture_derived_objects(
-        binding, changed, [], previous_envelope=envelope
-    )
+    runtime._check_collection_materialization(envelope.extracted_objects[0], obj)
     assert (
-        result.extracted_objects[0].metadata["validation_history"]
+        obj.metadata["validation_history"]
         == envelope.extracted_objects[0].metadata["validation_history"]
     )
     corrupted = envelope.model_copy(deep=True)

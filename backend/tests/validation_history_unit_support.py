@@ -61,7 +61,8 @@ def isolated_validation_history(monkeypatch):
             for attempt, result in zip(invocation["attempt_ids"], results, strict=True)
         ]
 
-    from src.lib.validation_history import candidates, selections
+    from src.lib.validation_history import candidates, selections, projection
+    monkeypatch.setattr(projection, "read_dispatch_source", lambda bound, envelope: envelope)
 
     def declare(bound, envelope, matches, **kwargs):
         return envelope.model_copy(update={"metadata": {
@@ -75,7 +76,6 @@ def isolated_validation_history(monkeypatch):
     monkeypatch.setattr(runtime, "record_match_scheduling", lambda *args, **kwargs: str(uuid4()))
     monkeypatch.setattr(runtime, "capture_extraction", lambda **kwargs: kwargs["envelope"])
     monkeypatch.setattr(runtime, "bind_artifact", lambda envelope, context: binding)
-    monkeypatch.setattr(runtime, "capture_derived_objects", lambda bound, envelope, results, **kwargs: envelope)
     monkeypatch.setattr(runtime, "record_runner_receipt", lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime, "begin_jobs", begin)
     monkeypatch.setattr(runtime, "complete_jobs", complete)

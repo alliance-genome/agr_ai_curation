@@ -457,6 +457,8 @@ def dispatch_active_validator_bindings(
 
     from src.lib.validation_history.runtime import bind_artifact
     history_binding = bind_artifact(envelope, runtime_context)
+    from src.lib.validation_history.projection import read_dispatch_source
+    dispatch_source = read_dispatch_source(history_binding, envelope)
     authenticated_groups = _normalized_authenticated_groups(runtime_context)
     if profile_context is None:
         from .profile_validation import resolve_envelope_profile_validation
@@ -475,16 +477,16 @@ def dispatch_active_validator_bindings(
     else:
         validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(domain_pack)
     matches = validation_registry.match_bindings(
-        envelope,
+        dispatch_source,
         states=[ValidationBindingState.ACTIVE],
     )
     from src.lib.validation_history.selections import declare_envelope_episode
     envelope = declare_envelope_episode(history_binding, envelope, matches,
-        unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable] if profile_context else ())
+        unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable if item.mapping.policy.blocks_readiness] if profile_context else ())
     if profile_context is not None:
         from .profile_validation import profile_dispatch_matches
         eligible_matches, eligibility_findings, binding_audit = profile_dispatch_matches(
-            envelope, profile_context, authenticated_groups=authenticated_groups,
+            dispatch_source, profile_context, authenticated_groups=authenticated_groups,
         )
     else:
         eligible_matches, eligibility_findings, binding_audit = (

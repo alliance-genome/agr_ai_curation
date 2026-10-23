@@ -108,6 +108,18 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
     return envelope.model_copy(update={"extracted_objects": objects})
 
 
+def read_dispatch_source(binding, envelope):
+    """Resolve validator inputs from immutable extraction/curator source targets.
+
+    Selected output remains a separate projection. A reconsideration must not
+    silently feed the preceding validator's correction back as extracted text.
+    Explicit selected prerequisites are supplied separately by the supervisor.
+    """
+    with store.SessionLocal.begin() as db:
+        selections._lock_artifact(db, binding.scope, binding.artifact_id)
+        return source_envelope_in_transaction(db, binding.scope, binding.artifact_id, envelope)
+
+
 def pin_publication_in_transaction(
     db, scope, artifact_id, *, operation_id, manifest, envelope,
 ):

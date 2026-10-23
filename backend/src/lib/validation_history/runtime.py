@@ -808,54 +808,6 @@ def _check_collection_materialization(before, after):
     walk(before.payload, after.payload)
 
 
-def capture_derived_objects(
-    binding: CapturedArtifact, envelope, results, *, previous_envelope
-):
-    """Give newly materialized objects identities as validator contributions.
-
-    This never labels the contribution an extraction or an accepted selection.
-    Existing collection edits must use the explicit stable-identity APIs.
-    """
-    from copy import deepcopy
-
-    envelope = envelope.model_copy(deep=True)
-    previous_targets = {
-        obj.object_id or obj.pending_ref_id: obj
-        for obj in previous_envelope.extracted_objects
-    }
-    for obj in envelope.extracted_objects:
-        prior = previous_targets.get(obj.object_id or obj.pending_ref_id)
-        if prior is not None:
-            _check_collection_materialization(prior, obj)
-            if "validation_history" not in obj.metadata:
-                obj.metadata["validation_history"] = deepcopy(
-                    prior.metadata["validation_history"]
-                )
-    if all("validation_history" in obj.metadata for obj in envelope.extracted_objects):
-        return envelope
-    contributions = [
-        result._history_ref["fact_id"] for result in results if result._history_ref
-    ]
-    for fact_id in contributions:
-        store.read_fact(binding.scope, binding.artifact_id, fact_id)
-    if not contributions:
-        raise store.HistoryConflict(
-            "Derived objects require recorded source contributions"
-        )
-    root = envelope.metadata["validation_history"]["target_id"]
-    return _attach_object_targets(
-        envelope.model_copy(deep=True),
-        binding.scope,
-        binding.artifact_id,
-        root,
-        origin={
-            "kind": "validator_contribution",
-            "available_wave_fact_ids": contributions,
-            "exact_contributor_available": False,
-        },
-    )
-
-
 def capture_curator_objects(binding: CapturedArtifact, envelope, *, actor_id: str):
     """Register new curator-authored objects without inventing extractor provenance."""
     if actor_id != binding.scope.owner_id:

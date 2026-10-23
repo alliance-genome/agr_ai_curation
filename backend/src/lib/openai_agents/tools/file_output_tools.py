@@ -254,7 +254,6 @@ async def save_projected_file_output(
         "descriptor": descriptor, "branch_identity": branch_identity,
         "output_format": normalized_format,
     }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest()
-    storage_descriptor = f"{storage_descriptor}_{export_version}"
     storage = FileOutputStorageService()
     file_path, file_hash, file_size, warnings = storage.save_output(
         trace_id=effective_trace_id,
@@ -263,6 +262,7 @@ async def save_projected_file_output(
         file_type=normalized_format,  # type: ignore[arg-type]
         descriptor=storage_descriptor,
         stable_filename=True,
+        content_version=export_version,
     )
 
     for warning in warnings:

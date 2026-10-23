@@ -728,3 +728,25 @@ async def test_measured_projection_persists_written_count_and_complete_diagnosti
 
     finally:
         clear_context()
+
+
+@pytest.mark.asyncio
+async def test_long_descriptor_does_not_overwrite_historical_export(tmp_path, monkeypatch):
+    from src.lib.file_outputs import FileOutputStorageService
+    from src.lib.flows.output_projection import FlowOutputProjectionResult, FlowOutputColumnSpec
+    from src.lib.openai_agents.tools import file_output_tools
+    set_current_trace_id(uuid4().hex)
+    set_current_session_id("long-descriptor-session")
+    set_current_user_id("curator")
+    monkeypatch.setattr(file_output_tools, "FileOutputStorageService", lambda: FileOutputStorageService(base_path=tmp_path))
+    store = _install_projected_file_output_store(monkeypatch, file_output_tools)
+    projection = FlowOutputProjectionResult(format="csv", row_source="object",
+        columns=[FlowOutputColumnSpec(key="name", field_ref="object.name")], rows=[{"name": "first"}], total_count=1)
+    first = await file_output_tools.save_projected_file_output("csv", projection, "x" * 100, "csv_formatter")
+    original = Path(store.rows[0].file_path)
+    original_bytes = original.read_bytes()
+    projection.rows = [{"name": "second"}]
+    second = await file_output_tools.save_projected_file_output("csv", projection, "x" * 100, "csv_formatter")
+    assert first["file_id"] != second["file_id"]
+    assert original.read_bytes() == original_bytes
+    assert store.rows[0].file_path != store.rows[1].file_path

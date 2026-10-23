@@ -1019,7 +1019,7 @@ def patch_envelope_field(
         patch_payload["patch_id"] = request.patch_id
     if request.selected_value_action is not None:
         from src.lib.validation_history.curator_values import resolve_curator_identity
-        from src.lib.validation_history.store import HistoryScope, HistoryConflict
+        from src.lib.validation_history.store import HistoryScope, HistoryConflict, HistoryAccessError
         from src.lib.domain_envelopes.patches import _resolvable_target
         from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
         obj = next((obj for obj in envelope.extracted_objects
@@ -1041,14 +1041,21 @@ def patch_envelope_field(
             value_path, spec, _ = target
             keys = spec.identity_keys
             patch_payload["operation"] = EnvelopeFieldPatchOperation.REPLACE_IDENTITY
-        history = envelope.metadata["validation_history"]
+        history = envelope.metadata.get("validation_history")
+        owner_id = actor_user_id(actor_claims)
+        if not owner_id:
+            raise HTTPException(status_code=403, detail="An authenticated curator is required")
+        if not isinstance(history, dict) or not history.get("session_id"):
+            raise HTTPException(status_code=409, detail="Selected history is unavailable for this envelope")
         try:
             patch_payload["value"] = resolve_curator_identity(
-                HistoryScope(actor_user_id(actor_claims), str(envelope_row.document_id), history["session_id"]),
+                HistoryScope(owner_id, str(envelope_row.document_id), history["session_id"]),
                 envelope=envelope, object_id=request.object_id, value_path=value_path,
                 identity_keys=keys, action=request.selected_value_action,
                 reference=request.selection_reference,
             )
+        except HistoryAccessError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except HistoryConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         patch_payload["selected_value_action"] = request.selected_value_action

@@ -764,8 +764,9 @@ def apply_curator_identity(
     a subset; the declared id and label stay filled. Otherwise it is
     rejected with a message naming what is missing. Clearing the whole
     identity reverts to unresolved (the
-    validator's last unresolved outcome, else ``not_validated``); entering
-    the identity the value had before the override restores that state.
+    validator's last unresolved outcome, else ``not_validated``). Entering an
+    old identity remains a new explicit override; historical restoration is a
+    separate authorized selection action.
     Returns the audit record.
     """
 

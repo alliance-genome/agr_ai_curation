@@ -2279,14 +2279,16 @@ async def _execute_validation_groups_for_step(
                 authenticated_groups=_authenticated_groups_from_agent_context(agent_context),
             ),
         )
+        from src.lib.validation_history.projection import read_dispatch_source
+        dispatch_source = read_dispatch_source(history_binding, source_envelope)
         source_envelope = declare_envelope_episode(
-            history_binding, source_envelope, registry.match_bindings(source_envelope),
-            unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable] if profile_context else (),
+            history_binding, source_envelope, registry.match_bindings(dispatch_source, states=[ValidationBindingState.ACTIVE]),
+            unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable if item.mapping.policy.blocks_readiness] if profile_context else (),
         )
         collect_started_at = time.monotonic()
         materialization_inputs, selector_findings, executable_metadata = (
             await _collect_flow_validator_materialization_inputs(
-                source_envelope=source_envelope,
+                source_envelope=dispatch_source.model_copy(update={"metadata": source_envelope.metadata}),
                 source_envelope_revision=source_envelope_revision,
                 registry=registry,
                 groups=groups,
@@ -2329,7 +2331,7 @@ async def _execute_validation_groups_for_step(
             )
 
         materialized_revision = source_envelope_revision
-        if appended_findings:
+        if appended_findings or working_envelope.metadata != envelope_row.envelope_json.get("metadata", {}):
             checkpoint_started_at = time.monotonic()
             checkpoint = write_domain_envelope_checkpoint(
                 session,

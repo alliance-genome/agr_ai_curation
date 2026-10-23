@@ -265,6 +265,13 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
         )
     assert projected.extracted_objects[0].payload["evidence_code_curies"] == ["ECO:ACCEPTED"]
     assert "ECO:REJECTED" not in str(projected.extracted_objects[0].payload)
+    from src.lib.validation_history.projection import read_dispatch_source
+    reconsideration = read_dispatch_source(captured, projected)
+    repeated_match = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(reconsideration)[0]
+    repeated_request = build_domain_validation_request(repeated_match).request
+    assert repeated_request.selected_inputs == request.selected_inputs
+    assert reconsideration.extracted_objects[0].payload["evidence_code_curies"] == ["eco:1"]
+    assert projected.extracted_objects[0].payload["evidence_code_curies"] == ["ECO:ACCEPTED"]
     from src.lib.validation_history.projection import publish_decisions, read_published_projection
     from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, StaleDomainEnvelopeRevisionError
     monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
@@ -405,6 +412,12 @@ def test_curator_withdraw_and_restore_do_not_revive_retired_source(scope):
     with pytest.raises(h.HistoryAccessError):
         resolve_curator_identity(h.HistoryScope("other-owner", scope.document_id, scope.session_id),
             **kwargs, action="restore_selected", reference=reference)
+    pending_episode = s.start_episode(scope, aid, episode={
+        "episode_id": uuid4().hex, "reason": "reconsider without replacing selected value",
+        "obligations": [{"target_id": tid, "mode": "extraction_only"}],
+    })
+    assert not s.read_manifest(scope, aid, episode_id=pending_episode)["ready"]
+    assert resolve_curator_identity(scope, **kwargs, action="withdraw_override", reference=None) == {"label": "a"}
     field = source.extracted_objects[0].metadata["validation_history"]["fields"]["terms[0].label"]
     decision(scope, aid, field, 0, "retire")
     with pytest.raises(h.HistoryConflict, match="no longer current"):
