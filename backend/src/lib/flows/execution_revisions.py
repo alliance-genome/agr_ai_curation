@@ -19,7 +19,7 @@ from src.lib.agent_studio.execution_revision_service import (
     get_execution_revision,
 )
 from src.lib.config.models_loader import get_model
-from src.lib.packages.tool_roles import identity_lookup_tools_on_extraction_agent
+from src.lib.packages.tool_roles import identity_lookup_tools_on_extraction_agent, forbidden_tools_on_validator, validator_tool_message
 from src.models.sql.agent import Agent
 from src.schemas.agent_execution_revision import AgentExecutionReceipt, AgentExecutionSnapshot
 from src.schemas.flows import FlowDefinition, FlowNode
@@ -170,6 +170,18 @@ def resolve_flow_execution_revisions(
                     ))
                     continue
                 # Group-scoped tools count for every group, as in the startup report.
+                validator_forbidden = forbidden_tools_on_validator(
+                    [*saved.tool_ids, *(rule["tool_id"] for rule in saved.group_tool_policy.get("rules", []))],
+                    output_schema_key=saved.output_contract.output_schema_key,
+                )
+                if validator_forbidden:
+                    findings.append(AuthoringValidationFinding(
+                        code="validator_paper_source_tools", severity="error", node_id=node.id,
+                        path=f"flow_definition.nodes.{node.id}.data.agent_revision_id",
+                        message=validator_tool_message("This step's validator", validator_forbidden),
+                        fix_hint="Remove prohibited tools and select a new saved revision.",
+                    ))
+                    continue
                 lookups = identity_lookup_tools_on_extraction_agent(
                     [
                         *saved.tool_ids,

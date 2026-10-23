@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
 from hashlib import sha256
@@ -876,7 +877,7 @@ def _evidence_records_for_target(match: ValidatorBindingMatch) -> list[dict[str,
     if match.object_envelope is None:
         return []
     return [
-        dict(record)
+        copy.deepcopy(record)
         for record in _candidate_evidence_records(match.envelope, match.object_envelope)
     ]
 

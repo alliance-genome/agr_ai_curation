@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.lib.packages.tool_roles import (
+    forbidden_tools_on_validator, validator_tool_message,
     extraction_identity_lookup_message,
     identity_lookup_tools_on_extraction_agent,
 )
@@ -413,6 +414,15 @@ def build_agent_runtime_report(
                 row_warnings.append(detail)
             else:
                 row_errors.append(detail)
+
+        validator_forbidden = forbidden_tools_on_validator(
+            [*canonical_tool_ids, *group_rule_tool_ids],
+            output_schema_key=getattr(row, "output_schema_key", None) if visibility == "system" else head_output_schema_key,
+        )
+        if validator_forbidden:
+            row_errors.append(validator_tool_message(
+                f"Agent '{getattr(row, 'agent_key', '')}'", validator_forbidden,
+            ))
 
         if visibility == "project" and project_id is None:
             row_errors.append("project visibility requires project_id")

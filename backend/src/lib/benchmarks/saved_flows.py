@@ -69,7 +69,7 @@ CANNOT_RUN = ("This flow can't run right now. Open it in AI Curation and check i
 # Findings raised after the resolver authorized the step's pinned receipt: its structure is
 # still readable from that receipt; only running it needs a re-save.
 RECOVERABLE_CODES = frozenset({
-    "unavailable_model", "unsupported_reasoning_effort", "extraction_identity_lookup_tools",
+    "unavailable_model", "unsupported_reasoning_effort", "extraction_identity_lookup_tools", "validator_paper_source_tools",
 })
 UNAVAILABLE_CODES = frozenset({
     "missing_execution_revision", "unavailable_execution_revision", "execution_contract_mismatch",
@@ -85,6 +85,8 @@ def run_problem_for_code(code: str) -> str:
     """The fixed curator sentence for a finding code; a finding's own message is never used."""
     if code in ("unavailable_model", "unsupported_reasoning_effort"):
         return RESAVE_MODEL
+    if code == "validator_paper_source_tools":
+        return "This validator has paper or evidence tools. Remove them and save a new agent revision."
     if code == "extraction_identity_lookup_tools":
         return RESAVE_LOOKUPS
     if code in UNAVAILABLE_CODES:

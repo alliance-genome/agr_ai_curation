@@ -697,80 +697,11 @@ def _create_canonical_evidence_recorder(
     *,
     defer_source_updates: bool = False,
     workspace_records: list[dict[str, Any]] | None = None,
-    allowed_evidence_record_ids: set[str] | frozenset[str] | None = None,
-    allow_create: bool = True,
-    required_object_id: str | None = None,
-    required_pending_ref_id: str | None = None,
-    required_field_path: str | None = None,
 ):
     """Verify internal canonical span identities for one document and user."""
 
-    allowed_ids = {
-        normalized
-        for raw in (allowed_evidence_record_ids or set())
-        for normalized in [_optional_output_string(raw)]
-        if normalized
-    } if allowed_evidence_record_ids is not None else None
 
-    def _scope_error_for_record_id(
-        normalized_evidence_record_id: str | None,
-    ) -> dict[str, Any] | None:
-        if normalized_evidence_record_id is None:
-            if allow_create:
-                return None
-            return {
-                "status": "forbidden",
-                "message": "This validator evidence tool may only update supplied evidence records; provide evidence_record_id.",
-                "allowed_evidence_record_ids": sorted(allowed_ids or []),
-            }
-        if allowed_ids is None or normalized_evidence_record_id in allowed_ids:
-            return None
-        return {
-            "status": "forbidden",
-            "evidence_record_id": normalized_evidence_record_id,
-            "allowed_evidence_record_ids": sorted(allowed_ids),
-            "message": "Validators may only update evidence records supplied for this validation target.",
-        }
 
-    def _target_scope_error(
-        *,
-        object_id: Any = None,
-        pending_ref_id: Any = None,
-        field_path: Any = None,
-    ) -> dict[str, Any] | None:
-        normalized_object_id = _optional_output_string(object_id)
-        normalized_pending_ref_id = _optional_output_string(pending_ref_id)
-        normalized_field_path = _optional_output_string(field_path)
-        allowed_target_ids = {
-            target_id
-            for target_id in (required_object_id, required_pending_ref_id)
-            if target_id
-        }
-        supplied_target_ids = [
-            target_id
-            for target_id in (normalized_object_id, normalized_pending_ref_id)
-            if target_id
-        ]
-        if allowed_target_ids and supplied_target_ids and not all(
-            target_id in allowed_target_ids for target_id in supplied_target_ids
-        ):
-            return {
-                "status": "forbidden",
-                "message": "Validators may not retarget evidence to another object or pending ref.",
-                "allowed_object_id": required_object_id,
-                "allowed_pending_ref_id": required_pending_ref_id,
-            }
-        if (
-            required_field_path
-            and normalized_field_path
-            and normalized_field_path != required_field_path
-        ):
-            return {
-                "status": "forbidden",
-                "message": "Validators may not retarget evidence to another field path.",
-                "target_field_path": required_field_path,
-            }
-        return None
 
     def _target_argument_error(
         *,
@@ -842,32 +773,6 @@ def _create_canonical_evidence_recorder(
 
         normalized_entity = str(entity or "").strip()
         normalized_evidence_record_id = _optional_output_string(evidence_record_id)
-        scope_error = _scope_error_for_record_id(normalized_evidence_record_id)
-        if scope_error is not None:
-            return _log_record_evidence_result(
-                {"entity": normalized_entity, **scope_error},
-                document_id=document_id,
-                verification_method="evidence_record_scope",
-            )
-        target_scope_error = _target_scope_error(
-            object_id=object_id,
-            pending_ref_id=pending_ref_id,
-            field_path=field_path,
-        )
-        if target_scope_error is not None:
-            return _log_record_evidence_result(
-                {
-                    "entity": normalized_entity,
-                    **(
-                        {"evidence_record_id": normalized_evidence_record_id}
-                        if normalized_evidence_record_id
-                        else {}
-                    ),
-                    **target_scope_error,
-                },
-                document_id=document_id,
-                verification_method="evidence_target_scope",
-            )
         target_argument_error = _target_argument_error(
             object_id=object_id,
             pending_ref_id=pending_ref_id,
@@ -1208,15 +1113,10 @@ def _create_canonical_evidence_recorder(
 
 def create_record_evidence_tool(
     document_id: str, user_id: str, tracker=None, *, workspace_records=None,
-    allowed_evidence_record_ids=None, allow_create=True, required_object_id=None,
-    required_pending_ref_id=None, required_field_path=None,
 ):
     """The public tool accepts only local selections; canonical IDs stay internal."""
     recorder = _create_canonical_evidence_recorder(
         document_id, user_id, tracker, workspace_records=workspace_records, defer_source_updates=True,
-        allowed_evidence_record_ids=allowed_evidence_record_ids, allow_create=allow_create,
-        required_object_id=required_object_id, required_pending_ref_id=required_pending_ref_id,
-        required_field_path=required_field_path,
     )
 
     @function_tool(failure_error_function=None)

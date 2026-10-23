@@ -801,7 +801,7 @@ GET_EXTRACTION_TIMELINE_TOOL = {
 
 GET_EVIDENCE_REVISIONS_TOOL = {
     "name": "get_evidence_revisions",
-    "description": "Inspect diagnostics-only hidden evidence revision history for same-ID evidence updates and backend-refused scope mutations. Use when troubleshooting evidence quote/provenance changes, validator evidence updates, or validator attempts to modify evidence outside its supplied field/object scope. Extractors create field-level evidence; validators receive scoped quote bundles, may search/read paper, and may update the same evidence record through scoped record_evidence. Live evidence fields are authoritative.",
+    "description": "Inspect diagnostics-only hidden evidence revision history for same-ID evidence updates and backend-refused scope mutations. Use when troubleshooting evidence quote/provenance changes, validator evidence updates, or validator attempts to modify evidence outside its supplied field/object scope. Extractors create field-level evidence. Validators receive supplied context and cannot read papers or change evidence. Historical validator evidence updates remain inspectable exactly as recorded.",
     "input_schema": {
         "type": "object",
         "properties": {

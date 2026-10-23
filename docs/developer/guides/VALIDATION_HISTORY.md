@@ -209,3 +209,33 @@ with its original document/session scope after removal. New dispatch, selection,
 or restoration is blocked; late in-flight completions remain auditable. A rolled
 back deletion also rolls back retirement. This does not expose another owner's
 history or recreate the removed source document.
+
+## Validator source boundary (ALL-1440)
+
+Validators consume supplied extractor context and database/ontology lookups. They
+cannot retrieve paper text or create/change source evidence. Package tool metadata
+marks source access with `paper_source: true`; builder tools are also prohibited
+for validator result contracts and explicit validator dispatch. Authoring, saved
+revision restoration, flow preflight, catalog construction (including group tool
+additions) and final dispatch enforce this boundary. Invalid saved configurations
+must be re-saved; they are not silently stripped or given a different fingerprint.
+
+The validator request includes its scoped evidence records directly. Removing the
+old workspace tools must not remove the source context. Missing context can be
+reported as questions/limitations; it does not initiate extraction. Batching policy
+is unchanged. Validator responses never write source evidence back into envelopes.
+
+`domain_packs.evidence_snapshot.EvidenceSnapshot` resolves explicit evidence IDs
+inside an already-authorized exact artifact/checkpoint payload. Callers authorize
+and load that revision first. There is no global/latest lookup, text join, or new
+amendment ledger. Rich canonical source records and agreeing quote projections
+resolve to an actual stored source record; conflicting known source fields remain
+ambiguous, and complementary fragments are never synthesized into a new record.
+Export support, quote summaries, inspection and navigation anchors share this
+resolution. Historical source bodies and extractor revision histories stay exact.
+
+This updates the coordinated cutover's validator/reader rows: incompatible old
+workers must be drained, and these readers and role restrictions ship together.
+The integration series is still not independently deployable. C owns accepted
+annotation values; D owns supervisor review and redispatch, not paper access for
+validators.

@@ -2789,76 +2789,22 @@ def _object_evidence_records(
     envelope: DomainEnvelope,
     obj: CuratableObjectEnvelope,
 ) -> list[Mapping[str, Any]]:
-    records: list[Mapping[str, Any]] = []
-    metadata_records = _metadata_evidence_records(envelope.metadata)
-    metadata_by_id = {
-        str(item.get("evidence_record_id") or item.get("id") or ""): item
-        for item in metadata_records
-        if isinstance(item, Mapping)
-    }
-    for evidence_id in obj.evidence_record_ids:
-        metadata_record = metadata_by_id.get(str(evidence_id))
-        if metadata_record is not None:
-            records.append(metadata_record)
-        else:
-            records.append({"evidence_record_id": evidence_id})
-
-    direct_evidence = _payload_evidence_record(obj)
-    if direct_evidence:
-        if records and not any(_record_has_evidence_text(item) for item in records):
-            merged = dict(records[0])
-            merged.update(direct_evidence)
-            records[0] = merged
-        else:
-            records.append(direct_evidence)
-
-    return _dedupe_evidence_records(records)
-
-
-def _metadata_evidence_records(metadata: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    # Canonical conversion retains extractor metadata under extraction_metadata.
-    # Native domain envelopes can instead carry evidence directly in metadata.
-    nested = metadata.get("extraction_metadata")
-    sources = [metadata, nested] if isinstance(nested, Mapping) else [metadata]
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+    snapshot = EvidenceSnapshot.from_payload(
+        envelope.model_dump(mode="json"),
+        [item.model_dump(mode="json") for item in envelope.extracted_objects],
+    )
     records = []
-    for source in sources:
-        raw = source.get("evidence_records")
-        if isinstance(raw, list):
-            records.extend(item for item in raw if isinstance(item, Mapping))
+    for identity in dict.fromkeys(obj.evidence_record_ids):
+        record, problem = snapshot.resolve(identity)
+        records.append(record if problem is None else {
+            "evidence_record_id": identity, "evidence_link_issue": problem,
+        })
     return records
-
-
-def _payload_evidence_record(obj: CuratableObjectEnvelope) -> dict[str, Any]:
-    record: dict[str, Any] = {}
-    if obj.evidence_record_ids:
-        record["evidence_record_id"] = obj.evidence_record_ids[0]
-    for key in (*_EVIDENCE_TEXT_KEYS, *_EVIDENCE_CONTEXT_KEYS):
-        value = obj.payload.get(key)
-        if value is not None:
-            record[key] = value
-    return record
 
 
 def _record_has_evidence_text(record: Mapping[str, Any]) -> bool:
     return any(record.get(key) for key in _EVIDENCE_TEXT_KEYS)
-
-
-def _dedupe_evidence_records(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    deduped: list[Mapping[str, Any]] = []
-    seen: set[str] = set()
-    for record in records:
-        key = str(
-            record.get("evidence_record_id")
-            or record.get("id")
-            or record.get("verified_quote")
-            or record.get("quote")
-            or id(record)
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(record)
-    return deduped
 
 
 def _compact_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -2866,7 +2812,7 @@ def _compact_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
 
     return {
         key: record[key]
-        for key in ("evidence_record_id", "id", "field_path", *_EVIDENCE_CONTEXT_KEYS,
+        for key in ("evidence_record_id", "id", "field_path", "evidence_link_issue", *_EVIDENCE_CONTEXT_KEYS,
                     *_EVIDENCE_TEXT_KEYS)
         if record.get(key) is not None
     }

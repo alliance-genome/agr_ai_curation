@@ -948,3 +948,18 @@ async def test_resolve_package_tool_executes_document_tools_inline(
         ("track", tool_id),
         ("invoke", input_payload),
     ]
+
+@pytest.mark.parametrize("tool_id", ["search_document", "record_evidence", "read_section"])
+def test_direct_validator_constructor_refuses_paper_tools_before_resolution(monkeypatch, tool_id):
+    from src.lib.packages import tool_roles
+    fake_row = SimpleNamespace(
+        id="validator-id", agent_key="custom-validator", template_source="gene_validation",
+        instructions="Check supplied context", group_prompt_overrides={}, group_rules_enabled=False,
+        model_id="gpt-6.1-sol", model_temperature=0.1, model_reasoning="medium",
+        output_schema_key="fixture-validator", tool_ids=[tool_id], name="Validator",
+    )
+    monkeypatch.setattr(tool_roles, "is_validator_output_schema", lambda key: key == "fixture-validator")
+    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **kwargs: _FakePromptBundle())
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda *args: pytest.fail("forbidden tool was resolved"))
+    with pytest.raises(ValueError, match="cannot read papers"):
+        catalog_service._create_db_agent(fake_row, document_id="doc", user_id="owner")

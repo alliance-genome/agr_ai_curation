@@ -37,8 +37,11 @@ the correct biological decision.
 
 Gene extraction still emits one object per candidate/evidence pairing; this
 change does not merge those objects. Validator dispatch retains its existing
-scoped-evidence behavior: requests carrying quote bundles use isolated runs
-where needed, rather than sharing mutable evidence across batched targets.
+batching policy: requests carrying quote bundles retain isolated runs where
+configured. Validators receive supplied evidence directly, cannot search/read
+the paper or manage source evidence, and return resolutions/questions separately.
+Database/ontology lookup tools remain available. Missing context is reported to
+the supervisor without an automatic extraction retry.
 
 ## Rollout
 

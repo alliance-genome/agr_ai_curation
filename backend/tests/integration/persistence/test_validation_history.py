@@ -1615,3 +1615,50 @@ def test_document_cleanup_retires_history_and_preserves_owner_exact_reads(scope)
         )
     with pytest.raises(h.HistoryAccessError):
         h.read_archived_checkpoint(scope, aid, envelope_id="unrelated", revision=1)
+
+
+@pytest.mark.parametrize("pack", ["allele", "phenotype", "disease"])
+def test_converted_source_evidence_remains_exact_through_validation_history_and_readers(scope, pack):
+    import importlib
+    from copy import deepcopy
+    from datetime import datetime, timezone
+    from src.schemas.curation_workspace import CurationExtractionResultRecord
+    from src.lib.curation_workspace.domain_envelope_normalization import domain_envelope_from_extraction_result
+    from src.lib.domain_packs.materialization import project_evidence_anchor_projections
+    from src.lib.flows.output_projection import _attach_source_linked_evidence
+    from src.lib.openai_agents.inspect_results import _object_evidence_records
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    fixture = importlib.import_module(f'tests.contract.alliance.domain_packs.test_{pack}_builder_domain_pack')
+    converted = fixture._materialize_one_candidate()
+    assert converted.ok, converted.summary()
+    record = CurationExtractionResultRecord.model_validate({
+        'extraction_result_id': str(uuid4()), 'document_id': scope.document_id,
+        'adapter_key': pack, 'agent_key': pack + '_extractor', 'source_kind': 'chat',
+        'candidate_count': len(converted.payload['curatable_objects']),
+        'payload_json': converted.payload, 'created_at': datetime.now(timezone.utc), 'metadata': {},
+    })
+    envelope = domain_envelope_from_extraction_result(record, stored=False)
+    original = envelope.model_dump(mode='json')
+    aid = h.capture_baseline(scope, producer_id=str(uuid4()), subject_kind='extracted',
+                             typed=converted.payload, normalized=original, provenance={'fixture': pack})
+    tid = target(scope, aid)
+    supplied = deepcopy(converted.payload['metadata']['evidence_records'])
+    att = attempt(scope, aid, tid, request={'evidence': supplied})
+    supplied[0]['verified_quote'] = 'Fake validator replacement must never become source'
+    completion = h.complete_attempt(scope, aid, att, state='completed', result={'resolved_values': {'term': 'X'}}, diagnostics={})
+    decision(scope, aid, tid, 0, 'accept', subject=completion)
+    saved = h.read_baseline(scope, aid)['normalized']
+    assert saved == original
+    restored = DomainEnvelope.model_validate(saved)
+    items = saved['extracted_objects']
+    rows = [{} for _ in items]
+    _attach_source_linked_evidence(rows, items, saved)
+    supported = [(obj, row) for obj, row in zip(restored.extracted_objects, rows) if obj.evidence_record_ids]
+    assert supported
+    for obj, row in supported:
+        assert not row['object.evidence_link_issues']
+        assert row['object.supporting_evidence'] == _object_evidence_records(restored, obj)
+    anchors = project_evidence_anchor_projections(restored, envelope_revision=1, document_id=scope.document_id)
+    assert anchors
+    assert 'Fake validator replacement' not in str([a.model_dump() for a in anchors])
