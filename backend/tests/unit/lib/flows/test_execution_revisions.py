@@ -917,3 +917,18 @@ def test_a_pinned_reasoning_level_that_is_never_sent_or_offered_does_not_block(m
     resolved = module.resolve_flow_execution_revisions(Mock(), flow(pin), user_id=7, active_group_ids=[])
 
     assert not [f for f in resolved.findings if f.code == "unsupported_reasoning_effort"]
+
+
+@pytest.mark.parametrize("group_only", [False, True])
+def test_saved_validator_refuses_paper_tools_including_group_rules(monkeypatch, group_only):
+    from src.lib.packages import tool_roles
+    monkeypatch.setattr(tool_roles, "is_validator_output_schema", lambda key: key == "AlleleResultEnvelope")
+    pin = receipt("domain")
+    pin.output_contract.output_schema_key = "AlleleResultEnvelope"
+    install_resolver(monkeypatch, [pin],
+        tool_ids=[] if group_only else ["search_document"],
+        group_tool_policy={"rules": [{"tool_id": "record_evidence", "allowed_group_ids": ["TEAM_C"]}]} if group_only else {},
+    )
+    resolved = module.resolve_flow_execution_revisions(Mock(), flow(pin), user_id=7, active_group_ids=[])
+    assert any(f.code == "validator_paper_source_tools" and "cannot read papers" in f.message for f in resolved.findings)
+    assert resolved.entries_by_node == {"node_0": None}

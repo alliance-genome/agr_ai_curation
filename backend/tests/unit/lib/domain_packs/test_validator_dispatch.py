@@ -21,7 +21,6 @@ from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
     _DEFAULT_VALIDATOR_BATCH_MAX_SIZE,
     ValidatorRuntimeContext,
-    _apply_validator_evidence_updates_to_envelope,
     _plan_validator_run_groups,
     _validated_results_from_agent_batch_output,
     _validator_batch_summary,
@@ -46,7 +45,6 @@ from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
 
 
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
-
 
 
 @pytest.fixture(autouse=True)
@@ -658,7 +656,7 @@ def test_validator_guidance_is_advisory_in_single_and_batch_prompts():
     from src.lib.domain_packs.validator_dispatch import _append_validator_source_context_instructions
     for batch in (False, True):
         agent = SimpleNamespace(instructions="Existing validator policy")
-        _append_validator_source_context_instructions(agent, batch=batch, runtime_context=None)
+        _append_validator_source_context_instructions(agent)
         assert "Existing validator policy" in agent.instructions
         assert "Never resolve an identity solely from guidance" in agent.instructions
         assert "higher-priority policy" in agent.instructions
@@ -673,16 +671,12 @@ def test_validator_request_payload_for_agent_omits_semantic_duplicates():
     assert payload["selected_inputs"] == request.selected_inputs
     assert "validation_guidance" not in payload
     assert "input_selectors" not in payload
-    assert "evidence" not in payload
+    assert payload["evidence"] == request.evidence
     assert "input_values" not in payload["target"]
-    assert payload["evidence_summary"] == {
-        "evidence_count": 1,
-        "evidence_record_ids": ["evidence-1"],
-    }
+    assert payload["evidence"] == request.evidence
     assert payload["runtime_compaction"]["omitted_fields"] == [
         "input_selectors",
         "target.input_values",
-        "evidence",
     ]
 
 
@@ -736,52 +730,10 @@ def test_validator_request_payload_reports_runtime_capabilities_for_scoped_evide
         deep=True,
     )
 
-    payload = validator_request_payload_for_agent(
-        request,
-        runtime_context=ValidatorRuntimeContext(
-            document_id="doc-123",
-            user_id="user-1",
-        ),
-    )
+    payload = validator_request_payload_for_agent(request)
 
-    assert payload["validator_runtime_capabilities"] == {
-        "paper_search_available": True,
-        "scoped_evidence_update_available": True,
-        "allowed_evidence_record_ids": ["evidence-1"],
-        "target_object_id": "object-1",
-        "target_field_path": "gene.identifier",
-    }
-
-
-def test_validator_runtime_capabilities_scope_from_request_evidence_for_bare_quote():
-    request = _verbose_validation_request().model_copy(
-        update={
-            "target": ValidationTarget(
-                domain_pack_id="fixture.dispatch",
-                object_type="GeneAssertion",
-                object_id="object-1",
-                field_path="gene.identifier",
-                input_values={"identifier": "BAD:0001", "evidence_quote": "crb quote"},
-            ),
-        },
-        deep=True,
-    )
-
-    payload = validator_request_payload_for_agent(
-        request,
-        runtime_context=ValidatorRuntimeContext(
-            document_id="doc-123",
-            user_id="user-1",
-        ),
-    )
-
-    assert payload["validator_runtime_capabilities"] == {
-        "paper_search_available": True,
-        "scoped_evidence_update_available": True,
-        "allowed_evidence_record_ids": ["evidence-1"],
-        "target_object_id": "object-1",
-        "target_field_path": "gene.identifier",
-    }
+    assert "validator_runtime_capabilities" not in payload
+    assert payload["evidence"] == request.evidence
 
 
 def test_validator_request_dedupe_key_includes_field_and_evidence_context():
@@ -839,59 +791,6 @@ def test_validator_request_dedupe_key_includes_field_and_evidence_context():
     assert _validator_request_dedupe_key(base_request) != _validator_request_dedupe_key(
         different_field
     )
-
-
-def test_apply_validator_evidence_updates_replaces_matching_envelope_records():
-    envelope = _envelope(
-        evidence_records=[
-            {
-                "evidence_record_id": "evidence-1",
-                "entity": "BAD:0001",
-                "verified_quote": "Previous quote.",
-                "page": 3,
-                "section": "Results",
-                "chunk_id": "chunk-1",
-            }
-        ]
-    )
-    request = _validation_request().model_copy(
-        update={
-            "evidence": [
-                {
-                    "evidence_record_id": "evidence-1",
-                    "entity": "BAD:0001",
-                    "verified_quote": "Updated quote.",
-                    "page": 4,
-                    "section": "Results",
-                    "chunk_id": "chunk-2",
-                    "updated_at": "2026-06-08T00:00:00+00:00",
-                    "evidence_revision_history": [
-                        {
-                            "revision": 1,
-                            "previous_source": {
-                                "verified_quote": "Previous quote.",
-                                "chunk_id": "chunk-1",
-                            },
-                        }
-                    ],
-                }
-            ]
-        },
-        deep=True,
-    )
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope,
-        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-    )
-
-    evidence_record = updated.extracted_objects[0].payload["evidence_records"][0]
-    assert evidence_record["verified_quote"] == "Updated quote."
-    assert evidence_record["chunk_id"] == "chunk-2"
-    assert evidence_record["evidence_revision_history"][0]["previous_source"] == {
-        "verified_quote": "Previous quote.",
-        "chunk_id": "chunk-1",
-    }
 
 
 def test_validator_batch_summary_reports_payload_sizes_and_large_scalars():
@@ -2979,8 +2878,8 @@ def test_package_scoped_validator_agent_uses_compact_finalization_schema(
     assert runtime_payload["selected_inputs"] == request.selected_inputs
     assert "input_values" not in runtime_payload["target"]
     assert "input_selectors" not in runtime_payload
-    assert "evidence" not in runtime_payload
-    assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
+    assert runtime_payload["evidence"] == request.evidence
+    assert runtime_payload["evidence"] == request.evidence
     assert captured["kwargs"]["max_turns"] == 18
     assert captured["agent_lookup"][1] == {
         "authenticated_groups": ["RGD"],
@@ -3167,7 +3066,7 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
         assert result.resolved_objects == []
 
 
-def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
+def test_package_scoped_validator_agent_keeps_lookup_and_supplied_context_only(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -3251,30 +3150,12 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
         runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
     )
 
-    tool_names = [tool.name for tool in captured["agent"].tools]
-    assert tool_names == [
-        "agr_curation_query",
-        "search_document",
-        "read_chunk",
-        "record_evidence",
-        "list_recorded_evidence",
-        "get_recorded_evidence",
-        "finalize_validator_result",
+    assert [tool.name for tool in captured["agent"].tools] == [
+        "agr_curation_query", "finalize_validator_result",
     ]
-    instructions = captured["agent"].instructions
-    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
-        assert removed_tool not in instructions
-    assert "Extractor-provided evidence" in instructions
-    assert (
-        "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
-        in instructions
-    )
-    assert "search_document" in instructions
-    assert "document_id and user_id" not in instructions
-    assert "paper; you do not" not in instructions
-    assert captured["payload"]["validator_runtime_capabilities"][
-        "scoped_evidence_update_available"
-    ] is True
+    assert "cannot search/read the paper" in captured["agent"].instructions
+    assert captured["payload"]["evidence"] == request.evidence
+    assert "validator_runtime_capabilities" not in captured["payload"]
 
 
 def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
@@ -3332,14 +3213,7 @@ def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
     assert [tool.name for tool in captured["agent"].tools] == [
         "agr_curation_query", "finalize_validator_result"
     ]
-    instructions = captured["agent"].instructions
-    assert "Paper search and evidence update tools are unavailable" in instructions
-    assert (
-        "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
-        in instructions
-    )
-    assert "paper; you do not" not in instructions
-    assert "validator_runtime_capabilities" not in captured["payload"]
+    assert "cannot search/read the paper" in captured["agent"].instructions
 
 
 def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
@@ -3514,28 +3388,16 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     assert payload["requests"][0]["request_id"] == request.request_id
     assert payload["requests"][0]["selected_inputs"] == request.selected_inputs
     assert "input_selectors" not in payload["requests"][0]
-    assert "evidence" not in payload["requests"][0]
+    assert payload["requests"][0]["evidence"] == request.evidence
     assert "input_values" not in payload["requests"][0]["target"]
-    assert payload["requests"][0]["evidence_summary"] == {
-        "evidence_count": 1,
-        "evidence_record_ids": ["evidence-1"],
-    }
+    assert payload["requests"][0]["evidence"] == request.evidence
     assert captured["kwargs"]["max_turns"] == 6
     assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
 
 
-# Never called by any validator in 522 production runs (Sep 16-22, 2026);
-# validators read the paper through search_document and read_chunk only.
-NEVER_CALLED_VALIDATOR_TOOLS = (
-    "read_section",
-    "read_subsection",
-    "attach_evidence_to_object",
-    "detach_evidence_from_object",
-    "update_recorded_evidence_metadata",
-)
 
 
-def test_package_scoped_validator_batch_agent_offers_only_used_paper_tools(
+def test_package_scoped_validator_batch_agent_never_offers_paper_tools(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -3588,15 +3450,10 @@ def test_package_scoped_validator_batch_agent_offers_only_used_paper_tools(
         runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
     )
 
-    runtime_agent = captured["agent"]
-    assert [tool.name for tool in runtime_agent.tools] == [
-        "agr_curation_query",
-        "search_document",
-        "read_chunk",
-        "finalize_validator_batch_results",
+    assert [tool.name for tool in captured["agent"].tools] == [
+        "agr_curation_query", "finalize_validator_batch_results",
     ]
-    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
-        assert removed_tool not in runtime_agent.instructions
+    assert "cannot search/read the paper" in captured["agent"].instructions
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -4206,147 +4063,6 @@ def test_profile_finalization_instructions_scope_package_override_to_requests(ba
     assert "must remain unresolved" in agent.instructions
 
 
-# --- KANBAN-1773: write-back selects by actual change, not by a timestamp ----
-
-
-def _canonical_evidence(**overrides):
-    record = {
-        "evidence_record_id": "evidence-1",
-        "entity": "BAD:0001",
-        "verified_quote": "Previous quote.",
-        "page": 3,
-        "section": "Results",
-        "chunk_id": "chunk-1",
-        "source_span_ids": ["span-1"],
-    }
-    record.update(overrides)
-    return record
-
-
-def _items_with_evidence(evidence):
-    request = _validation_request().model_copy(update={"evidence": evidence}, deep=True)
-    return cast(Any, [SimpleNamespace(
-        request=request,
-        match=SimpleNamespace(binding=SimpleNamespace(raw={})),
-    )])
-
-
-def test_untouched_evidence_is_not_written_back():
-    """A validator that reads but does not change evidence leaves the envelope alone."""
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([_canonical_evidence()])
-    )
-
-    assert updated is envelope
-
-
-def test_changed_evidence_is_written_back_without_a_timestamp():
-    """The old gate required updated_at or evidence_revision_history to be present.
-
-    Every mutating tool a validator currently holds stamps updated_at, so the
-    gate happened to be correct. It coupled correctness to a side effect, and
-    discard writes no updated_at at all. Selection is now by actual change.
-    """
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    mutated = _canonical_evidence(verified_quote="Corrected quote.")
-    assert "updated_at" not in mutated
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([mutated])
-    )
-
-    written = updated.extracted_objects[0].payload["evidence_records"][0]
-    assert written["verified_quote"] == "Corrected quote."
-
-
-def test_written_back_evidence_is_projected_to_canonical_provenance():
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    mutated = {
-        **_canonical_evidence(verified_quote="Corrected quote."),
-        "status": "verified",
-        "span_ids": ["span-1"],
-        "updated_at": "2026-09-18T12:31:54+00:00",
-    }
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([mutated])
-    )
-
-    written = updated.extracted_objects[0].payload["evidence_records"][0]
-    assert written["source_span_ids"] == ["span-1"]
-    for field in ("status", "span_ids", "updated_at"):
-        assert field not in written
-
-
-def test_a_discarded_record_is_written_back():
-    """Review finding: the new gate misses a discard, like the old one did.
-
-    discard writes status/workspace_status/discard_reason/discarded_at, all of
-    which are workspace-only keys. strip_workspace_fields removes them from
-    BOTH sides of the comparison, so a discarded record compares equal to its
-    active envelope copy and nothing is written back.
-
-    Validators hold no discard tool today, so this is latent. It is exactly the
-    latency the previous commit claimed to remove.
-    """
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    discarded = {
-        **_canonical_evidence(),
-        "status": "discarded",
-        "workspace_status": "discarded",
-        "discard_reason": "Superseded by a better quote.",
-        "discarded_at": "2026-09-18T12:32:00+00:00",
-    }
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([discarded])
-    )
-
-    assert updated is not envelope, "a discard must reach the envelope"
-    records = updated.extracted_objects[0].payload["evidence_records"]
-    assert records == [], "discarded evidence must not remain as active support"
-
-
-def test_a_discard_prunes_the_object_reference():
-    """Second-review finding C1: dropping the record orphaned its ID.
-
-    CuratableObjectEnvelope.evidence_record_ids was never pruned, so a discard
-    left a dangling reference. gene_expression/conversion.py:1693 raises
-    alliance.gene_expression.evidence_records_missing (severity BLOCKER) for
-    exactly that state, and inspect_results reports a runtime exception to
-    Sentry when it cannot resolve the id to text. A normal curator action would
-    have manufactured a non-repairable blocker and a false alert.
-    """
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    assert envelope.extracted_objects[0].evidence_record_ids == ["evidence-1"]
-
-    discarded = {
-        **_canonical_evidence(),
-        "status": "discarded",
-        "workspace_status": "discarded",
-        "discard_reason": "Superseded by a better quote.",
-    }
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([discarded])
-    )
-
-    assert updated.extracted_objects[0].payload["evidence_records"] == []
-    assert updated.extracted_objects[0].evidence_record_ids == [], (
-        "a dropped record must not leave a dangling reference"
-    )
-
-
-def test_an_update_leaves_the_object_reference_intact():
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    mutated = _canonical_evidence(verified_quote="Corrected quote.")
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([mutated])
-    )
-
-    assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]
 
 
 @pytest.mark.parametrize("curie", ["UBERON:0000068", "UBERON:0000092"])
@@ -4665,3 +4381,28 @@ def test_required_document_failure_cannot_become_validator_finding(tmp_path, mon
     assert caught.value is error
     assert len(calls) == 1
     assert reports == []  # Terminal entry point owns reporting, not validator recovery.
+
+
+def test_validator_cannot_write_back_source_evidence(tmp_path):
+    from copy import deepcopy
+    records = [{"evidence_record_id": "E1", "verified_quote": "Original source", "page": 1,
+                "source_fragments": [{"text": "Original source"}]}]
+    envelope = _envelope(evidence_records=deepcopy(records))
+    def runner(request, *, binding):
+        assert request.evidence
+        request.evidence[0]["verified_quote"] = "Replacement"
+        request.evidence[0]["source_fragments"][0]["text"] = "Nested replacement"
+        return _result_payload(request)
+    result = dispatch_active_validator_bindings(envelope, _loaded_pack(tmp_path), runner=runner)
+    assert envelope.extracted_objects[0].payload["evidence_records"] == records
+    assert result.envelope.extracted_objects[0].payload["evidence_records"] == records
+
+
+def test_validator_policy_refusal_is_configuration_failure_not_sentry(tmp_path, monkeypatch):
+    from src.lib.packages.tool_roles import ValidatorToolPolicyError
+    monkeypatch.setattr('src.lib.domain_packs.validator_dispatch._report_validator_dispatch_failure',
+                        lambda *a, **kw: pytest.fail('configuration refusal reported as server failure'))
+    def runner(request, *, binding):
+        raise ValidatorToolPolicyError('Forbidden configured paper reader')
+    result = dispatch_active_validator_bindings(_envelope(), _loaded_pack(tmp_path), runner=runner)
+    assert result.validator_results[0]._execution_failure == 'validator_tool_policy'

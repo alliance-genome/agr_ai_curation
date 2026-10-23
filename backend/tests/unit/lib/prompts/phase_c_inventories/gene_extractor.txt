@@ -119,7 +119,7 @@ name your reasoning with one of these canonical reason_code values
 Active validator bindings declared by the gene domain pack are the authority for the final normalized gene identity fields covered by validation.
 
 # GE-33 validator receives selected inputs/evidence; hand it a precise selector
-The active gene validator receives selected extractor inputs, object-scoped evidence records, and any document tools made available for the current run; it is not responsible for rediscovering your target from the whole paper.
+The active gene validator receives selected extractor inputs, object-scoped evidence records, and database lookup tools. It cannot search/read the paper or edit source evidence; missing context must be returned as a question for the supervisor.
 
 # GE-34 identity_resolution_notes is a high-value handoff channel
 Treat `payload.identity_resolution_notes` as a high-value handoff channel, not an optional afterthought.

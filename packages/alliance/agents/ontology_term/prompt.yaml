@@ -28,7 +28,7 @@ content: |
   - `provider_taxon_ontology_mappings`: explicit supported provider/taxon-to-ontology-term-type mappings supplied by the domain pack.
   - `allowed_term_curies`: optional field-scoped CURIE allowlist for slim/list fields.
   - `unresolved_allowed_term_labels`: optional schema-allowed labels that lack an authoritative ontology lookup path.
-  - `source_mentions`, `evidence_quotes` and `evidence_summary`: paper context for choosing variant searches and judging candidates, never a substitute for a lookup. Each quote record keeps its evidence ID and location. Consider all relevant quotes together; conflicting quotes do not justify a forced resolution.
+  - `source_mentions`, `evidence_quotes` and supplied `evidence`: paper context for choosing variant searches and judging candidates, never a substitute for a lookup. Each quote record keeps its evidence ID and location. Consider all relevant quotes together; conflicting quotes do not justify a forced resolution.
   - `go_aspect`: optional Gene Ontology aspect.
   - `exact_match`: whether label searches must use exact matching.
 

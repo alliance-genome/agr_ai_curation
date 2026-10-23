@@ -1017,34 +1017,17 @@ def _attach_source_linked_evidence(
     labels, genes, row position, or a different extraction's evidence inventory.
     Conflicting duplicate IDs and missing references stay visible as issues.
     """
-    from copy import deepcopy
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
 
-    records = _explicit_evidence_records(payload) if isinstance(payload, Mapping) else []
-    metadata = payload.get("metadata") if isinstance(payload, Mapping) else None
-    if isinstance(metadata, Mapping):
-        records += _explicit_evidence_records(metadata)
-        extraction_metadata = metadata.get("extraction_metadata")
-        if isinstance(extraction_metadata, Mapping):
-            records += _explicit_evidence_records(extraction_metadata)
-    for item in items:
-        records += _explicit_evidence_records(item)
-        body = _object_payload(item)
-        if body.get("evidence_record_id") and body.get("verified_quote"):
-            records.append(body)
-    by_id: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-    for record in records:
-        identity = record.get("evidence_record_id")
-        if isinstance(identity, str) and identity and record not in by_id[identity]:
-            by_id[identity].append(record)
+    snapshot = EvidenceSnapshot.from_payload(payload if isinstance(payload, Mapping) else {}, items)
     for row, item in zip(rows, items):
         evidence, issues = [], []
         for identity in _object_evidence_record_ids(item):
-            matches = by_id.get(identity, [])
-            if len(matches) == 1:
-                evidence.append(deepcopy(dict(matches[0])))
+            record, problem = snapshot.resolve(identity)
+            if problem:
+                issues.append({"evidence_record_id": identity, "status": problem})
             else:
-                issues.append({"evidence_record_id": identity,
-                               "status": "missing" if not matches else "ambiguous"})
+                evidence.append(record)
         row["object.supporting_evidence"] = evidence
         row["object.evidence_link_issues"] = issues
 
@@ -1068,13 +1051,13 @@ def _evidence_rows_from_records(
             "object.pending_ref_id": "",
         }
     )
-    for index, record in enumerate(records, start=1):
+    for record in records:
         row: dict[str, Any] = dict(artifact_context)
         row.update(object_context)
         row.update(
             {
                 "evidence.evidence_record_id": (
-                    record.get("evidence_record_id") or record.get("anchor_id") or record.get("id") or index
+                    record.get("evidence_record_id") or ""
                 ),
                 "evidence.quote": record.get("quote") or record.get("evidence_quote") or record.get("source_quote") or "",
                 "evidence.verified_quote": record.get("verified_quote") or "",
@@ -1887,7 +1870,7 @@ def _build_artifact_from_step(
         populate_summary_fields(
             rows_by_source["object"], object_items,
             _explicit_validation_findings(payload) if isinstance(payload, Mapping) else [],
-            export_fields, domain_pack_id,
+            export_fields, domain_pack_id, payload=payload if isinstance(payload, Mapping) else {},
         )
     if shape == "structured_result":
         # Validator result rows: the output projection's declared label fields.

@@ -114,7 +114,7 @@ Active validator bindings declared by the allele domain pack are the authority f
 does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
 
 # AE-27 validator receives selected inputs/evidence; hand it a precise selector
-The downstream allele validator receives selected extractor inputs, object-scoped evidence records, and any document tools made available for the current run; it is not responsible for rediscovering your target from the whole paper. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene`, `taxon`, `source_mentions`, and evidence context when available.
+The downstream allele validator receives selected extractor inputs, object-scoped evidence records, and database lookup tools. It cannot search/read the paper or edit source evidence; missing context must be returned as a question for the supervisor. Hand it a precise selector: the exact compact allele/variant notation in `mention`, plus paper-supported `associated_gene`, `taxon`, `source_mentions`, and evidence context when available.
 Do not rely on the validator to recover the intended allele from surrounding prose alone.
 
 # AE-28 preserve notation; fill associated_gene/taxon only when supported; normalized_hint sparse

@@ -678,6 +678,7 @@ def _agent_validation_sources(
         )
         else []
     )
+    from src.lib.packages.tool_roles import validator_forbidden_tool_names
     return AgentValidationSources(
         models=models,
         tools=tools,
@@ -685,6 +686,8 @@ def _agent_validation_sources(
         group_ids=frozenset(get_valid_group_ids()),
         builder_finalization_tool_ids=frozenset(_builder_finalization_tool_ids()),
         identity_lookup_tool_ids=_identity_lookup_tool_ids(),
+        validator_forbidden_tool_ids=validator_forbidden_tool_names(),
+        validator_output_schema_keys=frozenset(key for key in output_schema_keys if is_validator_output_schema(key)),
         extraction_output_schema_keys=frozenset(
             key for key in output_schema_keys if not is_validator_output_schema(key)
         ),

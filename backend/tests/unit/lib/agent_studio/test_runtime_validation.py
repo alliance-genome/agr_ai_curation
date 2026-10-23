@@ -698,3 +698,19 @@ def test_startup_only_warns_for_a_reasoning_value_that_is_never_sent(monkeypatch
 
     assert report["errors"] == []
     assert any("Invalid model_reasoning 'disabled'" in msg for msg in report["warnings"])
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_old_private_validator_does_not_block_everyones_startup(monkeypatch, strict):
+    from src.lib.agent_studio import runtime_validation as module
+    from src.lib.packages import tool_roles
+    monkeypatch.setattr(tool_roles, "is_validator_output_schema", lambda key: key == "DemoValidationResult")
+    monkeypatch.setattr(tool_roles, "validator_forbidden_tool_names", lambda: frozenset({"stage_demo"}))
+    monkeypatch.setattr(module, "_fetch_head_output_contracts", lambda _agents: {
+        "rev-validator": ("structured_extraction", "DemoValidationResult"),
+    })
+    row = _agent(agent_key="ca_validator", category="Custom", execution_revision_id="rev-validator",
+                 output_schema_key="DemoValidationResult", tool_ids=["stage_demo"])
+    report = _identity_lookup_report(monkeypatch, row, strict=strict)
+    assert any("cannot read papers" in msg for msg in report["errors" if strict else "warnings"])
+    assert not any("cannot read papers" in msg for msg in report["warnings" if strict else "errors"])

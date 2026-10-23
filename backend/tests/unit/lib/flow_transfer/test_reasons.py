@@ -13,6 +13,7 @@ from src.lib.flow_transfer.reasons import REASON_CODES, reason_for_finding, reas
     ("invalid_selected_export", "fields_need_choosing"),
     ("unavailable_projection_profile", "fields_need_choosing"),
     ("direct_export_requires_fields", "fields_need_choosing"),
+    ("validator_paper_source_tools", "cannot_run"),
     ("something_new", "cannot_run"),
 ])
 def test_finding_codes_map_to_plain_reasons(code, reason):

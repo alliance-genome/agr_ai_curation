@@ -3286,7 +3286,7 @@ def project_evidence_anchor_projections(
     """Project curator evidence navigation anchors from envelope metadata records."""
 
     records_by_id, record_ids_by_metadata_path = _evidence_record_indexes(
-        envelope.metadata
+        envelope
     )
     projections: list[DomainEnvelopeEvidenceAnchorProjection] = []
 
@@ -3302,7 +3302,7 @@ def project_evidence_anchor_projections(
             record_ids_by_metadata_path,
         ):
             evidence_record = records_by_id.get(evidence_record_id)
-            if evidence_record is None:
+            if evidence_record is None or evidence_record.get("evidence_link_issue"):
                 continue
             for field_path in _projection_field_paths(evidence_record, domain_object):
                 projection_key = (evidence_record_id, field_path)
@@ -4299,8 +4299,14 @@ def _validation_state_by_object(envelope: DomainEnvelope) -> dict[str, str]:
 
 
 def _evidence_record_indexes(
-    metadata: Mapping[str, Any],
+    envelope: DomainEnvelope,
 ) -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+    snapshot = EvidenceSnapshot.from_payload(
+        {"metadata": envelope.metadata},
+        [item.model_dump(mode="json") for item in envelope.extracted_objects],
+    )
+    metadata = envelope.metadata
     records_by_id: dict[str, Mapping[str, Any]] = {}
     record_ids_by_metadata_path: dict[str, str] = {}
 
@@ -4311,11 +4317,20 @@ def _evidence_record_indexes(
             evidence_record_id = _optional_string(raw_record.get("evidence_record_id"))
             if evidence_record_id is None:
                 continue
-            records_by_id[evidence_record_id] = raw_record
+            record, problem = snapshot.resolve(evidence_record_id)
+            records_by_id[evidence_record_id] = record if record is not None else {
+                "evidence_record_id": evidence_record_id, "evidence_link_issue": problem,
+            }
             record_ids_by_metadata_path[
                 f"{metadata_path}[{record_index}]"
             ] = evidence_record_id
 
+    for obj in envelope.extracted_objects:
+        for identity in obj.evidence_record_ids:
+            record, problem = snapshot.resolve(identity)
+            records_by_id[identity] = record if record is not None else {
+                "evidence_record_id": identity, "evidence_link_issue": problem,
+            }
     return records_by_id, record_ids_by_metadata_path
 
 

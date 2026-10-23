@@ -5,6 +5,8 @@ platform derives these sets from the registry instead of hardcoded tool names:
 
 - ``builder_finalization: true``: a builder-materializer finalize tool. An agent
   that carries one is an extraction agent.
+- ``paper_source: true``: paper reading/search or evidence management; validators
+  must use supplied context and cannot carry these tools.
 - ``identity_lookup: true``: a tool that searches a database or service for an
   identity (terms, entities, references). Only validation and lookup agents may
   use these; extraction agents read the paper and never search for identities.
@@ -127,6 +129,39 @@ def require_no_identity_lookup_on_extraction(
         raise ValueError(extraction_identity_lookup_message(agent_label, forbidden))
 
 
+
+def validator_forbidden_tool_names() -> frozenset[str]:
+    """Package-declared source access and extraction tools, never validator tools."""
+    return (_flagged_tool_names("paper_source")
+            | builder_finalization_tool_names() | _flagged_tool_names("builder_run_state"))
+
+
+def forbidden_tools_on_validator(tool_ids: Iterable[str], *, output_schema_key: str | None = None,
+                                 validator_role: bool = False) -> tuple[str, ...]:
+    if not validator_role and not is_validator_output_schema(output_schema_key):
+        return ()
+    forbidden = validator_forbidden_tool_names()
+    return tuple(name for name in dict.fromkeys(tool_ids) if name in forbidden)
+
+
+def validator_tool_message(agent_label: str, tool_ids: Iterable[str]) -> str:
+    return (f"{agent_label} is a validator and cannot read papers or manage source evidence "
+            f"({', '.join(sorted(tool_ids))}). Use supplied context and database/ontology "
+            "lookups. Remove these tools to save or run it.")
+
+
+class ValidatorToolPolicyError(ValueError):
+    """Invalid validator configuration, not a provider/server failure."""
+
+
+def require_validator_tool_boundary(tool_ids: Iterable[str], *, output_schema_key: str | None = None,
+                                    validator_role: bool = False, agent_label: str) -> None:
+    forbidden = forbidden_tools_on_validator(tool_ids, output_schema_key=output_schema_key,
+                                            validator_role=validator_role)
+    if forbidden:
+        raise ValidatorToolPolicyError(validator_tool_message(agent_label, forbidden))
+
+
 def reset_cache() -> None:
     """Clear the registry-derived role caches (tests and package reloads)."""
 
@@ -146,6 +181,11 @@ __all__ = [
     "is_extraction_agent",
     "is_validator_output_schema",
     "require_no_identity_lookup_on_extraction",
+    "forbidden_tools_on_validator",
+    "validator_forbidden_tool_names",
+    "validator_tool_message",
+    "ValidatorToolPolicyError",
+    "require_validator_tool_boundary",
     "reset_cache",
     "tool_metadata_by_name",
 ]

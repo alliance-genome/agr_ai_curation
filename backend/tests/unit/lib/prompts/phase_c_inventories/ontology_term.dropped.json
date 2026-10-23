@@ -123,7 +123,7 @@
   {
     "phrase": "`selected_inputs.source_mentions` are the exact paper phrases the extractor captured for the target finding.",
     "synonyms": [
-      "`source_mentions`, `evidence_quotes` and `evidence_summary`: paper context for choosing variant searches and judging candidates, never a substitute for a lookup."
+      "`source_mentions`, `evidence_quotes` and supplied `evidence`: paper context for choosing variant searches and judging candidates, never a substitute for a lookup."
     ],
     "category": "relocated",
     "reason": "Sep 22 hotfix validator TLC (ontology_term): the <source_mentions_context> paragraph is stated once with the other request inputs; paper context now also supports bounded variant searches, and a lookup is still required.",

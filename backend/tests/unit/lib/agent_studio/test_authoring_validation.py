@@ -490,3 +490,16 @@ def test_tool_group_above_the_on_demand_cap_is_rejected_at_save_time():
     )
     assert "patch_allele_observation" in finding.fix_hint
     assert "tool_group_too_large" not in {item.code for item in one_builder.errors}
+
+@pytest.mark.parametrize("phase", ["proposal", "save"])
+def test_validator_authoring_refuses_paper_tools(phase):
+    from dataclasses import replace
+    sources = replace(_agent_sources(), validator_output_schema_keys=frozenset({"DemoEnvelope"}),
+                      extraction_output_schema_keys=frozenset(),
+                      validator_forbidden_tool_ids=frozenset({"search"}))
+    result = validate_custom_agent_authoring_draft(
+        _agent(output_schema_key="DemoEnvelope"),
+        context=AuthoringValidationContext.from_values(db_user_id=7, active_group_ids=["TEAM_C"]),
+        sources=sources, phase=phase,
+    )
+    assert "paper_source_on_validator" in {f.code for f in result.errors}

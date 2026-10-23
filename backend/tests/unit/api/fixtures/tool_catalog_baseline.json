@@ -1053,6 +1053,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -1301,6 +1302,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -1598,6 +1600,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -2874,6 +2877,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -3293,6 +3297,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -4169,6 +4174,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -4261,6 +4267,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -4314,6 +4321,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -4355,6 +4363,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -4647,6 +4656,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"
@@ -5858,6 +5868,7 @@
     "package_export_name": "default",
     "package_id": "agr.alliance",
     "package_version": "1.0.0",
+    "paper_source": true,
     "required_context": [
       "document_id",
       "user_id"

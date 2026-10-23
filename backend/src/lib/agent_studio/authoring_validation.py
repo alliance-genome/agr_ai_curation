@@ -637,6 +637,8 @@ class AgentValidationSources:
     identity_lookup_tool_ids: frozenset[str]
     # Output schemas whose agents extract (structured extraction, not validator results).
     extraction_output_schema_keys: frozenset[str]
+    validator_output_schema_keys: frozenset[str] = frozenset()
+    validator_forbidden_tool_ids: frozenset[str] = frozenset()
 
 
 class AgentDraftExtensionValidator(Protocol):
@@ -847,6 +849,15 @@ def validate_custom_agent_authoring_draft(
                     fix_hint=f"Remove these tools: {', '.join(lookups)}.",
                 )
             )
+
+    if schema_key in sources.validator_output_schema_keys:
+        forbidden = set(normalized_tool_ids) & sources.validator_forbidden_tool_ids
+        if forbidden:
+            findings.append(AuthoringValidationFinding(
+                code="paper_source_on_validator", severity="error", path="custom_agent.tool_ids",
+                message="Validators use supplied context and lookup tools; they cannot read papers or manage evidence.",
+                fix_hint=f"Remove these tools: {', '.join(sorted(forbidden))}.",
+            ))
 
     normalized_allowed = list(dict.fromkeys(draft.allowed_group_ids))
     normalized_inherited = list(dict.fromkeys(draft.inherited_allowed_group_ids))

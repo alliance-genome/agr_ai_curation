@@ -42,7 +42,7 @@ def _unique(values: list) -> list:
 
 
 def object_validation_summary(item: Mapping, items: list, findings: list,
-                              config: dict, domain_pack_id: str) -> dict[str, Any]:
+                              config: dict, domain_pack_id: str, evidence_snapshot=None) -> dict[str, Any]:
     """Keep every source row; ambiguous/mixed findings never supply a flat ID."""
     notes, linked = [], []
     own_ref = {key: item.get(key) for key in ("object_type", "object_id", "pending_ref_id")}
@@ -102,16 +102,15 @@ def object_validation_summary(item: Mapping, items: list, findings: list,
         status = "ambiguous"
         notes.append("Validation values withheld; inspect the source results for conflicting provenance or values.")
 
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+    snapshot = evidence_snapshot if evidence_snapshot is not None else EvidenceSnapshot.from_payload({}, items)
     evidence = []
-    evidence_config = config["evidence"]
     for evidence_id in _unique(list(item.get("evidence_record_ids") or [])):
-        matches = _unique([deepcopy(other.get("payload") or {}) for other in items
-                           if other.get("object_type") == evidence_config["object_type"]
-                           and (other.get("payload") or {}).get(evidence_config["id_field"]) == evidence_id])
-        if len(matches) == 1:
-            evidence.append(matches[0])
+        record, problem = snapshot.resolve(evidence_id)
+        if problem:
+            notes.append(f"Evidence {evidence_id}: {problem} saved record; content withheld.")
         else:
-            notes.append(f"Evidence {evidence_id}: {'missing' if not matches else 'ambiguous'} saved record; content withheld.")
+            evidence.append(record)
     return {"status": status, "finding_statuses": _unique([entry["status"] for entry in linked]),
             "finding_ids": _unique([entry["finding_id"] for entry in linked]),
             "results": linked, "notes": _unique(notes), "evidence": evidence,
@@ -119,7 +118,9 @@ def object_validation_summary(item: Mapping, items: list, findings: list,
 
 
 def populate_summary_fields(rows: list, items: list, findings: list,
-                            fields: list, domain_pack_id: str) -> None:
+                            fields: list, domain_pack_id: str, *, payload: Mapping | None = None) -> None:
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+    snapshot = EvidenceSnapshot.from_payload(payload if payload is not None else {}, items)
     summaries = [field for field in fields if "summary_key" in field]
     for row, item in zip(rows, items):
         cache = {}
@@ -130,5 +131,5 @@ def populate_summary_fields(rows: list, items: list, findings: list,
                 continue
             if object_type not in cache:
                 cache[object_type] = object_validation_summary(
-                    item, items, findings, field["summary_config"], domain_pack_id)
+                    item, items, findings, field["summary_config"], domain_pack_id, evidence_snapshot=snapshot)
             row[field["ref"]] = cache[object_type][field["summary_key"]]
