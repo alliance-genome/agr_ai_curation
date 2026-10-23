@@ -151,6 +151,7 @@ class ValidatorResultMaterializationInput:
     request: DomainValidationRequest
     result: DomainValidatorResultBase
     dispatch_context: Mapping[str, Any] | None = None
+    selected_result_slots: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -484,6 +485,18 @@ def materialize_validator_results_into_envelope(
             working_envelope, result=item.result, request=item.request,
             source_envelope_revision=source_envelope_revision,
         )
+        if item.selected_result_slots is not None:
+            from dataclasses import replace
+            item = replace(item, request=item.request.model_copy(update={
+                "expected_result_fields": {
+                    key: value for key, value in item.request.expected_result_fields.items()
+                    if key in item.selected_result_slots
+                },
+                "optional_result_fields": {
+                    key: value for key, value in (item.request.optional_result_fields or {}).items()
+                    if key in item.selected_result_slots
+                },
+            }))
         try:
             working_envelope, item_findings, linked_objects = _materialize_one_result(
                 working_envelope,

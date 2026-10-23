@@ -2204,6 +2204,10 @@ class CurationEnvelopeFieldPatchRequest(CurationWorkspaceBaseModel):
         description="Client-observed field value before the edit",
     )
     value: Optional[Any] = Field(default=None, description="New field value")
+    selected_value_action: Optional[Literal["withdraw_override", "restore_selected"]] = None
+    selection_reference: Optional[dict[str, Any]] = Field(
+        default=None, description="Exact published selection reference for an explicit historical restore",
+    )
     reason: Optional[str] = Field(
         default=None,
         description="Optional curator reason for the edit",

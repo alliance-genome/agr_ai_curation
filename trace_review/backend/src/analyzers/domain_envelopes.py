@@ -542,6 +542,8 @@ class DomainEnvelopeTraceAnalyzer:
                 "validation_finding_count": len(findings),
                 "validator_result_count": len(original_items),
                 "history_event_count": len(history),
+                "selected_projection": _short_value(metadata.get("selected_projection")) if isinstance(metadata, Mapping) else None,
+                "review_episode_id": _as_string(metadata.get("review_episode_id")) if isinstance(metadata, Mapping) else None,
                 "source_path": source_path,
             },
         )
@@ -739,6 +741,8 @@ class DomainEnvelopeTraceAnalyzer:
             "object_type": object_type,
             "field_path": field_path,
             "validation_result_ref": _short_value(original_ref),
+            "machine_review": _as_string(details.get("machine_review")) if isinstance(details, Mapping) else None,
+            "selected_value": details.get("selected_value") if isinstance(details, Mapping) else None,
             "original_available": (isinstance(original_ref, str) and original_refs is not None
                 and original_ref in original_refs and original_refs[original_ref].get("schema_version", 1) == 1),
             "history_ref": _short_value((original_refs or {}).get(original_ref, {}).get("history_ref")) if isinstance(original_ref, str) else None,

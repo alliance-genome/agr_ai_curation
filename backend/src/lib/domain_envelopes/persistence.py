@@ -149,6 +149,11 @@ def write_domain_envelope_checkpoint(
     requested_source_payload_hash = request.source_payload_hash
     now = datetime.now(timezone.utc)
 
+    # History decisions and projection publication use the same lock order.
+    # Never acquire an artifact lock after holding its envelope row lock here.
+    history_reference = envelope.metadata.get("validation_history")
+    if history_reference is not None:
+        lock_projection_artifact(db, history_reference["artifact_id"])
     envelope_row = db.scalars(
         select(DomainEnvelopeModel)
         .where(DomainEnvelopeModel.envelope_id == envelope.envelope_id)
@@ -1043,3 +1048,13 @@ __all__ = [
     "regenerate_domain_envelope_indexes",
     "write_domain_envelope_checkpoint",
 ]
+
+
+def lock_projection_artifact(db, artifact_id):
+    """Acquire history before envelope so all publishers share one lock order."""
+    from src.models.sql.validation_history import ValidationArtifact
+    found = db.scalar(select(ValidationArtifact.id).where(
+        ValidationArtifact.id == artifact_id,
+    ).with_for_update())
+    if found is None:
+        raise DomainEnvelopePersistenceError("Projection history artifact is missing")

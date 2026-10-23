@@ -167,17 +167,18 @@ def test_rejects_changed_record_request_before_applying_stale_lookup(example):
     assert "stale" in output.appended_findings[0].message
 
 
-def test_existing_dispatcher_uses_profile_transaction(example, monkeypatch):
+def test_existing_dispatcher_retains_profile_candidate_until_review(example, monkeypatch):
     from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
     source, context = prepared(example)
     item, = results(source, context, [{"identifier": "EX:1"}])
-    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.materialize_validator_results_into_envelope",
+    monkeypatch.setattr("src.lib.domain_packs.materialization.materialize_validator_results_into_envelope",
                         lambda *a, **kw: pytest.fail("Profile entered the packaged sequential writer"))
     output = dispatch_active_validator_bindings(
         source, context.registry.domain_pack, profile_context=context,
         runner=lambda request, **kwargs: item.result.model_dump(mode="json"),
     )
-    assert output.envelope.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert output.envelope.extracted_objects[0].payload == source.extracted_objects[0].payload
+    assert output.appended_findings[0].details["machine_review"] == "pending"
     assert output.validator_agent_run_count == 1
 
 
@@ -189,11 +190,12 @@ def test_dispatch_resolves_authoritative_profile_without_caller_opt_in(example, 
                         lambda receipt: context.profile if receipt == context.receipt else pytest.fail("Wrong receipt"))
     monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog",
                         lambda **kwargs: [example[1]])
-    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.materialize_validator_results_into_envelope",
+    monkeypatch.setattr("src.lib.domain_packs.materialization.materialize_validator_results_into_envelope",
                         lambda *args, **kwargs: pytest.fail("Profile entered the packaged writer"))
     output = dispatch_active_validator_bindings(source, example[2],
         runner=lambda request, **kwargs: item.result.model_dump(mode="json"))
-    assert output.envelope.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert output.envelope.extracted_objects[0].payload == source.extracted_objects[0].payload
+    assert output.appended_findings[0].details["machine_review"] == "pending"
 
 
 def test_supplied_context_cannot_override_authoritative_receipt(example):
@@ -251,7 +253,8 @@ def test_packaged_dispatch_does_not_enter_profile_transaction(example, monkeypat
                         lambda *args, **kwargs: pytest.fail("Packaged path entered profile transaction"))
     output = dispatch_active_validator_bindings(source, context.registry.domain_pack, registry=context.registry,
         runner=lambda request, **kwargs: item.result.model_dump(mode="json"))
-    assert output.envelope.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert output.envelope.extracted_objects[0].payload == source.extracted_objects[0].payload
+    assert output.appended_findings[0].details["machine_review"] == "pending"
 
 
 @pytest.mark.parametrize("groups", [None, (), ("WB",)])

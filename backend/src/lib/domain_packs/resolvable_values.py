@@ -798,17 +798,6 @@ def apply_curator_identity(
         )
         value.pop(CURATOR_OVERRIDE_KEY, None)
         action = "cleared"
-    elif all(identity[key] == base.get(key) for key in identity_keys) and has_resolution_state(base) and (
-        base.get(LOOKUP_OUTCOME_KEY) != OUTCOME_CURATOR_OVERRIDE
-    ):
-        # The curator entered the identity the value had before: restore that state.
-        for key in [key for key in value if isinstance(key, str) and key.startswith(OVERRULED_KEY_PREFIX)]:
-            del value[key]
-        for key in (*identity_keys, VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY):
-            value.pop(key, None)
-        value.update(copy.deepcopy(base))
-        value.pop(CURATOR_OVERRIDE_KEY, None)
-        action = "restored"
     else:
         missing = [
             key for key in identity_keys

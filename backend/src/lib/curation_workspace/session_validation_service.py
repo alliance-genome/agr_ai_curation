@@ -236,6 +236,7 @@ def _compute_candidate_validation(
         draft_fields=draft_fields,
         validated_at=validated_at,
         runtime_context=runtime_context,
+        force=force,
     )
     warnings.extend(envelope_warnings)
 
@@ -460,6 +461,7 @@ def _envelope_validation_results_for_candidate(
     draft_fields: Sequence[CurationDraftFieldSchema],
     validated_at: datetime,
     runtime_context: ValidatorRuntimeContext | None = None,
+    force: bool = False,
 ) -> tuple[dict[str, FieldValidationResult] | None, list[str], str | None, int | None]:
     if (
         candidate.envelope_id is None
@@ -491,15 +493,36 @@ def _envelope_validation_results_for_candidate(
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
-    envelope, envelope_revision, dispatch_warnings = _dispatch_workspace_envelope_validation(
-        db,
-        candidate,
-        envelope_row=envelope_row,
-        envelope=envelope,
-        field_paths=_candidate_validation_field_paths(draft_fields),
-        validated_at=validated_at,
-        runtime_context=runtime_context,
-    )
+    reference = envelope.metadata.get("selected_projection")
+    if reference is not None and not force:
+        # A readiness check consumes selection; it must not create another review
+        # episode just because its display/validation snapshot needs refreshing.
+        from src.lib.validation_history.projection import read_published_projection
+        from src.lib.validation_history.store import HistoryScope, HistoryConflict
+        history = envelope.metadata.get("validation_history") or {}
+        if runtime_context is None or not runtime_context.user_id or not history.get("session_id"):
+            raise HTTPException(status_code=403, detail="Selected validation requires authenticated scope")
+        envelope_revision = int(envelope_row.revision)
+        dispatch_warnings = []
+        try:
+            envelope, manifest = read_published_projection(
+                HistoryScope(runtime_context.user_id, str(envelope_row.document_id), history["session_id"]),
+                reference, current=True,
+            )
+            if not manifest["ready"]:
+                dispatch_warnings.append("Selected values remain current; another review episode is pending.")
+        except HistoryConflict:
+            dispatch_warnings.append("Selected projection awaits refresh; finalization is blocked.")
+    else:
+        envelope, envelope_revision, dispatch_warnings = _dispatch_workspace_envelope_validation(
+            db,
+            candidate,
+            envelope_row=envelope_row,
+            envelope=envelope,
+            field_paths=_candidate_validation_field_paths(draft_fields),
+            validated_at=validated_at,
+            runtime_context=runtime_context,
+        )
     field_results, warnings = domain_envelope_field_validation_results(
         envelope,
         envelope_revision=envelope_revision,

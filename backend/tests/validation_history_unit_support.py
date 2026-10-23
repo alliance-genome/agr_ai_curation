@@ -14,6 +14,7 @@ import pytest
 @pytest.fixture
 def isolated_validation_history(monkeypatch):
     from src.lib.validation_history import runtime, store
+    monkeypatch.setattr("src.lib.domain_envelopes.persistence.lock_projection_artifact", lambda *args: None)
 
     monkeypatch.setattr(store, "record_scheduling", lambda *args, **kwargs: str(uuid4()))
     records = {}
@@ -60,6 +61,17 @@ def isolated_validation_history(monkeypatch):
             for attempt, result in zip(invocation["attempt_ids"], results, strict=True)
         ]
 
+    from src.lib.validation_history import candidates, selections
+
+    def declare(bound, envelope, matches, **kwargs):
+        return envelope.model_copy(update={"metadata": {
+            **envelope.metadata,
+            "validation_history": {"artifact_id": binding.artifact_id, "session_id": binding.scope.session_id},
+            "review_episode_id": str(uuid4()),
+        }})
+
+    monkeypatch.setattr(selections, "declare_envelope_episode", declare)
+    monkeypatch.setattr(candidates, "_record_recipe", lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime, "record_match_scheduling", lambda *args, **kwargs: str(uuid4()))
     monkeypatch.setattr(runtime, "capture_extraction", lambda **kwargs: kwargs["envelope"])
     monkeypatch.setattr(runtime, "bind_artifact", lambda envelope, context: binding)

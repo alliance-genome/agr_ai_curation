@@ -87,6 +87,8 @@ class EnvelopeFieldPatch:
     operation: EnvelopeFieldPatchOperation = EnvelopeFieldPatchOperation.REPLACE
     reason: str | None = None
     patch_id: str = field(default_factory=lambda: f"curator-field-patch:{uuid4().hex}")
+    selected_value_action: str | None = None
+    selection_reference: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +406,8 @@ def apply_curator_field_patch(
         "before": current_before,
         "after": patch.value,
         "reason": patch.reason,
+        "selected_value_action": patch.selected_value_action,
+        "selection_reference": dict(patch.selection_reference) if patch.selection_reference is not None else None,
     }
     if history_edits:
         details["validation_history_edits"] = {"actor_id": actor_id,

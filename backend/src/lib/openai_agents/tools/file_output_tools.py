@@ -91,6 +91,7 @@ def _find_existing_projected_file_output(
     descriptor: str,
     file_path: str,
     branch_identity: str | None,
+    export_version: str,
 ) -> FileOutput | None:
     """Find one structured formatter row by canonical session/descriptor/format identity."""
 
@@ -101,11 +102,10 @@ def _find_existing_projected_file_output(
     )
     if file_output is not None:
         metadata = file_output.file_metadata or {}
-        if branch_identity is None or (
-            isinstance(metadata, dict)
-            and str(metadata.get("flow_output_branch_identity") or "")
-            == branch_identity
-        ):
+        if (str(file_output.session_id) == session_id
+                and str(file_output.curator_id) == curator_id
+                and metadata.get("export_version") == export_version
+                and metadata.get("flow_output_branch_identity") == branch_identity):
             return file_output
 
     candidates = (
@@ -124,6 +124,7 @@ def _find_existing_projected_file_output(
             continue
         if (
             metadata.get("structured_projection") is True
+            and metadata.get("export_version") == export_version
             and str(metadata.get("descriptor") or "") == descriptor
             and (
                 branch_identity is None
@@ -245,6 +246,15 @@ async def save_projected_file_output(
         projection=projection,
     )
 
+    # A later selection or export layout creates another immutable file identity.
+    # Repeating the exact same content and manifest remains idempotent.
+    import json
+    export_version = hashlib.sha256(json.dumps({
+        "content": content, "selection_manifests": projection.selection_manifests,
+        "descriptor": descriptor, "branch_identity": branch_identity,
+        "output_format": normalized_format,
+    }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest()
+    storage_descriptor = f"{storage_descriptor}_{export_version}"
     storage = FileOutputStorageService()
     file_path, file_hash, file_size, warnings = storage.save_output(
         trace_id=effective_trace_id,
@@ -269,6 +279,7 @@ async def save_projected_file_output(
             descriptor=descriptor,
             file_path=str(file_path),
             branch_identity=branch_identity,
+            export_version=export_version,
         )
         saved_summary = projection_summary(projection)
         diagnostics = exact_diagnostics_json(export_diagnostics(projection))
@@ -308,6 +319,8 @@ async def save_projected_file_output(
                     "descriptor": descriptor,
                     "storage_descriptor": storage_descriptor,
                     "flow_output_branch_identity": branch_identity,
+                    "selection_manifests": projection.selection_manifests,
+                    "export_version": export_version,
                     "projection_summary": saved_summary,
                     "export_diagnostics": diagnostics,
                     **branch_metadata,
@@ -332,6 +345,8 @@ async def save_projected_file_output(
                     "descriptor": descriptor,
                     "storage_descriptor": storage_descriptor,
                     "flow_output_branch_identity": branch_identity,
+                    "selection_manifests": projection.selection_manifests,
+                    "export_version": export_version,
                     "projection_summary": saved_summary,
                     "export_diagnostics": diagnostics,
                     **branch_metadata,

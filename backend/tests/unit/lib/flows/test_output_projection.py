@@ -454,6 +454,14 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
             {"key": "stage", "header": "Stage", "field_ref": "object.pack.GeneExpressionAnnotation.when_expressed_stage_name", "source_node_id": "expression"},
         ],
     })
+    # These layout tests provide an explicitly published source. Persistence and
+    # authorization are exercised by the selected-value integration suite.
+    bundle.authorization_user_id = "curator"
+    for source in bundle.artifacts:
+        source.review_session_id = "chat"
+        source.selected_projection = {"fact_id": "reviewed-layout-fixture"}
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
+                        lambda *args, **kwargs: (None, {"ready": True}))
     projection = finalize_output_projection(bundle, plan)
     csv_bytes = _projection_content_for_file_type(output_format="csv", projection=projection).encode("utf-8")
     rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
@@ -2614,7 +2622,7 @@ def test_statement_evidence_join_preserves_multiple_quotes_and_missing_ambiguous
 
 
 @pytest.mark.parametrize("selection_mode", ["guided", "selected_fields"])
-def test_expression_statements_with_source_evidence_reach_final_chat(selection_mode):
+def test_expression_statements_with_source_evidence_reach_final_chat(selection_mode, monkeypatch):
     from src.lib.flows.output_projection import finalize_output_projection, render_chat_projection
 
     step = _completed_domain_source_step(
@@ -2647,6 +2655,14 @@ def test_expression_statements_with_source_evidence_reach_final_chat(selection_m
             {"key": "issues", "header": "Evidence link issues", "field_ref": "object.evidence_link_issues", "source_node_id": "expression"},
         ],
     })
+    # These layout tests provide an explicitly published source. Persistence and
+    # authorization are exercised by the selected-value integration suite.
+    bundle.authorization_user_id = "curator"
+    for source in bundle.artifacts:
+        source.review_session_id = "chat"
+        source.selected_projection = {"fact_id": "reviewed-layout-fixture"}
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
+                        lambda *args, **kwargs: (None, {"ready": True}))
     projection = finalize_output_projection(bundle, plan)
     assert projection.total_count == 2
     assert "No signal" in json.dumps(projection.rows[0]["evidence"])
@@ -2657,3 +2673,32 @@ def test_expression_statements_with_source_evidence_reach_final_chat(selection_m
     assert "Negative tissue control." in rendered
     assert "Signal was detected elsewhere." in rendered
     assert "not-saved" in rendered
+
+
+def test_final_export_requires_review_only_for_selected_sources(monkeypatch):
+    from src.lib.flows.output_projection import FlowOutputArtifact, FlowOutputArtifactBundle, finalize_output_projection
+    from src.lib.validation_history.store import HistoryConflict
+    bundle = FlowOutputArtifactBundle(flow_name="review", authorization_user_id="owner", artifacts=[
+        FlowOutputArtifact(node_id="selected", source_key="selected", is_canonical_curation_data=True,
+            review_session_id="session", selected_projection={"fact_id": "accepted"},
+            rows_by_source={"object": [{"artifact.source_key": "selected", "object.name": "A"}]}),
+        FlowOutputArtifact(node_id="pending", source_key="pending", is_canonical_curation_data=True),
+    ])
+    plan = FlowOutputProjectionPlan(format="csv", row_source="object", source_keys=["selected"],
+        columns=[{"key": "name", "field_ref": "object.name"}])
+    reads = []
+    def read(scope, reference, **kwargs):
+        reads.append((scope, reference, kwargs))
+        return None, {"ready": True}
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", read)
+    projected = finalize_output_projection(bundle, plan)
+    assert projected.rows == [{"name": "A"}]
+    assert projected.selection_manifests == [{"fact_id": "accepted"}]
+    assert len(reads) == 1 and reads[0][2] == {"finalized": True}
+    plan.source_keys = ["pending"]
+    with pytest.raises(HistoryConflict, match="explicit review"):
+        finalize_output_projection(bundle, plan)
+    plan.source_keys = ["selected"]
+    bundle.authorization_user_id = None
+    with pytest.raises(HistoryConflict, match="authenticated"):
+        finalize_output_projection(bundle, plan)

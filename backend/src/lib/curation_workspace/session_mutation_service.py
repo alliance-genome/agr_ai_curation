@@ -1017,6 +1017,44 @@ def patch_envelope_field(
     }
     if request.patch_id is not None:
         patch_payload["patch_id"] = request.patch_id
+    if request.selected_value_action is not None:
+        from src.lib.validation_history.curator_values import resolve_curator_identity
+        from src.lib.validation_history.store import HistoryScope, HistoryConflict
+        from src.lib.domain_envelopes.patches import _resolvable_target
+        from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+        obj = next((obj for obj in envelope.extracted_objects
+                    if request.object_id in {obj.object_id, obj.pending_ref_id}), None)
+        if obj is None:
+            raise HTTPException(status_code=404, detail="Selected identity object is unavailable")
+        if profile is not None:
+            from src.lib.agent_studio.profile_conformance import declared_value_path
+            value_path = request.field_path
+            keys = profile.resolvable_objects().get(declared_value_path(value_path))
+            if keys is None:
+                raise HTTPException(status_code=422, detail="Selection action requires the whole declared identity and its before value")
+            patch_payload["operation"] = EnvelopeFieldPatchOperation.REPLACE
+            patch_payload["field_path"] = value_path
+        else:
+            target = _resolvable_target(request.field_path, declared_resolvable_fields(domain_pack.metadata, obj.object_type))
+            if target is None:
+                raise HTTPException(status_code=422, detail="Selection action requires a declared identity")
+            value_path, spec, _ = target
+            keys = spec.identity_keys
+            patch_payload["operation"] = EnvelopeFieldPatchOperation.REPLACE_IDENTITY
+        history = envelope.metadata["validation_history"]
+        try:
+            patch_payload["value"] = resolve_curator_identity(
+                HistoryScope(actor_user_id(actor_claims), str(envelope_row.document_id), history["session_id"]),
+                envelope=envelope, object_id=request.object_id, value_path=value_path,
+                identity_keys=keys, action=request.selected_value_action,
+                reference=request.selection_reference,
+            )
+        except HistoryConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        patch_payload["selected_value_action"] = request.selected_value_action
+        patch_payload["selection_reference"] = request.selection_reference
+    elif request.selection_reference is not None:
+        raise HTTPException(status_code=422, detail="A historical selection requires an explicit restore action")
 
     patch_result = apply_curator_field_patch(
         envelope,

@@ -4531,6 +4531,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "created_at": "2026-04-26T00:00:00Z",
                         }
 
+                    # This test isolates filename scoping; source review is
+                    # covered by the formatter and persistence suites.
+                    for artifact in agent.runtime_kwargs["formatter_bundle"].artifacts:
+                        artifact.is_canonical_curation_data = False
                     formatter_tools = build_output_formatter_tools(
                         bundle=agent.runtime_kwargs["formatter_bundle"],
                         output_format=agent.runtime_kwargs["formatter_output_format"],

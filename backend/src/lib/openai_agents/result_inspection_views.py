@@ -57,3 +57,25 @@ def validation_view(record: Any, *, revision: int | None, user_id: str) -> dict[
         result = record.model_dump(mode="json")
     result.update(payload_json=payload, inspection_view="post_validation", inspection_revision=pinned)
     return result
+
+
+def accepted_view(record: Any, *, user_id: str) -> dict[str, Any]:
+    """Current explicitly selected projection; original/checkpoint views stay exact."""
+    from src.lib.validation_history.projection import latest_publication_reference, read_published_projection
+    from src.lib.validation_history.store import HistoryScope, HistoryConflict
+    payload = _attr(record, "payload_json") or {}
+    history = (payload.get("metadata") or {}).get("validation_history")
+    if not isinstance(history, Mapping):
+        raise InspectionViewUnavailable("Historical result has no explicit selected publication.")
+    scope = HistoryScope(user_id, str(_attr(record, "document_id")), history["session_id"])
+    reference = latest_publication_reference(scope, history["artifact_id"])
+    if reference is None:
+        raise InspectionViewUnavailable("Result is awaiting explicit review and publication.")
+    try:
+        envelope, manifest = read_published_projection(scope, reference, current=True)
+    except HistoryConflict as exc:
+        raise InspectionViewUnavailable("The selected projection requires refresh after review changes.") from exc
+    result = dict(record) if isinstance(record, Mapping) else record.model_dump(mode="json")
+    result.update(payload_json=envelope.model_dump(mode="json"), inspection_view="accepted",
+                  selection_manifest=manifest, inspection_revision=None)
+    return result

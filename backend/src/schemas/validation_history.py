@@ -84,3 +84,33 @@ class FrozenValidationInput(HistoryContract):
                     "Decision units must partition the complete result coverage"
                 )
         return self
+
+
+class ReviewObligation(HistoryContract):
+    """A declared unit for this episode, including work that could not execute."""
+
+    target_id: StrictStr = Field(min_length=1)
+    mode: Literal["validation", "extraction_only", "curator"]
+    binding_id: StrictStr | None = None
+
+    @model_validator(mode="after")
+    def binding_required(self):
+        if (self.mode == "validation") != (self.binding_id is not None):
+            raise ValueError("Only validation obligations name a binding")
+        return self
+
+
+class ReviewEpisode(HistoryContract):
+    """Runtime declares coverage; the reader never infers it from successful calls."""
+
+    episode_id: StrictStr = Field(min_length=1)
+    obligations: list[ReviewObligation]
+    unavailable_bindings: list[StrictStr] = Field(default_factory=list)
+    reason: StrictStr = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_targets(self):
+        ids = [item.target_id for item in self.obligations]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Review coverage must identify distinct decision units")
+        return self
