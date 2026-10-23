@@ -190,7 +190,7 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
             continue
         path = current_path(body)
         nested_scope = any(path != requested and _covers(path, requested) for requested in field_paths)
-        nested_edit = not field_paths and any(other["object_id"] == object_id and current_path(other) != path
+        nested_edit = any(other["object_id"] == object_id and current_path(other) != path
             and _covers(path, current_path(other)) for _, other in active)
         if nested_scope or nested_edit or any(change.get("structural") or not change["present"]
                 or isinstance(change.get("value"), (dict, list)) for change in body["changes"]):
