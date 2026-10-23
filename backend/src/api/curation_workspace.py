@@ -1031,6 +1031,7 @@ async def post_candidate_validation(
             request,
             user_id=_current_user_id(user),
             active_groups=_authenticated_active_groups(user),
+            explicit_request=True,
         ),
     )
 
@@ -1054,6 +1055,7 @@ async def post_session_validation(
             request,
             user_id=_current_user_id(user),
             active_groups=_authenticated_active_groups(user),
+            explicit_request=True,
         ),
     )
 

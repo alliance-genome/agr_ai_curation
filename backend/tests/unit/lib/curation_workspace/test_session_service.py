@@ -2577,6 +2577,7 @@ def test_workspace_validation_passes_document_user_runtime_context(
         ),
         user_id="curator-44",
         active_groups=["RGD"],
+        explicit_request=True,
     )
 
     assert len(captured_contexts) == 1
@@ -2691,11 +2692,9 @@ def test_workspace_validation_blocker_prevents_export_readiness(
 
     readiness = response.submission.readiness[0]
     assert readiness.ready is False
-    assert "Required title is missing." in readiness.blocking_reasons
+    assert "Required blocking field is missing: artifact.title." in readiness.blocking_reasons
     assert [(blocker.field_path, blocker.code) for blocker in readiness.blockers] == [
         ("artifact.title", "domain_envelope.required_field_missing"),
-        ("artifact.title", "domain_pack.required_field_missing"),
-        ("artifact.title", "fixture.required_field_missing"),
         (None, "domain_envelope.machine_review_pending"),
     ]
 

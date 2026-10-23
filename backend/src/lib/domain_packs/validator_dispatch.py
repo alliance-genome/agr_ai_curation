@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Protocol, Sequence, cast
 
 from src.lib.packages.tool_roles import ValidatorToolPolicyError
 
@@ -230,7 +230,7 @@ class ValidatorRuntimeContext:
     document_id: str | None = None
     user_id: str | None = None
     authenticated_groups: tuple[str, ...] | None = None
-    curator_revalidation: Mapping[str, Any] | None = None
+    curator_revalidation: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     explicit_validation_requested: bool = False
 
 
@@ -553,15 +553,16 @@ def dispatch_active_validator_bindings(
                     findings.extend(selector_result.findings)
                 continue
             if selector_result.request is not None and runtime_context and runtime_context.curator_revalidation:
-                intent = runtime_context.curator_revalidation
-                guidance = intent.get("guidance")
-                from src.lib.validation_history.curator_authority import _overlap
-                paths = [*selector_result.request.expected_result_fields.values(), *(selector_result.request.optional_result_fields or {}).values()]
-                target_matches = match.object_envelope is not None and intent["object_id"] in {match.object_envelope.object_id, match.object_envelope.pending_ref_id}
-                fields_match = not intent["field_paths"] or any(isinstance(path, str) and _overlap(path, requested) for path in paths for requested in intent["field_paths"])
-                if guidance and target_matches and fields_match:
-                    previous = selector_result.request.validation_guidance
-                    selector_result.request.validation_guidance = "\n\n".join(value for value in (previous, "Curator revalidation guidance: " + guidance) if value)
+                from src.lib.validation_history.curator_authority import revalidation_intents
+                for intent in revalidation_intents(runtime_context.curator_revalidation):
+                    guidance = intent.get("guidance")
+                    from src.lib.validation_history.curator_authority import _overlap
+                    paths = [*selector_result.request.expected_result_fields.values(), *(selector_result.request.optional_result_fields or {}).values()]
+                    target_matches = match.object_envelope is not None and intent["object_id"] in {match.object_envelope.object_id, match.object_envelope.pending_ref_id}
+                    fields_match = not intent["field_paths"] or any(isinstance(path, str) and _overlap(path, requested) for path in paths for requested in intent["field_paths"])
+                    if guidance and target_matches and fields_match:
+                        previous = selector_result.request.validation_guidance
+                        selector_result.request.validation_guidance = "\n\n".join(value for value in (previous, "Curator revalidation guidance: " + guidance) if value)
             if selector_result.request is None:
                 record_match_scheduling(history_binding, match, "missing_input")
                 continue

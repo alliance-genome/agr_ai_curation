@@ -393,3 +393,18 @@ def test_apply_curator_field_patch_rejects_protected_and_undeclared_paths(
     assert "not declared" in undeclared.errors[0]
     assert stable.status is EnvelopeFieldPatchStatus.REJECTED
     assert "not declared editable" in stable.errors[0]
+
+
+def test_per_element_profile_curator_patch_uses_declared_array_paths():
+    from tests.unit.lib.domain_packs.test_profile_validation import example
+    from tests.unit.lib.domain_packs.test_profile_materialization import prepared
+    source, context = prepared(example.__wrapped__(), per_element=True,
+        attributes={"records": [{"paper_name": "A", "resolved_id": "EX:1"}]})
+    obj = source.extracted_objects[0]
+    result = apply_curator_field_patch(source, context.registry.domain_pack,
+        EnvelopeFieldPatch(envelope_id=source.envelope_id, expected_revision=1,
+            object_id=obj.object_id or obj.pending_ref_id, field_path="attributes.records[0].resolved_id",
+            before="EX:1", value="EX:CURATOR"), current_revision=1,
+        actor_id="curator", actor_display_name="Curator", profile=context.profile)
+    assert result.accepted, result.errors
+    assert result.envelope.extracted_objects[0].payload["attributes"]["records"][0]["resolved_id"] == "EX:CURATOR"

@@ -373,7 +373,7 @@ def apply_curator_field_patch(
 
     curator_value = None
     if profile is not None:
-        validator_destinations = profile.validator_owned_paths()
+        validator_destinations = {path for mapping in profile.contract.validator_mappings for path in mapping.outputs.values()}
     else:
         validator_destinations = {
             path for match in validation_registry.match_bindings(envelope)
@@ -382,7 +382,10 @@ def apply_curator_field_patch(
             for path in [*match.binding.expected_result_fields.values(), *(match.binding.optional_result_fields or {}).values()]
             if isinstance(path, str)
         }
-    validator_owned_field = _bare_path(patch.field_path) in {_bare_path(path) for path in validator_destinations}
+    from src.lib.agent_studio.profile_conformance import declared_value_path
+    edited_path = declared_value_path(patch.field_path)
+    validator_owned_field = any(edited_path == path or edited_path.startswith(path + ".") or path.startswith(edited_path + ".") or path.startswith(edited_path + "[]")
+        for path in (declared_value_path(destination) for destination in validator_destinations))
     authority_edit = patch.operation is not EnvelopeFieldPatchOperation.REMOVE and (override_audit is not None or validator_owned_field or "selected_contribution" in domain_object.metadata)
     if authority_edit and "validation_history" in domain_object.metadata:
         from src.lib.validation_history.curator_authority import payload_changes, bind_patch_anchors

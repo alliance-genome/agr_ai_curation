@@ -487,7 +487,7 @@ def republish_curator_checkpoint(db, envelope, *, revision, authenticated_groups
         manifest=manifest, envelope=projected, envelope_revision=revision)
 
 
-def read_underlying_curator_value(scope, envelope, *, object_id, value_path):
+def read_underlying_curator_value(scope, envelope, *, object_id, value_path, authenticated_groups=()):
     """Resolve the current selected value without replaying curator overlays."""
     from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
     from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
@@ -537,7 +537,7 @@ def read_underlying_curator_value(scope, envelope, *, object_id, value_path):
         if pack is None:
             raise store.HistoryConflict("Underlying selected domain pack is unavailable")
         profile = resolve_envelope_profile_validation(envelope, pack, db=db, user_id=scope.owner_id,
-            active_group_ids=envelope.authenticated_context.get("active_groups", ()) if isinstance(envelope.authenticated_context, dict) else ())
+            active_group_ids=authenticated_groups)
         result = rebuild_selected_envelope(db, scope, artifact_id, envelope=envelope,
             manifest=manifest, domain_pack=pack, profile_context=profile, apply_curator=False)
         obj = next((obj for obj in result.extracted_objects if object_id in {obj.object_id, obj.pending_ref_id}), None)

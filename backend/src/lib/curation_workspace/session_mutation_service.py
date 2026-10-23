@@ -913,8 +913,9 @@ def _materialize_candidate_draft_changes_into_envelope(
         envelope_row=envelope_row,
         patched_envelope=working_envelope,
         expected_revision=current_revision,
+        authenticated_groups=active_groups_from_actor_claims(actor_claims),
     )
-    updated_object = _envelope_object_by_stable_id(working_envelope, object_id)
+    updated_object = _envelope_object_by_stable_id(DomainEnvelope.model_validate(envelope_row.envelope_json), object_id)
     if updated_object is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1053,6 +1054,7 @@ def patch_envelope_field(
                 envelope=envelope, object_id=request.object_id, value_path=value_path,
                 identity_keys=keys, action=request.selected_value_action,
                 reference=request.selection_reference, include_state=True,
+                authenticated_groups=active_groups_from_actor_claims(actor_claims),
             )
             patch_payload["value"] = {key: selected_state.get(key) for key in keys}
             if request.selected_value_action == "withdraw_override":
@@ -1088,6 +1090,7 @@ def patch_envelope_field(
             envelope_row=envelope_row,
             patched_envelope=patch_result.envelope,
             expected_revision=previous_revision,
+            authenticated_groups=active_groups_from_actor_claims(actor_claims),
         )
         _record_envelope_patch_action(
             db,
@@ -1115,10 +1118,11 @@ def patch_envelope_field(
         envelope_row=envelope_row,
         patched_envelope=patch_result.envelope,
         expected_revision=previous_revision,
+        authenticated_groups=active_groups_from_actor_claims(actor_claims),
     )
 
     updated_object = _envelope_object_by_stable_id(
-        patch_result.envelope,
+        DomainEnvelope.model_validate(envelope_row.envelope_json),
         request.object_id,
     )
     if updated_object is None:
@@ -1316,6 +1320,7 @@ def waive_validation_finding(
         envelope_row=envelope_row,
         patched_envelope=patched_envelope,
         expected_revision=previous_revision,
+        authenticated_groups=active_groups_from_actor_claims(actor_claims),
     )
 
     now = datetime.now(timezone.utc)
@@ -1563,13 +1568,16 @@ def _checkpoint_patch_result(
     envelope_row: Any,
     patched_envelope: DomainEnvelope,
     expected_revision: int,
+    authenticated_groups=(),
 ) -> int:
+    from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
     try:
         checkpoint = write_domain_envelope_checkpoint(
             db,
             DomainEnvelopeCheckpointRequest(
                 project_key=envelope_row.project_key,
                 envelope=patched_envelope,
+                authenticated_groups=authenticated_groups,
                 expected_revision=expected_revision,
                 document_id=envelope_row.document_id,
                 session_id=envelope_row.session_id,
@@ -1578,7 +1586,9 @@ def _checkpoint_patch_result(
                 model_field_ref_json=dict(envelope_row.model_field_ref_json or {}),
             ),
         )
-    except DomainEnvelopePersistenceError as exc:
+    except HistoryAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (DomainEnvelopePersistenceError, HistoryConflict) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),

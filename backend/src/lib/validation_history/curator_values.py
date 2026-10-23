@@ -12,7 +12,7 @@ def _value(payload, path):
     return value
 
 
-def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity_keys, action, reference, include_state=False):
+def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity_keys, action, reference, include_state=False, authenticated_groups=()):
     def result(value):
         if not include_state:
             return {key: deepcopy(value.get(key)) for key in identity_keys}
@@ -29,7 +29,7 @@ def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity
     elif action == "withdraw_override":
         if reference is not None:
             raise store.HistoryConflict("Withdrawal cannot choose an arbitrary historical value")
-        underlying = projection.read_underlying_curator_value(scope, envelope, object_id=object_id, value_path=value_path)
+        underlying = projection.read_underlying_curator_value(scope, envelope, object_id=object_id, value_path=value_path, authenticated_groups=authenticated_groups)
         if underlying is not None:
             return result(underlying)
         reference = projection.latest_publication_reference(scope, artifact_id)

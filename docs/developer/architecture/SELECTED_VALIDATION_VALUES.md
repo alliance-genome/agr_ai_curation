@@ -83,3 +83,13 @@ Episode coverage records configured, permitted opt-outs, inapplicable group
 bindings and optional non-executable declarations separately from required work.
 Missing authenticated group context, required missing inputs and failed execution
 remain pending. Exemptions never invent a successful attempt or automatic review.
+
+Submission readiness consumes current publication and never starts review execution.
+The explicit validation API starts at most one episode per envelope in a session
+request, retaining the scoped intents for all requested candidates atomically with
+that episode. Display aliases are not replacement authority: exact declared field
+paths and explicit mirror paths determine that scope.
+
+Curator edits republish current selected values. Pending answers and their findings
+remain in the immutable history ledger; supervisor consumers must query that ledger
+rather than assuming every pending finding remains in the current projection.

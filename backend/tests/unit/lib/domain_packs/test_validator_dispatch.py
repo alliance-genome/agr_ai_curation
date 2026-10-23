@@ -4290,3 +4290,18 @@ def test_validator_policy_refusal_is_configuration_failure_not_sentry(tmp_path, 
         raise ValidatorToolPolicyError('Forbidden configured paper reader')
     result = dispatch_active_validator_bindings(_envelope(), _loaded_pack(tmp_path), runner=runner)
     assert result.validator_results[0]._execution_failure == 'validator_tool_policy'
+
+
+def test_explicit_curator_guidance_is_scoped_to_requested_object(tmp_path):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+    envelope = _multi_object_envelope(["BAD:0001", "BAD:0002"])
+    first = envelope.extracted_objects[0]
+    captured = []
+    def batch(jobs, *, binding):
+        captured.extend(job.request.validation_guidance for job in jobs)
+        return [_result_payload(job.request, resolved_values={"identifier": "AGR:1", "symbol": "A"}) for job in jobs]
+    dispatch_active_validator_bindings(envelope, pack, batch_runner=batch,
+        runtime_context=ValidatorRuntimeContext(document_id="document", user_id="curator",
+            curator_revalidation=[{"object_id": first.object_id or first.pending_ref_id,
+                "field_paths": [], "actor_id": "curator", "guidance": "Check organism."}]))
+    assert captured == ["Curator revalidation guidance: Check organism.", None]

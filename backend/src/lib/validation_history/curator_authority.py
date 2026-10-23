@@ -29,9 +29,9 @@ def anchor_for_path(refs, path):
     for length in range(len(parts), 0, -1):
         prefix = _path(parts[:length])
         target = refs["fields"].get(prefix)
-        if target is None and isinstance(parts[length - 1], int):
+        index = parts[length - 1]
+        if target is None and isinstance(index, int):
             ids = refs["elements"].get(_path(parts[:length - 1]), [])
-            index = parts[length - 1]
             target = ids[index] if 0 <= index < len(ids) else None
         if target is not None:
             return {"target_id": target, "suffix": list(parts[length:])}
@@ -54,8 +54,8 @@ def anchored_path(refs, anchor):
 def rebind_output_path(path, old_target_path, current_target_path):
     """Move indexed addresses with their stable selected target, without matching text."""
     original = parse_field_path(path)
-    old = parse_field_path(old_target_path or "")
-    current = parse_field_path(current_target_path)
+    old = parse_field_path(old_target_path) if old_target_path else []
+    current = parse_field_path(current_target_path) if current_target_path else []
     rebound = list(original)
     for index, part in enumerate(old):
         if isinstance(part, int) and index < len(original) and index < len(current) and original[:index] == old[:index]:
@@ -88,7 +88,7 @@ def active_overlays(db, artifact_id):
         except store.HistoryConflict:
             continue  # Retiring a source also retires its override; history remains.
         active.append((fact, body))
-    return active
+    return sorted(active, key=lambda item: item[0].sequence)
 
 
 def record_patch(db, scope, artifact_id, *, event_id, actor_id, body):
@@ -130,42 +130,51 @@ def record_patch(db, scope, artifact_id, *, event_id, actor_id, body):
 
 def record_revalidation_intent(binding, *, envelope, episode_id, object_id, field_paths, actor_id, guidance=None):
     """Called only for an explicit authenticated revalidation request."""
-    from .selections import _lock_artifact
     with store.SessionLocal.begin() as db:
-        _lock_artifact(db, binding.scope, binding.artifact_id, write=True)
-        if actor_id != binding.scope.owner_id:
-            raise store.HistoryAccessError("Revalidation intent requires the authenticated curator")
-        store._fact(db, binding.artifact_id, episode_id, kind="review_episode")
-        refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
-                for obj in envelope.extracted_objects}
-        def current_path(body):
-            return anchored_path(refs[body["target_id"]], body["anchor"])
-        def requested(body):
-            if body["object_id"] == object_id:
-                return not field_paths or any(_overlap(current_path(body), path) for path in field_paths)
-            contributor = body.get("contributor_completion_id")
-            if contributor is None:
-                return False
-            completion = store._fact(db, binding.artifact_id, contributor, kind="completion")
-            frozen = store._content(db, store._fact(db, binding.artifact_id, completion.parent_id, kind="attempt"))["input"]
-            target = store._content(db, store._fact(db, binding.artifact_id, frozen["target_id"], kind="target"))
-            root_id = target.get("object_target")
-            if root_id is None:
-                return False
-            root = store._content(db, store._fact(db, binding.artifact_id, root_id, kind="target"))
-            if root["object_ref"] != object_id:
-                return False
-            destinations = {**frozen["request"]["expected_result_fields"], **(frozen["request"].get("optional_result_fields") or {})}
-            return not field_paths or any(isinstance(destination, str) and _overlap(destination, path)
-                for destination in destinations.values() for path in field_paths)
-        overlays = [(fact, body) for fact, body in active_overlays(db, binding.artifact_id) if requested(body)]
-        return store._append(db, binding.artifact_id,
-            operation_id="curator-revalidation:" + episode_id + ":" + object_id,
-            kind="curator_revalidation_intent", parent_id=episode_id,
-            body={"actor_id": actor_id, "object_id": object_id,
-                  "field_paths": list(field_paths), "overlay_ids": [f.id for f, _ in overlays],
-                  "overlay_paths": {f.id: current_path(body) for f, body in overlays},
-                  "guidance": guidance}).id
+        return record_revalidation_intent_in_transaction(db, binding, envelope=envelope,
+            episode_id=episode_id, object_id=object_id, field_paths=field_paths, actor_id=actor_id, guidance=guidance)
+
+
+def revalidation_intents(value):
+    return [] if value is None else [value] if isinstance(value, dict) else list(value)
+
+
+def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_id, object_id, field_paths, actor_id, guidance=None):
+    from .selections import _lock_artifact
+    _lock_artifact(db, binding.scope, binding.artifact_id, write=True)
+    if actor_id != binding.scope.owner_id:
+        raise store.HistoryAccessError("Revalidation intent requires the authenticated curator")
+    store._fact(db, binding.artifact_id, episode_id, kind="review_episode")
+    refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
+            for obj in envelope.extracted_objects}
+    def current_path(body):
+        return anchored_path(refs[body["target_id"]], body["anchor"])
+    def requested(body):
+        if body["object_id"] == object_id:
+            return not field_paths or any(_overlap(current_path(body), path) for path in field_paths)
+        contributor = body.get("contributor_completion_id")
+        if contributor is None:
+            return False
+        completion = store._fact(db, binding.artifact_id, contributor, kind="completion")
+        frozen = store._content(db, store._fact(db, binding.artifact_id, completion.parent_id, kind="attempt"))["input"]
+        target = store._content(db, store._fact(db, binding.artifact_id, frozen["target_id"], kind="target"))
+        root_id = target.get("object_target")
+        if root_id is None:
+            return False
+        root = store._content(db, store._fact(db, binding.artifact_id, root_id, kind="target"))
+        if root["object_ref"] != object_id:
+            return False
+        destinations = {**frozen["request"]["expected_result_fields"], **(frozen["request"].get("optional_result_fields") or {})}
+        return not field_paths or any(isinstance(destination, str) and _overlap(destination, path)
+            for destination in destinations.values() for path in field_paths)
+    overlays = [(fact, body) for fact, body in active_overlays(db, binding.artifact_id) if requested(body)]
+    return store._append(db, binding.artifact_id,
+        operation_id="curator-revalidation:" + episode_id + ":" + object_id,
+        kind="curator_revalidation_intent", parent_id=episode_id,
+        body={"actor_id": actor_id, "object_id": object_id,
+              "field_paths": list(field_paths), "overlay_ids": [f.id for f, _ in overlays],
+              "overlay_paths": {f.id: current_path(body) for f, body in overlays},
+              "guidance": guidance}).id
 
 
 def _overlap(left, right):
@@ -180,6 +189,8 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
                if fact.parent_id == episode_id]
     authorized = {oid: intent["overlay_paths"][oid] for intent in intents if intent["actor_id"] == scope.owner_id for oid in intent["overlay_ids"]}
     overlays = active_overlays(db, artifact_id)
+    from .selections import manifest_in_transaction
+    current_units = manifest_in_transaction(db, scope, artifact_id, episode_id=episode_id)["units"]
     released = set()
     for entry in accepted_entries:
         if entry["action"] != "accept" or entry.get("subject") in {None, "baseline", "curator"}:
@@ -207,7 +218,12 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
             if contributor:
                 old_completion = store._fact(db, artifact_id, contributor, kind="completion")
                 old_input = store._content(db, store._fact(db, artifact_id, old_completion.parent_id, kind="attempt"))["input"]
-                same_contributor = old_input["target_id"] == frozen["target_id"] and not unit.get("decision_unit")
+                selected_slots = {slot for selected in current_units
+                    if selected["eligible"] and selected["selected"] == completion.id
+                    for slot in (selected["decision_unit"]["fields"] if selected.get("decision_unit")
+                                 else [*request["expected_result_fields"], *(request.get("optional_result_fields") or {})])}
+                whole_result = set(request["expected_result_fields"]) | set(request.get("optional_result_fields") or {})
+                same_contributor = old_input["target_id"] == frozen["target_id"] and whole_result <= selected_slots
             if same_contributor or (same_source and any(isinstance(path, str) and _overlap(path, authorized[fact.id]) for path in destinations)):
                 released.add(fact.id)
     if released:
@@ -224,6 +240,10 @@ def apply_overlays(db, artifact_id, envelope):
     for _, body in active_overlays(db, artifact_id):
         store._require_active_target(db, artifact_id, body["target_id"])
         for change in body["changes"]:
+            try:
+                store._require_active_target(db, artifact_id, change["anchor"]["target_id"])
+            except store.HistoryConflict:
+                continue  # Retired list elements remain in history, not current output.
             obj = objects.get(change["target_id"])
             if obj is None:
                 raise store.HistoryConflict("Replacing this record requires explicit curator revalidation authority")

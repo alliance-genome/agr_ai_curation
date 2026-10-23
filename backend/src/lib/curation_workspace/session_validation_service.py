@@ -503,7 +503,7 @@ def _envelope_validation_results_for_candidate(
         history = envelope.metadata.get("validation_history") or {}
         if runtime_context is None or not runtime_context.user_id or not history.get("session_id"):
             raise HTTPException(status_code=403, detail="Selected validation requires authenticated scope")
-        envelope_revision = int(envelope_row.revision)
+        envelope_revision = reference.get("envelope_revision") or int(envelope_row.revision)
         dispatch_warnings = []
         try:
             envelope, manifest = read_published_projection(
@@ -559,6 +559,29 @@ def _candidate_validation_field_paths(
             if path not in paths:
                 paths.append(path)
     return tuple(paths)
+
+
+def _curator_revalidation_field_paths(draft_fields):
+    """Exact declared destinations; display aliases must never grant authority."""
+    paths = []
+    for field in draft_fields:
+        metadata = field.metadata or {}
+        candidates = [metadata.get("source_field_path") or field.field_key,
+                      *(metadata.get("materializes_to_field_paths") or [])]
+        for path in candidates:
+            if isinstance(path, str) and path and path not in paths:
+                paths.append(path)
+    return tuple(paths)
+
+
+def _require_revalidation_context(context, candidate, user_id):
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Explicit revalidation requires an authenticated curator")
+    if context is None or candidate.domain_envelope is None or not candidate.object_id:
+        raise HTTPException(status_code=409, detail="Explicit revalidation requires an envelope target and document context")
+    history = candidate.domain_envelope.envelope_json.get("metadata", {}).get("validation_history", {})
+    if not history.get("artifact_id") or not history.get("session_id"):
+        raise HTTPException(status_code=409, detail="Explicit revalidation requires durable validation history")
 
 
 def _dispatch_workspace_envelope_validation(
@@ -625,15 +648,21 @@ def _dispatch_workspace_envelope_validation(
         profile_context=profile_context,
     )
     validator_envelope = structural_result.envelope.model_copy(update={"extracted_objects": envelope.extracted_objects})
-    dispatch_result = dispatch_active_validator_bindings(
-        validator_envelope,
-        domain_pack,
-        actor_id="workspace_candidate_validation",
-        profile_context=profile_context,
-        registry=structural_result.registry,
-        source_envelope_revision=source_revision,
-        runtime_context=runtime_context,
-    )
+    from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
+    try:
+        dispatch_result = dispatch_active_validator_bindings(
+            validator_envelope,
+            domain_pack,
+            actor_id="workspace_candidate_validation",
+            profile_context=profile_context,
+            registry=structural_result.registry,
+            source_envelope_revision=source_revision,
+            runtime_context=runtime_context,
+        )
+    except HistoryAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except HistoryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     stale_resolution = resolve_stale_validation_findings_after_refresh(
         original_envelope=envelope,
         refreshed_envelope=dispatch_result.envelope,
@@ -686,12 +715,15 @@ def _dispatch_workspace_envelope_validation(
 
     candidate.envelope_revision = checkpoint.revision
     candidate.updated_at = validated_at
+    from src.lib.curation_workspace.session_mutation_service import (
+        _refresh_candidate_projection_from_envelope, load_envelope_candidates_for_patch,
+    )
+    linked = load_envelope_candidates_for_patch(db, session_id=candidate.session_id,
+                                                envelope_id=envelope.envelope_id)
+    for linked_candidate in linked:
+        linked_candidate.envelope_revision = checkpoint.revision
+        linked_candidate.updated_at = validated_at
     if profile_context is not None:
-        from src.lib.curation_workspace.session_mutation_service import (
-            _refresh_candidate_projection_from_envelope, load_envelope_candidates_for_patch,
-        )
-        linked = load_envelope_candidates_for_patch(db, session_id=candidate.session_id,
-                                                    envelope_id=envelope.envelope_id)
         for projection in [candidate, *(item for item in linked if item.id != candidate.id)]:
             obj = next(item for item in stale_resolution.envelope.extracted_objects
                        if projection.object_id in (item.object_id, item.pending_ref_id))
@@ -773,6 +805,7 @@ def validate_candidate(
     *,
     user_id: str | None = None,
     active_groups: Sequence[str] | None = None,
+    explicit_request: bool = False,
 ) -> CurationCandidateValidationResponse:
     """Validate a candidate within the transaction owned by the caller.
 
@@ -815,13 +848,12 @@ def validate_candidate(
         authenticated_groups=active_groups,
     )
     if runtime_context is not None:
-        runtime_context = replace(runtime_context, explicit_validation_requested=True)
+        runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request)
     if request.replace_curator_override:
-        if not user_id:
-            raise HTTPException(status_code=403, detail="Explicit revalidation requires an authenticated curator")
+        _require_revalidation_context(runtime_context, candidate, user_id)
         runtime_context = replace(runtime_context, curator_revalidation={
             "actor_id": user_id, "object_id": candidate.object_id,
-            "field_paths": _candidate_validation_field_paths([
+            "field_paths": _curator_revalidation_field_paths([
                 CurationDraftFieldSchema.model_validate(field) for field in candidate.draft.fields
                 if not request.field_keys or field.get("field_key") in request.field_keys]),
             "guidance": request.guidance,
@@ -859,6 +891,7 @@ def validate_session(
     *,
     user_id: str | None = None,
     active_groups: Sequence[str] | None = None,
+    explicit_request: bool = False,
 ) -> CurationSessionValidationResponse:
     """Validate a review session within the transaction owned by the caller.
 
@@ -894,28 +927,34 @@ def validate_session(
     candidate_validations: list[CurationValidationSnapshotSchema] = []
     changed = False
 
+    contexts = {}
+    groups = {}
     for target_candidate_id in target_candidate_ids:
-        runtime_context = _validator_runtime_context_for_candidate(
-            candidate_map[target_candidate_id],
-            user_id=user_id,
-            authenticated_groups=active_groups,
-        )
-        if runtime_context is not None:
-            runtime_context = replace(runtime_context, explicit_validation_requested=True)
+        candidate = candidate_map[target_candidate_id]
+        context = _validator_runtime_context_for_candidate(candidate, user_id=user_id, authenticated_groups=active_groups)
         if request.replace_curator_override:
-            if not user_id:
-                raise HTTPException(status_code=403, detail="Explicit revalidation requires an authenticated curator")
-            runtime_context = replace(runtime_context, curator_revalidation={
-                "actor_id": user_id, "object_id": candidate_map[target_candidate_id].object_id,
-                "field_paths": [], "guidance": request.guidance,
-            })
+            _require_revalidation_context(context, candidate, user_id)
+        contexts[target_candidate_id] = context
+        key = str(candidate.envelope_id) if candidate.envelope_id else target_candidate_id
+        groups.setdefault(key, []).append(candidate)
+    dispatched = set()
+    for target_candidate_id in target_candidate_ids:
+        candidate = candidate_map[target_candidate_id]
+        key = str(candidate.envelope_id) if candidate.envelope_id else target_candidate_id
+        first = key not in dispatched
+        runtime_context = contexts[target_candidate_id]
+        if runtime_context is not None:
+            runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request and first)
+            if request.replace_curator_override and first:
+                runtime_context = replace(runtime_context, curator_revalidation=[{
+                    "actor_id": user_id, "object_id": item.object_id,
+                    "field_paths": [], "guidance": request.guidance,
+                } for item in groups[key]])
         validation_snapshot, candidate_changed = _apply_candidate_validation(
-            db,
-            candidate_map[target_candidate_id],
-            force=request.force or request.replace_curator_override,
-            validated_at=validated_at,
-            runtime_context=runtime_context,
+            db, candidate, force=(request.force or request.replace_curator_override) and first,
+            validated_at=validated_at, runtime_context=runtime_context,
         )
+        dispatched.add(key)
         candidate_validations.append(validation_snapshot)
         changed |= candidate_changed
 

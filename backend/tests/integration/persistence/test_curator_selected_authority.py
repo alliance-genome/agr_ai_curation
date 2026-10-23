@@ -47,8 +47,8 @@ def scenario(scope, tmp_path, monkeypatch, request):
     state = SimpleNamespace(env=env, aid=aid, bound=bound, target=target, revision=0, source=uuid4())
 
     def episode():
-        state.episode = s.start_episode(scope, aid, episode={"episode_id": uuid4().hex, "reason": "review",
-            "obligations": [{"target_id": target, "mode": "validation", "binding_id": request.validator_binding_id}]})
+        state.env = s.declare_envelope_episode(bound, state.env, [match])
+        state.episode = state.env.metadata["review_episode_id"]
         return state.episode
 
     def propose(value, *, status="resolved"):
@@ -250,7 +250,7 @@ def test_edited_support_record_is_preserved_until_authorized_replacement(scope, 
         with pytest.raises(h.HistoryConflict, match="explicit curator revalidation"):
             x.publish(answer)
     else:
-        x.publish(answer)
+        assert x.publish(answer)["ready"]
         new_support = next(obj for obj in x.env.extracted_objects if obj.object_type == "SupportingTerm")
         assert new_support.payload["name"] == "ECO:NEW"
         assert new_support.metadata["validation_history"]["target_id"] != root
@@ -277,3 +277,166 @@ def test_curator_overlay_follows_stable_element_through_reorder_and_retirement(s
     decision(scope, aid, ids[0], 0, "retire")
     with h.SessionLocal.begin() as db:
         assert c.active_overlays(db, aid) == []
+
+def test_profile_curator_revalidation_and_group_authorized_withdrawal(scope, monkeypatch):
+    from dataclasses import replace
+    from src.lib.domain_packs import profile_validation as pv
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
+    from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
+    from src.lib.validation_history.candidates import retain_candidates
+    from src.lib.validation_history.curator_values import resolve_curator_identity
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
+    from src.schemas.domain_validator import DomainValidatorResultBase
+    from tests.unit.lib.domain_packs.test_profile_validation import example
+    from tests.unit.lib.domain_packs.test_profile_materialization import resolvable
+
+    raw, cap, pack = example.__wrapped__()
+    cap = replace(cap, binding=replace(cap.binding, required_any_active_group=("WB",)))
+    raw["validator_mappings"][0]["capability_fingerprint"] = cap.fingerprint()
+    # Prepare the pinned profile, then compile with actual authenticated groups.
+    source, _ = resolvable((raw, cap, pack))
+    from src.lib.agent_studio import generic_profile_service
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision, current_execution_receipt
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.curation_workspace.execution_contracts import resolve_receipt_profile
+    from src.models.sql.agent import Agent
+    from src.models.sql.pdf_document import PDFDocument
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    from uuid import UUID
+    monkeypatch.setattr("src.lib.agent_studio.profile_mapping_service.capability_catalog", lambda **kwargs: [cap])
+    monkeypatch.setattr(pv, "capability_catalog", lambda **kwargs: [cap])
+    with h.SessionLocal.begin() as db:
+        owner = db.get(PDFDocument, UUID(scope.document_id)).user_id
+        _, revision = generic_profile_service.create_profile(db, owner, raw, active_group_ids=("WB",))
+        agent = Agent(id=uuid4(), agent_key="ca_" + uuid4().hex, user_id=owner,
+            name="Authority fixture", instructions="Fixture", model_id="test-model",
+            model_temperature=0.0, visibility="private", tool_ids=["stage_generic_object", "finalize_generic_extraction"], group_rules_enabled=False)
+        db.add(agent)
+        db.flush()
+        contract = AgentOutputContract.model_validate({"output_state": "structured_extraction",
+            "output_mode": "profile_bound_generic", "generic_profile_ref": {"profile_id": revision.profile_id,
+            "profile_revision_id": revision.id, "revision": revision.revision, "fingerprint": revision.fingerprint}})
+        append_execution_revision(db, agent, capture_execution_snapshot(db, agent, contract), user_id=owner, expected_revision_id=None)
+        receipt = current_execution_receipt(db, agent.agent_key, owner, active_group_ids=["WB"])
+        profile = resolve_receipt_profile(db, receipt)
+    context = pv.compile_profile_validation(receipt, profile, pack, capabilities=[cap], active_group_ids=("WB",))
+    source.envelope_id = uuid4().hex
+    source.metadata["execution_receipt"] = receipt.model_dump(mode="json")
+    source.metadata["extraction_metadata"]["provenance"].update(produced_by=receipt.agent_key,
+        execution_receipt=receipt.model_dump(mode="json"), generic_profile_ref=profile.receipt)
+    for obj in source.extracted_objects:
+        obj.metadata["generic_profile_ref"] = profile.receipt
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
+    source = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
+        typed=source.model_dump(mode="json"), envelope=source, provenance={})
+    aid = source.metadata["validation_history"]["artifact_id"]
+    bound = runtime.CapturedArtifact(scope, aid)
+    match, = context.registry.match_bindings(source)
+    request = build_domain_validation_request(match).request
+    target = runtime.request_target(bound, ValidatorDispatchJob(match, request))
+    source = s.declare_envelope_episode(bound, source, [match], authenticated_groups=("WB",))
+    revision = 0
+    extraction_id = uuid4()
+
+    def publish(value):
+        nonlocal source, revision
+        episode = source.metadata["review_episode_id"]
+        job = ValidatorDispatchJob(match, request, history_episode_id=episode)
+        invocation = runtime.begin_jobs(bound, [job], operation_id=uuid4().hex, receipt={})
+        result = DomainValidatorResultBase(status="resolved", request_id=request.request_id,
+            validator_binding_id=request.validator_binding_id, validator_agent=request.validator_agent,
+            target=request.target, resolved_values={"identifier": value}, resolved_objects=[],
+            missing_expected_fields=[], candidates=[], lookup_attempts=[], explanation="Reviewed lookup", curator_message=None)
+        runtime.complete_jobs(bound, invocation, [result])
+        retain_candidates(source, [ValidatorResultMaterializationInput(match, request, result)], scope=scope)
+        with h.SessionLocal() as db:
+            version = h._current(db, aid, target)["version"]
+        source, manifest, checkpoint = publish_decisions(scope,
+            checkpoint_request=DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=source,
+                expected_revision=revision, document_id=scope.document_id, adapter_key="fixture",
+                source_extraction_result_id=extraction_id, authenticated_groups=("WB",), execution_receipt=context.receipt),
+            episode_id=episode, operation_id=uuid4().hex, actor={"type": "agent", "id": "supervisor"},
+            entries=[{"target_id": target, "expected_version": version, "action": "accept",
+                "subject": result._history_ref["fact_id"], "reason": "explicit review"}])
+        revision = checkpoint.revision
+        assert manifest["ready"]
+
+    def edit(value):
+        nonlocal source, revision
+        obj = source.extracted_objects[0]
+        patched = apply_curator_field_patch(source, pack,
+            EnvelopeFieldPatch(envelope_id=source.envelope_id, expected_revision=revision,
+                object_id=obj.object_id or obj.pending_ref_id, field_path="attributes.gene.gene_id",
+                before=obj.payload["attributes"]["gene"]["gene_id"], value=value),
+            current_revision=revision, actor_id=scope.owner_id, actor_display_name="Curator", profile=context.profile)
+        assert patched.accepted, patched.errors
+        with h.SessionLocal.begin() as db:
+            checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
+                project_key="fixture", envelope=patched.envelope, expected_revision=revision,
+                document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=extraction_id,
+                authenticated_groups=("WB",)))
+        revision = checkpoint.revision
+        from src.lib.validation_history.projection import latest_publication_reference
+        source, _ = read_published_projection(scope, latest_publication_reference(scope, aid), current=True)
+
+    publish("EX:FIRST")
+    edit("EX:CURATOR")
+    obj_id = source.extracted_objects[0].object_id or source.extracted_objects[0].pending_ref_id
+    args = dict(envelope=source, object_id=obj_id, value_path="attributes.gene",
+        identity_keys=("gene_id",), action="withdraw_override", reference=None, include_state=True)
+    with pytest.raises(h.HistoryConflict):
+        resolve_curator_identity(scope, **args, authenticated_groups=())
+    underlying = resolve_curator_identity(scope, **args, authenticated_groups=("WB",))
+    assert underlying["gene_id"] == "EX:FIRST"
+    assert underlying["lookup_outcome"] == "matched"
+    source = s.declare_envelope_episode(bound, source, [match], authenticated_groups=("WB",),
+        curator_revalidation={"object_id": obj_id, "field_paths": ["attributes.gene.gene_id"], "actor_id": scope.owner_id})
+    assert source.extracted_objects[0].payload["attributes"]["gene"]["gene_id"] == "EX:CURATOR"
+    publish("EX:SECOND")
+    gene = source.extracted_objects[0].payload["attributes"]["gene"]
+    assert gene["gene_id"] == "EX:SECOND"
+    assert gene["mention"] == "daf-16"
+    assert "curator_override" not in gene
+    assert h.read_baseline(scope, aid)["normalized"]["extracted_objects"][0]["payload"]["attributes"]["gene"]["gene_id"] is None
+
+
+def test_overlay_sequence_and_retired_child_changes(scope):
+    from tests.integration.persistence.test_selected_value_authority import captured_source
+    from tests.integration.persistence.test_validation_history import decision
+    env = captured_source(scope)
+    aid = env.metadata["validation_history"]["artifact_id"]
+    obj = env.extracted_objects[0]
+    root = obj.metadata["validation_history"]["target_id"]
+    def edit(anchor, value):
+        with h.SessionLocal.begin() as db:
+            c.record_patch(db, scope, aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+                body=c.bind_patch_anchors(env, {"target_id": root, "object_id": "one", "value_path": anchor,
+                    "action": "override", "changes": [{"target_id": root, "path": "terms[0].label", "present": True, "value": value}]}))
+    edit("terms", "first whole list edit")
+    edit("terms[0].label", "older child edit")
+    edit("terms", "newest whole list edit")
+    with h.SessionLocal.begin() as db:
+        assert c.apply_overlays(db, aid, env).extracted_objects[0].payload["terms"][0]["label"] == "newest whole list edit"
+    metadata, retired = runtime.retire_element_projection(obj.metadata, "terms[0]", payload=obj.payload)
+    obj.metadata = metadata
+    obj.payload["terms"].pop(0)
+    decision(scope, aid, retired, 0, "retire")
+    with h.SessionLocal.begin() as db:
+        assert c.apply_overlays(db, aid, env).extracted_objects[0].payload["terms"] == [{"label": "b"}]
+
+
+def test_failed_intent_does_not_supersede_current_episode(scope, scenario):
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+    x = scenario
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    source = __import__('src.lib.validation_history.projection', fromlist=['read_dispatch_source']).read_dispatch_source(x.bound, x.env)
+    matches = DomainPackValidationRegistry.from_domain_pack(resolve_curation_domain_pack_by_id(x.env.domain_pack_id)).match_bindings(source)
+    before = x.env.metadata["selected_projection"]
+    with pytest.raises(h.HistoryAccessError):
+        s.declare_envelope_episode(x.bound, x.env, matches, curator_revalidation={
+            "object_id": "one", "field_paths": [], "actor_id": "not-owner"})
+    _, manifest = read_published_projection(scope, before, current=True)
+    assert manifest["episode_id"] == x.episode
+    assert manifest["ready"]

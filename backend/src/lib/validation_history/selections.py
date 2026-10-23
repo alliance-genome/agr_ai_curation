@@ -29,23 +29,27 @@ def _lock_artifact(db, scope, artifact_id, *, write=False):
 
 def start_episode(scope, artifact_id: str, *, episode: dict) -> str:
     """Declare exact coverage, not just the validators that happened to succeed."""
-    body = ReviewEpisode.model_validate(episode).model_dump(mode="json")
     with store.SessionLocal.begin() as db:
-        _lock_artifact(db, scope, artifact_id, write=True)
-        store._require_live_artifact(db, artifact_id)
-        for obligation in body["obligations"]:
-            target = store._fact(db, artifact_id, obligation["target_id"], kind="target")
-            store._require_active_target(db, artifact_id, target.id)
-            original = store._content(db, target)
-            if obligation["mode"] != "validation" and original.get("binding_id"):
-                raise store.HistoryConflict("Validator target cannot become extraction-only or curator-only")
-            if obligation["mode"] == "validation":
-                if original.get("binding_id") != obligation["binding_id"]:
-                    raise store.HistoryConflict("Obligation does not match its binding")
-        return store._append(
-            db, artifact_id, operation_id="review-episode:" + body["episode_id"],
-            kind="review_episode", body=body,
-        ).id
+        return start_episode_in_transaction(db, scope, artifact_id, episode=episode)
+
+
+def start_episode_in_transaction(db, scope, artifact_id, *, episode):
+    body = ReviewEpisode.model_validate(episode).model_dump(mode="json")
+    _lock_artifact(db, scope, artifact_id, write=True)
+    store._require_live_artifact(db, artifact_id)
+    for obligation in body["obligations"]:
+        target = store._fact(db, artifact_id, obligation["target_id"], kind="target")
+        store._require_active_target(db, artifact_id, target.id)
+        original = store._content(db, target)
+        if obligation["mode"] != "validation" and original.get("binding_id"):
+            raise store.HistoryConflict("Validator target cannot become extraction-only or curator-only")
+        if obligation["mode"] == "validation":
+            if original.get("binding_id") != obligation["binding_id"]:
+                raise store.HistoryConflict("Obligation does not match its binding")
+    return store._append(
+        db, artifact_id, operation_id="review-episode:" + body["episode_id"],
+        kind="review_episode", body=body,
+    ).id
 
 
 def record_opinion(scope, artifact_id, *, operation_id, actor, completion_id, reason):
@@ -339,28 +343,30 @@ def declare_envelope_episode(binding, envelope, matches, *, unavailable_bindings
                 "target_id": target_id, "mode": "validation",
                 "binding_id": match.binding.binding_id,
             })
-    for obj in envelope.extracted_objects:
+    from .projection import read_dispatch_source
+    source = read_dispatch_source(binding, envelope)
+    for obj in source.extracted_objects:
         target_id = obj.metadata["validation_history"]["target_id"]
         if target_id not in covered_objects:
             with store.SessionLocal.begin() as db:
                 store._artifact(db, binding.artifact_id, binding.scope)
                 mode = "curator" if store._has_curator_subject(db, binding.artifact_id, target_id) else "extraction_only"
             obligations.append({"target_id": target_id, "mode": mode})
-    if not envelope.extracted_objects and not obligations:
+    if not source.extracted_objects and not obligations:
         obligations.append({
             "target_id": envelope.metadata["validation_history"]["target_id"],
             "mode": "extraction_only",
         })
     obligations = list({item["target_id"]: item for item in obligations}.values())
-    episode_id = start_episode(binding.scope, binding.artifact_id, episode={
-        "episode_id": str(uuid4()), "reason": "Explicit review of this validation run",
-        "obligations": obligations, "unavailable_bindings": list(unavailable_bindings), "excluded_bindings": exclusions,
-    })
-    intent_reference = {}
-    if curator_revalidation is not None:
-        from .curator_authority import record_revalidation_intent
-        intent_id = record_revalidation_intent(binding, envelope=envelope, episode_id=episode_id, **curator_revalidation)
-        intent_reference = {"curator_revalidation_intent": {"fact_id": intent_id, "episode_id": episode_id}}
+    from .curator_authority import record_revalidation_intent_in_transaction, revalidation_intents
+    with store.SessionLocal.begin() as db:
+        episode_id = start_episode_in_transaction(db, binding.scope, binding.artifact_id, episode={
+            "episode_id": str(uuid4()), "reason": "Explicit review of this validation run",
+            "obligations": obligations, "unavailable_bindings": list(unavailable_bindings), "excluded_bindings": exclusions,
+        })
+        intent_ids = [record_revalidation_intent_in_transaction(db, binding, envelope=envelope,
+            episode_id=episode_id, **intent) for intent in revalidation_intents(curator_revalidation)]
+    intent_reference = {"curator_revalidation_intent": {"fact_ids": intent_ids, "episode_id": episode_id}} if intent_ids else {}
     return envelope.model_copy(update={"metadata": {
         **{key: value for key, value in envelope.metadata.items() if key != "curator_revalidation_intent"},
         "review_episode_id": episode_id, **intent_reference,
