@@ -226,7 +226,7 @@ class TestDefect3ExplicitWorkspaceOwnership:
     def test_discard_tool_matches_its_siblings(self):
         import inspect
 
-        expected = {"workspace_records", "allowed_evidence_record_ids"}
+        expected = {"workspace_records"}
         for factory_name in (
             "create_attach_evidence_to_object_tool",
             "create_detach_evidence_from_object_tool",

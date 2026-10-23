@@ -4325,12 +4325,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             assert captured["agent_kwargs"]["execution_receipt"] == pinned_receipt.model_dump(mode="json")
         assert validation_request["selected_inputs"] == request.selected_inputs
         assert "input_selectors" not in validation_request
-        assert "evidence" not in validation_request
+        assert validation_request["evidence"] == request.evidence
         assert "input_values" not in validation_request["target"]
-        assert validation_request["evidence_summary"] == {
-            "evidence_count": 1,
-            "evidence_record_ids": ["evidence-1"],
-        }
+        assert "evidence_summary" not in validation_request
         assert validation_request["runtime_compaction"]["input_values_source"] == (
             "selected_inputs"
         )
