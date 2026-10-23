@@ -154,47 +154,52 @@ def pin_publication_in_transaction(
 def read_published_projection(scope, reference, *, current=False, finalized=False):
     """Exact old reads never reinterpret content using today's selection heads."""
     with store.SessionLocal.begin() as db:
-        artifact_id = reference["artifact_id"]
-        selections._lock_artifact(db, scope, artifact_id)
-        fact = store._fact(db, artifact_id, reference["fact_id"], kind="selected_projection")
-        if fact.body_sha != reference["body_sha256"]:
-            raise store.HistoryConflict("Published projection hash mismatch")
-        body = store._content(db, fact)
-        manifest = body["manifest"]
-        if reference.get("envelope_revision") != body["envelope_revision"]:
-            raise store.HistoryConflict("Published envelope revision mismatch")
-        if (manifest["sha256"] != reference["manifest_sha256"]
-                or manifest["episode_id"] != reference["episode_id"]):
-            raise store.HistoryConflict("Published selection manifest mismatch")
-        if current or finalized:
-            latest_episode = db.scalar(select(ValidationFact).where(
-                ValidationFact.artifact_id == artifact_id,
-                ValidationFact.kind == "review_episode",
-            ).order_by(ValidationFact.sequence.desc()).limit(1))
-            if latest_episode is None:
-                raise store.HistoryConflict("Published projection has no review episode")
-            live = selections.manifest_in_transaction(
-                db, scope, artifact_id, episode_id=latest_episode.id,
-            )
-            if finalized:
-                if live != manifest:
-                    raise store.SelectionNotReady("Finalization requires the current episode publication")
-            else:
-                # Pending reconsideration changes readiness, not the previous
-                # selected scientific value. A changed/stale selection still
-                # requires an atomic rebuild before it can be presented.
-                def values(snapshot):
-                    return {unit["target_id"]: (unit["selected"], unit["selection_generation"], unit["eligible"])
-                            for unit in snapshot["units"] if unit["selected"] is not None}
-                if (values(live) != values(manifest)
-                        or live["source_state_sha256"] != manifest["source_state_sha256"]):
-                    raise store.SelectionNotReady("Published projection is no longer current")
-                manifest = live
+        return read_published_projection_in_transaction(db, scope, reference, current=current, finalized=finalized)
+
+
+def read_published_projection_in_transaction(db, scope, reference, *, current=False, finalized=False):
+    """Read under a caller's existing checkpoint lock, including uncommitted publication."""
+    artifact_id = reference["artifact_id"]
+    selections._lock_artifact(db, scope, artifact_id)
+    fact = store._fact(db, artifact_id, reference["fact_id"], kind="selected_projection")
+    if fact.body_sha != reference["body_sha256"]:
+        raise store.HistoryConflict("Published projection hash mismatch")
+    body = store._content(db, fact)
+    manifest = body["manifest"]
+    if reference.get("envelope_revision") != body["envelope_revision"]:
+        raise store.HistoryConflict("Published envelope revision mismatch")
+    if (manifest["sha256"] != reference["manifest_sha256"]
+            or manifest["episode_id"] != reference["episode_id"]):
+        raise store.HistoryConflict("Published selection manifest mismatch")
+    if current or finalized:
+        latest_episode = db.scalar(select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact_id,
+            ValidationFact.kind == "review_episode",
+        ).order_by(ValidationFact.sequence.desc()).limit(1))
+        if latest_episode is None:
+            raise store.HistoryConflict("Published projection has no review episode")
+        live = selections.manifest_in_transaction(
+            db, scope, artifact_id, episode_id=latest_episode.id,
+        )
         if finalized:
-            selections.require_ready(manifest)
-        projection = DomainEnvelope.model_validate(body["projection"])
-        projection.metadata["selected_projection"] = deepcopy(reference)
-        return projection, deepcopy(manifest)
+            if live != manifest:
+                raise store.SelectionNotReady("Finalization requires the current episode publication")
+        else:
+            # Pending reconsideration changes readiness, not the previous
+            # selected scientific value. A changed/stale selection still
+            # requires an atomic rebuild before it can be presented.
+            def values(snapshot):
+                return {unit["target_id"]: (unit["selected"], unit["selection_generation"], unit["eligible"])
+                        for unit in snapshot["units"] if unit["selected"] is not None}
+            if (values(live) != values(manifest)
+                    or live["source_state_sha256"] != manifest["source_state_sha256"]):
+                raise store.SelectionNotReady("Published projection is no longer current")
+            manifest = live
+    if finalized:
+        selections.require_ready(manifest)
+    projection = DomainEnvelope.model_validate(body["projection"])
+    projection.metadata["selected_projection"] = deepcopy(reference)
+    return projection, deepcopy(manifest)
 
 
 def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, domain_pack, profile_context=None, apply_curator=True):

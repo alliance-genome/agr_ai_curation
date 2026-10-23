@@ -167,7 +167,8 @@ def _compute_candidate_validation(
     field_keys: Sequence[str] | None = None,
 ) -> CandidateValidationComputation:
     require_candidate_conformance(db, candidate)
-    _ensure_manual_profile_envelope(db, candidate, runtime_context=runtime_context)
+    if force or (runtime_context and runtime_context.explicit_validation_requested):
+        _ensure_manual_profile_envelope(db, candidate, runtime_context=runtime_context)
     profile_cache_current = _profile_validation_cache_is_current(db, candidate, runtime_context)
     requested_field_keys = set(field_keys or [])
     draft_fields = [
@@ -361,18 +362,21 @@ def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate, *
     from src.lib.validation_history.store import HistoryScope, canonical
     if runtime_context is None:
         raise ValueError("Curator-authored history requires an authenticated source context")
+    source_hash = canonical(envelope.model_dump(mode="json"))[0]
+    envelope.envelope_id += ":" + source_hash
+    envelope.metadata["manual_preparation"] = {"candidate_id": str(candidate.id), "source_sha256": source_hash}
     envelope = capture_extraction(
         scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, str(candidate.session_id)),
         producer_id=f"manual:{candidate.id}:" + canonical(envelope.model_dump(mode="json"))[0], typed=envelope.model_dump(mode="json"), envelope=envelope,
         provenance={"source": "curator_manual", "execution_receipt": receipt.model_dump(mode="json")},
         subject_kind="curator_authored",
     )
-    checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
-        project_key=envelope.domain_pack_id, envelope=envelope, expected_revision=0,
-        execution_receipt=receipt, document_id=candidate.session.document_id,
-        session_id=candidate.session_id, flow_run_id=candidate.session.flow_run_id,
-        adapter_key=candidate.adapter_key,
-    ))
+    from src.lib.curation_workspace.manual_profile_preparation import prepare_manual_source
+    checkpoint = prepare_manual_source(
+        envelope=envelope, receipt=receipt,
+        document_id=candidate.session.document_id, session_id=candidate.session_id,
+        flow_run_id=candidate.session.flow_run_id, adapter_key=candidate.adapter_key,
+    )
     candidate.envelope_id = checkpoint.envelope_id
     candidate.object_id = object_id
     candidate.envelope_revision = checkpoint.revision
@@ -498,7 +502,7 @@ def _envelope_validation_results_for_candidate(
     if reference is not None and not force:
         # A readiness check consumes selection; it must not create another review
         # episode just because its display/validation snapshot needs refreshing.
-        from src.lib.validation_history.projection import read_published_projection
+        from src.lib.validation_history.projection import read_published_projection_in_transaction
         from src.lib.validation_history.store import HistoryScope, HistoryConflict
         history = envelope.metadata.get("validation_history") or {}
         if runtime_context is None or not runtime_context.user_id or not history.get("session_id"):
@@ -506,8 +510,8 @@ def _envelope_validation_results_for_candidate(
         envelope_revision = reference.get("envelope_revision") or int(envelope_row.revision)
         dispatch_warnings = []
         try:
-            envelope, manifest = read_published_projection(
-                HistoryScope(runtime_context.user_id, str(envelope_row.document_id), history["session_id"]),
+            envelope, manifest = read_published_projection_in_transaction(
+                db, HistoryScope(runtime_context.user_id, str(envelope_row.document_id), history["session_id"]),
                 reference, current=True,
             )
             if not manifest["ready"]:

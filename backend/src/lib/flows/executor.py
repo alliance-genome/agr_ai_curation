@@ -3915,7 +3915,6 @@ def get_all_agent_tools(
                             session_id=session_id,
                             trace_id=get_current_trace_id(),
                             flow_run_id=flow_run_id,
-                            db=handoff_db,
                         )
                         if not extraction_results:
                             raise RuntimeError(

@@ -134,6 +134,13 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
         return SimpleNamespace(envelope_id=request.envelope.envelope_id, revision=row.revision)
 
     monkeypatch.setattr(session_validation_service, "write_domain_envelope_checkpoint", checkpoint)
+    def prepare_source(**kwargs):
+        from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+        return checkpoint(db, DomainEnvelopeCheckpointRequest(
+            project_key="generic", envelope=kwargs["envelope"], expected_revision=0,
+            execution_receipt=kwargs["receipt"], document_id=kwargs["document_id"],
+            session_id=kwargs["session_id"], flow_run_id=kwargs["flow_run_id"], adapter_key=kwargs["adapter_key"]))
+    monkeypatch.setattr("src.lib.curation_workspace.manual_profile_preparation.prepare_manual_source", prepare_source)
 
     def dispatch(envelope, pack, **kwargs):
         values = results(envelope, kwargs["profile_context"], [{"identifier": "EX:1"}]) if available else []
@@ -145,7 +152,7 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
         db, candidate, force=True, validated_at=datetime.now(timezone.utc),
         runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id=str(candidate.session.document_id)))
     assert len(requests) == 2 and requests[0].expected_revision == 0
-    assert candidate.envelope_id == f"manual-profile:{candidate.id}"
+    assert candidate.envelope_id.startswith(f"manual-profile:{candidate.id}:")
     assert candidate.normalized_payload == {}
     final = DomainEnvelope.model_validate(rows[candidate.envelope_id].envelope_json)
     assert final.metadata["source"] == "manual"

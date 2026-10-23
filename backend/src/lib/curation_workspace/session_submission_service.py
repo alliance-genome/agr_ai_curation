@@ -1146,11 +1146,11 @@ def _build_domain_envelope_submission_context(
         elif not user_id or not history_reference.get("session_id"):
             review_problem = "Authenticated selection scope is unavailable."
         else:
-            from src.lib.validation_history.projection import read_published_projection
+            from src.lib.validation_history.projection import read_published_projection_in_transaction
             from src.lib.validation_history.store import HistoryScope, HistoryConflict
             try:
-                envelope, _ = read_published_projection(
-                    HistoryScope(str(user_id), str(row.document_id), history_reference["session_id"]),
+                envelope, _ = read_published_projection_in_transaction(
+                    db, HistoryScope(str(user_id), str(row.document_id), history_reference["session_id"]),
                     reference, finalized=True,
                 )
             except HistoryConflict:

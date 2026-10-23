@@ -2,6 +2,7 @@
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
 
 from src.lib.validation_history import selections as s, store as h
 from tests.integration.persistence.test_validation_history import (
@@ -163,6 +164,7 @@ def test_source_rebuild_ignores_payload_values_and_preserves_stable_reorder(scop
 def test_exact_publication_survives_later_selection_and_failed_publication_rolls_back(scope):
     from src.lib.validation_history.projection import (
         pin_publication_in_transaction, read_published_projection,
+        read_published_projection_in_transaction,
     )
     env = captured_source(scope)
     aid = env.metadata["validation_history"]["artifact_id"]
@@ -175,6 +177,14 @@ def test_exact_publication_survives_later_selection_and_failed_publication_rolls
         published = pin_publication_in_transaction(
             db, scope, aid, operation_id="first-publication", manifest=manifest, envelope=env,
         )
+        # Autosave and readiness checks must see the publication in the caller's
+        # transaction, without opening another session behind its artifact lock.
+        db.execute(text("SET LOCAL lock_timeout = '5s'"))
+        pending, pending_manifest = read_published_projection_in_transaction(
+            db, scope, published.metadata["selected_projection"], finalized=True,
+        )
+        assert pending_manifest["ready"]
+        assert pending.extracted_objects == published.extracted_objects
     reference = published.metadata["selected_projection"]
     old, old_manifest = read_published_projection(scope, reference, finalized=True)
     assert old_manifest["ready"]

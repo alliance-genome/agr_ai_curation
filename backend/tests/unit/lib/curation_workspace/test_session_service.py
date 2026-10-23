@@ -814,6 +814,8 @@ def _create_domain_envelope_submission_session(
             ))
             return DomainEnvelope.model_validate(current.envelope_json), {"ready": True}
         monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", selected_read)
+        monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection_in_transaction",
+                            lambda db, *args, **kwargs: selected_read(*args, **kwargs))
     envelope_revision = 1
     db_session.add(
         DomainEnvelopeModel(

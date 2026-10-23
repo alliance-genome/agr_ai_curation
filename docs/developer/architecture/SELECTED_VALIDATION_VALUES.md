@@ -109,3 +109,26 @@ length) cannot be safely replaced by leaf validator results: explicit revalidati
 returns a conflict naming the structural edit; individual-field validation cannot
 replace that aggregate edit. It does not silently release a newer
 leaf edit and expose an older aggregate value.
+
+## Transaction boundaries and failed preparation
+
+Commit immutable source envelopes before validation opens independent history
+transactions. Flow persistence and curation preparation own these short source
+transactions; they do not commit a caller's prep record, review session, or edits.
+Validator attempts and outcomes commit independently. The final envelope checkpoint
+still uses the original revision as its concurrency guard, so a later checkpoint
+cannot be overwritten by an earlier request.
+
+First validation of a manual profile record prepares a source whose identity
+includes its immutable content hash. Candidate linkage remains in the caller's
+transaction. Cancellation or a failed final checkpoint leaves the source and audit
+history intact while rolling back linkage and draft changes. An exact retry adopts
+the original preparation; a changed draft creates a distinct source. Unlinked manual
+preparations are excluded from envelope discovery, direct inspection and benchmark
+export until candidate linkage commits.
+
+Publication reads after a checkpoint use
+`read_published_projection_in_transaction` with the caller's session. This retains
+scope, integrity, revision and readiness checks without opening another connection
+that waits on the caller's artifact lock. Model execution and its history writes
+must not reuse that open checkpoint transaction.

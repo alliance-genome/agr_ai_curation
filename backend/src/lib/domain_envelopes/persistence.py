@@ -159,6 +159,9 @@ def write_domain_envelope_checkpoint(
         select(DomainEnvelopeModel)
         .where(DomainEnvelopeModel.envelope_id == envelope.envelope_id)
         .with_for_update()
+        # A validator may have run since this row entered the identity map.
+        # Compare against the locked database revision, not that cached copy.
+        .execution_options(populate_existing=True)
     ).first()
 
     stored_receipt = getattr(envelope_row, "execution_receipt", None) if envelope_row is not None else None

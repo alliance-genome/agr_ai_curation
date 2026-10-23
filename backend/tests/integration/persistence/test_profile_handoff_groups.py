@@ -43,9 +43,6 @@ async def test_saved_profile_35_records_handoff_and_replay(
     monkeypatch.setattr(
         bootstrap_service, "run_post_curation_pipeline", capture_pipeline
     )
-    # Keep real SQL/persistence and service transaction behavior, but contain
-    # commits in the fixture transaction so its rollback removes all test data.
-    monkeypatch.setattr(db, "commit", db.flush)
     document_id = str(manual.session.document_id)
     owner = db.get(User, db.get(PDFDocument, manual.session.document_id).user_id).auth_sub
     flow_run_id, origin_session_id = str(uuid4()), str(uuid4())
@@ -102,7 +99,6 @@ async def test_saved_profile_35_records_handoff_and_replay(
         session_id=origin_session_id,
         trace_id="fixture-handoff",
         flow_run_id=flow_run_id,
-        db=db,
     )
     result = await run_flow_curation_handoff(
         extraction_results=records,
