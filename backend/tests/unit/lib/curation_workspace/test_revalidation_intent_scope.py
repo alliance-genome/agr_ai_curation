@@ -84,11 +84,13 @@ def test_group_dispatch_resolves_stale_findings_for_every_requested_object(monke
         assert not source.validation_findings
         return NS(envelope=source, appended_findings=(), binding_audit=())
     monkeypatch.setattr(v, "dispatch_active_validator_bindings", dispatch)
+    # This test isolates grouped finding scopes; PostgreSQL tests cover locking.
+    monkeypatch.setattr(v, "_lock_unchanged_validation_draft", lambda *args: None)
     monkeypatch.setattr(v, "write_domain_envelope_checkpoint", lambda *a: NS(revision=2))
     monkeypatch.setattr("src.lib.curation_workspace.session_mutation_service.load_envelope_candidates_for_patch", lambda *a, **k: [])
     row = NS(revision=1, project_key="fixture", document_id=uuid4(), session_id=uuid4(), flow_run_id=None,
         object_model_ref_json={}, model_field_ref_json={})
-    candidate = NS(object_id="one", session_id=row.session_id)
+    candidate = NS(object_id="one", session_id=row.session_id, draft=NS(version=1, fields=[]))
     receipt = {}
     result, _, _ = v._dispatch_workspace_envelope_validation(None, candidate, envelope_row=row, envelope=envelope,
         field_paths=("title",), validated_at=datetime.now(timezone.utc), runtime_context=v.ValidatorRuntimeContext(
