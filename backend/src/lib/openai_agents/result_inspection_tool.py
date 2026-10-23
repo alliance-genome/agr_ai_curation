@@ -9,6 +9,8 @@ Use inspect_results to search/list results available in this context, then inspe
 objects, exact fields, explanations, evidence or validator details. In a flow,
 only successfully completed steps and explicitly bound follow-up results are
 available. Inspection is optional, read-only, and never advances a flow step.
+Use result_view=accepted for explicitly selected current values and readiness.
+Original and post_validation views are historical, not implicit approval.
 Use result_view=original for extractor output; use result_view=post_validation
 for the saved validation findings and data supplied to the formatter. These are
 explicit versions of one result, not interchangeable summaries. Follow returned
@@ -26,7 +28,7 @@ def make_result_inspection_tool(
     @function_tool(
         name_override="inspect_results",
         description_override=(
-            "Select result_view=original for extractor output or post_validation for the saved "
+            "Select result_view=accepted for current explicitly selected values, original for extractor output, or post_validation for the saved "
             "validation checkpoint used by the formatter. Follow returned envelope_revision and "
             "read calls; unavailable versions are never replaced with newer data. Search/list "
             "only cover the server-authorized scope. Inspection is optional and never advances "

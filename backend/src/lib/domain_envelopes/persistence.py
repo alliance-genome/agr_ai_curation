@@ -109,6 +109,7 @@ class DomainEnvelopeCheckpointRequest:
     source_extraction_result_id: str | UUID | None = None
     source_payload_hash: str | None = None
     authenticated_groups: Sequence[str] | None = None
+    curator_authority_groups: Sequence[str] | None = None
     execution_context: ExtractionExecutionContext | None = None
     object_model_ref_json: Mapping[str, Any] = field(default_factory=dict)
     model_field_ref_json: Mapping[str, Any] = field(default_factory=dict)
@@ -149,10 +150,18 @@ def write_domain_envelope_checkpoint(
     requested_source_payload_hash = request.source_payload_hash
     now = datetime.now(timezone.utc)
 
+    # History decisions and projection publication use the same lock order.
+    # Never acquire an artifact lock after holding its envelope row lock here.
+    history_reference = envelope.metadata.get("validation_history")
+    if history_reference is not None:
+        lock_projection_artifact(db, history_reference["artifact_id"])
     envelope_row = db.scalars(
         select(DomainEnvelopeModel)
         .where(DomainEnvelopeModel.envelope_id == envelope.envelope_id)
         .with_for_update()
+        # A validator may have run since this row entered the identity map.
+        # Compare against the locked database revision, not that cached copy.
+        .execution_options(populate_existing=True)
     ).first()
 
     stored_receipt = getattr(envelope_row, "execution_receipt", None) if envelope_row is not None else None
@@ -287,6 +296,22 @@ def write_domain_envelope_checkpoint(
     envelope_row.schema_ref_json = _schema_ref_json(envelope.schema_ref)
     envelope_row.object_model_ref_json = dict(request.object_model_ref_json)
     envelope_row.model_field_ref_json = dict(request.model_field_ref_json)
+    previous_payload = envelope_row.envelope_json
+    previous_events = {event.get("event_id") for event in (previous_payload or {}).get("history", [])}
+    has_curator_edit = any(event.event_id not in previous_events and
+        event.event_type.value == "curator_field_patch_accepted" for event in envelope.history)
+    # Persist source/authority facts before deriving the exact same transaction's
+    # checkpoint body. No reader can see the edit without its selected projection.
+    envelope_row.envelope_json = envelope_json
+    envelope_row.updated_at = now
+    envelope_row.checkpointed_at = now
+    db.flush()
+    inserted_history_event_count = _append_history_events_for_row(db, envelope_row)
+    if has_curator_edit:
+        from src.lib.validation_history.projection import republish_curator_checkpoint
+        envelope = republish_curator_checkpoint(db, DomainEnvelope.model_validate(envelope_json),
+            revision=next_revision, authenticated_groups=request.curator_authority_groups if request.curator_authority_groups is not None else request.authenticated_groups)
+        envelope_json = envelope.model_dump(mode="json")
     from src.lib.validation_history.checkpoints import write_checkpoint_body
     from src.models.sql.validation_history import ValidationCheckpoint
     # Same caller transaction as the current projection: a rolled-back workspace
@@ -299,7 +324,7 @@ def write_domain_envelope_checkpoint(
         document_id=str(envelope_row.document_id),
         source_extraction_result_id=source_extraction_result_id,
         body_sha=write_checkpoint_body(db, envelope_json,
-            previous_payload=envelope_row.envelope_json if previous_checkpoint is not None else None,
+            previous_payload=previous_payload if previous_checkpoint is not None else None,
             previous_sha=previous_checkpoint.body_sha if previous_checkpoint is not None else None),
         provenance="runtime_checkpoint",
     ))
@@ -319,7 +344,6 @@ def write_domain_envelope_checkpoint(
                     body={"pending_ref_id": obj.pending_ref_id, "durable_object_id": _stable_object_id(obj),
                           "envelope_id": envelope.envelope_id})
     index_counts = _regenerate_indexes_for_row(db, envelope_row)
-    inserted_history_event_count = _append_history_events_for_row(db, envelope_row)
     db.flush()
 
     return DomainEnvelopeCheckpointResult(
@@ -617,6 +641,17 @@ def _append_history_events_for_row(
             history_store.apply_decisions_in_transaction(db, scope, artifact.id,
                 operation_id="curator-retirement:" + event_id,
                 actor={"type": "curator", "id": retirement["actor_id"]}, entries=entries)
+        curator_value = event.details.get("curator_value")
+        if curator_value is not None and event.event_type.value == "curator_field_patch_accepted":
+            from src.lib.validation_history import store as history_store
+            from src.lib.validation_history.curator_authority import record_patch
+            from src.models.sql.validation_history import ValidationArtifact
+            reference = envelope.metadata["validation_history"]
+            artifact = db.get(ValidationArtifact, reference["artifact_id"])
+            if artifact is None or artifact.document_id != str(envelope_row.document_id):
+                raise DomainEnvelopePersistenceError("Curator value artifact scope mismatch")
+            scope = history_store.HistoryScope(artifact.owner_id, artifact.document_id, reference["session_id"])
+            record_patch(db, scope, artifact.id, event_id=event_id, actor_id=event.actor_id, body=curator_value)
         edits = event.details.get("validation_history_edits")
         if edits is not None and event.event_type.value == "curator_field_patch_accepted":
             from src.lib.validation_history import store as history_store
@@ -1043,3 +1078,13 @@ __all__ = [
     "regenerate_domain_envelope_indexes",
     "write_domain_envelope_checkpoint",
 ]
+
+
+def lock_projection_artifact(db, artifact_id):
+    """Acquire history before envelope so all publishers share one lock order."""
+    from src.models.sql.validation_history import ValidationArtifact
+    found = db.scalar(select(ValidationArtifact.id).where(
+        ValidationArtifact.id == artifact_id,
+    ).with_for_update())
+    if found is None:
+        raise DomainEnvelopePersistenceError("Projection history artifact is missing")

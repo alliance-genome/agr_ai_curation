@@ -297,6 +297,7 @@ def _build_chat_formatter_bundle(
         from src.lib.curation_workspace.execution_contracts import load_receipt_profile
 
         bundle = build_extraction_result_artifact_bundle(
+            user_id=resolved_user_id,
             extraction_results=records,
             bundle_name="Chat Extraction Results",
             profile_resolver=load_receipt_profile,

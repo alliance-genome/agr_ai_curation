@@ -181,11 +181,13 @@ def create_benchmark_snapshot(
     """Lock and export the exact current persisted envelope revision."""
 
     _require_session_access(db, session_id, current_user_id)
+    from src.lib.curation_workspace.envelope_visibility import linked_or_non_prepared_envelope
     envelope_row = db.scalars(
         select(DomainEnvelopeModel)
         .where(
             DomainEnvelopeModel.envelope_id == envelope_id,
             DomainEnvelopeModel.session_id == session_id,
+            linked_or_non_prepared_envelope(),
         )
         .with_for_update()
     ).first()

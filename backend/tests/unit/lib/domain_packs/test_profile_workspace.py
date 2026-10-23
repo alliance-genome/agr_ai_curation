@@ -19,6 +19,14 @@ from .test_profile_materialization import prepared, results
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
+@pytest.fixture(autouse=True)
+def workspace_database_boundaries(monkeypatch):
+    # These profile unit tests use in-memory rows. Real lock/CAS behavior is
+    # covered by test_profile_validator_workspace against migrated PostgreSQL.
+    monkeypatch.setattr(session_validation_service, "_lock_unlinked_manual_candidate", lambda *args: None)
+    monkeypatch.setattr(session_validation_service, "_lock_unchanged_validation_draft", lambda *args: None)
+
+
 
 @pytest.mark.parametrize("inline_complete", [False, True])
 def test_prep_checks_live_profile_access_without_open_generic_fallback(example, monkeypatch, inline_complete):
@@ -75,14 +83,16 @@ def test_workspace_revalidation_uses_profile_registry_and_atomic_writer(example,
     checkpoints = []
     monkeypatch.setattr(session_validation_service, "write_domain_envelope_checkpoint",
                         lambda _db, request: (checkpoints.append(request), SimpleNamespace(revision=2))[1])
-    candidate = SimpleNamespace(id="candidate", session_id="session", object_id="one", envelope_revision=1, draft=None)
+    candidate = SimpleNamespace(id="candidate", session_id="session", object_id="one", envelope_revision=1, draft=SimpleNamespace(version=1, fields=[]))
     updated, revision, warnings = session_validation_service._dispatch_workspace_envelope_validation(
         object(), candidate, envelope_row=row, envelope=source, field_paths=(),
         validated_at=datetime.now(timezone.utc),
     )
     assert revision == candidate.envelope_revision == 2
     assert not warnings
-    assert updated.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert updated.extracted_objects[0].payload["attributes"] == {"paper_name": "A"}
+    assert updated.validator_results
+    assert updated.validation_findings[0].details["machine_review"] == "pending"
     assert checkpoints[0].envelope == updated
     assert source.extracted_objects[0].payload["attributes"] == {"paper_name": "A"}
 
@@ -132,6 +142,13 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
         return SimpleNamespace(envelope_id=request.envelope.envelope_id, revision=row.revision)
 
     monkeypatch.setattr(session_validation_service, "write_domain_envelope_checkpoint", checkpoint)
+    def prepare_source(**kwargs):
+        from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+        return checkpoint(db, DomainEnvelopeCheckpointRequest(
+            project_key="generic", envelope=kwargs["envelope"], expected_revision=0,
+            execution_receipt=kwargs["receipt"], document_id=kwargs["document_id"],
+            session_id=kwargs["session_id"], flow_run_id=kwargs["flow_run_id"], adapter_key=kwargs["adapter_key"]))
+    monkeypatch.setattr("src.lib.curation_workspace.manual_profile_preparation.prepare_manual_source", prepare_source)
 
     def dispatch(envelope, pack, **kwargs):
         values = results(envelope, kwargs["profile_context"], [{"identifier": "EX:1"}]) if available else []
@@ -143,13 +160,16 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
         db, candidate, force=True, validated_at=datetime.now(timezone.utc),
         runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id=str(candidate.session.document_id)))
     assert len(requests) == 2 and requests[0].expected_revision == 0
-    assert candidate.envelope_id == f"manual-profile:{candidate.id}"
+    assert candidate.envelope_id.startswith(f"manual-profile:{candidate.id}:")
     assert candidate.normalized_payload == {}
     final = DomainEnvelope.model_validate(rows[candidate.envelope_id].envelope_json)
     assert final.metadata["source"] == "manual"
     assert final.metadata["extraction_metadata"]["provenance"]["record_source"] == "curator_manual"
     attributes = final.extracted_objects[0].payload["attributes"]
-    assert attributes == ({"paper_name": "A", "resolved_id": "EX:1"} if available else {"paper_name": "A"})
+    assert attributes == {"paper_name": "A"}
+    if available:
+        assert final.validator_results
+        assert final.validation_findings[0].details["machine_review"] == "pending"
     assert computation.updated_fields[0]["value"] == attributes
     assert computation.snapshot.envelope_id == candidate.envelope_id
     assert computation.snapshot.envelope_revision == 2

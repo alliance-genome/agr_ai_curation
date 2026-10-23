@@ -764,8 +764,9 @@ def apply_curator_identity(
     a subset; the declared id and label stay filled. Otherwise it is
     rejected with a message naming what is missing. Clearing the whole
     identity reverts to unresolved (the
-    validator's last unresolved outcome, else ``not_validated``); entering
-    the identity the value had before the override restores that state.
+    validator's last unresolved outcome, else ``not_validated``). Entering an
+    old identity remains a new explicit override; historical restoration is a
+    separate authorized selection action.
     Returns the audit record.
     """
 
@@ -798,17 +799,6 @@ def apply_curator_identity(
         )
         value.pop(CURATOR_OVERRIDE_KEY, None)
         action = "cleared"
-    elif all(identity[key] == base.get(key) for key in identity_keys) and has_resolution_state(base) and (
-        base.get(LOOKUP_OUTCOME_KEY) != OUTCOME_CURATOR_OVERRIDE
-    ):
-        # The curator entered the identity the value had before: restore that state.
-        for key in [key for key in value if isinstance(key, str) and key.startswith(OVERRULED_KEY_PREFIX)]:
-            del value[key]
-        for key in (*identity_keys, VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY):
-            value.pop(key, None)
-        value.update(copy.deepcopy(base))
-        value.pop(CURATOR_OVERRIDE_KEY, None)
-        action = "restored"
     else:
         missing = [
             key for key in identity_keys

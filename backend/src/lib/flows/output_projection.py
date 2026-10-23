@@ -374,6 +374,8 @@ class FlowOutputField(BaseModel):
 
 
 class FlowOutputArtifact(BaseModel):
+    selected_projection: dict[str, Any] | None = None
+    review_session_id: str | None = None
     node_id: str = ""
     export_schema_fingerprint: str = ""
     execution_receipt: AgentExecutionReceipt | None = None
@@ -416,6 +418,7 @@ class FlowOutputArtifact(BaseModel):
 
 
 class FlowOutputArtifactBundle(BaseModel):
+    authorization_user_id: str | None = Field(default=None, exclude=True)
     flow_name: str
     flow_run_id: str | None = None
     document_id: str | None = None
@@ -436,6 +439,7 @@ class FlowOutputArtifactBundle(BaseModel):
 
 
 class FlowOutputProjectionResult(BaseModel):
+    selection_manifests: list[dict[str, Any]] = Field(default_factory=list)
     # None explicitly means a caller did not supply stage measurements.
     export_accounting: ExportAccounting | None = None
     applied_filters: list[dict[str, Any]] = Field(default_factory=list)
@@ -1565,6 +1569,8 @@ def _artifact_source_key(
 def _build_artifact_from_step(
     step: Mapping[str, Any],
     *,
+    user_id: str | None = None,
+    source_document_id: str | None = None,
     profile_resolver: ProfileResolver | None = None,
     packaged_sources: dict[tuple[str, str], Any] | None = None,
 ) -> FlowOutputArtifact | None:
@@ -1582,6 +1588,43 @@ def _build_artifact_from_step(
     if payload is None:
         return None
 
+    selected_reference = None
+    review_session_id = None
+    if isinstance(payload, Mapping):
+        source_metadata = payload.get("metadata") or {}
+        selected_reference = source_metadata.get("selected_projection")
+        history_reference = source_metadata.get("validation_history") or {}
+        review_session_id = history_reference.get("session_id")
+        if history_reference and user_id and review_session_id:
+            from src.lib.validation_history.projection import latest_publication_reference
+            from src.lib.validation_history.store import HistoryScope
+            selected_reference = latest_publication_reference(
+                HistoryScope(user_id, source_document_id, review_session_id),
+                history_reference["artifact_id"],
+            )
+        if selected_reference is not None:
+            if not user_id or not review_session_id:
+                raise ValueError("Selected output requires authenticated source scope")
+            from src.lib.validation_history.projection import read_published_projection
+            from src.lib.validation_history.store import HistoryScope, SelectionNotReady
+            try:
+                selected_envelope, _ = read_published_projection(
+                    HistoryScope(user_id, source_document_id, review_session_id),
+                    selected_reference, current=True,
+                )
+            except SelectionNotReady as exc:
+                # Expose pending readiness without presenting stale payload as
+                # current rows or failing discovery of unrelated ready artifacts.
+                return FlowOutputArtifact(
+                    node_id=str(_step_attr(step, "node_id") or ""),
+                    envelope_id=str(payload.get("envelope_id") or ""),
+                    domain_pack_id=str(payload.get("domain_pack_id") or ""),
+                    review_session_id=review_session_id, artifact_shape="domain_envelope",
+                    source_key=str(_step_attr(step, "source_key") or _step_attr(step, "node_id") or payload.get("envelope_id") or ""),
+                    is_canonical_curation_data=True,
+                    warnings=["Selected values await publication: " + str(exc)],
+                )
+            payload = selected_envelope.model_dump(mode="json")
     raw_receipt = _candidate_attr(candidate, "execution_receipt")
     receipt = AgentExecutionReceipt.model_validate(raw_receipt) if raw_receipt is not None else None
     profile_fields = None
@@ -1890,6 +1933,7 @@ def _build_artifact_from_step(
                                       display=display_specs.get(f["ref"]))
                       for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
     return FlowOutputArtifact(
+        selected_projection=selected_reference, review_session_id=review_session_id,
         node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
         execution_receipt=receipt,
         declared_fields=[FlowOutputField(
@@ -1976,6 +2020,7 @@ def _default_row_source_for_bundle(
 
 def _build_artifact_bundle(
     *,
+    user_id: str | None = None,
     artifacts: Sequence[FlowOutputArtifact],
     flow_name: str,
     flow_run_id: str | None = None,
@@ -2018,6 +2063,7 @@ def _build_artifact_bundle(
         for warning in artifact.warnings
     ]
     return FlowOutputArtifactBundle(
+        authorization_user_id=user_id,
         flow_name=flow_name,
         flow_run_id=flow_run_id,
         document_id=document_id,
@@ -2034,6 +2080,7 @@ def _build_artifact_bundle(
 
 def build_flow_output_artifact_bundle(
     *,
+    user_id: str | None = None,
     completed_steps: Sequence[Mapping[str, Any]],
     flow_name: str,
     flow_run_id: str | None = None,
@@ -2049,9 +2096,11 @@ def build_flow_output_artifact_bundle(
         for step in completed_steps
         if (artifact := _build_artifact_from_step(
             step, profile_resolver=profile_resolver, packaged_sources=packaged_sources,
+            user_id=user_id, source_document_id=document_id,
         )) is not None
     ]
     return _build_artifact_bundle(
+        user_id=user_id,
         flow_name=flow_name,
         flow_run_id=flow_run_id,
         document_id=document_id,
@@ -2101,6 +2150,7 @@ def _step_from_extraction_result(
 
 def build_extraction_result_artifact_bundle(
     *,
+    user_id: str | None = None,
     extraction_results: Sequence[CurationExtractionResultRecord],
     bundle_name: str = "Extraction Results",
     flow_run_id: str | None = None,
@@ -2120,9 +2170,11 @@ def build_extraction_result_artifact_bundle(
         for step in completed_steps
         if (artifact := _build_artifact_from_step(
             step, profile_resolver=profile_resolver, packaged_sources=packaged_sources,
+            user_id=user_id, source_document_id=document_id,
         )) is not None
     ]
     return _build_artifact_bundle(
+        user_id=user_id,
         artifacts=artifacts,
         flow_name=bundle_name,
         flow_run_id=flow_run_id or _common_string_value(
@@ -3773,7 +3825,33 @@ def finalize_output_projection(
     rows beyond ``FLOW_PROJECTION_MAX_ROWS`` are never silently dropped.
     """
 
+    from src.lib.validation_history.projection import read_published_projection
+    from src.lib.validation_history.store import HistoryScope, HistoryConflict
+    if plan.selection_mode == "selected_fields":
+        node_ids = {source.node_id for source in plan.selected_sources}
+        selected_artifacts = [artifact for artifact in bundle.artifacts if artifact.node_id in node_ids]
+    else:
+        source_ids = {value.strip() for value in plan.source_extraction_result_ids if value.strip()}
+        source_keys = {value.strip() for value in plan.source_keys if value.strip()}
+        selected_artifacts = [artifact for artifact in bundle.artifacts
+            if not source_ids and not source_keys
+            or artifact.extraction_result_id in source_ids or artifact.source_key in source_keys]
+    for artifact in selected_artifacts:
+        if not artifact.is_canonical_curation_data:
+            continue
+        if artifact.selected_projection is None:
+            raise HistoryConflict("Output awaits explicit review and selected-value publication")
+        if not bundle.authorization_user_id or not artifact.review_session_id:
+            raise HistoryConflict("Selected output requires authenticated source scope")
+        read_published_projection(
+            HistoryScope(bundle.authorization_user_id, bundle.document_id, artifact.review_session_id),
+            artifact.selected_projection, finalized=True,
+        )
     result = apply_projection_plan(bundle, plan, render_display=True)
+    result.selection_manifests = [
+        dict(artifact.selected_projection) for artifact in selected_artifacts
+        if artifact.selected_projection is not None
+    ]
     if result.truncated and not result.limited_by_max_rows:
         raise FlowOutputOperationalCeilingError(
             f"The projection matched {result.total_count} rows, above the operational "

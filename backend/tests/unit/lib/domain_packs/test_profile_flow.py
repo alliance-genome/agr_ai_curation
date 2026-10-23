@@ -222,8 +222,6 @@ async def test_flow_step_commits_profile_record_atomically(example, monkeypatch,
     results_by_request = {item.request.request_id: item.result for item in items}
     monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
         lambda request, **kwargs: results_by_request[request.request_id].model_dump(mode="json"))
-    monkeypatch.setattr(executor, "materialize_validator_results_into_envelope",
-                        lambda *a, **kw: pytest.fail("Profile entered packaged writer"))
     monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", lambda **kwargs: [SimpleNamespace(extraction_result_id="11111111-1111-1111-1111-111111111111")])
     monkeypatch.setattr(executor, "ensure_domain_envelope_materialization",
                         lambda *args, **kwargs: SimpleNamespace(envelope_id=source.envelope_id))
@@ -284,10 +282,10 @@ async def test_flow_step_commits_profile_record_atomically(example, monkeypatch,
     assert result["validated_candidate"].execution_receipt is candidate.execution_receipt
     assert candidate.payload_json == source.model_dump(mode="json")
     records = saved.extracted_objects[0].payload["attributes"]["records"]
-    if invalid_second:
-        assert saved.extracted_objects == source.extracted_objects
-    else:
-        assert [record["resolved_id"] for record in records] == ["EX:1", "EX:2"]
+    # Completion retains proposals; acceptance is a separate supervisor action.
+    assert records == [{"paper_name": "A"}, {"paper_name": "B"}]
+    assert len(saved.validator_results) == 2
+    assert all(f.details["machine_review"] == "pending" for f in saved.validation_findings)
     assert source.extracted_objects[0].payload["attributes"]["records"] == [{"paper_name": "A"}, {"paper_name": "B"}]
     db.commit.assert_called_once()
     db.rollback.assert_not_called()

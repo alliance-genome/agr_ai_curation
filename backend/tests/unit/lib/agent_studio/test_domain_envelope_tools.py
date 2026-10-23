@@ -810,7 +810,8 @@ def test_sessionless_domain_envelope_visibility_requires_visible_candidate_sessi
 
     assert document_result["success"] is True
     assert len(select_statements) == 2
-    assert "envelope_json" not in select_statements[-1]
+    # Visibility may filter preparation metadata, but discovery never loads full JSON.
+    assert "envelope_json" not in select_statements[-1].split("FROM", 1)[0]
     assert {row["envelope_id"] for row in document_result["envelopes"]} == {
         "env-visible-sessionless"
     }

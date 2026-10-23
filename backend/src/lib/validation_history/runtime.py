@@ -71,69 +71,77 @@ def _attach_object_targets(updated, scope, artifact_id, root_target, *, origin):
         )
         store._require_live_artifact(db, artifact_id)
 
-        def register(identity, original, parent):
-            return store.register_target_in_transaction(
-                db,
-                artifact_id,
-                identity=identity,
-                original=original,
-                parent_target_id=parent,
+        return attach_object_targets_in_transaction(
+            db, updated, artifact_id, root_target, origin=origin,
+        )
+
+
+def attach_object_targets_in_transaction(db, updated, artifact_id, root_target, *, origin):
+    """Attach immutable targets within the caller's locked publication transaction."""
+    def register(identity, original, parent):
+        return store.register_target_in_transaction(
+            db,
+            artifact_id,
+            identity=identity,
+            original=original,
+            parent_target_id=parent,
+        )
+
+    for obj in updated.extracted_objects:
+        if "validation_history" in obj.metadata:
+            continue
+        object_key = obj.object_id or obj.pending_ref_id
+        if object_key is None:
+            raise store.HistoryConflict(
+                "Extraction object requires a stable source identity"
             )
+        object_target = register(
+            "object:" + object_key + (":" + origin["completion_id"] if "completion_id" in origin else ""),
+            {
+                "object_ref": object_key,
+                "object_type": obj.object_type,
+                "payload": obj.payload,
+                "object_refs": [ref.model_dump(mode="json") for ref in obj.object_refs],
+                "origin": origin,
+            },
+            root_target,
+        )
+        fields, elements = {}, {}
 
-        for obj in updated.extracted_objects:
-            if "validation_history" in obj.metadata:
-                continue
-            object_key = obj.object_id or obj.pending_ref_id
-            if object_key is None:
-                raise store.HistoryConflict(
-                    "Extraction object requires a stable source identity"
-                )
-            object_target = register(
-                "object:" + object_key,
-                {
-                    "object_ref": object_key,
-                    "object_type": obj.object_type,
-                    "payload": obj.payload,
-                    "origin": origin,
-                },
-                root_target,
-            )
-            fields, elements = {}, {}
+        def walk(value, path, parent):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    child_path = f"{path}.{key}" if path else key
+                    tid = register(
+                        f"field:{parent}:{key}",
+                        {"initial_path": child_path, "value": child},
+                        parent,
+                    )
+                    fields[child_path] = tid
+                    walk(child, child_path, tid)
+            elif isinstance(value, list):
+                ids = []
+                for index, child in enumerate(value):
+                    child_path = f"{path}[{index}]"
+                    tid = register(
+                        f"element:{parent}:{index}",
+                        {
+                            "object_target": object_target,
+                            "initial_path": child_path,
+                            "value": child,
+                        },
+                        parent,
+                    )
+                    ids.append(tid)
+                    walk(child, child_path, tid)
+                elements[path] = ids
 
-            def walk(value, path, parent):
-                if isinstance(value, dict):
-                    for key, child in value.items():
-                        child_path = f"{path}.{key}" if path else key
-                        tid = register(
-                            f"field:{parent}:{key}",
-                            {"initial_path": child_path, "value": child},
-                            parent,
-                        )
-                        fields[child_path] = tid
-                        walk(child, child_path, tid)
-                elif isinstance(value, list):
-                    ids = []
-                    for index, child in enumerate(value):
-                        child_path = f"{path}[{index}]"
-                        tid = register(
-                            f"element:{parent}:{index}",
-                            {
-                                "object_target": object_target,
-                                "initial_path": child_path,
-                                "value": child,
-                            },
-                            parent,
-                        )
-                        ids.append(tid)
-                        walk(child, child_path, tid)
-                    elements[path] = ids
-
-            walk(obj.payload, "", object_target)
-            obj.metadata["validation_history"] = {
-                "target_id": object_target,
-                "fields": fields,
-                "elements": elements,
-            }
+        walk(obj.payload, "", object_target)
+        obj.metadata["validation_history"] = {
+            "target_id": object_target,
+            "fields": fields,
+            "elements": elements,
+        }
     return updated
 
 
@@ -161,17 +169,21 @@ def bind_artifact(envelope, runtime_context) -> CapturedArtifact:
 
 
 def request_target(binding: CapturedArtifact, job) -> str:
+    return binding_target(binding, job.match)
+
+
+def binding_target(binding: CapturedArtifact, match) -> str:
     """Binding target identity pins stable element, never a mutable array position."""
     from src.schemas.domain_envelope import parse_field_path
 
-    obj = job.match.object_envelope
+    obj = match.object_envelope
     if obj is None:
-        root_target = job.match.envelope.metadata["validation_history"]["target_id"]
+        root_target = match.envelope.metadata["validation_history"]["target_id"]
         return store.register_target(
             binding.scope,
             binding.artifact_id,
-            identity="envelope-binding:" + job.request.validator_binding_id,
-            original={"binding_id": job.request.validator_binding_id},
+            identity="envelope-binding:" + match.binding.binding_id,
+            original={"binding_id": match.binding.binding_id},
             parent_target_id=root_target,
         )
     refs = obj.metadata["validation_history"]
@@ -181,7 +193,7 @@ def request_target(binding: CapturedArtifact, job) -> str:
         obj.pending_ref_id,
     }:
         raise store.HistoryConflict("Object identity does not match its history target")
-    field = job.request.target.field_path
+    field = match.field_path
     parts = parse_field_path(field) if field else ()
     stable = []
     prefix = ""
@@ -224,7 +236,7 @@ def request_target(binding: CapturedArtifact, job) -> str:
     identity = store.canonical(
         {
             "object": refs["target_id"],
-            "binding": job.request.validator_binding_id,
+            "binding": match.binding.binding_id,
             "path": stable,
         }
     )[0]
@@ -234,7 +246,7 @@ def request_target(binding: CapturedArtifact, job) -> str:
         identity="binding:" + identity,
         original={
             "object_target": refs["target_id"],
-            "binding_id": job.request.validator_binding_id,
+            "binding_id": match.binding.binding_id,
             "stable_path": stable,
         },
         parent_target_id=parent_target,
@@ -244,6 +256,7 @@ def request_target(binding: CapturedArtifact, job) -> str:
 def begin_jobs(
     binding: CapturedArtifact, jobs, *, operation_id: str, receipt: dict
 ) -> dict:
+    from .curator_authority import anchor_for_path
     requests = [
         {
             "target_id": request_target(binding, j),
@@ -253,9 +266,14 @@ def begin_jobs(
                 *j.request.target.expected_fields,
                 *(j.request.target.optional_fields or []),
             ],
+            "result_anchors": {slot: anchor_for_path(j.match.object_envelope.metadata["validation_history"], path)
+                for slot, path in {**j.request.expected_result_fields, **(j.request.optional_result_fields or {})}.items()
+                if j.match.object_envelope is not None and isinstance(path, str)},
             "decision_units": list(j.match.binding.decision_units),
             "dispatch_wave": j.history_wave,
+            "review_episode_id": j.history_episode_id or j.match.envelope.metadata.get("review_episode_id"),
             "available_prior_completions": list(j.history_prior_completions),
+            "prerequisites": list(j.history_prerequisites),
         }
         for j in jobs
     ]
@@ -793,54 +811,6 @@ def _check_collection_materialization(before, after):
                 walk(old.get(key), new.get(key), (*parts, key))
 
     walk(before.payload, after.payload)
-
-
-def capture_derived_objects(
-    binding: CapturedArtifact, envelope, results, *, previous_envelope
-):
-    """Give newly materialized objects identities as validator contributions.
-
-    This never labels the contribution an extraction or an accepted selection.
-    Existing collection edits must use the explicit stable-identity APIs.
-    """
-    from copy import deepcopy
-
-    envelope = envelope.model_copy(deep=True)
-    previous_targets = {
-        obj.object_id or obj.pending_ref_id: obj
-        for obj in previous_envelope.extracted_objects
-    }
-    for obj in envelope.extracted_objects:
-        prior = previous_targets.get(obj.object_id or obj.pending_ref_id)
-        if prior is not None:
-            _check_collection_materialization(prior, obj)
-            if "validation_history" not in obj.metadata:
-                obj.metadata["validation_history"] = deepcopy(
-                    prior.metadata["validation_history"]
-                )
-    if all("validation_history" in obj.metadata for obj in envelope.extracted_objects):
-        return envelope
-    contributions = [
-        result._history_ref["fact_id"] for result in results if result._history_ref
-    ]
-    for fact_id in contributions:
-        store.read_fact(binding.scope, binding.artifact_id, fact_id)
-    if not contributions:
-        raise store.HistoryConflict(
-            "Derived objects require recorded source contributions"
-        )
-    root = envelope.metadata["validation_history"]["target_id"]
-    return _attach_object_targets(
-        envelope.model_copy(deep=True),
-        binding.scope,
-        binding.artifact_id,
-        root,
-        origin={
-            "kind": "validator_contribution",
-            "available_wave_fact_ids": contributions,
-            "exact_contributor_available": False,
-        },
-    )
 
 
 def capture_curator_objects(binding: CapturedArtifact, envelope, *, actor_id: str):

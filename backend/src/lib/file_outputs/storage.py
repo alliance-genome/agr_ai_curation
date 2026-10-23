@@ -284,6 +284,7 @@ class FileOutputStorageService:
         file_type: Literal["csv", "tsv", "json"],
         descriptor: str,
         stable_filename: bool = False,
+        content_version: str | None = None,
     ) -> tuple[Path, str, int, list[str]]:
         """Save file output to storage.
 
@@ -303,6 +304,9 @@ class FileOutputStorageService:
                 outputs/structured/{trace_id}/{descriptor}_{trace_id}.{ext} path
                 and replace any existing file at that path. Intended for
                 idempotent per-run structured exports.
+            content_version: Optional SHA256 version of the exported content and
+                selection manifest. Requires stable_filename; appended after human
+                descriptor normalization so truncation cannot erase the version.
 
         Returns:
             Tuple of (final_path, file_hash, file_size, warnings)
@@ -318,6 +322,12 @@ class FileOutputStorageService:
         self._validate_file_type(file_type)
         normalized_descriptor = sanitize_output_descriptor(descriptor)
         self._validate_descriptor(normalized_descriptor)
+        if content_version is not None:
+            if not stable_filename or re.fullmatch(r"[a-f0-9]{64}", content_version) is None:
+                raise FileValidationError("Content version requires a SHA256 digest and stable filename")
+            # The cryptographic identity is not human filename text and must
+            # never pass through the descriptor truncation step.
+            normalized_descriptor = f"{normalized_descriptor}_{content_version}"
 
         # Generate filename
         if stable_filename:

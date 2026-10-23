@@ -112,6 +112,8 @@ def _clean_domain_tables(session):
         CurationReviewSession,
     ):
         session.execute(delete(model))
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord
+    session.execute(delete(CurationExtractionResultRecord).where(CurationExtractionResultRecord.document_id == OWNER_DOCUMENT_ID))
     session.execute(
         delete(PDFDocument).where(PDFDocument.filename.like("field_patch_constraint_%"))
     )
@@ -638,7 +640,7 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
     monkeypatch.setattr(
         executor.DomainPackValidationRegistry,
         "from_domain_pack",
-        lambda _domain_pack: SimpleNamespace(),
+        lambda _domain_pack: SimpleNamespace(match_bindings=lambda *args, **kwargs: []),
     )
     monkeypatch.setattr(
         executor,
@@ -675,9 +677,9 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
                             }
                         ]
                     },
-                    document_id=str(uuid4()),
-                    user_id="curator-1",
-                    session_id=str(uuid4()),
+                    document_id=str(OWNER_DOCUMENT_ID),
+                    user_id="test_pdf_owner_domain_envelope",
+                    session_id=str(OWNER_SESSION_ID),
                     flow_run_id="flow-run-validator",
                     agent_context={"user_id": "test_pdf_owner_domain_envelope"},
                     flow_conversation_summary="Validated the extracted symbol.",
@@ -705,9 +707,9 @@ def test_validation_group_worker_commits_materialized_checkpoint(db_session, mon
                         }
                     ]
                 },
-                document_id=str(uuid4()),
-                user_id="curator-1",
-                session_id=str(uuid4()),
+                document_id=str(OWNER_DOCUMENT_ID),
+                user_id="test_pdf_owner_domain_envelope",
+                session_id=str(OWNER_SESSION_ID),
                 flow_run_id="flow-run-validator",
                 agent_context={"user_id": "test_pdf_owner_domain_envelope"},
                 flow_conversation_summary="Validated the extracted symbol.",

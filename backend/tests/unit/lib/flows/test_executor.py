@@ -3433,11 +3433,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
             set_live_event_list(None)
 
         assert selector_findings == []
-        assert batch_calls == [
+        # Independent batches can start in either order; each batch and the
+        # returned logical target order remain deterministic.
+        assert sorted(batch_calls) == [
             ["AGR:0001", "AGR:0002"],
             ["AGR:0003", "AGR:0004"],
         ]
         assert len(materialization_inputs) == 5
+        assert [item.result.resolved_values["identifier"] for item in materialization_inputs] == identifiers
         assert [item.result.status for item in materialization_inputs] == [
             "resolved",
             "resolved",
@@ -4531,6 +4534,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "created_at": "2026-04-26T00:00:00Z",
                         }
 
+                    # This test isolates filename scoping; source review is
+                    # covered by the formatter and persistence suites.
+                    for artifact in agent.runtime_kwargs["formatter_bundle"].artifacts:
+                        artifact.is_canonical_curation_data = False
                     formatter_tools = build_output_formatter_tools(
                         bundle=agent.runtime_kwargs["formatter_bundle"],
                         output_format=agent.runtime_kwargs["formatter_output_format"],
@@ -4599,6 +4606,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         persisted_requests = []
         fake_db = MagicMock()
         fake_db.in_transaction.return_value = True
+        record_sources = _recording_persist_idempotent_extraction_results(persisted_requests)
+
+        def persist_sources(requests, *, db=None):
+            assert db is None  # Source persistence owns its transaction.
+            return record_sources(requests)
+
+        def materialize_sources(records, *, db=None):
+            assert db is None  # A prep-owned lock must not leak into materialization.
+            captured["source_prepared"] = True
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -4629,6 +4645,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             persistence_context=None,
             db=None,
         ):
+            assert captured["source_prepared"]
+            fake_db.commit.assert_not_called()
             captured["extraction_results"] = extraction_results
             captured["scope_confirmation"] = scope_confirmation
             captured["persistence_context"] = persistence_context
@@ -4692,10 +4710,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             lambda: fake_db,
         ), patch(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
-            _recording_persist_idempotent_extraction_results(persisted_requests),
+            persist_sources,
         ), patch(
             "src.lib.flows.executor._materialize_flow_domain_envelope_records",
-            lambda *_args, **_kwargs: None,
+            materialize_sources,
         ):
             flow = _make_flow([
                 _task_input_node("Prepare the extracted gene-expression findings for review."),

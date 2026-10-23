@@ -2204,6 +2204,10 @@ class CurationEnvelopeFieldPatchRequest(CurationWorkspaceBaseModel):
         description="Client-observed field value before the edit",
     )
     value: Optional[Any] = Field(default=None, description="New field value")
+    selected_value_action: Optional[Literal["withdraw_override", "restore_selected"]] = None
+    selection_reference: Optional[dict[str, Any]] = Field(
+        default=None, description="Exact published selection reference for an explicit historical restore",
+    )
     reason: Optional[str] = Field(
         default=None,
         description="Optional curator reason for the edit",
@@ -2470,6 +2474,8 @@ class CurationCandidateValidationRequest(CurationWorkspaceBaseModel):
         description="Optional field subset to validate; empty means validate the whole candidate",
     )
     force: bool = Field(default=False, description="Whether to bypass snapshot freshness checks")
+    replace_curator_override: bool = Field(default=False, description="Explicit Revalidate intent: an accepted replacement may supersede the current curator value for the requested targets")
+    guidance: str | None = Field(default=None, description="Optional advisory guidance for this explicit revalidation; never source evidence")
 
 
 class CurationCandidateValidationResponse(CurationWorkspaceBaseModel):
@@ -2490,6 +2496,8 @@ class CurationSessionValidationRequest(CurationWorkspaceBaseModel):
         description="Optional candidate subset to validate; empty means validate the whole session",
     )
     force: bool = Field(default=False, description="Whether to bypass snapshot freshness checks")
+    replace_curator_override: bool = Field(default=False, description="Explicit Revalidate intent: an accepted replacement may supersede the current curator value for the requested targets")
+    guidance: str | None = Field(default=None, description="Optional advisory guidance for this explicit revalidation; never source evidence")
 
 
 class CurationSessionValidationResponse(CurationWorkspaceBaseModel):

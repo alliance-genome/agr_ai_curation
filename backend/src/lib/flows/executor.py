@@ -85,7 +85,6 @@ from src.lib.domain_envelopes.persistence import (
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput,
-    materialize_validator_results_into_envelope,
 )
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -761,6 +760,7 @@ def _flow_file_output_format(agent_id: str, entry: Mapping[str, Any] | None = No
 
 def _build_terminal_flow_artifact_bundle(
     *,
+    user_id: str | None = None,
     agent_id: str,
     output_format: str,
     completed_steps: list[dict[str, Any]],
@@ -807,6 +807,7 @@ def _build_terminal_flow_artifact_bundle(
                 )
         from src.lib.curation_workspace.execution_contracts import load_receipt_profile
         bundle = build_flow_output_artifact_bundle(
+            user_id=user_id,
             completed_steps=scoped_steps,
             flow_name=flow_name,
             flow_run_id=flow_run_id,
@@ -954,6 +955,7 @@ def _make_flow_runtime_formatter_tool(
         output_filename_descriptor: str = "",
     ) -> str:
         bundle = _build_terminal_flow_artifact_bundle(
+            user_id=base_context.get("user_id"),
             agent_id=agent_id,
             output_format=output_format,
             completed_steps=completed_steps,
@@ -1104,6 +1106,7 @@ def _make_flow_chat_output_tool(
                 "Flow chat output must run inside the flow executor's chat output delivery scope."
             )
         bundle = _build_terminal_flow_artifact_bundle(
+            user_id=base_context.get("user_id"),
             agent_id=agent_id,
             output_format=output_format,
             completed_steps=completed_steps,
@@ -2266,10 +2269,28 @@ async def _execute_validation_groups_for_step(
             source_load_started_at
         )
 
+        # Coverage is declared before selectors or provider execution can skip/fail.
+        # Each episode covers the whole artifact, including bindings outside this group.
+        from src.lib.validation_history.runtime import bind_artifact
+        from src.lib.validation_history.selections import declare_envelope_episode
+        history_binding = bind_artifact(
+            source_envelope, _validator_runtime_context_for_flow(
+                document_id=document_id, user_id=user_id,
+                authenticated_groups=_authenticated_groups_from_agent_context(agent_context),
+            ),
+        )
+        from src.lib.validation_history.projection import read_dispatch_source
+        dispatch_source = read_dispatch_source(history_binding, source_envelope)
+        source_envelope = declare_envelope_episode(
+            history_binding, source_envelope, registry.match_bindings(dispatch_source, states=[ValidationBindingState.ACTIVE]),
+            authenticated_groups=_authenticated_groups_from_agent_context(agent_context),
+            flow_selections={_binding_id_from_group(group): group for group in effective_flow_validation_groups(groups)},
+            unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable if item.mapping.policy.blocks_readiness] if profile_context else (),
+        )
         collect_started_at = time.monotonic()
         materialization_inputs, selector_findings, executable_metadata = (
             await _collect_flow_validator_materialization_inputs(
-                source_envelope=source_envelope,
+                source_envelope=dispatch_source.model_copy(update={"metadata": source_envelope.metadata}),
                 source_envelope_revision=source_envelope_revision,
                 registry=registry,
                 groups=groups,
@@ -2300,32 +2321,19 @@ async def _execute_validation_groups_for_step(
             )
         if materialization_inputs:
             result_materialization_started_at = time.monotonic()
-            if profile_context is not None:
-                from src.lib.domain_packs.profile_materialization import materialize_profile_validator_results
-                materialization_result = materialize_profile_validator_results(
-                    working_envelope, profile_context, materialization_inputs,
-                    actor_id="flow_validator_group", source_envelope_revision=source_envelope_revision,
-                )
-            else:
-                materialization_result = materialize_validator_results_into_envelope(
-                    working_envelope,
-                    domain_pack.metadata,
-                    materialization_inputs,
-                    actor_id="flow_validator_group",
-                    source_envelope_revision=source_envelope_revision,
-                )
-            from src.lib.validation_history.runtime import bind_artifact, capture_derived_objects
-            working_envelope = capture_derived_objects(
-                bind_artifact(source_envelope, _validator_runtime_context_for_flow(document_id=document_id,
-                    user_id=user_id, authenticated_groups=_authenticated_groups_from_agent_context(agent_context))),
-                materialization_result.envelope, [item.result for item in materialization_inputs], previous_envelope=working_envelope)
+            from src.lib.validation_history.candidates import retain_candidates
+            materialization_result = retain_candidates(
+                working_envelope, materialization_inputs, scope=history_binding.scope,
+                source_envelope_revision=source_envelope_revision,
+            )
+            working_envelope = materialization_result.envelope
             appended_findings.extend(materialization_result.appended_findings)
             phase_timings_ms["materialize_validator_results_ms"] = _elapsed_ms(
                 result_materialization_started_at
             )
 
         materialized_revision = source_envelope_revision
-        if appended_findings:
+        if appended_findings or working_envelope.metadata != envelope_row.envelope_json.get("metadata", {}):
             checkpoint_started_at = time.monotonic()
             checkpoint = write_domain_envelope_checkpoint(
                 session,
@@ -3833,7 +3841,6 @@ def get_all_agent_tools(
                             session_id=session_id,
                             trace_id=get_current_trace_id(),
                             flow_run_id=flow_run_id,
-                            db=prep_db,
                         )
                         if not extraction_results:
                             raise RuntimeError(
@@ -3907,7 +3914,6 @@ def get_all_agent_tools(
                             session_id=session_id,
                             trace_id=get_current_trace_id(),
                             flow_run_id=flow_run_id,
-                            db=handoff_db,
                         )
                         if not extraction_results:
                             raise RuntimeError(

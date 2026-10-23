@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.curation_workspace.execution_contracts import resolve_manual_candidate_receipt, profiled_draft_payload, resolve_receipt_profile
@@ -78,6 +79,7 @@ from src.lib.curation_workspace.session_types import (
 from src.lib.curation_workspace.session_validation_service import (
     _apply_candidate_validation,
     _load_candidate_for_write,
+    _lock_unlinked_manual_candidate,
     _validator_runtime_context_for_candidate,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
@@ -576,6 +578,17 @@ def update_candidate_draft(
         candidate_id=normalized_candidate_id,
     )
     draft_row = candidate.draft
+    if candidate.source == CurationCandidateSource.MANUAL and candidate.envelope_id is None:
+        # First validation may link a source after this request loaded the draft.
+        # Serialize that decision before taking the non-envelope save path. If
+        # linkage won, return a conflict rather than saving only the stale draft.
+        _lock_unlinked_manual_candidate(db, candidate.id)
+        with db.no_autoflush:
+            current = db.execute(select(DraftModel.version, DraftModel.fields).where(
+                DraftModel.id == draft_row.id,
+            ).with_for_update()).one()
+        if current.version != draft_row.version or current.fields != draft_row.fields:
+            raise HTTPException(status_code=409, detail="Curator draft changed; reload and retry")
     request_draft_id = _normalize_uuid(request.draft_id, field_name="draft_id")
     if draft_row.id != request_draft_id:
         raise HTTPException(
@@ -689,7 +702,7 @@ def update_candidate_draft(
         validation_snapshot, _ = _apply_candidate_validation(
             db,
             candidate,
-            force=True,
+            force=False,
             validated_at=now,
             runtime_context=_validator_runtime_context_for_candidate(
                 candidate,
@@ -913,8 +926,9 @@ def _materialize_candidate_draft_changes_into_envelope(
         envelope_row=envelope_row,
         patched_envelope=working_envelope,
         expected_revision=current_revision,
+        authenticated_groups=active_groups_from_actor_claims(actor_claims),
     )
-    updated_object = _envelope_object_by_stable_id(working_envelope, object_id)
+    updated_object = _envelope_object_by_stable_id(DomainEnvelope.model_validate(envelope_row.envelope_json), object_id)
     if updated_object is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1017,6 +1031,55 @@ def patch_envelope_field(
     }
     if request.patch_id is not None:
         patch_payload["patch_id"] = request.patch_id
+    if request.selected_value_action is not None:
+        from src.lib.validation_history.curator_values import resolve_curator_identity
+        from src.lib.validation_history.store import HistoryScope, HistoryConflict, HistoryAccessError
+        from src.lib.domain_envelopes.patches import _resolvable_target
+        from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+        obj = next((obj for obj in envelope.extracted_objects
+                    if request.object_id in {obj.object_id, obj.pending_ref_id}), None)
+        if obj is None:
+            raise HTTPException(status_code=404, detail="Selected identity object is unavailable")
+        if profile is not None:
+            from src.lib.agent_studio.profile_conformance import declared_value_path
+            value_path = request.field_path
+            keys = profile.resolvable_objects().get(declared_value_path(value_path))
+            if keys is None:
+                raise HTTPException(status_code=422, detail="Selection action requires the whole declared identity and its before value")
+            patch_payload["operation"] = EnvelopeFieldPatchOperation.REPLACE
+            patch_payload["field_path"] = value_path
+        else:
+            target = _resolvable_target(request.field_path, declared_resolvable_fields(domain_pack.metadata, obj.object_type))
+            if target is None:
+                raise HTTPException(status_code=422, detail="Selection action requires a declared identity")
+            value_path, spec, _ = target
+            keys = spec.identity_keys
+            patch_payload["operation"] = EnvelopeFieldPatchOperation.REPLACE_IDENTITY
+        history = envelope.metadata.get("validation_history")
+        owner_id = actor_user_id(actor_claims)
+        if not owner_id:
+            raise HTTPException(status_code=403, detail="An authenticated curator is required")
+        if not isinstance(history, dict) or not history.get("session_id"):
+            raise HTTPException(status_code=409, detail="Selected history is unavailable for this envelope")
+        try:
+            selected_state = resolve_curator_identity(
+                HistoryScope(owner_id, str(envelope_row.document_id), history["session_id"]),
+                envelope=envelope, object_id=request.object_id, value_path=value_path,
+                identity_keys=keys, action=request.selected_value_action,
+                reference=request.selection_reference, include_state=True,
+                authenticated_groups=active_groups_from_actor_claims(actor_claims),
+            )
+            patch_payload["value"] = {key: selected_state.get(key) for key in keys}
+            if request.selected_value_action == "withdraw_override":
+                patch_payload["selected_state"] = selected_state
+        except HistoryAccessError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except HistoryConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        patch_payload["selected_value_action"] = request.selected_value_action
+        patch_payload["selection_reference"] = request.selection_reference
+    elif request.selection_reference is not None:
+        raise HTTPException(status_code=422, detail="A historical selection requires an explicit restore action")
 
     patch_result = apply_curator_field_patch(
         envelope,
@@ -1040,6 +1103,7 @@ def patch_envelope_field(
             envelope_row=envelope_row,
             patched_envelope=patch_result.envelope,
             expected_revision=previous_revision,
+            authenticated_groups=active_groups_from_actor_claims(actor_claims),
         )
         _record_envelope_patch_action(
             db,
@@ -1067,10 +1131,11 @@ def patch_envelope_field(
         envelope_row=envelope_row,
         patched_envelope=patch_result.envelope,
         expected_revision=previous_revision,
+        authenticated_groups=active_groups_from_actor_claims(actor_claims),
     )
 
     updated_object = _envelope_object_by_stable_id(
-        patch_result.envelope,
+        DomainEnvelope.model_validate(envelope_row.envelope_json),
         request.object_id,
     )
     if updated_object is None:
@@ -1268,6 +1333,7 @@ def waive_validation_finding(
         envelope_row=envelope_row,
         patched_envelope=patched_envelope,
         expected_revision=previous_revision,
+        authenticated_groups=active_groups_from_actor_claims(actor_claims),
     )
 
     now = datetime.now(timezone.utc)
@@ -1515,13 +1581,16 @@ def _checkpoint_patch_result(
     envelope_row: Any,
     patched_envelope: DomainEnvelope,
     expected_revision: int,
+    authenticated_groups=(),
 ) -> int:
+    from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
     try:
         checkpoint = write_domain_envelope_checkpoint(
             db,
             DomainEnvelopeCheckpointRequest(
                 project_key=envelope_row.project_key,
                 envelope=patched_envelope,
+                curator_authority_groups=authenticated_groups,
                 expected_revision=expected_revision,
                 document_id=envelope_row.document_id,
                 session_id=envelope_row.session_id,
@@ -1530,7 +1599,9 @@ def _checkpoint_patch_result(
                 model_field_ref_json=dict(envelope_row.model_field_ref_json or {}),
             ),
         )
-    except DomainEnvelopePersistenceError as exc:
+    except HistoryAccessError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (DomainEnvelopePersistenceError, HistoryConflict) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),

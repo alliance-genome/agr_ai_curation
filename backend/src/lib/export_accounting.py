@@ -144,6 +144,7 @@ def projection_summary(result: Any) -> dict[str, Any]:
             for warning in result.warnings[: get_flow_projection_max_list_items()]
         ],
         "export_accounting": compact_accounting(result),
+        "selection_manifests": list(result.selection_manifests),
     }
 
 

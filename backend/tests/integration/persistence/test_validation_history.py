@@ -386,7 +386,8 @@ def test_runtime_captures_baseline_and_request_before_runner_mutates_them(
         match=SimpleNamespace(
             object_envelope=obj,
             envelope=captured,
-            binding=SimpleNamespace(decision_units=()),
+            field_path=request.target.field_path,
+            binding=SimpleNamespace(decision_units=(), binding_id=request.validator_binding_id),
         ),
         request=request,
     )
@@ -758,7 +759,8 @@ def test_reordering_identical_elements_keeps_binding_target_identity(scope):
         target={"domain_pack_id": "fixture", "field_path": "items[0].nested[0]"},
         expected_result_fields={"value": "items[0].nested[0]"},
     )
-    job = SimpleNamespace(match=SimpleNamespace(object_envelope=obj), request=request)
+    job = SimpleNamespace(match=SimpleNamespace(object_envelope=obj,
+        field_path=request.target.field_path, binding=SimpleNamespace(binding_id=request.validator_binding_id)), request=request)
     original_target = runtime.request_target(binding, job)
     reordered = runtime.reorder_element_projection(obj, "items", list(reversed(ids)))
     assert reordered.payload == obj.payload
@@ -768,6 +770,7 @@ def test_reordering_identical_elements_keeps_binding_target_identity(scope):
     )
     job.match.object_envelope = reordered
     request.target.field_path = "items[1].nested[0]"
+    job.match.field_path = request.target.field_path
     request.expected_result_fields = {"value": "items[1].nested[0]"}
     assert runtime.request_target(binding, job) == original_target
 
@@ -991,7 +994,7 @@ def test_rejecting_previously_selected_answer_keeps_exact_accepted_version(scope
     accepted = decision(scope, aid, tid, 0, "accept", subject=completion)[0]
     rejected = decision(scope, aid, tid, 1, "reject", subject=completion)[0]
     assert h.read_fact(scope, aid, accepted)["content"]["selected"] == completion
-    assert h.read_fact(scope, aid, rejected)["content"]["selected"] is None
+    assert h.read_fact(scope, aid, rejected)["content"]["selected"] == h.read_fact(scope, aid, accepted)["content"]["selected"]
     assert h.read_fact(scope, aid, completion)["content"]["result"] == {
         "status": "unresolved"
     }
@@ -1143,7 +1146,7 @@ def test_composite_units_and_pinned_prerequisite_selections(scope):
         )
 
 
-def test_curator_identity_replacement_is_atomic_and_stales_inflight_answer(scope):
+def test_curator_identity_override_is_atomic_and_keeps_extraction_targets(scope):
     from src.lib.validation_history.runtime import capture_extraction
     from src.lib.domain_envelopes.patches import (
         EnvelopeFieldPatch,
@@ -1215,7 +1218,7 @@ def test_curator_identity_replacement_is_atomic_and_stales_inflight_answer(scope
     new = edited.envelope.extracted_objects[0].metadata["validation_history"][
         "elements"
     ]["sites"][0]
-    assert new != old
+    assert new == old
     with SessionLocal() as db:
         save(db, edited.envelope, 1)
         db.rollback()
@@ -1226,16 +1229,16 @@ def test_curator_identity_replacement_is_atomic_and_stales_inflight_answer(scope
     answer = h.complete_attempt(
         scope, aid, att, state="completed", result={"old": True}, diagnostics={}
     )
-    with pytest.raises(h.HistoryConflict):
-        decision(scope, aid, old, 1, "accept", subject=answer)
+    # An old lookup can be retained/selected underneath the separate override.
+    # It cannot consume curator replacement authority or erase the human value.
+    decision(scope, aid, old, 0, "accept", subject=answer)
     assert h.read_fact(scope, aid, old)["content"]["value"] == value
     with SessionLocal() as db:
         assert (
             db.scalar(
                 select(ValidationFact).where(
                     ValidationFact.artifact_id == aid,
-                    ValidationFact.kind == "replacement",
-                    ValidationFact.target_id == new,
+                    ValidationFact.kind == "curator_value",
                 )
             )
             is not None
@@ -1334,9 +1337,6 @@ def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed
         envelope=envelope,
         provenance={},
     )
-    binding = runtime.CapturedArtifact(
-        scope, envelope.metadata["validation_history"]["artifact_id"]
-    )
     for values in (
         [{"label": "B"}, {"label": "A"}],
         [{"label": "C"}, {"label": "D"}],
@@ -1345,8 +1345,8 @@ def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed
         changed = envelope.model_copy(deep=True)
         changed.extracted_objects[0].payload["terms"] = values
         with pytest.raises(h.HistoryConflict, match="materialization"):
-            runtime.capture_derived_objects(
-                binding, changed, [], previous_envelope=envelope
+            runtime._check_collection_materialization(
+                envelope.extracted_objects[0], changed.extracted_objects[0]
             )
     changed = envelope.model_copy(deep=True)
     obj = changed.extracted_objects[0]
@@ -1354,11 +1354,9 @@ def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed
     obj.metadata["validator_resolved_value_materialization"] = [
         {"materialized_field_paths": ["terms[0].label"]}
     ]
-    result = runtime.capture_derived_objects(
-        binding, changed, [], previous_envelope=envelope
-    )
+    runtime._check_collection_materialization(envelope.extracted_objects[0], obj)
     assert (
-        result.extracted_objects[0].metadata["validation_history"]
+        obj.metadata["validation_history"]
         == envelope.extracted_objects[0].metadata["validation_history"]
     )
     corrupted = envelope.model_copy(deep=True)
@@ -1430,7 +1428,7 @@ def test_history_page_size_is_environment_configurable(scope, monkeypatch):
 
 
 @pytest.mark.parametrize("whole_list", [False, True])
-def test_real_two_wave_materializer_preserves_elements_or_rejects_rewrite(
+def test_real_two_wave_dispatch_retains_source_and_waits_for_selection(
     scope, tmp_path, whole_list
 ):
     from copy import deepcopy
@@ -1498,36 +1496,22 @@ def test_real_two_wave_materializer_preserves_elements_or_rejects_rewrite(
         ),
         max_parallel_validators=1,
     )
-    if whole_list:
-        with pytest.raises(h.HistoryConflict, match="materialization"):
-            dispatch_active_validator_bindings(envelope, pack, **kwargs)
-        assert calls == [first["binding_id"]]
-    else:
-        result = dispatch_active_validator_bindings(envelope, pack, **kwargs)
-        assert calls.count("fixture.second") == 2
-        obj = result.envelope.extracted_objects[0]
-        assert obj.payload["evidence_code_curies"] == ["ECO:1", "ECO:2"]
-        assert (
-            obj.metadata["validation_history"]["elements"]["evidence_code_curies"]
-            == old_ids
-        )
-        with SessionLocal() as db:
-            attempts = list(
-                db.scalars(
-                    select(ValidationFact).where(
-                        ValidationFact.artifact_id
-                        == envelope.metadata["validation_history"]["artifact_id"],
-                        ValidationFact.kind == "attempt",
-                    )
-                )
-            )
-            waves = [h._content(db, row)["input"] for row in attempts]
-            assert {item["dispatch_wave"] for item in waves} == {0, 1}
-            assert all(
-                item["available_prior_completions"]
-                for item in waves
-                if item["dispatch_wave"] == 1
-            )
+    result = dispatch_active_validator_bindings(envelope, pack, **kwargs)
+    assert "fixture.second" not in calls
+    obj = result.envelope.extracted_objects[0]
+    assert obj.payload["evidence_code_curies"] == ["eco:1", "eco:2"]
+    assert obj.metadata["validation_history"]["elements"]["evidence_code_curies"] == old_ids
+    with SessionLocal() as db:
+        attempts = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == envelope.metadata["validation_history"]["artifact_id"],
+            ValidationFact.kind == "attempt",
+        )))
+        assert {h._content(db, row)["input"]["dispatch_wave"] for row in attempts} == {0}
+        scheduling = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == envelope.metadata["validation_history"]["artifact_id"],
+            ValidationFact.kind == "scheduling",
+        )))
+        assert any(h._content(db, row)["outcome"] == "awaiting_review" for row in scheduling)
 
 
 def test_document_cleanup_retires_history_and_preserves_owner_exact_reads(scope):

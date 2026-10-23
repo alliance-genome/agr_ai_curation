@@ -5,12 +5,19 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.reviewed_output_unit_support import (
+    build_reviewed_output_bundle as build_flow_output_artifact_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
+
 from src.lib.context import get_current_flow_output_attachment
 from src.lib.flows import executor
-from src.lib.flows.output_projection import build_flow_output_artifact_bundle
 from src.lib.openai_agents.tools import output_formatter_tools
 from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
 from .test_profile_projection import profile_step, _selected_plan  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
 
 
 @pytest.mark.asyncio

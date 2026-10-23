@@ -7,14 +7,22 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.reviewed_output_unit_support import (
+    build_reviewed_output_bundle as build_flow_output_artifact_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
+
 from src.lib.flows.export_fields import packaged_export_fields
 from src.lib.flows.output_projection import (
-    FlowOutputProjectionPlan, apply_projection_plan, build_flow_output_artifact_bundle,
+    FlowOutputProjectionPlan, apply_projection_plan,
     _bounded_projection_row,
 )
 from src.lib.flows.validation_summary_export import object_validation_summary
 from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
 from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
 
 PACK = "agr.alliance.allele"
 PREFIX = "object.summary.AlleleMention."

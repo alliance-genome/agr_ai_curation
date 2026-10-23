@@ -872,19 +872,9 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     assert finding.field_ref.field_path == "gene.identifier"
     assert finding.details["validation_metadata"]["source_envelope_revision"] == 7
     assert finding.details["validation_result"]["resolved_objects"][0]["object_type"] == "Gene"
-    materialized_gene = next(
-        domain_object
-        for domain_object in result.envelope.extracted_objects
-        if domain_object.object_type == "Gene"
-    )
-    assert materialized_gene.status.value == "validated"
-    assert materialized_gene.payload == {
-        "identifier": "AGR:0001",
-        "symbol": "ABC-1",
-    }
-    assert result.envelope.extracted_objects[0].object_refs == [
-        materialized_gene.to_object_ref()
-    ]
+    assert not any(obj.object_type == "Gene" for obj in result.envelope.extracted_objects)
+    assert finding.details["machine_review"] == "pending"
+    assert finding.details["selected_value"] is False
     assert result.validator_results[0].status == "resolved"
 
 
@@ -1306,16 +1296,8 @@ def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
         "domain_pack.validator_resolved",
         "domain_pack.validator_resolved",
     ]
-    materialized_gene = next(
-        domain_object
-        for domain_object in result.envelope.extracted_objects
-        if domain_object.object_type == "Gene"
-    )
-    assert all(
-        materialized_gene.to_object_ref() in domain_object.object_refs
-        for domain_object in result.envelope.extracted_objects
-        if domain_object.object_type == "GeneAssertion"
-    )
+    assert not any(obj.object_type == "Gene" for obj in result.envelope.extracted_objects)
+    assert len(result.envelope.validator_results) == 2
 
 
 def test_dispatch_runs_unique_validator_requests_in_parallel(tmp_path: Path):
@@ -1699,10 +1681,7 @@ def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context(
     ]
     assert result.validator_results[0].lookup_attempts[0].method == "search_genes"
     assert [item.payload.get("gene_symbol") for item in result.envelope.extracted_objects] == [
-        "crb",
-        "crb",
-        "ninaE",
-        None,
+        None, None, None, None,
     ]
 
 
@@ -1854,48 +1833,13 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "source_reference_validation",
         "subject_gene_validation",
     }
-    annotation = result.envelope.extracted_objects[0]
-    subject = annotation.payload["expression_annotation_subject"]
-    assert {key: subject[key] for key in ("primary_external_id", "gene_symbol", "mention")} == {
-        "primary_external_id": "MGI:1923928",
-        "gene_symbol": "Tmem67",
-        "mention": "Tmem67",
-    }
-    assert (subject["resolution_state"], subject["lookup_outcome"]) == ("resolved", "matched")
-    # A reference stored before the contract is verified by this re-validation (ALL-1283).
-    assert annotation.payload["single_reference"] == {
-        "pmid": "PMID:203506",
-        "title": "Resolved literature title",
-        "reference_id": 203506,
-        "curie": "PMID:203506",
-        "resolution_state": "resolved",
-        "lookup_outcome": "matched",
-        "validator_explanation": "Fixture validator resolved this field.",
-        "validator_curator_message": "source_reference_validation resolved.",
-    }
-    patch_events = {
-        event["validator_binding_id"]: event
-        for event in annotation.metadata["validator_resolved_value_materialization"]
-    }
-    assert patch_events["source_reference_validation"]["original_values"] == {
-        "single_reference.title": "Paper supplied title"
-    }
-    assert patch_events["subject_gene_validation"]["materialized_field_paths"] == [
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
+    assert [obj.payload for obj in result.envelope.extracted_objects] == [
+        obj.payload for obj in _gene_expression_envelope().extracted_objects
     ]
-    field_paths = [
-        finding.field_ref.field_path
-        for finding in result.appended_findings
-        if finding.field_ref is not None
-    ]
-    assert {
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
-        "single_reference.reference_id",
-        "single_reference.curie",
-        "single_reference.title",
-    } <= set(field_paths)
+    answers = {item.validator_binding_id: item for item in result.validator_results}
+    assert answers["subject_gene_validation"].resolved_values["primary_external_id"] == "MGI:1923928"
+    assert answers["source_reference_validation"].resolved_values["title"] == "Resolved literature title"
+    assert all(f.details["machine_review"] == "pending" for f in result.appended_findings)
 
 
 def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible():
@@ -2037,76 +1981,16 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         max_parallel_validators=1,
     )
 
-    annotation = result.envelope.extracted_objects[0]
-    # The unresolved gene keeps its paper wording and records why; no identity is written.
-    assert annotation.payload["expression_annotation_subject"] == {
-        "primary_external_id": None,
-        "gene_symbol": None,
-        "mention": "Tmem67",
-        "resolution_state": "unresolved",
-        "lookup_outcome": "ambiguous",
-        "validator_explanation": "Multiple provider candidates matched.",
-        "validator_curator_message": "Subject gene lookup is ambiguous.",
-    }
-    # The lookup found no reference (decisive): the stored, unverified title is set aside.
-    assert annotation.payload["single_reference"] == {
-        "pmid": "PMID:203506",
-        "title": None,
-        "overruled_title": "Paper supplied title",
-        "resolution_state": "unresolved",
-        "lookup_outcome": "not_found",
-        "validator_explanation": "The API-backed lookup found no source reference.",
-        "validator_curator_message": "No unambiguous reference match found.",
-    }
-    open_findings = [
-        finding
-        for finding in result.appended_findings
-        if finding.status.value == "open"
+    assert [obj.payload for obj in result.envelope.extracted_objects] == [
+        obj.payload for obj in _gene_expression_envelope().extracted_objects
     ]
-    assert {
-        finding.field_ref.field_path
-        for finding in open_findings
-        if finding.field_ref is not None
-    } == {
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
-        "expression_experiment.entity_assayed.primary_external_id",
-        "expression_experiment.entity_assayed.gene_symbol",
-        "single_reference.reference_id",
-        "expression_experiment.single_reference.reference_id",
-        "single_reference.curie",
-        "single_reference.title",
-        # The experiment's copy mirrors the full reference identity (N6).
-        "expression_experiment.single_reference.curie",
-        "expression_experiment.single_reference.title",
+    answers = {item.validator_binding_id: item for item in result.validator_results}
+    assert answers["subject_gene_validation"].status == "unresolved"
+    assert answers["source_reference_validation"].status == "unresolved"
+    assert {candidate.value for candidate in answers["subject_gene_validation"].candidates} == {
+        "MGI:1923928", "RGD:1586167",
     }
-    classifications = {
-        finding.field_ref.field_path: finding.details["failure_classification"]
-        for finding in open_findings
-        if finding.field_ref is not None
-    }
-    assert classifications["expression_annotation_subject.primary_external_id"] == "ambiguous"
-    assert classifications["single_reference.reference_id"] == "not_found"
-    gene_finding = next(
-        finding
-        for finding in open_findings
-        if finding.field_ref is not None
-        and finding.field_ref.field_path
-        == "expression_annotation_subject.primary_external_id"
-    )
-    assert [item["value"] for item in gene_finding.details["candidate_matches"]] == [
-        "MGI:1923928",
-        "RGD:1586167",
-    ]
-    reference_finding = next(
-        finding
-        for finding in open_findings
-        if finding.field_ref is not None
-        and finding.field_ref.field_path == "single_reference.reference_id"
-    )
-    assert reference_finding.details["lookup_attempts"][0]["lookup_status"] == (
-        "not_found"
-    )
+    assert all(f.details["machine_review"] == "pending" for f in result.appended_findings)
 
 
 def test_invalid_validator_schema_becomes_controlled_unresolved_result(
@@ -3974,11 +3858,11 @@ def test_dispatch_validates_and_materializes_every_multivalued_element(tmp_path:
     # EVERY element was sent to the validator, not just [0].
     assert sorted(dispatched_curies) == ["eco:0000315", "eco:0000316"]
 
-    # Both elements were written back per-element at field[0] and field[1].
+    # Both proposals were retained; neither changes the source before review.
     annotation = result.envelope.extracted_objects[0]
     assert annotation.payload["evidence_code_curies"] == [
-        "ECO:0000315",
-        "ECO:0000316",
+        "eco:0000315",
+        "eco:0000316",
     ]
 
     # Per-element findings carry the element index (D6).
@@ -4406,3 +4290,18 @@ def test_validator_policy_refusal_is_configuration_failure_not_sentry(tmp_path, 
         raise ValidatorToolPolicyError('Forbidden configured paper reader')
     result = dispatch_active_validator_bindings(_envelope(), _loaded_pack(tmp_path), runner=runner)
     assert result.validator_results[0]._execution_failure == 'validator_tool_policy'
+
+
+def test_explicit_curator_guidance_is_scoped_to_requested_object(tmp_path):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+    envelope = _multi_object_envelope(["BAD:0001", "BAD:0002"])
+    first = envelope.extracted_objects[0]
+    captured = []
+    def batch(jobs, *, binding):
+        captured.extend(job.request.validation_guidance for job in jobs)
+        return [_result_payload(job.request, resolved_values={"identifier": "AGR:1", "symbol": "A"}) for job in jobs]
+    dispatch_active_validator_bindings(envelope, pack, batch_runner=batch,
+        runtime_context=ValidatorRuntimeContext(document_id="document", user_id="curator",
+            curator_revalidation=[{"object_id": first.object_id or first.pending_ref_id,
+                "field_paths": [], "actor_id": "curator", "guidance": "Check organism."}]))
+    assert captured == ["Curator revalidation guidance: Check organism.", None]

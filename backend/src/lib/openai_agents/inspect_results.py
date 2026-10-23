@@ -311,14 +311,15 @@ def _inspect(
     detail_path: str | None,
     result_sha256: str | None,
 ) -> dict[str, Any]:
-    if result_view not in {"original", "post_validation"}:
-        raise _RequestError("invalid_request", "result_view must be original or post_validation.")
+    if result_view not in {"original", "post_validation", "accepted"}:
+        raise _RequestError("invalid_request", "result_view must be original, post_validation or accepted.")
     if envelope_revision is not None and (result_view != "post_validation" or envelope_revision < 1):
         raise _RequestError("invalid_request", "envelope_revision requires a positive post_validation revision.")
     if action == "help":
         return {**_help_response(), "result_views": {
             "original": "Immutable extractor output before flow-attached validation.",
-            "post_validation": "Exact saved validation checkpoint used downstream; unavailable if superseded.",
+            "post_validation": "Exact saved validation checkpoint; not evidence of supervisor acceptance.",
+            "accepted": "Current explicitly selected values with review readiness; originals and pending answers remain separate.",
         }}
     if action not in _ACTIONS:
         raise _RequestError(
@@ -499,15 +500,18 @@ def _inspect(
     if action not in {"list", "search"} or (action == "search" and normalized_target == "latest" and parsed_ref is None):
         records = records[:1]
     unavailable_views = []
-    if result_view == "post_validation":
-        from src.lib.openai_agents.result_inspection_views import validation_view, InspectionViewUnavailable
+    if result_view in {"post_validation", "accepted"}:
+        from src.lib.openai_agents.result_inspection_views import validation_view, accepted_view, InspectionViewUnavailable
         projected = []
         for record in records:
             try:
                 binding = authorized_refs.get(_record_result_ref(record), {}) if authorized_refs is not None else {}
                 if "post_validation_checkpoint" in binding and binding["post_validation_checkpoint"] != (_record_attr(record, "metadata") or {}).get("inspection_checkpoint"):
                     raise InspectionViewUnavailable("The completed step's pinned validation checkpoint changed.")
-                projected.append(validation_view(record, revision=envelope_revision, user_id=user_id))
+                projected.append(
+                    accepted_view(record, user_id=user_id) if result_view == "accepted"
+                    else validation_view(record, revision=envelope_revision, user_id=user_id)
+                )
             except InspectionViewUnavailable as exc:
                 # Explicit reads fail; discovery omits unavailable views without substituting originals.
                 if parsed_ref or action not in {"list", "search"}:
@@ -2491,6 +2495,9 @@ def _record_summary(record: Any) -> dict[str, Any]:
         "canonical_status": canonical_status,
         "result_view": _record_attr(record, "inspection_view") or "original",
         "envelope_revision": _record_attr(record, "inspection_revision"),
+        "selection_review_ready": (_record_attr(record, "selection_manifest") or {}).get("ready"),
+        "review_episode_id": (_record_attr(record, "selection_manifest") or {}).get("episode_id"),
+        "selection_manifest_sha256": (_record_attr(record, "selection_manifest") or {}).get("sha256"),
         "post_validation_checkpoint": (_record_attr(record, "metadata") or {}).get("inspection_checkpoint"),
         "object_count": object_count,
         "validation_warning_count": validation_warning_count,

@@ -182,7 +182,8 @@ def list_domain_envelopes(
             .where(CurationCandidate.session_id.in_(visible_session_ids))
             .where(CurationCandidate.envelope_id.is_not(None))
         )
-        query = select(DomainEnvelopeModel).where(
+        from src.lib.curation_workspace.envelope_visibility import linked_or_non_prepared_envelope
+        query = select(DomainEnvelopeModel).where(linked_or_non_prepared_envelope()).where(
             or_(
                 DomainEnvelopeModel.session_id.in_(visible_session_ids),
                 and_(
@@ -1576,6 +1577,9 @@ def _envelope_visible_to_user(
     row: DomainEnvelopeModel,
     user_auth_sub: str,
 ) -> bool:
+    if row.envelope_json.get("metadata", {}).get("manual_preparation") is not None:
+        if row.session_id not in _candidate_session_ids_for_envelope(db, row.envelope_id):
+            return False
     if row.session_id is not None:
         return _session_visible_to_user(
             db,

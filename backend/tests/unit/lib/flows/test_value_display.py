@@ -10,6 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.reviewed_output_unit_support import (
+    build_reviewed_output_bundle as build_flow_output_artifact_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
+
 from src.lib.flows import export_fields
 from src.lib.flows.output_projection import (
     FlowOutputArtifact,
@@ -17,12 +23,13 @@ from src.lib.flows.output_projection import (
     FlowOutputField,
     FlowOutputProjectionPlan,
     apply_projection_plan,
-    build_flow_output_artifact_bundle,
     default_projection_plan,
     finalize_output_projection,
 )
 from src.lib.flows.value_display import display_text
 from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
 
 TERM = {"label": "name", "id": "curie"}
 GENE = {"label": "gene_symbol", "id": "primary_external_id"}

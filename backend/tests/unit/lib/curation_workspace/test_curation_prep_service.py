@@ -405,7 +405,7 @@ async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monke
     def _fake_ensure_domain_envelope_materialization(record, *, persist, db=None):
         assert record is extraction_result
         assert persist is True
-        assert db == object_db
+        assert db is None  # Source preparation owns a committed transaction.
         return CurationPrepEnvelopeRef(
             envelope_id="env-gene-1",
             envelope_revision=2,

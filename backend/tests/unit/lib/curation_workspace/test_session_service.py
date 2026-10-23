@@ -109,6 +109,16 @@ from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_workspace_history_lock(monkeypatch):
+    # This SQLite suite uses synthetic history references. Real artifact/draft
+    # locking and concurrent-edit refusal run in test_profile_validator_workspace.
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.session_validation_service._lock_unchanged_validation_draft",
+        lambda *args: None,
+    )
+
+
 @compiles(PostgresUUID, "sqlite")
 def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(36)"
@@ -743,6 +753,7 @@ def _create_domain_envelope_submission_session(
     object_definition_state: DefinitionState = DefinitionState.STABLE,
     allow_title_override: bool = False,
     title_binding_allows_opt_out: bool = False,
+    reviewed: bool = True,
 ) -> dict[str, str]:
     loaded_pack = _loaded_museum_pack(
         tmp_path,
@@ -800,6 +811,21 @@ def _create_domain_envelope_submission_session(
         ],
         validation_findings=validation_findings or [],
     )
+    if reviewed:
+        envelope.metadata.update(
+            validation_history={"session_id": "unit-selected-session", "artifact_id": "unit-selected-artifact"},
+            selected_projection={"fact_id": "unit-selected-publication"},
+        )
+        def selected_read(scope, reference, *, finalized=False, current=False):
+            assert (finalized or current) and reference == {"fact_id": "unit-selected-publication"}
+            assert scope.document_id == str(document.id)
+            current = db_session.scalar(select(DomainEnvelopeModel).where(
+                DomainEnvelopeModel.envelope_id == envelope.envelope_id,
+            ))
+            return DomainEnvelope.model_validate(current.envelope_json), {"ready": True}
+        monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", selected_read)
+        monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection_in_transaction",
+                            lambda db, *args, **kwargs: selected_read(*args, **kwargs))
     envelope_revision = 1
     db_session.add(
         DomainEnvelopeModel(
@@ -2443,6 +2469,7 @@ def test_workspace_validation_passes_document_user_runtime_context(
         db_session,
         tmp_path=tmp_path,
         monkeypatch=monkeypatch,
+        reviewed=False,
         payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
         title_binding_allows_opt_out=True,
     )
@@ -2562,6 +2589,7 @@ def test_workspace_validation_passes_document_user_runtime_context(
         ),
         user_id="curator-44",
         active_groups=["RGD"],
+        explicit_request=True,
     )
 
     assert len(captured_contexts) == 1
@@ -2646,6 +2674,7 @@ def test_workspace_validation_blocker_prevents_export_readiness(
         db_session,
         tmp_path=tmp_path,
         monkeypatch=monkeypatch,
+        reviewed=False,
         payload={"artifact": {"accession_id": "A-1"}},
         title_binding_allows_opt_out=True,
     )
@@ -2675,11 +2704,10 @@ def test_workspace_validation_blocker_prevents_export_readiness(
 
     readiness = response.submission.readiness[0]
     assert readiness.ready is False
-    assert "Required title is missing." in readiness.blocking_reasons
+    assert "Required blocking field is missing: artifact.title." in readiness.blocking_reasons
     assert [(blocker.field_path, blocker.code) for blocker in readiness.blockers] == [
         ("artifact.title", "domain_envelope.required_field_missing"),
-        ("artifact.title", "domain_pack.required_field_missing"),
-        ("artifact.title", "fixture.required_field_missing"),
+        (None, "domain_envelope.machine_review_pending"),
     ]
 
 
@@ -4806,6 +4834,7 @@ def test_validate_candidate_reruns_after_waiver_advances_envelope_revision(
         db_session,
         tmp_path=tmp_path,
         monkeypatch=monkeypatch,
+        reviewed=False,
         payload={
             "artifact": {
                 "accession_id": "A-1",
@@ -4918,7 +4947,7 @@ def test_validate_candidate_reruns_after_waiver_advances_envelope_revision(
         CurationCandidateValidationRequest(
             session_id=seeded["session_id"],
             candidate_id=seeded["candidate_id"],
-            force=False,
+            force=True,
         ),
     )
 
@@ -6471,3 +6500,14 @@ def test_get_submission_returns_single_submission_history_record(db_session):
     assert response.submission.payload is not None
     assert response.submission.payload.payload_json == {"ok": True}
     assert response.submission.response_message == "Preview available."
+
+
+def test_submission_does_not_invent_approval_for_historical_envelope(db_session, tmp_path, monkeypatch):
+    seeded = _create_domain_envelope_submission_session(db_session, tmp_path=tmp_path,
+        monkeypatch=monkeypatch, reviewed=False,
+        payload={"artifact": {"accession_id": "A-1", "title": "Historical extraction"}, "condition": {"status": "stable"}})
+    response = module.submission_preview(db_session, seeded["session_id"], CurationSubmissionPreviewRequest(
+        session_id=seeded["session_id"], mode=SubmissionMode.EXPORT, target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY))
+    readiness = response.submission.readiness[0]
+    assert not readiness.ready
+    assert any(blocker.code == "domain_envelope.machine_review_pending" for blocker in readiness.blockers)

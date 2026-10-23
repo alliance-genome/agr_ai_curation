@@ -14,6 +14,7 @@ import pytest
 @pytest.fixture
 def isolated_validation_history(monkeypatch):
     from src.lib.validation_history import runtime, store
+    monkeypatch.setattr("src.lib.domain_envelopes.persistence.lock_projection_artifact", lambda *args: None)
 
     monkeypatch.setattr(store, "record_scheduling", lambda *args, **kwargs: str(uuid4()))
     records = {}
@@ -60,10 +61,22 @@ def isolated_validation_history(monkeypatch):
             for attempt, result in zip(invocation["attempt_ids"], results, strict=True)
         ]
 
+    from src.lib.validation_history import candidates, selections, projection
+    monkeypatch.setattr(projection, "read_dispatch_source", lambda bound, envelope: envelope)
+    monkeypatch.setattr(projection, "republish_curator_checkpoint", lambda db, envelope, **kwargs: envelope)
+
+    def declare(bound, envelope, matches, **kwargs):
+        return envelope.model_copy(update={"metadata": {
+            **envelope.metadata,
+            "validation_history": {"artifact_id": binding.artifact_id, "session_id": binding.scope.session_id},
+            "review_episode_id": str(uuid4()),
+        }})
+
+    monkeypatch.setattr(selections, "declare_envelope_episode", declare)
+    monkeypatch.setattr(candidates, "_record_recipe", lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime, "record_match_scheduling", lambda *args, **kwargs: str(uuid4()))
     monkeypatch.setattr(runtime, "capture_extraction", lambda **kwargs: kwargs["envelope"])
     monkeypatch.setattr(runtime, "bind_artifact", lambda envelope, context: binding)
-    monkeypatch.setattr(runtime, "capture_derived_objects", lambda bound, envelope, results, **kwargs: envelope)
     monkeypatch.setattr(runtime, "record_runner_receipt", lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime, "begin_jobs", begin)
     monkeypatch.setattr(runtime, "complete_jobs", complete)

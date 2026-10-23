@@ -54,8 +54,8 @@ def materialize_profile_validator_results(
     original_refs = {}
     for item in items:
         envelope, original_refs[id(item)] = retain_validator_original(
-            envelope, result=item.result, request=item.request,
-            source_envelope_revision=source_envelope_revision,
+            envelope, result=item.original_result or item.result, request=item.request,
+            source_envelope_revision=item.original_source_revision if item.original_result is not None else source_envelope_revision,
         )
         grouped[_object_key(item.match.object_envelope)].append(item)
     objects = {_object_key(obj): obj for obj in envelope.extracted_objects}
@@ -176,6 +176,11 @@ def _approved_updates(item, canonical, context, target):
         issues = ResolvedGenericProfile(slot_pin, slot_contract).validate_attributes(values)
         if issues:
             return "Validator result violates the mapped capability slot type: " + "; ".join(i["message"] for i in issues), []
+    if item.selected_result_slots is not None:
+        expected = expected.model_copy(update={"expected_result_fields": {
+            key: value for key, value in expected.expected_result_fields.items()
+            if key in item.selected_result_slots
+        }})
     if not result.is_resolved:
         try:
             classification = validator_failure_classification(result, error_type=ValueError)

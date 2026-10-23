@@ -71,8 +71,12 @@ def domain_envelope_field_validation_results(
 
     from src.lib.domain_packs.materialization import project_validation_summary_projections
 
+    current_envelope = envelope.model_copy(update={"validation_findings": [
+        finding for finding in envelope.validation_findings
+        if finding.details.get("machine_review") != "pending"
+    ]})
     summaries = project_validation_summary_projections(
-        envelope,
+        current_envelope,
         envelope_revision=envelope_revision,
     )
     object_summaries = [

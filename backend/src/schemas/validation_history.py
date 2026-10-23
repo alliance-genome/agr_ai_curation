@@ -60,18 +60,27 @@ class PrerequisiteSelection(HistoryContract):
     selection_generation: StrictInt = Field(ge=1)
 
 
+class StableValueAnchor(HistoryContract):
+    target_id: StrictStr = Field(min_length=1)
+    suffix: list[StrictStr | StrictInt] = Field(default_factory=list)
+
+
 class FrozenValidationInput(HistoryContract):
     target_id: StrictStr = Field(min_length=1)
     binding_id: StrictStr = Field(min_length=1)
     request: dict[str, Any]
     result_fields: list[StrictStr] = Field(default_factory=list)
+    result_anchors: dict[StrictStr, StableValueAnchor] = Field(default_factory=dict)
     decision_units: list[DecisionUnit] = Field(default_factory=list)
     prerequisites: list[PrerequisiteSelection] = Field(default_factory=list)
     dispatch_wave: StrictInt | None = Field(default=None, ge=0)
+    review_episode_id: StrictStr | None = None
     available_prior_completions: list[StrictStr] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def complete_partition(self):
+        if set(self.result_anchors) - set(self.result_fields):
+            raise ValueError("Destination anchors must name declared result fields")
         if len(set(self.result_fields)) != len(self.result_fields):
             raise ValueError("Result fields must be unique")
         if self.decision_units:
@@ -83,4 +92,42 @@ class FrozenValidationInput(HistoryContract):
                 raise ValueError(
                     "Decision units must partition the complete result coverage"
                 )
+        return self
+
+
+class ReviewObligation(HistoryContract):
+    """A declared unit for this episode, including work that could not execute."""
+
+    target_id: StrictStr = Field(min_length=1)
+    mode: Literal["validation", "extraction_only", "curator"]
+    binding_id: StrictStr | None = None
+
+    @model_validator(mode="after")
+    def binding_required(self):
+        if (self.mode == "validation") != (self.binding_id is not None):
+            raise ValueError("Only validation obligations name a binding")
+        return self
+
+
+class ReviewExclusion(HistoryContract):
+    """Declared policy makes this binding inapplicable; not a successful attempt."""
+    target_id: StrictStr
+    binding_id: StrictStr
+    reason: Literal["group_not_applicable", "configured_opt_out", "optional_declarative_binding"]
+
+
+class ReviewEpisode(HistoryContract):
+    """Runtime declares coverage; the reader never infers it from successful calls."""
+
+    episode_id: StrictStr = Field(min_length=1)
+    obligations: list[ReviewObligation]
+    unavailable_bindings: list[StrictStr] = Field(default_factory=list)
+    excluded_bindings: list[ReviewExclusion] = Field(default_factory=list)
+    reason: StrictStr = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unique_targets(self):
+        ids = [item.target_id for item in self.obligations]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Review coverage must identify distinct decision units")
         return self

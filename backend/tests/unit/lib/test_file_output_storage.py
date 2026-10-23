@@ -740,3 +740,13 @@ class TestPathSecurityVerification:
                 symlink_path.unlink()
             if target_path.exists():
                 target_path.rmdir()
+
+
+@pytest.mark.parametrize("version,stable", [("../escape", True), ("a" * 63, True), ("a" * 64, False)])
+def test_versioned_export_rejects_invalid_version(storage_service, valid_trace_id, valid_session_id, version, stable):
+    with pytest.raises(FileValidationError):
+        storage_service.save_output(
+            trace_id=valid_trace_id, session_id=valid_session_id,
+            content="[]", file_type="json", descriptor="results",
+            stable_filename=stable, content_version=version,
+        )

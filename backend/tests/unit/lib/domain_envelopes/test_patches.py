@@ -140,6 +140,22 @@ def test_profile_identity_edit_goes_through_the_curator_override_path(tmp_path):
     audit, = edited.metadata[CURATOR_OVERRIDE_METADATA_KEY]
     assert audit["field_path"] == "attributes.gene.gene_id"
 
+    # A withdrawal of the same identity still removes curator precedence, and
+    # carries the selected answer's state without changing the paper wording.
+    from dataclasses import replace
+    before_value = edited.payload["attributes"]["gene"]
+    withdrawal = replace(_patch("attributes.gene", before=before_value, value={"gene_id": "EX:9"}),
+        selected_value_action="withdraw_override", selected_state={"gene_id": "EX:9",
+            "resolution_state": "resolved", "lookup_outcome": "matched"})
+    withdrawn = apply_curator_field_patch(result.envelope, pack, withdrawal,
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1", profile=profile)
+    assert withdrawn.accepted
+    selected = withdrawn.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert selected["mention"] == "daf-16"
+    assert selected["gene_id"] == "EX:9"
+    assert selected["lookup_outcome"] == "matched"
+    assert "curator_override" not in selected
+
 
 def test_profile_two_key_override_is_a_whole_value_replace_and_rejects_replace_identity(tmp_path):
     """ALL-1302 with core 89e74a356: the grid sends a profile value's override as a whole-value replace."""
@@ -377,3 +393,18 @@ def test_apply_curator_field_patch_rejects_protected_and_undeclared_paths(
     assert "not declared" in undeclared.errors[0]
     assert stable.status is EnvelopeFieldPatchStatus.REJECTED
     assert "not declared editable" in stable.errors[0]
+
+
+def test_per_element_profile_curator_patch_uses_declared_array_paths():
+    from tests.unit.lib.domain_packs.test_profile_validation import example
+    from tests.unit.lib.domain_packs.test_profile_materialization import prepared
+    source, context = prepared(example.__wrapped__(), per_element=True,
+        attributes={"records": [{"paper_name": "A", "resolved_id": "EX:1"}]})
+    obj = source.extracted_objects[0]
+    result = apply_curator_field_patch(source, context.registry.domain_pack,
+        EnvelopeFieldPatch(envelope_id=source.envelope_id, expected_revision=1,
+            object_id=obj.object_id or obj.pending_ref_id, field_path="attributes.records[0].resolved_id",
+            before="EX:1", value="EX:CURATOR"), current_revision=1,
+        actor_id="curator", actor_display_name="Curator", profile=context.profile)
+    assert result.accepted, result.errors
+    assert result.envelope.extracted_objects[0].payload["attributes"]["records"][0]["resolved_id"] == "EX:CURATOR"

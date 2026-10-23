@@ -36,6 +36,10 @@ class HistoryConflict(ValueError):
     """Conflicting immutable identity or stale current version."""
 
 
+class SelectionNotReady(HistoryConflict):
+    """Expected pending/stale selection state; not an operational failure."""
+
+
 class HistoryRecordingError(RuntimeError):
     """Audit capture failed before model execution; not a validator answer."""
 
@@ -404,7 +408,7 @@ def _prerequisites_current(db, scope, references):
         ):
             raise HistoryConflict("Prerequisite selection is stale or ineligible")
 
-        if pinned["selected"] != "baseline":
+        if pinned["selected"] not in {"baseline", "curator"}:
             completion = _fact(db, aid, pinned["selected"], kind="completion")
             attempt = _fact(db, aid, completion.parent_id, kind="attempt")
             if not _attempt_is_current(db, scope, aid, _content(db, attempt), tid):
@@ -483,6 +487,13 @@ def begin_execution(
             # Redelivery reads the original frozen versions even after retirement.
             return {"execution_id": existing.id, "attempt_ids": attempts}
         for request in requests:
+            if request["review_episode_id"] is not None:
+                episode = _fact(db, artifact_id, request["review_episode_id"], kind="review_episode")
+                latest = db.scalar(select(ValidationFact.id).where(
+                    ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_episode",
+                ).order_by(ValidationFact.sequence.desc()).limit(1))
+                if episode.id != latest:
+                    raise HistoryConflict("Validation dispatch belongs to an obsolete review episode")
             _require_active_target(db, artifact_id, request["target_id"])
             # Prerequisites stay within the same artifact; one artifact lock makes
             # snapshotting and grouped selection updates atomic without lock cycles.
@@ -600,6 +611,7 @@ def record_scheduling(
         "no_contract",
         "ineligible",
         "custom_replacement",
+        "awaiting_review",
     }:
         raise ValueError("Unknown scheduling outcome")
     with SessionLocal.begin() as db:
@@ -660,6 +672,16 @@ def _has_baseline_subject(db, artifact_id: str, target_id: str) -> bool:
         if "origin" in content:
             return content["origin"].get("baseline_target") is True
         if content.get("baseline_target") is True:
+            return True
+        target_id = fact.parent_id
+    return False
+
+
+def _has_curator_subject(db, artifact_id: str, target_id: str) -> bool:
+    """A curator-authored source is explicit provenance, not a model judgment."""
+    while target_id is not None:
+        fact = _fact(db, artifact_id, target_id, kind="target")
+        if _content(db, fact).get("origin", {}).get("kind") == "curator_authored":
             return True
         target_id = fact.parent_id
     return False
@@ -780,6 +802,10 @@ def apply_decisions_in_transaction(
                     raise HistoryConflict(
                         "This target has no attested extraction baseline subject"
                     )
+            elif subject == "curator":
+                if (actor["type"] != "curator" or actor["id"] != scope.owner_id
+                        or not _has_curator_subject(db, artifact_id, target.id)):
+                    raise HistoryAccessError("Only the owner can select an attested curator source")
             else:
                 completion = _fact(db, artifact_id, subject, kind="completion")
                 attempt = _fact(db, artifact_id, completion.parent_id, kind="attempt")
@@ -803,8 +829,8 @@ def apply_decisions_in_transaction(
             review = action
             if action == "accept":
                 selected = subject
-            elif selected == subject:
-                selected = None
+            # Reject records an opinion about this answer. Removing a current
+            # selection is a separate explicit revoke decision.
         elif action in {"defer", "revoke", "restore", "invalidate"}:
             review = "pending"
             if action in {"revoke", "restore", "invalidate"}:

@@ -251,8 +251,10 @@ def test_dispatch_runs_only_routed_targets_and_never_writes_the_routing_value(tm
     assert calls == [("widget_validator", "widget", 5)]
     routed, unrouted = result.envelope.extracted_objects
     assert routed.payload["subject"]["kind"] == "widget"
-    assert routed.payload["subject"]["identifier"] == "W:1"
-    assert routed.payload["subject"]["label"] == "Blue widget"
+    assert "identifier" not in routed.payload["subject"]
+    assert "label" not in routed.payload["subject"]
+    assert result.validator_results[0].resolved_values == {"widget_id": "W:1", "widget_name": "Blue widget"}
+    assert any(f.details.get("machine_review") == "pending" for f in result.appended_findings)
     assert unrouted.payload["subject"] == {"kind": "unknown", "wording": "thing"}
     assert [
         finding.code

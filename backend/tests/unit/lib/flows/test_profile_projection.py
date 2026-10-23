@@ -3,11 +3,19 @@ from uuid import uuid4
 from unittest.mock import Mock
 import pytest
 
+from tests.reviewed_output_unit_support import (
+    build_reviewed_output_bundle as build_flow_output_artifact_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
+
 from src.lib.flows.profile_projection import profile_projection_fields
 from src.schemas.generic_extraction_profile import GenericProfileContract
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile, ProfileIdentityError
-from src.lib.flows.output_projection import build_flow_output_artifact_bundle, apply_projection_plan, FlowOutputProjectionPlan
+from src.lib.flows.output_projection import apply_projection_plan, FlowOutputProjectionPlan
+
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
 
 
 def _contract():

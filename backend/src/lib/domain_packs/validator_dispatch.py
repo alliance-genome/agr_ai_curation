@@ -18,7 +18,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Protocol, Sequence, cast
 
 from src.lib.packages.tool_roles import ValidatorToolPolicyError
 
@@ -61,7 +61,6 @@ from .input_selectors import build_domain_validation_request
 from .flow_validator_selection import current_flow_validator_selections
 from .materialization import (
     ValidatorResultMaterializationInput,
-    materialize_validator_results_into_envelope,
 )
 from .registry import LoadedDomainPack
 from .validation_registry import (
@@ -231,6 +230,10 @@ class ValidatorRuntimeContext:
     document_id: str | None = None
     user_id: str | None = None
     authenticated_groups: tuple[str, ...] | None = None
+    curator_revalidation: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
+    explicit_validation_requested: bool = False
+    refresh_scopes: Sequence[tuple[str, Sequence[str]]] | None = None
+    dispatch_receipt: dict[str, bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -241,7 +244,9 @@ class ValidatorDispatchJob:
     request: DomainValidationRequest
     dispatch_context: Mapping[str, Any] | None = None
     history_wave: int | None = None
+    history_episode_id: str | None = None
     history_prior_completions: tuple[str, ...] = ()
+    history_prerequisites: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -457,6 +462,8 @@ def dispatch_active_validator_bindings(
 
     from src.lib.validation_history.runtime import bind_artifact
     history_binding = bind_artifact(envelope, runtime_context)
+    from src.lib.validation_history.projection import read_dispatch_source
+    dispatch_source = read_dispatch_source(history_binding, envelope)
     authenticated_groups = _normalized_authenticated_groups(runtime_context)
     if profile_context is None:
         from .profile_validation import resolve_envelope_profile_validation
@@ -475,13 +482,18 @@ def dispatch_active_validator_bindings(
     else:
         validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(domain_pack)
     matches = validation_registry.match_bindings(
-        envelope,
+        dispatch_source,
         states=[ValidationBindingState.ACTIVE],
     )
+    from src.lib.validation_history.selections import declare_envelope_episode
+    envelope = declare_envelope_episode(history_binding, envelope, matches,
+        authenticated_groups=authenticated_groups, flow_selections=current_flow_validator_selections(),
+        curator_revalidation=runtime_context.curator_revalidation if runtime_context else None,
+        unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable if item.mapping.policy.blocks_readiness] if profile_context else ())
     if profile_context is not None:
         from .profile_validation import profile_dispatch_matches
         eligible_matches, eligibility_findings, binding_audit = profile_dispatch_matches(
-            envelope, profile_context, authenticated_groups=authenticated_groups,
+            dispatch_source, profile_context, authenticated_groups=authenticated_groups,
         )
     else:
         eligible_matches, eligibility_findings, binding_audit = (
@@ -542,6 +554,17 @@ def dispatch_active_validator_bindings(
                 else:
                     findings.extend(selector_result.findings)
                 continue
+            if selector_result.request is not None and runtime_context and runtime_context.curator_revalidation:
+                from src.lib.validation_history.curator_authority import revalidation_intents
+                for intent in revalidation_intents(runtime_context.curator_revalidation):
+                    guidance = intent.get("guidance")
+                    from src.lib.validation_history.curator_authority import _overlap
+                    paths = [*selector_result.request.expected_result_fields.values(), *(selector_result.request.optional_result_fields or {}).values()]
+                    target_matches = match.object_envelope is not None and intent["object_id"] in {match.object_envelope.object_id, match.object_envelope.pending_ref_id}
+                    fields_match = not intent["field_paths"] or any(isinstance(path, str) and _overlap(path, requested) for path in paths for requested in intent["field_paths"])
+                    if guidance and target_matches and fields_match:
+                        previous = selector_result.request.validation_guidance
+                        selector_result.request.validation_guidance = "\n\n".join(value for value in (previous, "Curator revalidation guidance: " + guidance) if value)
             if selector_result.request is None:
                 record_match_scheduling(history_binding, match, "missing_input")
                 continue
@@ -566,16 +589,23 @@ def dispatch_active_validator_bindings(
     validator_agent_run_count = 0
     batch_validator_run_count = 0
     validator_batch_groups: list[Any] = []
-    # A binding that runs_after others dispatches in a later wave, against the
-    # envelope its prerequisites' results were written into.
+    # Dependent waves require explicit selected inputs. Completion alone cannot
+    # dispatch a dependent; the supervisor resume contract supplies pinned inputs.
     for wave_index, wave in enumerate(
         validator_dispatch_waves({match.binding.binding_id: match.binding for match in eligible_matches}.values())
     ):
         wave_matches = [match for match in eligible_matches if match.binding.binding_id in wave]
         if wave_index:
-            wave_matches = [_match_on_envelope(match, updated_envelope) for match in wave_matches]
+            for match in wave_matches:
+                record_match_scheduling(
+                    history_binding, match, "awaiting_review",
+                    details={"review_episode_id": envelope.metadata["review_episode_id"]},
+                )
+            # D/E/F resume this episode after explicit selection. Do not turn a
+            # completion into an accepted prerequisite to keep the loop running.
+            continue
         jobs, selector_findings = wave_jobs(wave_matches)
-        jobs = [replace(job, history_wave=wave_index,
+        jobs = [replace(job, history_wave=wave_index, history_episode_id=envelope.metadata["review_episode_id"],
             history_prior_completions=tuple(r._history_ref["fact_id"] for r in validator_results
                 if r._history_ref and r._history_ref.get("attempt_id"))) for job in jobs]
         pending_findings.extend(selector_findings)
@@ -605,26 +635,12 @@ def dispatch_active_validator_bindings(
             appended_findings.extend(selector_appended_findings)
             pending_findings = []
         if materialization_items:
-            materialization_started_at = time.monotonic()
-            if profile_context is not None:
-                from .profile_materialization import materialize_profile_validator_results
-                materialization_result = materialize_profile_validator_results(
-                    updated_envelope, profile_context, materialization_items,
-                    actor_id=actor_id, source_envelope_revision=source_envelope_revision,
-                )
-            else:
-                materialization_result = materialize_validator_results_into_envelope(
-                    updated_envelope, domain_pack.metadata, materialization_items,
-                    actor_id=actor_id, source_envelope_revision=source_envelope_revision,
-                )
-            LOGGER.info(
-                "Materialized %s active validator result(s) in %.3fs",
-                len(materialization_items),
-                time.monotonic() - materialization_started_at,
+            from src.lib.validation_history.candidates import retain_candidates
+            materialization_result = retain_candidates(
+                updated_envelope, materialization_items, scope=history_binding.scope,
+                source_envelope_revision=source_envelope_revision,
             )
-            from src.lib.validation_history.runtime import capture_derived_objects
-            updated_envelope = capture_derived_objects(history_binding, materialization_result.envelope,
-                [item.result for item in materialization_items], previous_envelope=updated_envelope)
+            updated_envelope = materialization_result.envelope
             appended_findings.extend(materialization_result.appended_findings)
 
     if pending_findings:
@@ -844,7 +860,7 @@ def _scoped_matches_by_target(
 
 
 def _match_on_envelope(match: ValidatorBindingMatch, envelope: DomainEnvelope) -> ValidatorBindingMatch:
-    """The same binding target read from ``envelope``, the one earlier waves wrote into."""
+    """The same binding target read from ``envelope``, using its stable object identity."""
 
     if match.object_envelope is None:
         return dataclasses.replace(match, envelope=envelope)
