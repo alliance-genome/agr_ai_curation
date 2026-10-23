@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 from typing import Any, Sequence
@@ -20,6 +21,7 @@ from src.lib.curation_workspace.adapter_registry import (
 )
 from src.lib.curation_workspace.models import (
     CurationCandidate,
+    CurationDraft,
     CurationReviewSession as ReviewSessionModel,
     DomainEnvelopeModel,
 )
@@ -46,6 +48,7 @@ from src.lib.curation_workspace.validation_runtime import (
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     DomainEnvelopePersistenceError,
+    lock_projection_artifact,
     write_domain_envelope_checkpoint,
 )
 from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
@@ -372,16 +375,44 @@ def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate, *
         subject_kind="curator_authored",
     )
     from src.lib.curation_workspace.manual_profile_preparation import prepare_manual_source
-    checkpoint = prepare_manual_source(
-        envelope=envelope, receipt=receipt,
-        document_id=candidate.session.document_id, session_id=candidate.session_id,
-        flow_run_id=candidate.session.flow_run_id, adapter_key=candidate.adapter_key,
-    )
+    from src.lib.validation_history.store import HistoryConflict
+    try:
+        checkpoint = prepare_manual_source(
+            envelope=envelope, receipt=receipt,
+            document_id=candidate.session.document_id, session_id=candidate.session_id,
+            flow_run_id=candidate.session.flow_run_id, adapter_key=candidate.adapter_key,
+        )
+    except HistoryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _lock_unlinked_manual_candidate(db, candidate.id)
     candidate.envelope_id = checkpoint.envelope_id
     candidate.object_id = object_id
     candidate.envelope_revision = checkpoint.revision
     candidate.normalized_payload = {}
     db.flush()
+
+
+def _lock_unlinked_manual_candidate(db: Session, candidate_id: UUID) -> None:
+    # A different first validation may have linked this candidate while source
+    # preparation ran. Read the database value, not the ORM identity map.
+    with db.no_autoflush:
+        linked_envelope = db.execute(select(CurationCandidate.envelope_id).where(
+            CurationCandidate.id == candidate_id,
+        ).with_for_update()).one()[0]
+    if linked_envelope is not None:
+        raise HTTPException(status_code=409, detail="Candidate source changed during validation; reload and retry")
+
+
+def _lock_unchanged_validation_draft(db, candidate, envelope, version, fields):
+    # Model work runs without a draft lock. Publication and curator edits take
+    # the artifact lock before projection rows; retain that order here.
+    with db.no_autoflush:
+        lock_projection_artifact(db, envelope.metadata["validation_history"]["artifact_id"])
+        current = db.execute(select(CurationDraft.version, CurationDraft.fields).where(
+            CurationDraft.id == candidate.draft.id,
+        ).with_for_update()).one()
+    if current.version != version or current.fields != fields:
+        raise HTTPException(status_code=409, detail="Curator draft changed during validation; reload and retry")
 
 
 def _profile_validation_cache_is_current(
@@ -616,6 +647,8 @@ def _dispatch_workspace_envelope_validation(
     if profile_context is not None:
         domain_pack = profile_context.registry.domain_pack
     source_revision = int(envelope_row.revision)
+    draft_version = candidate.draft.version
+    draft_fields = deepcopy(candidate.draft.fields)
     from src.lib.validation_history.runtime import bind_artifact
     from src.lib.validation_history.projection import read_dispatch_source
     source_envelope = read_dispatch_source(bind_artifact(envelope, runtime_context), envelope)
@@ -670,6 +703,7 @@ def _dispatch_workspace_envelope_validation(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if runtime_context is not None and runtime_context.dispatch_receipt is not None:
         runtime_context.dispatch_receipt["executed"] = True
+    _lock_unchanged_validation_draft(db, candidate, envelope, draft_version, draft_fields)
     stale_resolution = resolve_stale_validation_findings_after_refresh(
         original_envelope=envelope,
         refreshed_envelope=dispatch_result.envelope,

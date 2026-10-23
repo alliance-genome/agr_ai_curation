@@ -109,6 +109,16 @@ from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_workspace_history_lock(monkeypatch):
+    # This SQLite suite uses synthetic history references. Real artifact/draft
+    # locking and concurrent-edit refusal run in test_profile_validator_workspace.
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.session_validation_service._lock_unchanged_validation_draft",
+        lambda *args: None,
+    )
+
+
 @compiles(PostgresUUID, "sqlite")
 def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(36)"

@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.curation_workspace.execution_contracts import resolve_manual_candidate_receipt, profiled_draft_payload, resolve_receipt_profile
@@ -78,6 +79,7 @@ from src.lib.curation_workspace.session_types import (
 from src.lib.curation_workspace.session_validation_service import (
     _apply_candidate_validation,
     _load_candidate_for_write,
+    _lock_unlinked_manual_candidate,
     _validator_runtime_context_for_candidate,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
@@ -576,6 +578,17 @@ def update_candidate_draft(
         candidate_id=normalized_candidate_id,
     )
     draft_row = candidate.draft
+    if candidate.source == CurationCandidateSource.MANUAL and candidate.envelope_id is None:
+        # First validation may link a source after this request loaded the draft.
+        # Serialize that decision before taking the non-envelope save path. If
+        # linkage won, return a conflict rather than saving only the stale draft.
+        _lock_unlinked_manual_candidate(db, candidate.id)
+        with db.no_autoflush:
+            current = db.execute(select(DraftModel.version, DraftModel.fields).where(
+                DraftModel.id == draft_row.id,
+            ).with_for_update()).one()
+        if current.version != draft_row.version or current.fields != draft_row.fields:
+            raise HTTPException(status_code=409, detail="Curator draft changed; reload and retry")
     request_draft_id = _normalize_uuid(request.draft_id, field_name="draft_id")
     if draft_row.id != request_draft_id:
         raise HTTPException(

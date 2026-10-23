@@ -2,8 +2,8 @@
 
 Only validator responses are deterministic fixtures. Profile/revision creation,
 receipt triggers, envelope checkpoints, drafts, findings and snapshots are real.
-Fixtures use unique identities in the disposable test database. Source and audit
-records commit independently; caller-owned changes roll back after each test.
+Fixtures use unique identities in the disposable test database. Each test removes
+its own live projections and retires its immutable audit history during teardown.
 """
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -49,9 +49,12 @@ def manual_profile_record(migrated_database, example, monkeypatch, request):
         connection.exec_driver_sql("SET LOCAL lock_timeout = '5s'")
     event.listen(engine, "begin", bounded_locks)
     with SessionLocal() as db:
+        document_id = None
         try:
             review = _create_review_session_for_action_log(db)
+            document_id = review.document_id
             review.created_by_id = "test_pdf_owner_domain_envelope"
+            review.adapter_key = "generic"
             owner = db.get(PDFDocument, review.document_id).user_id
             db.commit()  # Source document/owner must be visible to independent capture transactions.
             _, revision = generic_profile_service.create_profile(db, owner, raw)
@@ -84,7 +87,16 @@ def manual_profile_record(migrated_database, example, monkeypatch, request):
             db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         finally:
             db.rollback()
-            event.remove(engine, "begin", bounded_locks)
+            try:
+                if document_id is not None:
+                    from src.lib.document_cleanup import cleanup_document_curation_dependencies
+                    with SessionLocal.begin() as cleanup:
+                        cleanup_document_curation_dependencies(cleanup, document_id)
+                        document = cleanup.get(PDFDocument, document_id)
+                        if document is not None:
+                            cleanup.delete(document)
+            finally:
+                event.remove(engine, "begin", bounded_locks)
 
 
 @pytest.mark.parametrize("available", [True, False])
@@ -258,6 +270,7 @@ def test_failed_manual_validation_keeps_hidden_source_and_exact_retry_adopts_it(
     source = db.get(DomainEnvelopeModel, prepared[0])
     assert source.revision == 1
     assert source.envelope_json["extracted_objects"][0]["payload"]["attributes"] == {"paper_name": "A"}
+
     from src.lib.validation_history import store
     from src.models.sql.validation_history import ValidationFact
     history = source.envelope_json["metadata"]["validation_history"]
@@ -326,4 +339,111 @@ def test_manual_validation_rejects_concurrently_advanced_source(manual_profile_r
     assert row.revision == 2
     assert row.envelope_json["metadata"]["concurrent_edit"] == "newer checkpoint wins"
     assert candidate.envelope_id is None
+    assert candidate.draft.fields[0]["value"] == {"paper_name": "A"}
+
+
+@pytest.mark.parametrize("concurrent_change", ["draft", "linkage"])
+def test_first_manual_validation_preserves_newer_unlinked_draft(manual_profile_record, monkeypatch, concurrent_change):
+    from copy import deepcopy
+    from fastapi import HTTPException
+    from src.lib.curation_workspace import manual_profile_preparation
+    db, candidate, _ = manual_profile_record
+    candidate_id, draft_id = candidate.id, candidate.draft.id
+    original_prepare = manual_profile_preparation.prepare_manual_source
+    prepared_ids = []
+
+    def concurrent_edit(**kwargs):
+        prepared = original_prepare(**kwargs)
+        prepared_ids.append(prepared.envelope_id)
+        with SessionLocal.begin() as editor:
+            if concurrent_change == "draft":
+                draft = editor.get(CurationDraft, draft_id)
+                fields = deepcopy(draft.fields)
+                fields[0]["value"] = {"paper_name": "New curator wording"}
+                draft.fields = fields
+                draft.version += 1
+            else:
+                other = editor.get(CurationCandidate, candidate_id)
+                other.envelope_id = prepared.envelope_id
+                other.envelope_revision = prepared.revision
+                other.object_id = f"manual:{candidate_id}"
+                other.normalized_payload = {}
+        return prepared
+
+    def dispatch(envelope, pack, **kwargs):
+        fixtures = results(envelope, kwargs["profile_context"], [{"identifier": "EX:1"}])
+        return dispatch_active_validator_bindings(envelope, pack, **kwargs,
+            runner=lambda *args, **kw: fixtures[0].result.model_dump(mode="json"))
+
+    monkeypatch.setattr(manual_profile_preparation, "prepare_manual_source", concurrent_edit)
+    monkeypatch.setattr(validation, "dispatch_active_validator_bindings", dispatch)
+    with pytest.raises(HTTPException) as conflict:
+        validation._apply_candidate_validation(
+            db, candidate, force=True, validated_at=datetime.now(timezone.utc),
+            runtime_context=_history_context(candidate),
+        )
+    assert conflict.value.status_code == 409
+    assert ("draft changed" if concurrent_change == "draft" else "source changed") in conflict.value.detail
+    db.rollback()
+    candidate = db.get(CurationCandidate, candidate_id)
+    if concurrent_change == "draft":
+        assert candidate.envelope_id is None
+        assert candidate.draft.version == 2
+        assert candidate.draft.fields[0]["value"] == {"paper_name": "New curator wording"}
+    else:
+        assert candidate.envelope_id == prepared_ids[0]
+        assert candidate.draft.version == 1
+    source = db.get(DomainEnvelopeModel, prepared_ids[0])
+    assert source.revision == 1
+    assert source.envelope_json["extracted_objects"][0]["payload"]["attributes"] == {"paper_name": "A"}
+
+
+def test_accepted_unvalidated_manual_profile_cannot_export(manual_profile_record):
+    from src.lib.curation_workspace import session_submission_service as submission
+    from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGET_KEY
+    from src.schemas.curation_workspace import (
+        CurationCandidateStatus, CurationSubmissionPreviewRequest, SubmissionMode,
+    )
+    db, candidate, _ = manual_profile_record
+    candidate.status = CurationCandidateStatus.ACCEPTED
+    db.flush()
+    response = submission.submission_preview(db, candidate.session_id,
+        CurationSubmissionPreviewRequest(session_id=str(candidate.session_id),
+            mode=SubmissionMode.EXPORT, target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY),
+        actor_claims={"sub": _history_context(candidate).user_id})
+    assert candidate.envelope_id is None
+    readiness, = response.submission.readiness
+    assert not readiness.ready
+    assert "Explicit review and selected-value publication are required." in readiness.blocking_reasons
+
+
+def test_autosave_loaded_before_source_linkage_is_refused(manual_profile_record, monkeypatch):
+    from fastapi import HTTPException
+    from src.lib.curation_workspace import session_mutation_service as mutation
+    from src.schemas.curation_workspace import CurationCandidateDraftUpdateRequest
+    db, candidate, _ = manual_profile_record
+    candidate_id, session_id = candidate.id, candidate.session_id
+    original_load = mutation._load_candidate_for_write
+
+    def load_then_link(*args, **kwargs):
+        stale = original_load(*args, **kwargs)
+        assert stale.envelope_id is None
+        with SessionLocal.begin() as validator:
+            other = validator.get(CurationCandidate, candidate_id)
+            validation._ensure_manual_profile_envelope(validator, other,
+                runtime_context=_history_context(other))
+        return stale
+
+    monkeypatch.setattr(mutation, "_load_candidate_for_write", load_then_link)
+    with pytest.raises(HTTPException) as conflict:
+        mutation.update_candidate_draft(db, session_id, candidate_id,
+            CurationCandidateDraftUpdateRequest(session_id=str(session_id),
+                candidate_id=str(candidate_id), draft_id=str(candidate.draft.id),
+                expected_version=1, field_changes=[{"field_key": "attributes", "value": {"paper_name": "Later edit"}}]),
+            actor_claims={"sub": _history_context(candidate).user_id})
+    assert conflict.value.status_code == 409
+    assert "source changed" in conflict.value.detail
+    db.rollback()
+    candidate = db.get(CurationCandidate, candidate_id)
+    assert candidate.envelope_id is not None
     assert candidate.draft.fields[0]["value"] == {"paper_name": "A"}

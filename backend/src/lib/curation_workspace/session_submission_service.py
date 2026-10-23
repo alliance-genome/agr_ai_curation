@@ -1277,6 +1277,12 @@ def _candidate_submission_readiness(
     blocking_reasons: list[str] = []
     warnings: list[str] = []
 
+    receipt = candidate.execution_receipt
+    if (receipt is not None
+            and receipt["output_contract"]["output_mode"] == "profile_bound_generic"
+            and not _domain_envelope_candidate(candidate)):
+        blocking_reasons.append("Explicit review and selected-value publication are required.")
+
     if candidate.status == CurationCandidateStatus.PENDING:
         blocking_reasons.append("Candidate is still pending curator review.")
     elif candidate.status == CurationCandidateStatus.REJECTED:

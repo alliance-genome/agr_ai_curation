@@ -132,3 +132,17 @@ Publication reads after a checkpoint use
 scope, integrity, revision and readiness checks without opening another connection
 that waits on the caller's artifact lock. Model execution and its history writes
 must not reuse that open checkpoint transaction.
+
+First-manual source adoption also checks candidate linkage and the originally loaded
+draft version/content. A concurrent draft save or first validation returns a 409
+conflict instead of attaching stale source. Autosave that loaded an unlinked
+candidate must recheck that state under lock before saving; if validation linked
+it in the meantime, autosave returns 409 so the caller reloads the envelope-backed
+record. Model execution holds no draft lock; final draft checks follow the artifact
+lock order. Unvalidated manual profile records cannot bypass review by remaining
+unlinked: submission explicitly blocks them until a selected publication exists.
+
+The manual preparation visibility rule is derived from live candidate linkage,
+including after a candidate is removed. Historical source/checkpoint reads remain
+available through the immutable audit ledger; an unlinked manual source is not a
+current workspace annotation.

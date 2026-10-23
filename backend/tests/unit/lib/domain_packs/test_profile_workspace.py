@@ -19,6 +19,14 @@ from .test_profile_materialization import prepared, results
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
+@pytest.fixture(autouse=True)
+def workspace_database_boundaries(monkeypatch):
+    # These profile unit tests use in-memory rows. Real lock/CAS behavior is
+    # covered by test_profile_validator_workspace against migrated PostgreSQL.
+    monkeypatch.setattr(session_validation_service, "_lock_unlinked_manual_candidate", lambda *args: None)
+    monkeypatch.setattr(session_validation_service, "_lock_unchanged_validation_draft", lambda *args: None)
+
+
 
 @pytest.mark.parametrize("inline_complete", [False, True])
 def test_prep_checks_live_profile_access_without_open_generic_fallback(example, monkeypatch, inline_complete):
@@ -75,7 +83,7 @@ def test_workspace_revalidation_uses_profile_registry_and_atomic_writer(example,
     checkpoints = []
     monkeypatch.setattr(session_validation_service, "write_domain_envelope_checkpoint",
                         lambda _db, request: (checkpoints.append(request), SimpleNamespace(revision=2))[1])
-    candidate = SimpleNamespace(id="candidate", session_id="session", object_id="one", envelope_revision=1, draft=None)
+    candidate = SimpleNamespace(id="candidate", session_id="session", object_id="one", envelope_revision=1, draft=SimpleNamespace(version=1, fields=[]))
     updated, revision, warnings = session_validation_service._dispatch_workspace_envelope_validation(
         object(), candidate, envelope_row=row, envelope=source, field_paths=(),
         validated_at=datetime.now(timezone.utc),

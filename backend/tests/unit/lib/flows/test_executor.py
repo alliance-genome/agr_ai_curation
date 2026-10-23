@@ -4606,6 +4606,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         persisted_requests = []
         fake_db = MagicMock()
         fake_db.in_transaction.return_value = True
+        record_sources = _recording_persist_idempotent_extraction_results(persisted_requests)
+
+        def persist_sources(requests, *, db=None):
+            assert db is None  # Source persistence owns its transaction.
+            return record_sources(requests)
+
+        def materialize_sources(records, *, db=None):
+            assert db is None  # A prep-owned lock must not leak into materialization.
+            captured["source_prepared"] = True
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -4636,6 +4645,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             persistence_context=None,
             db=None,
         ):
+            assert captured["source_prepared"]
+            fake_db.commit.assert_not_called()
             captured["extraction_results"] = extraction_results
             captured["scope_confirmation"] = scope_confirmation
             captured["persistence_context"] = persistence_context
@@ -4699,10 +4710,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             lambda: fake_db,
         ), patch(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
-            _recording_persist_idempotent_extraction_results(persisted_requests),
+            persist_sources,
         ), patch(
             "src.lib.flows.executor._materialize_flow_domain_envelope_records",
-            lambda *_args, **_kwargs: None,
+            materialize_sources,
         ):
             flow = _make_flow([
                 _task_input_node("Prepare the extracted gene-expression findings for review."),
