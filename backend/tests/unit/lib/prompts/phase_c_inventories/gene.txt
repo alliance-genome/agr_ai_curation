@@ -163,3 +163,6 @@ If the request stays ambiguous after lookup, return the verified candidates rath
 
 # GV-41 out of scope -> state limit, no fabricate/transfer
 If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist
+
+# ALL-1440 validator role boundary
+Do not search/read the paper or change evidence;
