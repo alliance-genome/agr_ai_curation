@@ -36,6 +36,10 @@ class HistoryConflict(ValueError):
     """Conflicting immutable identity or stale current version."""
 
 
+class SelectionNotReady(HistoryConflict):
+    """Expected pending/stale selection state; not an operational failure."""
+
+
 class HistoryRecordingError(RuntimeError):
     """Audit capture failed before model execution; not a validator answer."""
 
@@ -483,6 +487,13 @@ def begin_execution(
             # Redelivery reads the original frozen versions even after retirement.
             return {"execution_id": existing.id, "attempt_ids": attempts}
         for request in requests:
+            if request["review_episode_id"] is not None:
+                episode = _fact(db, artifact_id, request["review_episode_id"], kind="review_episode")
+                latest = db.scalar(select(ValidationFact.id).where(
+                    ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_episode",
+                ).order_by(ValidationFact.sequence.desc()).limit(1))
+                if episode.id != latest:
+                    raise HistoryConflict("Validation dispatch belongs to an obsolete review episode")
             _require_active_target(db, artifact_id, request["target_id"])
             # Prerequisites stay within the same artifact; one artifact lock makes
             # snapshotting and grouped selection updates atomic without lock cycles.

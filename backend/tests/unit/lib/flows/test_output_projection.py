@@ -2702,3 +2702,23 @@ def test_final_export_requires_review_only_for_selected_sources(monkeypatch):
     bundle.authorization_user_id = None
     with pytest.raises(HistoryConflict, match="authenticated"):
         finalize_output_projection(bundle, plan)
+
+
+def test_stale_selected_artifact_exposes_pending_without_leaking_old_rows(monkeypatch):
+    from src.lib.validation_history.store import SelectionNotReady
+    step = _completed_domain_step()
+    step["node_id"] = "pending-node"
+    step["candidate"].payload_json["metadata"] = {
+        "validation_history": {"artifact_id": "artifact", "session_id": "session"},
+        "selected_projection": {"fact_id": "old"},
+    }
+    monkeypatch.setattr("src.lib.validation_history.projection.latest_publication_reference", lambda *args: {"fact_id": "old"})
+    def pending(*args, **kwargs):
+        raise SelectionNotReady("Published projection is no longer current")
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", pending)
+    artifact = output_projection_module._build_artifact_from_step(step, user_id="owner")
+    assert artifact.is_canonical_curation_data
+    assert artifact.node_id == "pending-node"
+    assert artifact.selected_projection is None
+    assert not artifact.rows_by_source
+    assert "await publication" in artifact.warnings[0]

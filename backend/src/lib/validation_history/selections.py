@@ -184,7 +184,9 @@ def source_state_digest(db, artifact_id):
             continue
         state = store._current(db, artifact_id, tid)
         states.append((tid, fact.body_sha, state["active"], state["lifecycle_generation"]))
-    return store.canonical({"targets": sorted(states)})[0]
+    from .curator_authority import active_overlays
+    overlays = sorted((fact.id, fact.body_sha) for fact, _ in active_overlays(db, artifact_id))
+    return store.canonical({"targets": sorted(states), "curator_values": overlays})[0]
 
 
 def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
@@ -205,7 +207,11 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "attempt",
         ValidationFact.sequence > episode.sequence,
     )):
-        for target_id in store._content(db, attempt)["coverage"]:
+        attempt_body = store._content(db, attempt)
+        recorded_episode = attempt_body["input"].get("review_episode_id")
+        if recorded_episode is not None and recorded_episode != episode.id:
+            continue
+        for target_id in attempt_body["coverage"]:
             attempts_by_target.setdefault(target_id, []).append(attempt.id)
     completions = {fact.parent_id: fact.id for fact in db.scalars(select(ValidationFact).where(
         ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "completion",
@@ -253,6 +259,7 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         "baseline_sha256": artifact.baseline_sha,
         "source_state_sha256": source_state_digest(db, artifact_id),
         "episode_id": episode.id,
+        "excluded_bindings": store._content(db, episode)["excluded_bindings"],
         "provenance": deepcopy(artifact.provenance),
         "units": units,
         "blockers": blockers,
@@ -269,7 +276,7 @@ def read_manifest(scope, artifact_id, *, episode_id):
 
 def require_ready(manifest):
     if not manifest["ready"]:
-        raise store.HistoryConflict("Selected output is not ready for finalization")
+        raise store.SelectionNotReady("Selected output is not ready for finalization")
 
 
 def selected_prerequisites(manifest, target_ids):
@@ -288,15 +295,29 @@ def selected_prerequisites(manifest, target_ids):
     return pins
 
 
-def declare_envelope_episode(binding, envelope, matches, *, unavailable_bindings=()):
+def declare_envelope_episode(binding, envelope, matches, *, unavailable_bindings=(), curator_revalidation=None, authenticated_groups=None, flow_selections=None):
     """Declare all matching obligations before selectors/preflight can skip work."""
     from uuid import uuid4
     from .runtime import binding_target
 
     obligations = []
+    exclusions = []
     covered_objects = set()
     for match in matches:
         target_id = binding_target(binding, match)
+        reason = None
+        required_groups = match.binding.required_any_active_group
+        choice = (flow_selections or {}).get(match.binding.binding_id, {})
+        from src.lib.domain_packs.validator_dispatch import _binding_has_dispatch_contract
+        if required_groups and authenticated_groups is not None and not set(required_groups).intersection(authenticated_groups):
+            reason = "group_not_applicable"
+        elif choice.get("state") == "skipped" and (match.binding.allow_opt_out or not match.binding.required):
+            reason = "configured_opt_out"
+        elif not match.binding.required and not _binding_has_dispatch_contract(match.binding):
+            reason = "optional_declarative_binding"
+        if reason is not None:
+            exclusions.append({"target_id": target_id, "binding_id": match.binding.binding_id, "reason": reason})
+            continue
         if match.object_envelope is not None:
             covered_objects.add(match.object_envelope.metadata["validation_history"]["target_id"])
         if match.binding.decision_units:
@@ -333,8 +354,14 @@ def declare_envelope_episode(binding, envelope, matches, *, unavailable_bindings
     obligations = list({item["target_id"]: item for item in obligations}.values())
     episode_id = start_episode(binding.scope, binding.artifact_id, episode={
         "episode_id": str(uuid4()), "reason": "Explicit review of this validation run",
-        "obligations": obligations, "unavailable_bindings": list(unavailable_bindings),
+        "obligations": obligations, "unavailable_bindings": list(unavailable_bindings), "excluded_bindings": exclusions,
     })
+    intent_reference = {}
+    if curator_revalidation is not None:
+        from .curator_authority import record_revalidation_intent
+        intent_id = record_revalidation_intent(binding, envelope=envelope, episode_id=episode_id, **curator_revalidation)
+        intent_reference = {"curator_revalidation_intent": {"fact_id": intent_id, "episode_id": episode_id}}
     return envelope.model_copy(update={"metadata": {
-        **envelope.metadata, "review_episode_id": episode_id,
+        **{key: value for key, value in envelope.metadata.items() if key != "curator_revalidation_intent"},
+        "review_episode_id": episode_id, **intent_reference,
     }})

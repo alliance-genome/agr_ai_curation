@@ -565,11 +565,12 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
     def test_domain_envelope_retains_selected_publication_and_pending_answer_state(self):
         envelope = self._make_domain_envelope()
         reference = {"artifact_id": "artifact", "fact_id": "publication", "manifest_sha256": "exact"}
-        envelope["metadata"] = {"selected_projection": reference, "review_episode_id": "episode"}
+        envelope["metadata"] = {"selected_projection": reference, "review_episode_id": "episode", "curator_revalidation_intent": {"fact_id": "intent"}}
         envelope["validation_findings"][0]["details"] = {"machine_review": "pending", "selected_value": False}
         domain = DomainEnvelopeTraceAnalyzer.analyze_payload(envelope)
         self.assertEqual(domain["envelopes"][0]["selected_projection"], reference)
         self.assertEqual(domain["envelopes"][0]["review_episode_id"], "episode")
+        self.assertEqual(domain["envelopes"][0]["curator_revalidation_intent"], {"fact_id": "intent"})
         self.assertEqual(domain["validation_findings"][0]["machine_review"], "pending")
         self.assertIs(domain["validation_findings"][0]["selected_value"], False)
 

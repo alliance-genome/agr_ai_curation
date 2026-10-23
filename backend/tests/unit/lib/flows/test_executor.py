@@ -3433,11 +3433,14 @@ class TestGetAllAgentToolsStepOrderRuntime:
             set_live_event_list(None)
 
         assert selector_findings == []
-        assert batch_calls == [
+        # Independent batches can start in either order; each batch and the
+        # returned logical target order remain deterministic.
+        assert sorted(batch_calls) == [
             ["AGR:0001", "AGR:0002"],
             ["AGR:0003", "AGR:0004"],
         ]
         assert len(materialization_inputs) == 5
+        assert [item.result.resolved_values["identifier"] for item in materialization_inputs] == identifiers
         assert [item.result.status for item in materialization_inputs] == [
             "resolved",
             "resolved",

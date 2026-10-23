@@ -689,7 +689,7 @@ def update_candidate_draft(
         validation_snapshot, _ = _apply_candidate_validation(
             db,
             candidate,
-            force=True,
+            force=False,
             validated_at=now,
             runtime_context=_validator_runtime_context_for_candidate(
                 candidate,
@@ -1048,12 +1048,15 @@ def patch_envelope_field(
         if not isinstance(history, dict) or not history.get("session_id"):
             raise HTTPException(status_code=409, detail="Selected history is unavailable for this envelope")
         try:
-            patch_payload["value"] = resolve_curator_identity(
+            selected_state = resolve_curator_identity(
                 HistoryScope(owner_id, str(envelope_row.document_id), history["session_id"]),
                 envelope=envelope, object_id=request.object_id, value_path=value_path,
                 identity_keys=keys, action=request.selected_value_action,
-                reference=request.selection_reference,
+                reference=request.selection_reference, include_state=True,
             )
+            patch_payload["value"] = {key: selected_state.get(key) for key in keys}
+            if request.selected_value_action == "withdraw_override":
+                patch_payload["selected_state"] = selected_state
         except HistoryAccessError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except HistoryConflict as exc:

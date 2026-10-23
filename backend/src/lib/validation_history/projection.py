@@ -121,7 +121,7 @@ def read_dispatch_source(binding, envelope):
 
 
 def pin_publication_in_transaction(
-    db, scope, artifact_id, *, operation_id, manifest, envelope,
+    db, scope, artifact_id, *, operation_id, manifest, envelope, envelope_revision=None,
 ):
     """Retain exact approved meaning; call in the same transaction as its checkpoint."""
     selections._lock_artifact(db, scope, artifact_id, write=True)
@@ -135,6 +135,7 @@ def pin_publication_in_transaction(
         raise store.HistoryConflict("Published projection has a different artifact")
     body = {
         "manifest": manifest,
+        "envelope_revision": envelope_revision,
         "projection": envelope.model_dump(mode="json"),
     }
     fact = store._append(
@@ -145,7 +146,7 @@ def pin_publication_in_transaction(
         "schema_version": 1, "artifact_id": artifact_id,
         "fact_id": fact.id, "body_sha256": fact.body_sha,
         "manifest_sha256": manifest["sha256"],
-        "episode_id": manifest["episode_id"],
+        "episode_id": manifest["episode_id"], "envelope_revision": envelope_revision,
     }}
     return envelope.model_copy(update={"metadata": metadata})
 
@@ -160,6 +161,8 @@ def read_published_projection(scope, reference, *, current=False, finalized=Fals
             raise store.HistoryConflict("Published projection hash mismatch")
         body = store._content(db, fact)
         manifest = body["manifest"]
+        if reference.get("envelope_revision") != body["envelope_revision"]:
+            raise store.HistoryConflict("Published envelope revision mismatch")
         if (manifest["sha256"] != reference["manifest_sha256"]
                 or manifest["episode_id"] != reference["episode_id"]):
             raise store.HistoryConflict("Published selection manifest mismatch")
@@ -175,7 +178,7 @@ def read_published_projection(scope, reference, *, current=False, finalized=Fals
             )
             if finalized:
                 if live != manifest:
-                    raise store.HistoryConflict("Finalization requires the current episode publication")
+                    raise store.SelectionNotReady("Finalization requires the current episode publication")
             else:
                 # Pending reconsideration changes readiness, not the previous
                 # selected scientific value. A changed/stale selection still
@@ -185,7 +188,7 @@ def read_published_projection(scope, reference, *, current=False, finalized=Fals
                             for unit in snapshot["units"] if unit["selected"] is not None}
                 if (values(live) != values(manifest)
                         or live["source_state_sha256"] != manifest["source_state_sha256"]):
-                    raise store.HistoryConflict("Published projection is no longer current")
+                    raise store.SelectionNotReady("Published projection is no longer current")
                 manifest = live
         if finalized:
             selections.require_ready(manifest)
@@ -194,7 +197,7 @@ def read_published_projection(scope, reference, *, current=False, finalized=Fals
         return projection, deepcopy(manifest)
 
 
-def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, domain_pack, profile_context=None):
+def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, domain_pack, profile_context=None, apply_curator=True):
     """Replay exact selected recipes onto immutable source values."""
     from dataclasses import replace
     from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
@@ -353,7 +356,15 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
                         "completion_id": item.result._history_ref["fact_id"],
                         "exact_contributor_available": True},
             )
-    return working
+    from .curator_authority import apply_overlays
+    # Replaying a recipe derives values, not a second execution/history event.
+    # Immutable attempts and publication facts already record both operations.
+    working = working.model_copy(update={"history": deepcopy(envelope.history)})
+    projected = apply_overlays(db, artifact_id, working) if apply_curator else working
+    if profile_context is not None:
+        for obj in projected.extracted_objects:
+            profile_context.profile.require_attributes(obj.payload["attributes"])
+    return projected
 
 
 def publish_decisions(scope, *, checkpoint_request, episode_id, operation_id, actor, entries):
@@ -371,6 +382,9 @@ def publish_decisions(scope, *, checkpoint_request, episode_id, operation_id, ac
             db, scope, artifact_id, episode_id=episode_id,
             operation_id=operation_id, actor=actor, entries=entries,
         )
+        from .curator_authority import release_accepted_overlays
+        release_accepted_overlays(db, scope, artifact_id, episode_id=episode_id,
+                                 operation_id=operation_id, accepted_entries=entries)
         manifest = selections.manifest_in_transaction(db, scope, artifact_id, episode_id=episode_id)
         pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         if pack is None:
@@ -385,7 +399,7 @@ def publish_decisions(scope, *, checkpoint_request, episode_id, operation_id, ac
         )
         projected = pin_publication_in_transaction(
             db, scope, artifact_id, operation_id=operation_id,
-            manifest=manifest, envelope=projected,
+            manifest=manifest, envelope=projected, envelope_revision=checkpoint_request.expected_revision + 1,
         )
         checkpoint = write_domain_envelope_checkpoint(
             db, replace(checkpoint_request, envelope=projected),
@@ -409,7 +423,7 @@ def latest_publication_reference(scope, artifact_id):
             "schema_version": 1, "artifact_id": artifact_id,
             "fact_id": fact.id, "body_sha256": fact.body_sha,
             "manifest_sha256": body["manifest"]["sha256"],
-            "episode_id": body["manifest"]["episode_id"],
+            "episode_id": body["manifest"]["episode_id"], "envelope_revision": body["envelope_revision"],
         }
 
 
@@ -418,7 +432,8 @@ def refresh_workspace_projection(db, envelope, revision):
     from datetime import datetime, timezone
     from src.lib.curation_workspace.models import DomainEnvelopeModel
     from src.lib.curation_workspace.session_queries import load_envelope_candidates_for_patch
-    from src.lib.curation_workspace.session_mutation_service import _refresh_candidate_projection_from_envelope
+    from src.lib.curation_workspace.session_mutation_service import _refresh_candidate_projection_from_envelope, _projected_value_for_draft_field
+    from src.schemas.curation_workspace import CurationDraftField
 
     row = db.scalar(select(DomainEnvelopeModel).where(
         DomainEnvelopeModel.envelope_id == envelope.envelope_id,
@@ -432,8 +447,107 @@ def refresh_workspace_projection(db, envelope, revision):
         if obj is None:
             # Do not leave an old selected payload pretending to be current.
             raise store.HistoryConflict("Workspace candidate is absent from selected projection")
+        changed_fields = []
+        for raw in candidate.draft.fields if candidate.draft is not None else ():
+            field = CurationDraftField.model_validate(raw)
+            if _projected_value_for_draft_field(obj.payload, field) != field.value:
+                changed_fields.append(field.field_key)
         _refresh_candidate_projection_from_envelope(
             candidate, obj, envelope_revision=revision,
-            changed_field_path=tuple(obj.metadata["validation_history"]["fields"]), updated_at=now,
+            changed_field_path=tuple(changed_fields), updated_at=now,
         )
     db.flush()
+
+
+def republish_curator_checkpoint(db, envelope, *, revision, authenticated_groups):
+    """Rebuild after newly committed curator facts inside the checkpoint transaction."""
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+    from src.models.sql.validation_history import ValidationArtifact
+    ref = envelope.metadata.get("validation_history")
+    if ref is None:
+        return envelope
+    artifact = db.get(ValidationArtifact, ref["artifact_id"])
+    scope = store.HistoryScope(artifact.owner_id, artifact.document_id, ref["session_id"])
+    episode = db.scalar(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact.id, ValidationFact.kind == "review_episode",
+    ).order_by(ValidationFact.sequence.desc()).limit(1))
+    if episode is None:
+        return envelope  # No review was invented by the curator's edit.
+    manifest = selections.manifest_in_transaction(db, scope, artifact.id, episode_id=episode.id)
+    pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if pack is None:
+        raise store.HistoryConflict("Curator projection domain pack is unavailable")
+    profile = resolve_envelope_profile_validation(envelope, pack, db=db,
+        user_id=scope.owner_id, active_group_ids=authenticated_groups or ())
+    projected = rebuild_selected_envelope(db, scope, artifact.id, envelope=envelope,
+        manifest=manifest, domain_pack=pack, profile_context=profile)
+    return pin_publication_in_transaction(db, scope, artifact.id,
+        operation_id=f"curator-checkpoint:{envelope.envelope_id}:{revision}",
+        manifest=manifest, envelope=projected, envelope_revision=revision)
+
+
+def read_underlying_curator_value(scope, envelope, *, object_id, value_path):
+    """Resolve the current selected value without replaying curator overlays."""
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+    from .curator_authority import active_overlays, _overlap, anchored_path, rebind_output_path
+    artifact_id = envelope.metadata["validation_history"]["artifact_id"]
+    with store.SessionLocal.begin() as db:
+        selections._lock_artifact(db, scope, artifact_id)
+        object_refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
+                       for obj in envelope.extracted_objects}
+        if not any(body["object_id"] == object_id and _overlap(anchored_path(object_refs[body["target_id"]], body["anchor"]), value_path)
+                   for _, body in active_overlays(db, artifact_id)):
+            return None
+        episode = db.scalar(select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_episode",
+        ).order_by(ValidationFact.sequence.desc()).limit(1))
+        if episode is None:
+            return {}
+        manifest = selections.manifest_in_transaction(db, scope, artifact_id, episode_id=episode.id)
+        original_obj = next((obj for obj in envelope.extracted_objects if object_id in {obj.object_id, obj.pending_ref_id}), None)
+        if original_obj is None:
+            return {}
+        root = original_obj.metadata["validation_history"]["target_id"]
+        eligible = False
+        for unit in manifest["units"]:
+            if not unit["eligible"]:
+                continue
+            if unit["selected"] == "baseline" and unit["target_id"] == root:
+                eligible = True
+            elif unit.get("attempt_id"):
+                frozen = store._content(db, store._fact(db, artifact_id, unit["attempt_id"], kind="attempt"))["input"]
+                binding_fact = store._fact(db, artifact_id, frozen["target_id"], kind="target")
+                binding = store._content(db, binding_fact)
+                request = frozen["request"]
+                destinations = {**request["expected_result_fields"], **(request.get("optional_result_fields") or {})}
+                allowed = set(unit["decision_unit"]["fields"]) if unit.get("decision_unit") else set(destinations)
+                current_target_path = anchored_path(original_obj.metadata["validation_history"],
+                    {"target_id": binding_fact.parent_id, "suffix": []}) if binding.get("object_target") == root else ""
+                if binding.get("object_target") == root and any(
+                    slot in allowed and isinstance(path, str) and _overlap(rebind_output_path(path, request["target"].get("field_path"), current_target_path), value_path)
+                    for slot, path in destinations.items()):
+                    eligible = True
+                if original_obj.metadata.get("selected_contribution", {}).get("completion_id") == unit["selected"]:
+                    eligible = True
+        if not eligible:
+            return {}
+        pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+        if pack is None:
+            raise store.HistoryConflict("Underlying selected domain pack is unavailable")
+        profile = resolve_envelope_profile_validation(envelope, pack, db=db, user_id=scope.owner_id,
+            active_group_ids=envelope.authenticated_context.get("active_groups", ()) if isinstance(envelope.authenticated_context, dict) else ())
+        result = rebuild_selected_envelope(db, scope, artifact_id, envelope=envelope,
+            manifest=manifest, domain_pack=pack, profile_context=profile, apply_curator=False)
+        obj = next((obj for obj in result.extracted_objects if object_id in {obj.object_id, obj.pending_ref_id}), None)
+        if obj is None:
+            return {}
+        from src.schemas.domain_envelope import parse_field_path
+        value = obj.payload
+        try:
+            for part in parse_field_path(value_path):
+                value = value[part]
+        except (KeyError, IndexError, TypeError):
+            return {}
+        return deepcopy(value) if isinstance(value, dict) else {}

@@ -2283,6 +2283,8 @@ async def _execute_validation_groups_for_step(
         dispatch_source = read_dispatch_source(history_binding, source_envelope)
         source_envelope = declare_envelope_episode(
             history_binding, source_envelope, registry.match_bindings(dispatch_source, states=[ValidationBindingState.ACTIVE]),
+            authenticated_groups=_authenticated_groups_from_agent_context(agent_context),
+            flow_selections={_binding_id_from_group(group): group for group in effective_flow_validation_groups(groups)},
             unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable if item.mapping.policy.blocks_readiness] if profile_context else (),
         )
         collect_started_at = time.monotonic()

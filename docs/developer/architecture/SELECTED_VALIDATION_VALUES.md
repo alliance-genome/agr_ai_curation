@@ -52,3 +52,34 @@ Dependency waves pause pending review; their resume caller must use
 are rechecked when the attempt starts and when a selected result is read. A prior
 completion ID by itself is never an accepted prerequisite. No review-off fallback
 or deployment switch is supplied by this foundational change.
+
+## Curator revalidation authority
+
+A curator override is an immutable `curator_value` event, separate from source
+extraction targets. Checkpointing a curator edit records the event and rebuilds
+and pins the selected projection in the same transaction. Replaying selected
+recipes never recreates or rewrites old execution history events. The publication
+reference pins the checkpoint revision as well as the selection manifest.
+
+The authenticated validation API accepts `replace_curator_override=true` for an
+explicit Revalidate action, plus optional advisory `guidance`. This is different
+from `force`, which only bypasses a cached snapshot. Autosave and readiness reads
+cannot create replacement authority. The intent pins the review episode, actor,
+requested object/fields and exact current overlay fact IDs. The existing frontend
+service types expose this contract; wiring a Revalidate control and history UI
+belongs to the dependent UI work, not this foundational PR.
+
+During execution and review the curator value remains current. Only explicit
+acceptance of a structurally complete answer from this episode can supersede the
+pinned override. Failure, incomplete output, rejection, deferral and later curator
+edits cannot consume that authority. Accepted unresolved answers remain unresolved.
+Contributing records retain their old edited versions in history; an authorized
+replacement does not copy human edits to a different record. Ordinary publication
+without explicit revalidation keeps active overlays and refuses to drop an edited
+contribution. Withdrawal removes override precedence even when the selected
+identity is unchanged, preserving the selected resolution state and source wording.
+
+Episode coverage records configured, permitted opt-outs, inapplicable group
+bindings and optional non-executable declarations separately from required work.
+Missing authenticated group context, required missing inputs and failed execution
+remain pending. Exemptions never invent a successful attempt or automatic review.

@@ -543,6 +543,7 @@ class DomainEnvelopeTraceAnalyzer:
                 "validator_result_count": len(original_items),
                 "history_event_count": len(history),
                 "selected_projection": _short_value(metadata.get("selected_projection")) if isinstance(metadata, Mapping) else None,
+                "curator_revalidation_intent": _short_value(metadata.get("curator_revalidation_intent")) if isinstance(metadata, Mapping) else None,
                 "review_episode_id": _as_string(metadata.get("review_episode_id")) if isinstance(metadata, Mapping) else None,
                 "source_path": source_path,
             },

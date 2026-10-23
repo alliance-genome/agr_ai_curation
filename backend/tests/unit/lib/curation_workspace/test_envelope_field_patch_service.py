@@ -780,14 +780,14 @@ def test_update_candidate_draft_materializes_envelope_backed_payload(
 
     assert response.candidate.normalized_payload == {}
     assert response.candidate.projection_ref is not None
-    assert response.candidate.projection_ref.envelope_revision == 3
+    assert response.candidate.projection_ref.envelope_revision == 2
     assert response.draft.fields[0].value == "abc-3"
     assert response.draft.fields[0].seed_value == "abc-3"
     assert response.draft.fields[0].dirty is False
     assert response.draft.fields[0].stale_validation is False
 
     envelope_row = db_session.get(DomainEnvelopeModel, "env-1")
-    assert envelope_row.revision == 3
+    assert envelope_row.revision == 2
     assert envelope_row.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "abc-3"
     assert (
         envelope_row.envelope_json["extracted_objects"][0]["payload"]["experiment"][

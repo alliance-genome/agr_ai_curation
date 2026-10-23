@@ -1146,7 +1146,7 @@ def test_composite_units_and_pinned_prerequisite_selections(scope):
         )
 
 
-def test_curator_identity_replacement_is_atomic_and_stales_inflight_answer(scope):
+def test_curator_identity_override_is_atomic_and_keeps_extraction_targets(scope):
     from src.lib.validation_history.runtime import capture_extraction
     from src.lib.domain_envelopes.patches import (
         EnvelopeFieldPatch,
@@ -1218,7 +1218,7 @@ def test_curator_identity_replacement_is_atomic_and_stales_inflight_answer(scope
     new = edited.envelope.extracted_objects[0].metadata["validation_history"][
         "elements"
     ]["sites"][0]
-    assert new != old
+    assert new == old
     with SessionLocal() as db:
         save(db, edited.envelope, 1)
         db.rollback()
@@ -1229,16 +1229,16 @@ def test_curator_identity_replacement_is_atomic_and_stales_inflight_answer(scope
     answer = h.complete_attempt(
         scope, aid, att, state="completed", result={"old": True}, diagnostics={}
     )
-    with pytest.raises(h.HistoryConflict):
-        decision(scope, aid, old, 1, "accept", subject=answer)
+    # An old lookup can be retained/selected underneath the separate override.
+    # It cannot consume curator replacement authority or erase the human value.
+    decision(scope, aid, old, 0, "accept", subject=answer)
     assert h.read_fact(scope, aid, old)["content"]["value"] == value
     with SessionLocal() as db:
         assert (
             db.scalar(
                 select(ValidationFact).where(
                     ValidationFact.artifact_id == aid,
-                    ValidationFact.kind == "replacement",
-                    ValidationFact.target_id == new,
+                    ValidationFact.kind == "curator_value",
                 )
             )
             is not None

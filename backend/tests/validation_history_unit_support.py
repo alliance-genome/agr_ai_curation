@@ -63,6 +63,7 @@ def isolated_validation_history(monkeypatch):
 
     from src.lib.validation_history import candidates, selections, projection
     monkeypatch.setattr(projection, "read_dispatch_source", lambda bound, envelope: envelope)
+    monkeypatch.setattr(projection, "republish_curator_checkpoint", lambda db, envelope, **kwargs: envelope)
 
     def declare(bound, envelope, matches, **kwargs):
         return envelope.model_copy(update={"metadata": {

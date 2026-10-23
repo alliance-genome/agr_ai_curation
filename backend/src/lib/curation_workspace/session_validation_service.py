@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 from typing import Any, Sequence
@@ -513,6 +514,9 @@ def _envelope_validation_results_for_candidate(
                 dispatch_warnings.append("Selected values remain current; another review episode is pending.")
         except HistoryConflict:
             dispatch_warnings.append("Selected projection awaits refresh; finalization is blocked.")
+    elif not force and not (runtime_context and runtime_context.explicit_validation_requested):
+        envelope_revision = int(envelope_row.revision)
+        dispatch_warnings = ["Current values await explicit validation/review."]
     else:
         envelope, envelope_revision, dispatch_warnings = _dispatch_workspace_envelope_validation(
             db,
@@ -585,8 +589,11 @@ def _dispatch_workspace_envelope_validation(
     if profile_context is not None:
         domain_pack = profile_context.registry.domain_pack
     source_revision = int(envelope_row.revision)
+    from src.lib.validation_history.runtime import bind_artifact
+    from src.lib.validation_history.projection import read_dispatch_source
+    source_envelope = read_dispatch_source(bind_artifact(envelope, runtime_context), envelope)
     refresh_scope = remove_open_validation_findings_for_scope(
-        envelope,
+        source_envelope,
         object_id=candidate.object_id,
         field_paths=field_paths,
     )
@@ -617,7 +624,7 @@ def _dispatch_workspace_envelope_validation(
         registry=profile_context.registry if profile_context is not None else None,
         profile_context=profile_context,
     )
-    validator_envelope = structural_result.envelope
+    validator_envelope = structural_result.envelope.model_copy(update={"extracted_objects": envelope.extracted_objects})
     dispatch_result = dispatch_active_validator_bindings(
         validator_envelope,
         domain_pack,
@@ -807,10 +814,22 @@ def validate_candidate(
         user_id=user_id,
         authenticated_groups=active_groups,
     )
+    if runtime_context is not None:
+        runtime_context = replace(runtime_context, explicit_validation_requested=True)
+    if request.replace_curator_override:
+        if not user_id:
+            raise HTTPException(status_code=403, detail="Explicit revalidation requires an authenticated curator")
+        runtime_context = replace(runtime_context, curator_revalidation={
+            "actor_id": user_id, "object_id": candidate.object_id,
+            "field_paths": _candidate_validation_field_paths([
+                CurationDraftFieldSchema.model_validate(field) for field in candidate.draft.fields
+                if not request.field_keys or field.get("field_key") in request.field_keys]),
+            "guidance": request.guidance,
+        })
     validation_snapshot, changed = _apply_candidate_validation(
         db,
         candidate,
-        force=request.force,
+        force=request.force or request.replace_curator_override,
         validated_at=validated_at,
         runtime_context=runtime_context,
         field_keys=request.field_keys,
@@ -881,10 +900,19 @@ def validate_session(
             user_id=user_id,
             authenticated_groups=active_groups,
         )
+        if runtime_context is not None:
+            runtime_context = replace(runtime_context, explicit_validation_requested=True)
+        if request.replace_curator_override:
+            if not user_id:
+                raise HTTPException(status_code=403, detail="Explicit revalidation requires an authenticated curator")
+            runtime_context = replace(runtime_context, curator_revalidation={
+                "actor_id": user_id, "object_id": candidate_map[target_candidate_id].object_id,
+                "field_paths": [], "guidance": request.guidance,
+            })
         validation_snapshot, candidate_changed = _apply_candidate_validation(
             db,
             candidate_map[target_candidate_id],
-            force=request.force,
+            force=request.force or request.replace_curator_override,
             validated_at=validated_at,
             runtime_context=runtime_context,
         )

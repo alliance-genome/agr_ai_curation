@@ -928,6 +928,8 @@ export interface CurationCandidateValidationRequest {
   session_id: string
   candidate_id: string
   field_keys?: string[]
+  replace_curator_override?: boolean
+  guidance?: string | null
   force?: boolean
 }
 
@@ -939,6 +941,8 @@ export interface CurationCandidateValidationResponse {
 export interface CurationSessionValidationRequest {
   session_id: string
   candidate_ids?: string[]
+  replace_curator_override?: boolean
+  guidance?: string | null
   force?: boolean
 }
 

@@ -89,6 +89,7 @@ class EnvelopeFieldPatch:
     patch_id: str = field(default_factory=lambda: f"curator-field-patch:{uuid4().hex}")
     selected_value_action: str | None = None
     selection_reference: Mapping[str, Any] | None = None
+    selected_state: Mapping[str, Any] | None = None  # Server-resolved only; never a public request field.
 
 
 @dataclass(frozen=True)
@@ -275,7 +276,10 @@ def apply_curator_field_patch(
 
     staged_payload = copy.deepcopy(domain_object.payload)
     override_audit: dict[str, Any] | None = None
-    if profile is not None and is_generic_attribute_path(patch.field_path):
+    if patch.selected_value_action == "withdraw_override":
+        override_audit = _apply_selected_withdrawal(staged_payload, patch, domain_pack, domain_object.object_type,
+            profile=profile, actor_id=actor_id, actor_display_name=actor_display_name)
+    elif profile is not None and is_generic_attribute_path(patch.field_path):
         if patch.operation is EnvelopeFieldPatchOperation.REMOVE:
             staged_payload["attributes"], override_audit = profile.remove_curator_element(
                 staged_payload.get("attributes", {}),
@@ -295,7 +299,9 @@ def apply_curator_field_patch(
                 at=datetime.now(timezone.utc).isoformat(),
             )
     try:
-        if patch.operation is EnvelopeFieldPatchOperation.REMOVE and (
+        if patch.selected_value_action == "withdraw_override":
+            pass  # Already resolved through authorized current-selection history.
+        elif patch.operation is EnvelopeFieldPatchOperation.REMOVE and (
             profile is None or not is_generic_attribute_path(patch.field_path)
         ):
             override_audit = _remove_list_element(
@@ -365,6 +371,36 @@ def apply_curator_field_patch(
         # follow the curator's identity now, as the next validator run would.
         settled_envelope = _follow_mirrors(settled_envelope, updated_object, domain_pack, validation_registry)
 
+    curator_value = None
+    if profile is not None:
+        validator_destinations = profile.validator_owned_paths()
+    else:
+        validator_destinations = {
+            path for match in validation_registry.match_bindings(envelope)
+            if match.object_envelope is not None and
+            (match.object_envelope.object_id or match.object_envelope.pending_ref_id) == (domain_object.object_id or domain_object.pending_ref_id)
+            for path in [*match.binding.expected_result_fields.values(), *(match.binding.optional_result_fields or {}).values()]
+            if isinstance(path, str)
+        }
+    validator_owned_field = _bare_path(patch.field_path) in {_bare_path(path) for path in validator_destinations}
+    authority_edit = patch.operation is not EnvelopeFieldPatchOperation.REMOVE and (override_audit is not None or validator_owned_field or "selected_contribution" in domain_object.metadata)
+    if authority_edit and "validation_history" in domain_object.metadata:
+        from src.lib.validation_history.curator_authority import payload_changes, bind_patch_anchors
+        originals_by_id = {obj.object_id or obj.pending_ref_id: obj for obj in envelope.extracted_objects}
+        changes = []
+        for obj in settled_envelope.extracted_objects:
+            prior = originals_by_id[obj.object_id or obj.pending_ref_id]
+            changes.extend(payload_changes(prior.payload, obj.payload, prior.metadata["validation_history"]["target_id"]))
+        curator_value = {
+            "target_id": domain_object.metadata["validation_history"]["target_id"],
+            "object_id": domain_object.object_id or domain_object.pending_ref_id,
+            "value_path": override_audit["value_path"] if override_audit is not None else patch.field_path,
+            "action": patch.selected_value_action or "override", "changes": changes,
+            "contributor_completion_id": domain_object.metadata.get("selected_contribution", {}).get("completion_id"),
+            "reason": patch.reason,
+        }
+    if curator_value is not None:
+        curator_value = bind_patch_anchors(envelope, curator_value)
     history_edits = []
     from src.lib.validation_history.runtime import replace_projection_targets
     rewritten = []
@@ -375,7 +411,7 @@ def apply_curator_field_patch(
             patch.operation is EnvelopeFieldPatchOperation.REMOVE
             and (obj.object_id or obj.pending_ref_id) == (updated_object.object_id or updated_object.pending_ref_id)
         )
-        if "validation_history" in prior.metadata and not is_removed_object:
+        if "validation_history" in prior.metadata and not is_removed_object and curator_value is None:
             replacement_path = None
             if (obj.object_id or obj.pending_ref_id) == (updated_object.object_id or updated_object.pending_ref_id):
                 replacement_path = override_audit["value_path"] if override_audit is not None else patch.field_path
@@ -409,6 +445,8 @@ def apply_curator_field_patch(
         "selected_value_action": patch.selected_value_action,
         "selection_reference": dict(patch.selection_reference) if patch.selection_reference is not None else None,
     }
+    if curator_value is not None:
+        details["curator_value"] = curator_value
     if history_edits:
         details["validation_history_edits"] = {"actor_id": actor_id,
             "reason": patch.reason or "Curator changed source values", "objects": history_edits}
@@ -1364,3 +1402,34 @@ __all__ = [
     "EnvelopeFieldPatchStatus",
     "apply_curator_field_patch",
 ]
+
+
+def _apply_selected_withdrawal(payload, patch, domain_pack, object_type, *, profile, actor_id, actor_display_name):
+    """Withdraw precedence while retaining the selected answer's full resolution state."""
+    from src.lib.domain_packs.resolvable_values import VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY
+    if patch.selected_state is None:
+        raise ValueError("Withdrawal requires server-resolved selected state")
+    if profile is not None:
+        from src.lib.agent_studio.profile_conformance import declared_value_path
+        value_path = patch.field_path
+        keys = profile.resolvable_objects()[declared_value_path(value_path)]
+    else:
+        value_path, spec, _ = _resolvable_target(patch.field_path, declared_resolvable_fields(domain_pack.metadata, object_type))
+        keys = spec.identity_keys
+    container = _payload_value(payload, value_path) if value_path else payload
+    before = copy.deepcopy(container)
+    allowed = {*keys, RESOLUTION_STATE_KEY, LOOKUP_OUTCOME_KEY, VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY}
+    for key in list(container):
+        if key in allowed or key == CURATOR_OVERRIDE_KEY or key.startswith(OVERRULED_KEY_PREFIX):
+            container.pop(key)
+    container.update({key: copy.deepcopy(value) for key, value in patch.selected_state.items() if key in allowed})
+    container.setdefault(RESOLUTION_STATE_KEY, "unresolved")
+    container.setdefault(LOOKUP_OUTCOME_KEY, "not_validated")
+    if profile is not None:
+        profile.require_attributes(payload["attributes"])
+    else:
+        _follow_declared_mirrors(payload, value_path, container, domain_pack, object_type,
+                                 declared_resolvable_fields(domain_pack.metadata, object_type))
+    return {"action": "withdrawn", "value_path": value_path, "previous": before,
+            "identity": {key: container.get(key) for key in keys}, "actor_id": actor_id,
+            "actor_display_name": actor_display_name, "at": datetime.now(timezone.utc).isoformat()}

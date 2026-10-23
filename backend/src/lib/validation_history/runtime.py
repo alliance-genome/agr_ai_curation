@@ -267,6 +267,7 @@ def begin_jobs(
             ],
             "decision_units": list(j.match.binding.decision_units),
             "dispatch_wave": j.history_wave,
+            "review_episode_id": j.history_episode_id or j.match.envelope.metadata.get("review_episode_id"),
             "available_prior_completions": list(j.history_prior_completions),
             "prerequisites": list(j.history_prerequisites),
         }

@@ -68,6 +68,7 @@ class FrozenValidationInput(HistoryContract):
     decision_units: list[DecisionUnit] = Field(default_factory=list)
     prerequisites: list[PrerequisiteSelection] = Field(default_factory=list)
     dispatch_wave: StrictInt | None = Field(default=None, ge=0)
+    review_episode_id: StrictStr | None = None
     available_prior_completions: list[StrictStr] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -100,12 +101,20 @@ class ReviewObligation(HistoryContract):
         return self
 
 
+class ReviewExclusion(HistoryContract):
+    """Declared policy makes this binding inapplicable; not a successful attempt."""
+    target_id: StrictStr
+    binding_id: StrictStr
+    reason: Literal["group_not_applicable", "configured_opt_out", "optional_declarative_binding"]
+
+
 class ReviewEpisode(HistoryContract):
     """Runtime declares coverage; the reader never infers it from successful calls."""
 
     episode_id: StrictStr = Field(min_length=1)
     obligations: list[ReviewObligation]
     unavailable_bindings: list[StrictStr] = Field(default_factory=list)
+    excluded_bindings: list[ReviewExclusion] = Field(default_factory=list)
     reason: StrictStr = Field(min_length=1)
 
     @model_validator(mode="after")

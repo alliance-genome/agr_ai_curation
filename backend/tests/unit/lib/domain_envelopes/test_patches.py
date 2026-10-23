@@ -140,6 +140,22 @@ def test_profile_identity_edit_goes_through_the_curator_override_path(tmp_path):
     audit, = edited.metadata[CURATOR_OVERRIDE_METADATA_KEY]
     assert audit["field_path"] == "attributes.gene.gene_id"
 
+    # A withdrawal of the same identity still removes curator precedence, and
+    # carries the selected answer's state without changing the paper wording.
+    from dataclasses import replace
+    before_value = edited.payload["attributes"]["gene"]
+    withdrawal = replace(_patch("attributes.gene", before=before_value, value={"gene_id": "EX:9"}),
+        selected_value_action="withdraw_override", selected_state={"gene_id": "EX:9",
+            "resolution_state": "resolved", "lookup_outcome": "matched"})
+    withdrawn = apply_curator_field_patch(result.envelope, pack, withdrawal,
+        current_revision=1, actor_id="curator-1", actor_display_name="curator-1", profile=profile)
+    assert withdrawn.accepted
+    selected = withdrawn.envelope.extracted_objects[0].payload["attributes"]["gene"]
+    assert selected["mention"] == "daf-16"
+    assert selected["gene_id"] == "EX:9"
+    assert selected["lookup_outcome"] == "matched"
+    assert "curator_override" not in selected
+
 
 def test_profile_two_key_override_is_a_whole_value_replace_and_rejects_replace_identity(tmp_path):
     """ALL-1302 with core 89e74a356: the grid sends a profile value's override as a whole-value replace."""

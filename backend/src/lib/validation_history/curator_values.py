@@ -12,7 +12,14 @@ def _value(payload, path):
     return value
 
 
-def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity_keys, action, reference):
+def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity_keys, action, reference, include_state=False):
+    def result(value):
+        if not include_state:
+            return {key: deepcopy(value.get(key)) for key in identity_keys}
+        from src.lib.domain_packs.resolvable_values import RESOLUTION_STATE_KEY, LOOKUP_OUTCOME_KEY, VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY
+        allowed = [*identity_keys, RESOLUTION_STATE_KEY, LOOKUP_OUTCOME_KEY, VALIDATOR_EXPLANATION_KEY, VALIDATOR_CURATOR_MESSAGE_KEY]
+        return {key: deepcopy(value[key]) for key in allowed if key in value} | {
+            key: deepcopy(value.get(key)) for key in identity_keys}
     artifact_id = envelope.metadata["validation_history"]["artifact_id"]
     if action == "restore_selected":
         if reference is None or reference.get("artifact_id") != artifact_id:
@@ -22,15 +29,18 @@ def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity
     elif action == "withdraw_override":
         if reference is not None:
             raise store.HistoryConflict("Withdrawal cannot choose an arbitrary historical value")
+        underlying = projection.read_underlying_curator_value(scope, envelope, object_id=object_id, value_path=value_path)
+        if underlying is not None:
+            return result(underlying)
         reference = projection.latest_publication_reference(scope, artifact_id)
         if reference is None:
-            return {key: None for key in identity_keys}
+            return result({})
         # A retired/changed source has no eligible underlying selection. This is
         # explicitly a blank withdrawal, never an implicit restoration of history.
         try:
             chosen, _ = projection.read_published_projection(scope, reference, current=True)
         except store.HistoryConflict:
-            return {key: None for key in identity_keys}
+            return result({})
     else:
         raise ValueError("Unknown explicit curator selection action")
     obj = next((obj for obj in chosen.extracted_objects
@@ -44,5 +54,5 @@ def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity
     if not isinstance(value, dict) or any(key not in value for key in identity_keys):
         raise store.HistoryConflict("Selected identity does not match the declared field contract")
     if action == "withdraw_override" and value.get("curator_override") is not None:
-        return {key: None for key in identity_keys}
-    return {key: deepcopy(value[key]) for key in identity_keys}
+        return result({})
+    return result(value)

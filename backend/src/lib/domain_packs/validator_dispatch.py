@@ -230,6 +230,8 @@ class ValidatorRuntimeContext:
     document_id: str | None = None
     user_id: str | None = None
     authenticated_groups: tuple[str, ...] | None = None
+    curator_revalidation: Mapping[str, Any] | None = None
+    explicit_validation_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -240,6 +242,7 @@ class ValidatorDispatchJob:
     request: DomainValidationRequest
     dispatch_context: Mapping[str, Any] | None = None
     history_wave: int | None = None
+    history_episode_id: str | None = None
     history_prior_completions: tuple[str, ...] = ()
     history_prerequisites: tuple[dict[str, Any], ...] = ()
 
@@ -482,6 +485,8 @@ def dispatch_active_validator_bindings(
     )
     from src.lib.validation_history.selections import declare_envelope_episode
     envelope = declare_envelope_episode(history_binding, envelope, matches,
+        authenticated_groups=authenticated_groups, flow_selections=current_flow_validator_selections(),
+        curator_revalidation=runtime_context.curator_revalidation if runtime_context else None,
         unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable if item.mapping.policy.blocks_readiness] if profile_context else ())
     if profile_context is not None:
         from .profile_validation import profile_dispatch_matches
@@ -547,6 +552,16 @@ def dispatch_active_validator_bindings(
                 else:
                     findings.extend(selector_result.findings)
                 continue
+            if selector_result.request is not None and runtime_context and runtime_context.curator_revalidation:
+                intent = runtime_context.curator_revalidation
+                guidance = intent.get("guidance")
+                from src.lib.validation_history.curator_authority import _overlap
+                paths = [*selector_result.request.expected_result_fields.values(), *(selector_result.request.optional_result_fields or {}).values()]
+                target_matches = match.object_envelope is not None and intent["object_id"] in {match.object_envelope.object_id, match.object_envelope.pending_ref_id}
+                fields_match = not intent["field_paths"] or any(isinstance(path, str) and _overlap(path, requested) for path in paths for requested in intent["field_paths"])
+                if guidance and target_matches and fields_match:
+                    previous = selector_result.request.validation_guidance
+                    selector_result.request.validation_guidance = "\n\n".join(value for value in (previous, "Curator revalidation guidance: " + guidance) if value)
             if selector_result.request is None:
                 record_match_scheduling(history_binding, match, "missing_input")
                 continue
@@ -587,7 +602,7 @@ def dispatch_active_validator_bindings(
             # completion into an accepted prerequisite to keep the loop running.
             continue
         jobs, selector_findings = wave_jobs(wave_matches)
-        jobs = [replace(job, history_wave=wave_index,
+        jobs = [replace(job, history_wave=wave_index, history_episode_id=envelope.metadata["review_episode_id"],
             history_prior_completions=tuple(r._history_ref["fact_id"] for r in validator_results
                 if r._history_ref and r._history_ref.get("attempt_id"))) for job in jobs]
         pending_findings.extend(selector_findings)

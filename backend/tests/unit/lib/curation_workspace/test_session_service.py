@@ -4936,7 +4936,7 @@ def test_validate_candidate_reruns_after_waiver_advances_envelope_revision(
         CurationCandidateValidationRequest(
             session_id=seeded["session_id"],
             candidate_id=seeded["candidate_id"],
-            force=False,
+            force=True,
         ),
     )
 

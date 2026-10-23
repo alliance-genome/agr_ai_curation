@@ -1606,11 +1606,24 @@ def _build_artifact_from_step(
             if not user_id or not review_session_id:
                 raise ValueError("Selected output requires authenticated source scope")
             from src.lib.validation_history.projection import read_published_projection
-            from src.lib.validation_history.store import HistoryScope
-            selected_envelope, _ = read_published_projection(
-                HistoryScope(user_id, source_document_id, review_session_id),
-                selected_reference, current=True,
-            )
+            from src.lib.validation_history.store import HistoryScope, SelectionNotReady
+            try:
+                selected_envelope, _ = read_published_projection(
+                    HistoryScope(user_id, source_document_id, review_session_id),
+                    selected_reference, current=True,
+                )
+            except SelectionNotReady as exc:
+                # Expose pending readiness without presenting stale payload as
+                # current rows or failing discovery of unrelated ready artifacts.
+                return FlowOutputArtifact(
+                    node_id=str(_step_attr(step, "node_id") or ""),
+                    envelope_id=str(payload.get("envelope_id") or ""),
+                    domain_pack_id=str(payload.get("domain_pack_id") or ""),
+                    review_session_id=review_session_id, artifact_shape="domain_envelope",
+                    source_key=str(_step_attr(step, "source_key") or _step_attr(step, "node_id") or payload.get("envelope_id") or ""),
+                    is_canonical_curation_data=True,
+                    warnings=["Selected values await publication: " + str(exc)],
+                )
             payload = selected_envelope.model_dump(mode="json")
     raw_receipt = _candidate_attr(candidate, "execution_receipt")
     receipt = AgentExecutionReceipt.model_validate(raw_receipt) if raw_receipt is not None else None
