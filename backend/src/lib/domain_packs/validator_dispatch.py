@@ -232,6 +232,8 @@ class ValidatorRuntimeContext:
     authenticated_groups: tuple[str, ...] | None = None
     curator_revalidation: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     explicit_validation_requested: bool = False
+    refresh_scopes: Sequence[tuple[str, Sequence[str]]] | None = None
+    dispatch_receipt: dict[str, bool] | None = None
 
 
 @dataclass(frozen=True)

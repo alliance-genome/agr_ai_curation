@@ -92,6 +92,21 @@ def active_overlays(db, artifact_id):
 
 
 def record_patch(db, scope, artifact_id, *, event_id, actor_id, body):
+    # One fact per independent change keeps authorization and replacement exact.
+    # Declared compound identities and their mirrors are the only atomic group.
+    body = {**body, "source_event_id": event_id}
+    if body.get("atomic"):
+        return _record_patch_unit(db, scope, artifact_id, event_id=event_id, actor_id=actor_id, body=body)
+    ids = []
+    for index, change in enumerate(body["changes"]):
+        unit = {**deepcopy(body), "anchor": deepcopy(change["anchor"]),
+                "value_path": change["path"], "changes": [deepcopy(change)],
+                "source_event_id": event_id, "atomic": False}
+        ids.append(_record_patch_unit(db, scope, artifact_id, event_id=f"{event_id}:change:{index}", actor_id=actor_id, body=unit))
+    return ids[0] if ids else None
+
+
+def _record_patch_unit(db, scope, artifact_id, *, event_id, actor_id, body):
     from .selections import _lock_artifact
     _lock_artifact(db, scope, artifact_id, write=True)
     if actor_id != scope.owner_id:
@@ -151,7 +166,7 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
         return anchored_path(refs[body["target_id"]], body["anchor"])
     def requested(body):
         if body["object_id"] == object_id:
-            return not field_paths or any(_overlap(current_path(body), path) for path in field_paths)
+            return not field_paths or any(_overlap(current_path(body), path) if body.get("atomic") else _covers(path, current_path(body)) for path in field_paths)
         contributor = body.get("contributor_completion_id")
         if contributor is None:
             return False
@@ -175,6 +190,11 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
               "field_paths": list(field_paths), "overlay_ids": [f.id for f, _ in overlays],
               "overlay_paths": {f.id: current_path(body) for f, body in overlays},
               "guidance": guidance}).id
+
+
+def _covers(parent, child):
+    a, b = tuple(parse_field_path(parent)), tuple(parse_field_path(child))
+    return b[:len(a)] == a
 
 
 def _overlap(left, right):
@@ -224,7 +244,7 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
                                  else [*request["expected_result_fields"], *(request.get("optional_result_fields") or {})])}
                 whole_result = set(request["expected_result_fields"]) | set(request.get("optional_result_fields") or {})
                 same_contributor = old_input["target_id"] == frozen["target_id"] and whole_result <= selected_slots
-            if same_contributor or (same_source and any(isinstance(path, str) and _overlap(path, authorized[fact.id]) for path in destinations)):
+            if same_contributor or (same_source and any(isinstance(path, str) and (_overlap(path, authorized[fact.id]) if body.get("atomic") else _covers(path, authorized[fact.id])) for path in destinations)):
                 released.add(fact.id)
     if released:
         store._append(db, artifact_id, operation_id="curator-release:" + operation_id,

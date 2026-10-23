@@ -1577,7 +1577,7 @@ def _checkpoint_patch_result(
             DomainEnvelopeCheckpointRequest(
                 project_key=envelope_row.project_key,
                 envelope=patched_envelope,
-                authenticated_groups=authenticated_groups,
+                curator_authority_groups=authenticated_groups,
                 expected_revision=expected_revision,
                 document_id=envelope_row.document_id,
                 session_id=envelope_row.session_id,

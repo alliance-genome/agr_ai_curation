@@ -577,7 +577,7 @@ def _curator_revalidation_field_paths(draft_fields):
 def _require_revalidation_context(context, candidate, user_id):
     if not user_id:
         raise HTTPException(status_code=403, detail="Explicit revalidation requires an authenticated curator")
-    if context is None or candidate.domain_envelope is None or not candidate.object_id:
+    if context is None or candidate.domain_envelope is None or not candidate.object_id or candidate.envelope_revision is None:
         raise HTTPException(status_code=409, detail="Explicit revalidation requires an envelope target and document context")
     history = candidate.domain_envelope.envelope_json.get("metadata", {}).get("validation_history", {})
     if not history.get("artifact_id") or not history.get("session_id"):
@@ -615,11 +615,13 @@ def _dispatch_workspace_envelope_validation(
     from src.lib.validation_history.runtime import bind_artifact
     from src.lib.validation_history.projection import read_dispatch_source
     source_envelope = read_dispatch_source(bind_artifact(envelope, runtime_context), envelope)
-    refresh_scope = remove_open_validation_findings_for_scope(
-        source_envelope,
-        object_id=candidate.object_id,
-        field_paths=field_paths,
-    )
+    scopes = runtime_context.refresh_scopes if runtime_context and runtime_context.refresh_scopes else [(candidate.object_id, field_paths)]
+    package_envelope = source_envelope
+    removed_findings = []
+    for object_id, paths in scopes:
+        refreshed = remove_open_validation_findings_for_scope(package_envelope, object_id=object_id, field_paths=paths)
+        package_envelope = refreshed.envelope
+        removed_findings.extend(refreshed.removed_findings)
     # The package validator runs first: an object it marks not validatable
     # (not_validatable.NOT_VALIDATABLE_DETAIL_KEY) is skipped by the structural
     # checks and the binding dispatch below.
@@ -627,7 +629,6 @@ def _dispatch_workspace_envelope_validation(
         envelope.domain_pack_id
     )
     package_appended_findings = ()
-    package_envelope = refresh_scope.envelope
     if package_validator is not None and profile_context is None:
         package_findings = package_validator(package_envelope)
         package_envelope, package_appended_findings = (
@@ -663,10 +664,12 @@ def _dispatch_workspace_envelope_validation(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except HistoryConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if runtime_context is not None and runtime_context.dispatch_receipt is not None:
+        runtime_context.dispatch_receipt["executed"] = True
     stale_resolution = resolve_stale_validation_findings_after_refresh(
         original_envelope=envelope,
         refreshed_envelope=dispatch_result.envelope,
-        removed_findings=refresh_scope.removed_findings,
+        removed_findings=removed_findings,
         actor_id="workspace_candidate_validation",
     )
     appended_findings = (
@@ -943,8 +946,12 @@ def validate_session(
         key = str(candidate.envelope_id) if candidate.envelope_id else target_candidate_id
         first = key not in dispatched
         runtime_context = contexts[target_candidate_id]
+        dispatch_receipt = {}
         if runtime_context is not None:
-            runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request and first)
+            runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request and first,
+                dispatch_receipt=dispatch_receipt,
+                refresh_scopes=[(item.object_id, _candidate_validation_field_paths([
+                    CurationDraftFieldSchema.model_validate(field) for field in item.draft.fields])) for item in groups[key]])
             if request.replace_curator_override and first:
                 runtime_context = replace(runtime_context, curator_revalidation=[{
                     "actor_id": user_id, "object_id": item.object_id,
@@ -954,7 +961,8 @@ def validate_session(
             db, candidate, force=(request.force or request.replace_curator_override) and first,
             validated_at=validated_at, runtime_context=runtime_context,
         )
-        dispatched.add(key)
+        if dispatch_receipt.get("executed"):
+            dispatched.add(key)
         candidate_validations.append(validation_snapshot)
         changed |= candidate_changed
 

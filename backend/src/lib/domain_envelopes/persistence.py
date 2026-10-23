@@ -109,6 +109,7 @@ class DomainEnvelopeCheckpointRequest:
     source_extraction_result_id: str | UUID | None = None
     source_payload_hash: str | None = None
     authenticated_groups: Sequence[str] | None = None
+    curator_authority_groups: Sequence[str] | None = None
     execution_context: ExtractionExecutionContext | None = None
     object_model_ref_json: Mapping[str, Any] = field(default_factory=dict)
     model_field_ref_json: Mapping[str, Any] = field(default_factory=dict)
@@ -306,7 +307,7 @@ def write_domain_envelope_checkpoint(
     if has_curator_edit:
         from src.lib.validation_history.projection import republish_curator_checkpoint
         envelope = republish_curator_checkpoint(db, DomainEnvelope.model_validate(envelope_json),
-            revision=next_revision, authenticated_groups=request.authenticated_groups)
+            revision=next_revision, authenticated_groups=request.curator_authority_groups if request.curator_authority_groups is not None else request.authenticated_groups)
         envelope_json = envelope.model_dump(mode="json")
     from src.lib.validation_history.checkpoints import write_checkpoint_body
     from src.models.sql.validation_history import ValidationCheckpoint

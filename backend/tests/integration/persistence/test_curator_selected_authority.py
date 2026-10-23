@@ -280,7 +280,6 @@ def test_curator_overlay_follows_stable_element_through_reorder_and_retirement(s
 
 def test_profile_curator_revalidation_and_group_authorized_withdrawal(scope, monkeypatch):
     from dataclasses import replace
-    from src.lib.domain_packs import profile_validation as pv
     from src.lib.domain_packs.input_selectors import build_domain_validation_request
     from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
     from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
@@ -297,38 +296,7 @@ def test_profile_curator_revalidation_and_group_authorized_withdrawal(scope, mon
     raw["validator_mappings"][0]["capability_fingerprint"] = cap.fingerprint()
     # Prepare the pinned profile, then compile with actual authenticated groups.
     source, _ = resolvable((raw, cap, pack))
-    from src.lib.agent_studio import generic_profile_service
-    from src.lib.agent_studio.execution_revision_service import append_execution_revision, current_execution_receipt
-    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
-    from src.lib.curation_workspace.execution_contracts import resolve_receipt_profile
-    from src.models.sql.agent import Agent
-    from src.models.sql.pdf_document import PDFDocument
-    from src.schemas.agent_execution_revision import AgentOutputContract
-    from uuid import UUID
-    monkeypatch.setattr("src.lib.agent_studio.profile_mapping_service.capability_catalog", lambda **kwargs: [cap])
-    monkeypatch.setattr(pv, "capability_catalog", lambda **kwargs: [cap])
-    with h.SessionLocal.begin() as db:
-        owner = db.get(PDFDocument, UUID(scope.document_id)).user_id
-        _, revision = generic_profile_service.create_profile(db, owner, raw, active_group_ids=("WB",))
-        agent = Agent(id=uuid4(), agent_key="ca_" + uuid4().hex, user_id=owner,
-            name="Authority fixture", instructions="Fixture", model_id="test-model",
-            model_temperature=0.0, visibility="private", tool_ids=["stage_generic_object", "finalize_generic_extraction"], group_rules_enabled=False)
-        db.add(agent)
-        db.flush()
-        contract = AgentOutputContract.model_validate({"output_state": "structured_extraction",
-            "output_mode": "profile_bound_generic", "generic_profile_ref": {"profile_id": revision.profile_id,
-            "profile_revision_id": revision.id, "revision": revision.revision, "fingerprint": revision.fingerprint}})
-        append_execution_revision(db, agent, capture_execution_snapshot(db, agent, contract), user_id=owner, expected_revision_id=None)
-        receipt = current_execution_receipt(db, agent.agent_key, owner, active_group_ids=["WB"])
-        profile = resolve_receipt_profile(db, receipt)
-    context = pv.compile_profile_validation(receipt, profile, pack, capabilities=[cap], active_group_ids=("WB",))
-    source.envelope_id = uuid4().hex
-    source.metadata["execution_receipt"] = receipt.model_dump(mode="json")
-    source.metadata["extraction_metadata"]["provenance"].update(produced_by=receipt.agent_key,
-        execution_receipt=receipt.model_dump(mode="json"), generic_profile_ref=profile.receipt)
-    for obj in source.extracted_objects:
-        obj.metadata["generic_profile_ref"] = profile.receipt
-    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
+    source, context = _persist_test_profile(scope, raw, cap, pack, source, monkeypatch)
     source = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
         typed=source.model_dump(mode="json"), envelope=source, provenance={})
     aid = source.metadata["validation_history"]["artifact_id"]
@@ -431,7 +399,8 @@ def test_failed_intent_does_not_supersede_current_episode(scope, scenario):
     from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
     x = scenario
     from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
-    source = __import__('src.lib.validation_history.projection', fromlist=['read_dispatch_source']).read_dispatch_source(x.bound, x.env)
+    from src.lib.validation_history.projection import read_dispatch_source
+    source = read_dispatch_source(x.bound, x.env)
     matches = DomainPackValidationRegistry.from_domain_pack(resolve_curation_domain_pack_by_id(x.env.domain_pack_id)).match_bindings(source)
     before = x.env.metadata["selected_projection"]
     with pytest.raises(h.HistoryAccessError):
@@ -440,3 +409,139 @@ def test_failed_intent_does_not_supersede_current_episode(scope, scenario):
     _, manifest = read_published_projection(scope, before, current=True)
     assert manifest["episode_id"] == x.episode
     assert manifest["ready"]
+
+
+def _persist_test_profile(scope, raw, cap, pack, source, monkeypatch):
+    from src.lib.agent_studio import generic_profile_service
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision, current_execution_receipt
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.lib.curation_workspace.execution_contracts import resolve_receipt_profile
+    from src.models.sql.agent import Agent
+    from src.models.sql.pdf_document import PDFDocument
+    from src.schemas.agent_execution_revision import AgentOutputContract
+    from uuid import UUID
+    from src.lib.domain_packs import profile_validation as pv
+    monkeypatch.setattr("src.lib.agent_studio.profile_mapping_service.capability_catalog", lambda **kwargs: [cap])
+    monkeypatch.setattr(pv, "capability_catalog", lambda **kwargs: [cap])
+    with h.SessionLocal.begin() as db:
+        owner = db.get(PDFDocument, UUID(scope.document_id)).user_id
+        _, revision = generic_profile_service.create_profile(db, owner, raw, active_group_ids=("WB",))
+        agent = Agent(id=uuid4(), agent_key="ca_" + uuid4().hex, user_id=owner,
+            name="Authority fixture", instructions="Fixture", model_id="test-model",
+            model_temperature=0.0, visibility="private", tool_ids=["stage_generic_object", "finalize_generic_extraction"], group_rules_enabled=False)
+        db.add(agent)
+        db.flush()
+        contract = AgentOutputContract.model_validate({"output_state": "structured_extraction",
+            "output_mode": "profile_bound_generic", "generic_profile_ref": {"profile_id": revision.profile_id,
+            "profile_revision_id": revision.id, "revision": revision.revision, "fingerprint": revision.fingerprint}})
+        append_execution_revision(db, agent, capture_execution_snapshot(db, agent, contract), user_id=owner, expected_revision_id=None)
+        receipt = current_execution_receipt(db, agent.agent_key, owner, active_group_ids=["WB"])
+        profile = resolve_receipt_profile(db, receipt)
+    context = pv.compile_profile_validation(receipt, profile, pack, capabilities=[cap], active_group_ids=("WB",))
+    source.envelope_id = uuid4().hex
+    source.metadata["execution_receipt"] = receipt.model_dump(mode="json")
+    source.metadata["extraction_metadata"]["provenance"].update(produced_by=receipt.agent_key,
+        execution_receipt=receipt.model_dump(mode="json"), generic_profile_ref=profile.receipt)
+    for obj in source.extracted_objects:
+        obj.metadata["generic_profile_ref"] = profile.receipt
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
+    return source, context
+
+
+def test_profile_parent_edit_retains_unrequested_siblings_after_leaf_acceptance(scope, monkeypatch):
+    from copy import deepcopy
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
+    from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
+    from src.lib.validation_history.candidates import retain_candidates
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
+    from src.schemas.domain_validator import DomainValidatorResultBase
+    from tests.unit.lib.domain_packs.test_profile_validation import example
+    from tests.unit.lib.domain_packs.test_profile_materialization import prepared
+    raw, cap, pack = example.__wrapped__()
+    raw["fields"] = [{"key": "term", "required": True, "value_schema": {"kind": "object", "fields": [
+        {"key": key, "required": key == "paper_name", "value_schema": {"kind": "string"}} for key in ("paper_name", "name", "rank", "note")]}}]
+    raw["validator_mappings"][0].update(inputs={"mention": {"field_path": "attributes.term.paper_name"}},
+        outputs={"identifier": "attributes.term.name"})
+    rank_mapping = deepcopy(raw["validator_mappings"][0])
+    rank_mapping.update(mapping_id="rank", outputs={"identifier": "attributes.term.rank"})
+    raw["validator_mappings"].append(rank_mapping)
+    source, _ = prepared((raw, cap, pack), attributes={"term": {"paper_name": "Paper", "name": "Extracted", "rank": "Extracted rank", "note": "Source note"}})
+    source, context = _persist_test_profile(scope, raw, cap, pack, source, monkeypatch)
+    source = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex, typed=source.model_dump(mode="json"), envelope=source, provenance={})
+    aid = source.metadata["validation_history"]["artifact_id"]
+    bound = runtime.CapturedArtifact(scope, aid)
+    matches = context.registry.match_bindings(source)
+    requests = [build_domain_validation_request(match).request for match in matches]
+    source = s.declare_envelope_episode(bound, source, matches)
+    revision = 0
+    extraction_id = uuid4()
+    def publish(reject_rank=False):
+        nonlocal source, revision
+        entries = []
+        for match, request in zip(matches, requests, strict=True):
+            job = ValidatorDispatchJob(match, request, history_episode_id=source.metadata["review_episode_id"])
+            invocation = runtime.begin_jobs(bound, [job], operation_id=uuid4().hex, receipt={})
+            result = DomainValidatorResultBase(status="resolved", request_id=request.request_id,
+                validator_binding_id=request.validator_binding_id, validator_agent=request.validator_agent, target=request.target,
+                resolved_values={"identifier": "Selected"}, resolved_objects=[], missing_expected_fields=[],
+                candidates=[], lookup_attempts=[], explanation="Explicit result", curator_message=None)
+            runtime.complete_jobs(bound, invocation, [result])
+            retain_candidates(source, [ValidatorResultMaterializationInput(match, request, result)], scope=scope)
+            target = runtime.request_target(bound, job)
+            with h.SessionLocal() as db:
+                version = h._current(db, aid, target)["version"]
+            entries.append({"target_id": target, "expected_version": version,
+                "action": "reject" if reject_rank and "attributes.term.rank" in request.expected_result_fields.values() else "accept",
+                "subject": result._history_ref["fact_id"], "reason": "Explicit review"})
+        source, manifest, checkpoint = publish_decisions(scope,
+            checkpoint_request=DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=source,
+                expected_revision=revision, document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=extraction_id,
+                execution_receipt=context.receipt, authenticated_groups=("WB",)),
+            episode_id=source.metadata["review_episode_id"], operation_id=uuid4().hex,
+            actor={"type": "agent", "id": "supervisor"}, entries=entries)
+        revision = checkpoint.revision
+        return manifest
+    publish()
+    obj = source.extracted_objects[0]
+    before = deepcopy(obj.payload["attributes"]["term"])
+    edited = {**before, "name": "Curator name", "rank": "Curator rank", "note": "Curator note"}
+    patch = apply_curator_field_patch(source, pack, EnvelopeFieldPatch(envelope_id=source.envelope_id,
+        expected_revision=revision, object_id=obj.object_id or obj.pending_ref_id, field_path="attributes.term",
+        before=before, value=edited), current_revision=revision, actor_id=scope.owner_id, actor_display_name="Curator", profile=context.profile)
+    assert patch.accepted, patch.errors
+    with h.SessionLocal.begin() as db:
+        checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=patch.envelope,
+            expected_revision=revision, document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=extraction_id, authenticated_groups=("WB",)))
+    revision = checkpoint.revision
+    from src.lib.validation_history.projection import latest_publication_reference
+    source, _ = read_published_projection(scope, latest_publication_reference(scope, aid), current=True)
+    old_reference = source.metadata["selected_projection"]
+    source = s.declare_envelope_episode(bound, source, matches, curator_revalidation={"actor_id": scope.owner_id,
+        "object_id": obj.object_id or obj.pending_ref_id, "field_paths": ["attributes.term.name"]})
+    manifest = publish(reject_rank=True)
+    assert not manifest["ready"]
+    assert source.extracted_objects[0].payload["attributes"]["term"] == {**edited, "name": "Selected"}
+    old, _ = read_published_projection(scope, old_reference)
+    assert old.extracted_objects[0].payload["attributes"]["term"] == edited
+
+
+def test_child_scope_cannot_authorize_whole_collection_override(scope):
+    from tests.integration.persistence.test_selected_value_authority import captured_source
+    env = captured_source(scope)
+    aid = env.metadata["validation_history"]["artifact_id"]
+    root = env.extracted_objects[0].metadata["validation_history"]["target_id"]
+    bound = runtime.CapturedArtifact(scope, aid)
+    with h.SessionLocal.begin() as db:
+        edit = c.record_patch(db, scope, aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+            body=c.bind_patch_anchors(env, {"target_id": root, "object_id": "one", "value_path": "terms",
+                "action": "override", "changes": [{"target_id": root, "path": "terms", "present": True,
+                    "value": [{"label": "new whole list"}]}]}))
+    ep = s.start_episode(scope, aid, episode={"episode_id": uuid4().hex, "reason": "review", "obligations": [{"target_id": root, "mode": "extraction_only"}]})
+    child = c.record_revalidation_intent(bound, envelope=env, episode_id=ep, object_id="one",
+        field_paths=["terms[0].label"], actor_id=scope.owner_id)
+    assert h.read_fact(scope, aid, child)["content"]["overlay_ids"] == []
+    ep = s.start_episode(scope, aid, episode={"episode_id": uuid4().hex, "reason": "review", "obligations": [{"target_id": root, "mode": "extraction_only"}]})
+    parent = c.record_revalidation_intent(bound, envelope=env, episode_id=ep, object_id="one", field_paths=["terms"], actor_id=scope.owner_id)
+    assert h.read_fact(scope, aid, parent)["content"]["overlay_ids"] == [edit]

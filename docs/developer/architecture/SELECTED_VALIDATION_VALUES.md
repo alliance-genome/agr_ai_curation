@@ -93,3 +93,10 @@ paths and explicit mirror paths determine that scope.
 Curator edits republish current selected values. Pending answers and their findings
 remain in the immutable history ledger; supervisor consumers must query that ledger
 rather than assuming every pending finding remains in the current projection.
+
+An ordinary parent-object edit records independent changed leaves as separate
+immutable curator facts linked to the original edit event. Single-field revalidation
+can replace only the authorized leaf covered by its accepted result. Declared
+compound identities and their explicit mirrors remain one atomic fact. A child-only
+request cannot authorize a whole-collection replacement. A newer edit creates new
+facts and remains protected from earlier intent.

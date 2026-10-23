@@ -399,6 +399,7 @@ def apply_curator_field_patch(
             "object_id": domain_object.object_id or domain_object.pending_ref_id,
             "value_path": override_audit["value_path"] if override_audit is not None else patch.field_path,
             "action": patch.selected_value_action or "override", "changes": changes,
+            "atomic": override_audit is not None,
             "contributor_completion_id": domain_object.metadata.get("selected_contribution", {}).get("completion_id"),
             "reason": patch.reason,
         }
