@@ -33,3 +33,30 @@ def review_stop(error):
             return None
         error = error.__cause__ or error.__context__
     return None
+
+
+def stop_reason(error):
+    """Classify a recognized stop consistently across chat and flow review."""
+    from agents import MaxTurnsExceeded
+    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+
+    if isinstance(error, ReviewStopped):
+        return error.reason
+    if isinstance(error, asyncio.TimeoutError):
+        return "expired"
+    if isinstance(error, ContextRecoveryError):
+        return "unsupported_exact_context_admission"
+    if isinstance(error, asyncio.CancelledError):
+        return "cancelled"
+    if isinstance(error, MaxTurnsExceeded):
+        return "reviewer_turns_exhausted"
+    raise TypeError("Not a recognized review stop")
+
+
+def has_review_terminal(error, pending):
+    """SDK extraction failures without a saved source remain operational failures."""
+    return (isinstance(error, ReviewStopped) and (
+        pending is not None or error.reason == "flow_step_already_submitted"
+    )) or (
+        error is not None and pending is not None and pending.record is not None
+    )

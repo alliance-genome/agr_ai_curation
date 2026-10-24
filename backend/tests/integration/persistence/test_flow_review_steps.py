@@ -139,7 +139,7 @@ def test_discovered_batch_credits_are_shared_and_never_refill(planned):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('accept', [True, False, 'commit_failure', 'budget_exhausted'])
+@pytest.mark.parametrize('accept', [True, False, 'commit_failure', 'budget_exhausted', 'extractor_turns', 'extractor_timeout'])
 async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned, monkeypatch, accept):
     """Real wrapper, source persistence, validators and decisions; only providers are fake."""
     import json
@@ -211,6 +211,11 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         async def invoke(query: str) -> str:
             if tool_name == 'ask_gene_specialist':
                 calls.append('extract')
+                if accept == 'extractor_turns':
+                    from agents import MaxTurnsExceeded
+                    raise MaxTurnsExceeded('extractor turns')
+                if accept == 'extractor_timeout':
+                    raise TimeoutError('extractor timed out')
                 active = ACTIVE_CHAT_REVIEW.get()
                 assert active is not None
                 if accept == 'budget_exhausted':
@@ -245,7 +250,17 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         flow_run_id=run_id, enable_result_inspection=False)
     state['supervisor'] = supervisor
     context = SimpleNamespace(tool_name='step', run_config=None)
-    if accept == 'budget_exhausted':
+    if accept in ('extractor_turns', 'extractor_timeout'):
+        from agents import MaxTurnsExceeded
+        with pytest.raises(MaxTurnsExceeded if accept == 'extractor_turns' else TimeoutError):
+            await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert state['next_tool_index'] == 0 and not state['completed_steps']
+        assert calls == ['extract']
+        pending = state['pending_review']
+        assert pending.record is None
+        with store.SessionLocal() as db:
+            assert db.get(FlowReviewStep, pending.step_id).state == 'failed'
+    elif accept == 'budget_exhausted':
         with pytest.raises(admission.ReviewStopped, match='budget_exhausted') as stopped:
             await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
         assert state['next_tool_index'] == 0 and not state['completed_steps']

@@ -8229,14 +8229,23 @@ def test_output_role_lookup_reports_unavailable_before_category(monkeypatch, una
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('reason,status', [('budget_exhausted', 'review_exhausted'), ('unsupported_provider', 'review_pending')])
-async def test_expected_review_stop_emits_typed_terminal_without_error_report(monkeypatch, reason, status):
+@pytest.mark.parametrize('kind,reason,status,saved', [
+    ('review', 'budget_exhausted', 'review_exhausted', False),
+    ('review', 'unsupported_provider', 'review_pending', False),
+    ('context', 'unsupported_exact_context_admission', 'review_pending', True),
+    ('timeout', 'expired', 'review_exhausted', True),
+    ('turns', 'reviewer_turns_exhausted', 'review_exhausted', True),
+    ('timeout', None, None, False),
+    ('turns', None, None, False),
+])
+async def test_expected_review_stop_emits_typed_terminal_without_error_report(monkeypatch, kind, reason, status, saved):
     from src.lib.validation_review.admission import ReviewStopped
     flow = _make_flow([_task_input_node(), _agent_node('extract', 'gene')])
     supervisor = MagicMock(name='Configured supervisor')
     supervisor._flow_unavailable_steps = []
     state = _make_flow_execution_state(ordered_tool_names=['ask_gene_specialist'])
-    state['pending_review'] = SimpleNamespace(record=None, step_id='saved-step')
+    state['pending_review'] = SimpleNamespace(record=SimpleNamespace(extraction_result_id='saved-record') if saved else None, step_id='saved-step',
+                                             reference=lambda record: {'episode_id': 'saved-episode'})
     supervisor._flow_execution_state = state
     monkeypatch.setattr('src.lib.flows.executor.create_flow_supervisor', lambda **kw: supervisor)
     monkeypatch.setattr('src.lib.flows.executor.build_flow_prompt', lambda *a, **kw: 'Run saved flow')
@@ -8244,8 +8253,16 @@ async def test_expected_review_stop_emits_typed_terminal_without_error_report(mo
     monkeypatch.setattr('src.lib.flows.executor.report_runtime_exception', lambda *a, **kw: reports.append(kw))
     async def run(**kwargs):
         yield {'type': 'RUN_STARTED', 'data': {'trace_id': 'review-stop'}}
-        raise ReviewStopped(reason)
+        from agents import MaxTurnsExceeded
+        from src.lib.openai_agents.model_context_view import ContextRecoveryError
+        raise {'review': ReviewStopped(reason), 'context': ContextRecoveryError('exact context'),
+               'timeout': TimeoutError('timed out'), 'turns': MaxTurnsExceeded('extractor turns')}[kind]
     monkeypatch.setattr('src.lib.openai_agents.runner.run_agent_streamed', run)
+    if not saved and kind != 'review':
+        from agents import MaxTurnsExceeded
+        with pytest.raises(TimeoutError if kind == 'timeout' else MaxTurnsExceeded):
+            _ = [event async for event in execute_flow(flow, user_id='owner', session_id='session')]
+        return
     events = [event async for event in execute_flow(flow, user_id='owner', session_id='session')]
     finished, = [event for event in events if event['type'] == 'FLOW_FINISHED']
     assert finished['data']['status'] == status

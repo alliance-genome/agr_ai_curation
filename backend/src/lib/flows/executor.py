@@ -2753,14 +2753,14 @@ def get_all_agent_tools(
                     return await _run_claimed_ordered_tool(ctx, query, next_idx)
             except BaseException as error:
                 pending = execution_state.get("pending_review")
-                from src.lib.validation_review.stops import review_stop
+                from src.lib.validation_review.stops import review_stop, has_review_terminal
                 expected_stop = review_stop(error)
-                if pending is not None and (expected_stop is None or isinstance(error, asyncio.CancelledError)):
+                if pending is not None and (not has_review_terminal(expected_stop, pending) or isinstance(expected_stop, asyncio.CancelledError)):
                     from src.lib.validation_review import flow_steps
                     from src.lib.validation_history.store import HistoryScope
                     await asyncio.shield(asyncio.to_thread(flow_steps.stop,
                         HistoryScope(pending.owner_id, pending.document_id, pending.session_id), pending.step_id,
-                        interrupted=isinstance(error, asyncio.CancelledError),
+                        interrupted=isinstance(expected_stop, asyncio.CancelledError),
                         reason=getattr(error, "reason", None) or type(error).__name__))
                 raise
             finally:
@@ -4376,12 +4376,12 @@ async def execute_flow(
             except BenchmarkInvocationBudgetExceeded:
                 raise
             except Exception as exc:
-                from src.lib.validation_review.stops import review_stop
+                from src.lib.validation_review.stops import review_stop, has_review_terminal, stop_reason
                 stopped = review_stop(exc)
                 pending_review = flow_execution_state.get("pending_review")
-                if stopped is not None and (pending_review is not None or getattr(stopped, "reason", None) == "flow_step_already_submitted"):
+                if stopped is not None and has_review_terminal(stopped, pending_review):
                     from src.lib.validation_review.flow_outcome import status_for_reason
-                    reason = getattr(stopped, "reason", None) or "reviewer_turns_exhausted"
+                    reason = stop_reason(stopped)
                     flow_status = status_for_reason(reason)
                     failure_reason = reason
                     break

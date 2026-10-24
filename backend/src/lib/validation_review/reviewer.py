@@ -202,26 +202,14 @@ async def run(context, agent, *, input, run_config=None):
 
 
 async def _stopped_response(context, exc):
-    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+    from .stops import stop_reason
 
     status = await asyncio.to_thread(
         admission.status, context.history_scope, context.episode_id
     )
     return {
         "state": "complete" if status["ready"] else "needs_curator_review",
-        "reason": (
-            exc.reason
-            if isinstance(exc, admission.ReviewStopped)
-            else (
-                "expired"
-                if isinstance(exc, asyncio.TimeoutError)
-                else "unsupported_exact_context_admission"
-                if isinstance(exc, ContextRecoveryError)
-                else "cancelled"
-                if isinstance(exc, asyncio.CancelledError)
-                else "reviewer_turns_exhausted"
-            )
-        ),
+        "reason": stop_reason(exc),
         "resource": (
             exc.resource if isinstance(exc, admission.ReviewStopped) else None
         ),
