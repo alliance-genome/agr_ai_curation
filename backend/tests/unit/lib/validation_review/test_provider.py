@@ -118,7 +118,12 @@ async def test_nested_scope_restores_parent_and_direct_compaction_is_explicit_st
 
 def test_reviewer_identity_is_mandatory():
     with pytest.raises(ValueError, match="explicit reviewer"):
-        p.ExecutionBudget(HistoryScope("o", "d", "s"), "e", "reviewer_tokens", True)
+        p.ExecutionBudget(
+            HistoryScope("o", "00000000-0000-0000-0000-000000000001", "s"),
+            "e",
+            "reviewer_tokens",
+            True,
+        )
 
 
 @pytest.mark.asyncio

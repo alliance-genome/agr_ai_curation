@@ -842,6 +842,54 @@ def test_uncertain_attempt_can_be_acknowledged_without_fabricating_a_completion(
                 ValidationFact.artifact_id == aid, ValidationFact.kind == "completion"
             )
         )
+    # An acknowledged unknown attempt must not prevent a successful retry from
+    # becoming ready, even when the original provider never supplies an answer.
+    from src.lib.validation_review.decisions import ReviewContext
+
+    with h.SessionLocal() as db:
+        parent = db.scalar(
+            select(ValidationFact.id).where(
+                ValidationFact.artifact_id == aid,
+                ValidationFact.operation_id == "decision:ack",
+            )
+        )
+    retry = scheduling.reconsider(
+        ReviewContext(scope, ep, "reviewer"),
+        operation_id="retry",
+        parent_decision_id=parent,
+        target_ids=[tid],
+        instructions="Try again",
+        evidence_refs=[],
+    )
+    with h.SessionLocal() as db:
+        retry_attempt = db.get(Work, retry).payload["invocation"]["attempt_ids"][0]
+    answer = h.complete_attempt(
+        scope,
+        aid,
+        retry_attempt,
+        state="completed",
+        result={"value": "good"},
+        diagnostics={},
+    )
+    with h.SessionLocal.begin() as db:
+        selections.decide_episode_in_transaction(
+            db,
+            scope,
+            aid,
+            episode_id=ep,
+            operation_id="accept-retry",
+            actor={"type": "agent", "id": "reviewer"},
+            entries=[
+                {
+                    "target_id": tid,
+                    "expected_version": h._current(db, aid, tid)["version"],
+                    "action": "accept",
+                    "subject": answer,
+                    "reason": "Solid",
+                }
+            ],
+        )
+    assert a.status(scope, ep)["ready"]
     late = h.complete_attempt(
         scope,
         aid,
@@ -970,3 +1018,122 @@ def test_warning_thresholds_are_durable_and_idempotent(scope):
         )
         assert len(facts) == 4  # run and episode at both thresholds
         assert {h._content(db, f)["threshold"] for f in facts} == {75, 90}
+
+
+@pytest.mark.asyncio
+async def test_real_runner_factory_tools_and_measured_seam_with_fake_provider(
+    scope, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    from agents import Agent, RunConfig
+    from src.lib.validation_review import reviewer
+    from src.lib.validation_review.decisions import ReviewContext
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    from tests.unit.lib.openai_agents.test_model_request_measurement import (
+        FakeResponsesWSModel,
+        _tool_call,
+        _final,
+    )
+
+    _, ep, _ = admitted(scope)
+    monkeypatch.setenv(
+        "AGENT_MODEL_CAPACITY_OVERRIDES_JSON",
+        '{"gpt-test":{"context_window_tokens":1050000,"max_input_tokens":922000,"max_output_tokens":128000}}',
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.context_capacity.NativeCapacityRequest.count",
+        AsyncMock(return_value=1000),
+    )
+    model = FakeResponsesWSModel(
+        [
+            _tool_call(
+                "read_validation_history",
+                "bad",
+                '{"fact_id":"missing","sha256":"missing","offset":0}',
+            ),
+            _tool_call("get_validation_review_status", "status"),
+            _final("Still pending"),
+        ]
+    )
+    agent = Agent(name="reviewer", model=model, instructions="Review the ledger")
+    attach_agent_cost_identity(
+        agent, {"agent_id": "validation_reviewer", "agent_role": "supervisor"}
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda *args, **kwargs: agent,
+    )
+    context = ReviewContext(scope, ep, "reviewer")
+    configured = reviewer.create_reviewer(
+        context, checkpoint_provider=lambda: None, authenticated_groups=[]
+    )
+    result = await reviewer.run(
+        context, configured, input="Review", run_config=RunConfig(tracing_disabled=True)
+    )
+    assert result["output"] == "Still pending"
+    assert len(model.calls) == 3
+    budget = a.status(scope, ep)["budgets"][-1]["remaining"]
+    assert budget["reviewer_turns"] == 61
+    assert budget["reviewer_tools"] == 254
+    assert budget["reviewer_tokens"] == 1000000 - 3 * 1280
+    assert not result["review"]["ready"]
+    a.cancel(scope, ep, actor_id=scope.owner_id, reason="Done reviewing")
+    stopped = await reviewer.run(
+        context, configured, input="Review", run_config=RunConfig(tracing_disabled=True)
+    )
+    assert (
+        stopped["state"] == "needs_curator_review" and stopped["reason"] == "cancelled"
+    )
+    assert len(model.calls) == 3
+
+
+def test_32_target_run_shares_16_extra_allowance_across_two_episodes(scope):
+    from src.lib.validation_history import selections
+
+    sid = a.create_scope(
+        scope, operation_id=uuid4().hex, kind="document_run", targets=32, episodes=2
+    )
+    episodes = []
+    for index in range(2):
+        aid = h.capture_baseline(scope, producer_id=f"step:{index}", subject_kind="extracted",
+                                 typed={"mention": "original"}, normalized={"items": []}, provenance={})
+        targets = [
+            h.register_target(
+                scope, aid, identity=f"target:{n}", original={"binding_id": "fixture"}
+            )
+            for n in range(16)
+        ]
+        ep = selections.start_episode(
+            scope,
+            aid,
+            episode={
+                "episode_id": uuid4().hex,
+                "reason": "Extraction step",
+                "obligations": [
+                    {"target_id": tid, "mode": "validation", "binding_id": "fixture"}
+                    for tid in targets
+                ],
+            },
+        )
+        a.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
+        episodes.append(ep)
+    a.reserve(
+        scope,
+        episodes[0],
+        operation_id="sixteen-extras",
+        charges={"extra_attempts": 16},
+        request={},
+    )
+    with pytest.raises(a.ReviewStopped, match="budget_exhausted"):
+        a.reserve(
+            scope,
+            episodes[1],
+            operation_id="seventeenth",
+            charges={"extra_attempts": 1},
+            request={},
+        )
+    remaining = a.status(scope, episodes[1])["budgets"][0]["remaining"]
+    assert remaining["initial_tokens"] == 4800000
+    assert remaining["reconsideration_tokens"] == 2400000
+    assert remaining["reviewer_tokens"] == 2000000
+    assert remaining["extra_attempts"] == 0

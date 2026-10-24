@@ -38,7 +38,9 @@ class ExecutionBudget:
             raise ValueError("Reviewer budget requires an explicit reviewer agent ID")
 
 
-ACTIVE_BUDGET = ContextVar("validation_review_budget", default=None)
+ACTIVE_BUDGET: ContextVar[ExecutionBudget | None] = ContextVar(
+    "validation_review_budget", default=None
+)
 
 
 @contextmanager

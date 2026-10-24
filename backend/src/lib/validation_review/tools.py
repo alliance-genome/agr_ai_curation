@@ -8,6 +8,7 @@ from . import decisions, reads, scheduling
 from .admission import ReviewStopped
 from src.lib.validation_history import store
 from functools import wraps
+from inspect import signature
 from .decisions import ReviewEntry
 
 
@@ -21,8 +22,11 @@ class EvidenceReference(BaseModel):
 
 
 def _recoverable_tool(function):
+    contract = signature(function)
+
     @wraps(function)
     async def invoke(*args, **kwargs):
+        arguments = contract.bind(*args, **kwargs).arguments
         try:
             return await function(*args, **kwargs)
         except ReviewStopped as exc:
@@ -46,7 +50,7 @@ def _recoverable_tool(function):
                 "code": exc.reason,
                 "resource": exc.resource,
                 "applied": [],
-                "targets": kwargs.get("target_ids", []),
+                "targets": arguments.get("target_ids", []),
             }
         except (store.HistoryConflict, store.HistoryAccessError, ValueError) as exc:
             return {
@@ -54,10 +58,10 @@ def _recoverable_tool(function):
                 "code": type(exc).__name__,
                 "applied": [],
                 "message": str(exc),
-                "operation_id": kwargs.get("operation_id"),
-                "targets": kwargs.get("target_ids", []),
+                "operation_id": arguments.get("operation_id"),
+                "targets": arguments.get("target_ids", []),
                 "decision_units": [
-                    e.decision_unit_id for e in kwargs.get("entries", [])
+                    e.decision_unit_id for e in arguments.get("entries", [])
                 ],
             }
 

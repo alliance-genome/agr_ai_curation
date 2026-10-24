@@ -1,7 +1,7 @@
 """Resume dependent bindings inside the same artifact and review episode."""
 
 from .admission import lock_episode
-from .scheduling import _enqueue
+from .scheduling import _enqueue, _existing
 from src.lib.validation_history import store, selections
 
 
@@ -15,7 +15,16 @@ def advance(
     verdict. No provider/network work is allowed in this callback.
     """
     with store.SessionLocal.begin() as db:
-        ep, _ = lock_episode(db, scope, episode_id)
+        ep, _ = lock_episode(db, scope, episode_id, require_open=False)
+        identity = {"prerequisite_targets": prerequisite_targets, "receipt": receipt}
+        prior = _existing(db, ep, operation_id, identity)
+        if prior is not None:
+            return {
+                "state": "queued",
+                "work_id": prior.id,
+                "prerequisites": prior.payload["requests"][0]["prerequisites"],
+            }
+        lock_episode(db, scope, episode_id)
         manifest = selections.manifest_in_transaction(
             db, scope, ep.artifact_id, episode_id=ep.id
         )
@@ -51,7 +60,7 @@ def advance(
             operation_id=operation_id,
             requests=frozen,
             receipt=receipt,
-            identity={"requests": frozen, "receipt": receipt},
+            identity=identity,
             reconsideration=False,
         )
         return {"state": "queued", "work_id": work_id, "prerequisites": pins}

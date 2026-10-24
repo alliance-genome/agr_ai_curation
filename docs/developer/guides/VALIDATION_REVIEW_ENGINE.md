@@ -41,11 +41,31 @@ representative calibration and cost-policy approval in ALL-1446.
    structural transaction. The builder must use declared structural selectors,
    not a semantic quality test. It receives exact selected answers; returned
    requests get pinned prerequisite versions and the same episode. No extraction
-   is rerun. Return no requests for structurally missing required inputs.
+   is rerun. Return no requests for structurally missing required inputs. A baseline
+   or curator prerequisite returns an explicit `non_validator_prerequisite`
+   not-runnable outcome until an actor adapter supports that source.
+8. After a prerequisite changes, explicitly request reconsideration of a previously
+   attempted dependent. Supply a trusted `refresh_inputs(original_request, sources)`
+   callback to `scheduling.reconsider` (or the bound tool/reviewer factory). This
+   pure callback applies the binding's declared selectors and returns only the new
+   `selected_inputs`; return `None` when required inputs are unavailable. The engine
+   freezes current explicitly reviewed prerequisite pins, a fresh request ID, the
+   unchanged extraction/evidence/result anchors and the saved validator receipt.
+   The retry consumes the same target/run/batch allowances. Changed target lineage
+   is never refreshed this way. Replaying an operation returns its original work
+   before invoking the builder or inspecting changed selections.
+
+Tool input and compare-and-set conflicts return structured, atomically unapplied
+results for the reviewer to correct. Per-target retry limits do not stop unrelated
+review decisions. Episode-wide deadline, tool, turn and token stops still stop the
+run. The supervisor's final prose cannot override ledger readiness.
 
 ## Unknown completion and recovery
 
-Claims are fenced by durable leases. Unsubmitted expired claims may be delivered
+Claims are fenced by durable leases. The executor renews its lease while a validator
+callback runs; renewal never extends the episode deadline. Lost ownership or an
+explicit episode stop cancels the callback. Recovery never blindly resends submitted
+work. Unsubmitted expired claims may be delivered
 again. Once submission starts, a disconnected worker is uncertain: do not replay
 its provider call. Keep the reservation. Recovery/uncertainty facts remain in the
 immutable ledger, and late results are retained without granting selection rights.
@@ -53,8 +73,12 @@ An acknowledgement can name the exact uncertain attempt without inventing a
 completion. A later real answer still requires its own explicit review.
 
 Expiry cancels awaited work through the deadline timeout and prevents new work or
-selection publication. Hosts must cancel their task when the user cancels a run;
-they must not delete its scopes/jobs. Scientific disagreement, unresolved answers,
+selection publication. Hosts call `admission.cancel` with the authenticated owner and reason, and cancel
+their running reviewer task. Batch/workspace hosts also stop admitting new child
+operations. They must not delete scopes/jobs. A known pre-generation admission
+refusal records its exact stop reason/resource as an operational failed completion,
+not an unknown scientific answer. Once any provider call is admitted, ambiguous
+stops retain reservations and unknown outcomes. Scientific disagreement, unresolved answers,
 exhaustion and operational uncertainty are distinct from acceptance.
 
 ## Hard admission and supported transports
@@ -72,7 +96,10 @@ tools, stored provider context/prompt templates, uncountable providers, and nati
 or direct compaction with no enforceable output ceiling stop explicitly. No
 character estimate is presented as hard admission, and no permanent WebSocket
 transport switch is introduced. Nested review-related model calls inherit the
-same token pool; only the named reviewer consumes reviewer-turn allowances.
+same token pool; only the named reviewer consumes reviewer-turn allowances. A
+reviewer budget requires an explicit `reviewer_agent_id`. Deadline checks cache the
+fixed deadline locally instead of locking the batch row for each streamed delta;
+quota admission/settlement runs off the event loop.
 
 ## Limits and exact reads
 
@@ -110,3 +137,17 @@ races, parent quotas, restart/lease fencing, unknown usage, expiry, exact paging
 grouped decisions, idempotent publication and selected prerequisite waves. Fake
 validator callbacks exercise the reusable executor without paid provider replay.
 Unit tests cover provider admission, configuration, locked prompts and tool scope.
+
+## Integration handoff and calibration
+
+E/F/G must bind their real prompt/tool variants (compact, non-compact, single,
+batch, saved custom validators), supply the selector refresh adapter, and include
+`RECONSIDERATION_PROTOCOL` in validator invocations. Those tickets must replace
+impossible follow-up guidance in any caller that lacks review/reconsideration tools;
+D does not turn existing extractor prompts into supervisors ahead of activation.
+
+ALL-1446 must specifically exercise small episodes: reserving an existing 128k
+output ceiling against a 150k one-target initial pool leaves roughly 22k for input.
+This conservative refusal is visible; D does not silently lower output capacity.
+The fake-provider Runner test exercises the real factory, tools and measured seam
+without production calls. It does not replace H's representative live calibration.

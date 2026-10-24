@@ -123,20 +123,27 @@ def test_review_budget_counts_are_not_redacted_as_secrets():
 @pytest.mark.asyncio
 async def test_tool_conflicts_and_target_limits_are_recoverable(monkeypatch):
     import json
-    from agents import RunContextWrapper
+    from agents.tool_context import ToolContext
     from src.lib.validation_review import reads, scheduling
     from src.lib.validation_review.admission import ReviewStopped
     from src.lib.validation_history import store
 
     context = ReviewContext(
-        HistoryScope("owner", "doc", "session"), "episode", "reviewer"
+        HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+        "episode",
+        "reviewer",
     )
     tools = {t.name: t for t in create_tools(context, checkpoint_provider=Mock())}
     monkeypatch.setattr(
         reads, "read", Mock(side_effect=store.HistoryConflict("stale SHA"))
     )
     result = await tools["read_validation_history"].on_invoke_tool(
-        RunContextWrapper(None),
+        ToolContext(
+            context=None,
+            tool_name="review_tool",
+            tool_call_id="test",
+            tool_arguments="{}",
+        ),
         json.dumps({"fact_id": "f", "sha256": "s", "offset": 0}),
     )
     assert result["state"] == "conflict" and not result["applied"]
@@ -155,7 +162,13 @@ async def test_tool_conflicts_and_target_limits_are_recoverable(monkeypatch):
         }
     )
     result = await tools["request_validation_reconsideration"].on_invoke_tool(
-        RunContextWrapper(None), args
+        ToolContext(
+            context=None,
+            tool_name="review_tool",
+            tool_call_id="test",
+            tool_arguments="{}",
+        ),
+        args,
     )
     assert result["state"] == "not_applied" and result["targets"] == ["t"]
     monkeypatch.setattr(
@@ -163,5 +176,41 @@ async def test_tool_conflicts_and_target_limits_are_recoverable(monkeypatch):
     )
     with pytest.raises(ReviewStopped, match="expired"):
         await tools["request_validation_reconsideration"].on_invoke_tool(
-            RunContextWrapper(None), args
+            ToolContext(
+                context=None,
+                tool_name="review_tool",
+                tool_call_id="test",
+                tool_arguments="{}",
+            ),
+            args,
         )
+
+
+@pytest.mark.asyncio
+async def test_executor_renews_until_work_finishes_and_cancels_on_lost_ownership(
+    monkeypatch,
+):
+    import asyncio
+    from src.lib.validation_review.execution import _while_owned
+    from src.lib.validation_review import work
+    from src.lib.validation_review.admission import ReviewStopped
+
+    pulses = []
+
+    def heartbeat(*args):
+        pulses.append(args)
+        if len(pulses) == 2:
+            raise ReviewStopped("cancelled")
+
+    monkeypatch.setattr(work, "heartbeat", heartbeat)
+    cancelled = asyncio.Event()
+
+    async def long_call():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    with pytest.raises(ReviewStopped, match="cancelled"):
+        await _while_owned(long_call(), "scope", "work", "fence", 0.01)
+    assert cancelled.is_set() and len(pulses) == 2
