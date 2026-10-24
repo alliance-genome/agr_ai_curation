@@ -65,9 +65,9 @@ def test_flow_validator_uses_only_saved_node_and_current_authenticated_owner(mon
     monkeypatch.setattr('src.lib.packages.tool_roles.require_validator_tool_boundary', lambda *a, **kw: None)
     pin = {'node_id': 'validator-node', 'data': {'agent_id': 'ca_saved', 'agent_revision_id': 'revision',
         'execution_receipt': {'revision': 'saved'}, 'custom_instructions': 'Resolve this organism'}}
-    build_validator(pin, SimpleNamespace(user_id='owner', document_id='paper', authenticated_groups=['WB']))
+    build_validator(pin, SimpleNamespace(user_id='owner', document_id='paper', authenticated_groups=['TEAM_A']))
     assert calls == [('ca_saved', {'user_id': 'owner', 'db_user_id': 7, 'document_id': 'paper',
-        'authenticated_groups': ['WB'], 'cost_node_id': 'validator-node',
+        'authenticated_groups': ['TEAM_A'], 'cost_node_id': 'validator-node',
         'execution_revision_id': 'revision', 'execution_receipt': {'revision': 'saved'},
         'additional_runtime_context': ['Resolve this organism']})]
 
@@ -80,7 +80,7 @@ def test_profile_mappings_cannot_be_omitted_replaced_or_extended(tmp_path, monke
         contract=SimpleNamespace(validator_mappings=['saved-mapping'])))
     monkeypatch.setattr('src.lib.domain_packs.profile_validation.resolve_envelope_profile_validation', lambda *a, **kw: context)
     monkeypatch.setattr('src.lib.domain_packs.profile_validation.profile_mapping_binding_id', lambda profile, mapping: 'saved-mapping')
-    runtime = SimpleNamespace(user_id='owner', authenticated_groups=['WB'])
+    runtime = SimpleNamespace(user_id='owner', authenticated_groups=['TEAM_A'])
     for groups in ([], [{'binding_id': 'other', 'state': 'automatic'}],
                    [{'binding_id': 'saved-mapping', 'state': 'replaced'}],
                    [{'binding_id': 'saved-mapping', 'state': 'automatic'}] * 2):

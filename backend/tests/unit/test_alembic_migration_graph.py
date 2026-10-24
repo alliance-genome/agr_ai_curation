@@ -70,7 +70,7 @@ def test_alembic_revision_graph_has_single_head():
 
     heads = sorted(revision for revision in revisions if revision not in children)
 
-    assert heads == ["e7f1a2b3c4d5"]
+    assert heads == ["c1d5e6f7a8b9"]
 
 
 def test_alembic_revision_graph_rejects_duplicate_revision_ids(
@@ -132,14 +132,14 @@ def test_convergence_runs_only_the_missing_parent_branch(start, expected):
         # Match Alembic command.upgrade, including the other merge branch.
         item.revision for item in scripts.iterate_revisions("heads", start, implicit_base=True)
     }
-    assert upgrade == expected | {"f2a6b7c8d9e0", "a3b7c8d9e0f1", "b4c8d9e0f1a2", "c5d9e0f1a2b3", "d6e0f1a2b3c4", "e7f1a2b3c4d5"} | {"8c4279ba51ef", "q4f5a6b7c8d9", "r5a6b7c8d9e0", "s6t7u8v9w0x1", "92a22b250925", "a31c05e0925a", "b42c05e0925b", "c53c05e0925c", "d64c05e0925d", "e75c05e0926e", "f86c05e0926f", "a97c05e0926a", "b08d16f1037b", "b09c1d2e3f4a", "s6b7c8d9e0f1", "t7c8d9e0f1a2", "u8d9e0f1a2b3", "a7f1c2e3d4b5", "b8a2d3f4e5c6", "b8f2c3d4e5a6", "c9d3e4f5a6b7", "c9b3e4f5a6d7", "d0e4f5a6b7c8", "e1f5a6b7c8d9"}
+    assert upgrade == expected | {"f2a6b7c8d9e0", "a3b7c8d9e0f1", "b4c8d9e0f1a2", "c5d9e0f1a2b3", "d6e0f1a2b3c4", "e7f1a2b3c4d5", "f8a2b3c4d5e6", "a9b3c4d5e6f7", "b0c4d5e6f7a8", "c1d5e6f7a8b9"} | {"8c4279ba51ef", "q4f5a6b7c8d9", "r5a6b7c8d9e0", "s6t7u8v9w0x1", "92a22b250925", "a31c05e0925a", "b42c05e0925b", "c53c05e0925c", "d64c05e0925d", "e75c05e0926e", "f86c05e0926f", "a97c05e0926a", "b08d16f1037b", "b09c1d2e3f4a", "s6b7c8d9e0f1", "t7c8d9e0f1a2", "u8d9e0f1a2b3", "a7f1c2e3d4b5", "b8a2d3f4e5c6", "b8f2c3d4e5a6", "c9d3e4f5a6b7", "c9b3e4f5a6d7", "d0e4f5a6b7c8", "e1f5a6b7c8d9"}
 
 def test_alembic_script_directory_resolves_exactly_one_head():
     config = Config(str(BACKEND_DIR / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_heads() == ["e7f1a2b3c4d5"]
+    assert script.get_heads() == ["c1d5e6f7a8b9"]
 
 
 @pytest.mark.parametrize("start", ["8c4279ba51ef", "s6t7u8v9w0x1"])
@@ -156,4 +156,4 @@ def test_v0922_convergence_reaches_head_from_each_deployed_branch(start):
 ])
 def test_v0107_convergence_applies_only_missing_branch(start, expected):
     scripts = ScriptDirectory(str(VERSIONS_DIR.parent))
-    assert {r.revision for r in scripts.iterate_revisions("heads", start, implicit_base=True)} == expected | {"f2a6b7c8d9e0", "a3b7c8d9e0f1", "b4c8d9e0f1a2", "c5d9e0f1a2b3", "d6e0f1a2b3c4", "e7f1a2b3c4d5"}
+    assert {r.revision for r in scripts.iterate_revisions("heads", start, implicit_base=True)} == expected | {"f2a6b7c8d9e0", "a3b7c8d9e0f1", "b4c8d9e0f1a2", "c5d9e0f1a2b3", "d6e0f1a2b3c4", "e7f1a2b3c4d5", "f8a2b3c4d5e6", "a9b3c4d5e6f7", "b0c4d5e6f7a8", "c1d5e6f7a8b9"}

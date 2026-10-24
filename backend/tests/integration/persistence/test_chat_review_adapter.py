@@ -68,13 +68,15 @@ def planned(scope, tmp_path, monkeypatch, request):
         from copy import deepcopy
 
         raw = deepcopy(pack.metadata.metadata)
+        from src.lib.config.groups_loader import get_valid_group_ids
+        group_id = get_valid_group_ids()[0]
         raw["validator_bindings"]["active"][0]["group_scope"] = {
-            "required_any_active_group": ["WB"]
+            "required_any_active_group": [group_id]
         }
         pack = replace(
             pack, metadata=pack.metadata.model_copy(update={"metadata": raw})
         )
-        groups = ("WB",)
+        groups = (group_id,)
     env = DomainEnvelope(
         envelope_id=uuid4().hex,
         domain_pack_id=pack.pack_id,

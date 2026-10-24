@@ -55,6 +55,7 @@ def harness(monkeypatch, tmp_path):
     batch = SimpleNamespace(
         id=uuid4(), status=BatchStatus.RUNNING, total_documents=1,
         completed_documents=0, failed_documents=0, documents=[],
+        review_pending_documents=0, review_exhausted_documents=0, interrupted_documents=0,
         started_at=None, completed_at=None,
     )
     state = SimpleNamespace(

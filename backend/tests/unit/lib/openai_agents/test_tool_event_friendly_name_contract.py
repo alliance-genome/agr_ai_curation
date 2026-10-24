@@ -1896,7 +1896,8 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
         ),
     )
 
-    agent = SimpleNamespace(
+    from agents import Agent
+    agent = Agent(
         name="Allele/Variant Extraction Agent",
         tools=[],
         output_type=AlleleExtractionResultEnvelope,

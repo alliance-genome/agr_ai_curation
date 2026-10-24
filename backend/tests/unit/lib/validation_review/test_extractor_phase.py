@@ -92,7 +92,7 @@ def test_resumed_extractor_reconstructs_original_context_and_reauthorizes(monkey
     def build(key, **kwargs):
         calls.append((key, kwargs))
         assert kwargs['user_id'] == 'owner' and kwargs['db_user_id'] == 7
-        assert kwargs['authenticated_groups'] == ['WB']
+        assert kwargs['authenticated_groups'] == ['TEAM_A']
         assert kwargs['document_name'] == 'paper.pdf'
         assert kwargs['sections'] == [{'title': 'Methods'}]
         assert kwargs['additional_runtime_context'] == ['Configured extraction instructions']
@@ -101,7 +101,7 @@ def test_resumed_extractor_reconstructs_original_context_and_reauthorizes(monkey
         rebuilt.review_reconstruction_context = extractor_phase.reconstruction_context(kwargs)
         return rebuilt
     monkeypatch.setattr('src.lib.agent_studio.catalog_service.get_agent_by_id', build)
-    adapter = ExtractorAdapter(context, 'artifact', authenticated_groups=['WB'], checkpoint_provider=lambda: None)
+    adapter = ExtractorAdapter(context, 'artifact', authenticated_groups=['TEAM_A'], checkpoint_provider=lambda: None)
     rebuilt = adapter.resolve_agent(receipt)
     assert extractor_phase.contract(rebuilt, max_turns=17) == pinned
     assert len(calls) == 1
