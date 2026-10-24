@@ -1576,45 +1576,6 @@ def _remap_validator_result_for_request(
     return _finalize_validator_result(remapped, request=request)
 
 
-def validator_result_from_agent_output(
-    raw_output: Any,
-    *,
-    request: DomainValidationRequest,
-) -> DomainValidatorResultBase:
-    """Validate and normalize one validator agent output for materialization."""
-
-    validator_result = _validated_result_from_agent_output(
-        raw_output,
-        request=request,
-    )
-    validator_result = _enforce_expected_result_fields(
-        validator_result,
-        request=request,
-    )
-    return _ensure_classifiable_validator_result(
-        validator_result,
-        request=request,
-    )
-
-
-def unresolved_validator_result_for_dispatch_problem(
-    request: DomainValidationRequest,
-    *,
-    reason: str,
-    explanation: str,
-) -> DomainValidatorResultBase:
-    """Build a controlled unresolved validator result for dispatch failures."""
-
-    return _ensure_classifiable_validator_result(
-        _unresolved_result_for_dispatch_problem(
-            request,
-            reason=reason,
-            explanation=explanation,
-        ),
-        request=request,
-    )
-
-
 def run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
@@ -3483,7 +3444,5 @@ __all__ = [
     "run_package_scoped_validator_agent_batch_in_worker_thread",
     "run_package_scoped_validator_agent_in_worker_thread",
     "run_package_scoped_validator_agent",
-    "unresolved_validator_result_for_dispatch_problem",
     "validator_request_payload_for_agent",
-    "validator_result_from_agent_output",
 ]

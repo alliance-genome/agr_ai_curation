@@ -555,7 +555,7 @@ def test_stored_condition_finalization_preserves_component_completeness(schemas,
         _ValidatorAgentRunOutput, _ValidatorBatchAgentRunOutput, _ValidatorFinalizationState,
         _build_finalize_validator_batch_results_tool, _build_finalize_validator_result_tool,
         _remap_validator_result_for_request, _validated_results_from_agent_batch_output,
-        validator_result_from_agent_output,
+        _validated_result_from_agent_output, _finalize_validator_result,
     )
 
     contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
@@ -578,8 +578,8 @@ def test_stored_condition_finalization_preserves_component_completeness(schemas,
         response = tool(decision)
         assert response["status"] == "accepted", response
         result = state.accepted_result
-    result = validator_result_from_agent_output(
-        _ValidatorAgentRunOutput(None, result), request=contract.request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(
+        _ValidatorAgentRunOutput(None, result), request=contract.request), request=contract.request)
     result = _remap_validator_result_for_request(
         result, contract.request.model_copy(update={"request_id": "remapped-condition"}))
     assert result.status == "resolved"

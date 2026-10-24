@@ -412,7 +412,7 @@ def test_runtime_captures_baseline_and_request_before_runner_mutates_them(
         seen.append(attempt_row["id"])
         request.evidence[0]["quote"] = "mutated by validator"
         obj.payload["terms"][0]["label"] = "mutated"
-        result = dispatch.unresolved_validator_result_for_dispatch_problem(
+        result = dispatch._unresolved_result_for_dispatch_problem(
             request, reason="fixture", explanation="fixture"
         )
         # Model a real unresolved scientific answer, not an operational failure.

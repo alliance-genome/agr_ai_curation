@@ -31,11 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, TYPE_CHECKING, cast
+from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, cast
 from uuid import UUID, uuid4
-
-if TYPE_CHECKING:
-    pass
 
 from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
 
