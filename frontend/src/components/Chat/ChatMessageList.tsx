@@ -127,7 +127,10 @@ function ChatMessageList({
                   </div>
                   {message.validationReview && message.validationReview.results.length > 0 ? (
                     <div role="status" className="validation-review-status">
-                      {message.validationReview.pending_count > 0
+                      {message.validationReviewSnapshot ? 'Review status at the time of this response: ' : null}
+                      {message.validationReviewSnapshot
+                        ? (message.validationReview.pending_count > 0 ? 'Pending.' : 'Complete.')
+                        : message.validationReview.pending_count > 0
                         ? `Validation review pending for ${message.validationReview.pending_count} saved result(s). Final export and curation preparation are unavailable for pending results.`
                         : 'Validation review complete for the saved results.'}
                     </div>

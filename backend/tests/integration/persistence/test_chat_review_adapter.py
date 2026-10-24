@@ -198,13 +198,20 @@ def test_dispatch_survives_resume_and_unknown_submission_is_not_replayed(scope):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("review_kind", ["extraction_concern", "operational_refusal"])
 async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_review(
-    scope, tmp_path, monkeypatch
+    scope, tmp_path, monkeypatch, review_kind
 ):
     from src.lib.validation_review.chat import ChatReview
     from src.lib.observability.cost_context import attach_agent_cost_identity
     from src.lib.curation_workspace import curation_prep_service as prep
     from src.lib.curation_workspace.models import DomainEnvelopeModel
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        "src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False)
+    )
 
     pack = _multivalued_dispatch_pack(tmp_path)
     env = DomainEnvelope(
@@ -300,6 +307,62 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
         == "Extracted from the supplied paper."
     )
     assert chat.checkpoint(records[0]).execution_context == provenance
+    from src.lib.validation_review.chat import refresh_saved_response
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.resolve_tools", lambda *args: []
+    )
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    reviewer_calls = []
+    concern = "The extraction omitted an observation. Ask the curator before starting fresh extraction."
+
+    async def fake_reviewer(agent, input, **kwargs):
+        reviewer_calls.append(agent.name)
+        if review_kind == "operational_refusal":
+            raise admission.ReviewStopped("configured_validator_changed")
+        return SimpleNamespace(final_output=concern)
+
+    monkeypatch.setattr(
+        "src.lib.openai_agents.runner.run_agent_with_owned_openai_resources",
+        fake_reviewer,
+    )
+    await chat.resume()
+    expected_note = (
+        concern
+        if review_kind == "extraction_concern"
+        else "Review paused: configured validator changed"
+    )
+    rendered, delivery_status = chat.direct_delivery(current_turn_only=True)
+    assert expected_note in rendered
+    replay = refresh_saved_response(
+        owner_id=scope.owner_id,
+        session_id=chat.session_id,
+        status=delivery_status,
+        original="old extractor prose",
+    )
+    assert expected_note in replay and len(reviewer_calls) == 1
+    assert chat.supervisor_handoff()["review_outcomes"][0]["outcome"][
+        "output" if review_kind == "extraction_concern" else "reason"
+    ] == (
+        concern
+        if review_kind == "extraction_concern"
+        else "configured_validator_changed"
+    )
+    reconnected = ChatReview(
+        scope.owner_id, scope.document_id, scope.session_id,
+        chat.turn_id, supervisor, (), "Extract",
+    )
+    await reconnected.resume()
+    assert len(reviewer_calls) == 1
+    assert reconnected.review_notes() == chat.review_notes()
+    with store.SessionLocal() as db:
+        summaries = db.scalars(
+            select(ValidationFact).where(
+                ValidationFact.artifact_id == records[0].metadata["chat_review"]["artifact_id"],
+                ValidationFact.kind == "review_supervisor_summary",
+            )
+        ).all()
+        assert len(summaries) == 1
+    assert len(chat.records()) == 1
     record = records[0]
     assert record.payload_json["extracted_objects"][0]["payload"][
         "evidence_code_curies"

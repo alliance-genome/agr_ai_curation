@@ -25,5 +25,8 @@ describe('chat review readiness', () => {
       validationReview: { pending_count: 0, results: [{ result_ref: 'saved', episode_id: 'episode', ready: true }] },
     }]} /></MemoryRouter>)
     expect(screen.getByRole('status')).toHaveTextContent('Validation review complete')
+    view.rerender(<MemoryRouter><ChatMessageList {...props} messages={[{ ...message, validationReviewSnapshot: true }]} /></MemoryRouter>)
+    expect(screen.getByRole('status')).toHaveTextContent('Review status at the time of this response: Pending.')
+    expect(screen.getByRole('status')).not.toHaveTextContent('are unavailable')
   })
 })

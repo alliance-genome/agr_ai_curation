@@ -262,4 +262,5 @@ it('restores authoritative review status independently of completion prose', () 
     payload_json: { validation_review: review },
   }])
   expect(message.validationReview).toEqual(review)
+  expect(message.validationReviewSnapshot).toBe(true)
 })

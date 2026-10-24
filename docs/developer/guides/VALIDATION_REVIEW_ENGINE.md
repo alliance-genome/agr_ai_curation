@@ -244,3 +244,13 @@ OpenAI Responses with SDK HTTP retries disabled. Unsupported providers are not
 silently switched and cannot receive unmetered review calls; their results remain
 pending with an operational refusal in the review history. This is a release
 constraint, not authorization to weaken admission or activate flows/benchmarks.
+
+The review supervisor's explanation and expected stop reason are append-only
+history facts, keyed by result, episode, actor and durable chat turn. Direct
+presentation and replay include the latest saved explanation; named-supervisor
+handoffs carry it even when a continuation invokes no extractor. Reconnecting
+the same completed review turn reuses that outcome without calling the reviewer
+again. A new curator turn can continue the same episode without resetting budgets.
+Explicit Stop produces a saved interruption notice rather than a provider-error
+alert. Restored chat badges are labelled as status at the time of the response;
+current delivery and authenticated replay still read readiness from the ledger.

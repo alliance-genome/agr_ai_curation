@@ -186,7 +186,8 @@ def _stub_stream_turn_persistence(monkeypatch):
     chat.executable_run_manager._active_session_run_ids.clear()
 
 
-def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
+@pytest.mark.parametrize("review_stop", [False, True])
+def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch, review_stop):
     calls = {"register": [], "unregister": [], "clear": []}
 
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
@@ -219,6 +220,9 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
 
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
+        if review_stop:
+            from src.lib.validation_review.stops import ReviewInterrupted
+            raise ReviewInterrupted("Curator stopped validation review")
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
     _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
@@ -237,7 +241,10 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     assert isinstance(response, StreamingResponse)
 
     events = asyncio.run(_consume_stream(response))
-    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_interrupted" if review_stop else "turn_completed"]
+    if review_stop:
+        assert "review was stopped" in events[-1]["message"]
+        assert "unexpected" not in str(events) and "SUPERVISOR_ERROR" not in str(events)
 
     assert calls["register"] == [("session-chat-stream", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-chat-stream", "auth-sub", ANY)]

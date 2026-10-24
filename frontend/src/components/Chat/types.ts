@@ -60,6 +60,7 @@ export interface Message {
   traceIds?: string[]
   turnId?: string
   terminalState?: TerminalTurnState | null
+  validationReviewSnapshot?: boolean
   validationReview?: { pending_count: number; results: { result_ref: string; ready: boolean; episode_id: string }[] }
   terminalMessage?: string | null
   rescueState?: RescueState

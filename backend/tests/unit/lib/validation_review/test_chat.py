@@ -114,7 +114,10 @@ async def test_pending_terminal_is_authoritative_even_if_model_claims_complete(
 
     monkeypatch.setattr(runner, "_run_agent_with_groq_retry", stream)
     context = SimpleNamespace(
-        resume=AsyncMock(), status=lambda: {"pending_count": 1, "results": []}
+        resume=AsyncMock(),
+        status=lambda: {"pending_count": 1, "results": []},
+        supervisor_handoff=lambda: {"review_outcomes": []},
+        render_review_notes=lambda: "",
     )
     events = [
         event
@@ -303,7 +306,10 @@ async def test_direct_lookup_preserves_own_answer_and_never_claims_extraction(
 
     monkeypatch.setattr(chat_dispatch, "claim", forbidden)
     context = SimpleNamespace(
-        resume=AsyncMock(), status=lambda: {"pending_count": 0, "results": []}
+        resume=AsyncMock(),
+        status=lambda: {"pending_count": 0, "results": []},
+        supervisor_handoff=lambda: {"review_outcomes": []},
+        render_review_notes=lambda: "",
     )
     events = [
         event
@@ -354,3 +360,30 @@ def test_direct_supervisor_resolves_requested_settings_without_routing_agent(
         calls[0][1]["temperature"] == 0.2 and calls[0][1]["reasoning_effort"] == "high"
     )
     assert get_agent_cost_identity(agent)["agent_id"] == "supervisor.direct_chat"
+
+
+@pytest.mark.asyncio
+async def test_named_resume_without_extractor_delivers_actual_review_notes(monkeypatch):
+    from src.lib.openai_agents import runner
+
+    note = "A required observation is missing; ask the curator before fresh extraction."
+
+    async def stream(**kwargs):
+        assert note in kwargs["input_items"][-1]["content"]
+        yield {"type": "RUN_FINISHED", "data": {"response": "Saved review resumed."}}
+
+    monkeypatch.setattr(runner, "_run_agent_with_groq_retry", stream)
+    context = SimpleNamespace(
+        resume=AsyncMock(),
+        status=lambda: {"pending_count": 1, "results": []},
+        supervisor_handoff=lambda: {"review_outcomes": [{"outcome": {"output": note}}]},
+        render_review_notes=lambda: "\n\nReviewer's notes:\n" + note,
+    )
+    events = [
+        event
+        async for event in runner._run_agent_with_chat_review(
+            review_context=context, input_items=[]
+        )
+    ]
+    assert note in events[-1]["data"]["response"]
+    assert any(note in event.get("data", {}).get("delta", "") for event in events)

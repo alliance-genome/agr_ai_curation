@@ -798,7 +798,7 @@ export function useChatController({
       if (parsed.type === 'VALIDATION_REVIEW_STATUS' && turnId && parsed.validation_review) {
         setMessages((prev) => prev.map((message) =>
           message.role === 'assistant' && message.turnId === turnId
-            ? { ...message, validationReview: parsed.validation_review } : message))
+            ? { ...message, validationReview: parsed.validation_review, validationReviewSnapshot: false } : message))
         return
       }
 

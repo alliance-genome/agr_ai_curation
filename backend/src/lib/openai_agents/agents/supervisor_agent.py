@@ -808,7 +808,7 @@ async def _run_streaming_specialist_tool(
             dispatch = await asyncio.to_thread(chat_dispatch.claim, review, tool_name, query)
             if not dispatch["claimed"]:
                 if dispatch["state"] == "completed":
-                    return dispatch["result"]["output"] + "\nAuthoritative validation review: " + json.dumps(await asyncio.to_thread(review.status))
+                    return dispatch["result"]["output"] + "\nAuthoritative validation review: " + json.dumps(await asyncio.to_thread(review.supervisor_handoff))
                 return json.dumps({"state": "pending", "reason": "previous_dispatch_not_completed",
                     "message": "Inspect saved results and review history. Do not repeat extraction; a prior submission may still be running."})
             output = await _run_with_deadline()
@@ -816,7 +816,7 @@ async def _run_streaming_specialist_tool(
             # The extraction deadline has ended; review uses its own frozen
             # episode budget and the same supervisor identity.
             await review.resume()
-            return output + "\nAuthoritative validation review: " + json.dumps(await asyncio.to_thread(review.status))
+            return output + "\nAuthoritative validation review: " + json.dumps(await asyncio.to_thread(review.supervisor_handoff))
 
         return await ledger.run_or_replay(tool_name, query, durable_run)
 

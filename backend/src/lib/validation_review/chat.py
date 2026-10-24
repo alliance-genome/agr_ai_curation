@@ -66,7 +66,9 @@ class ChatReview:
                 watcher.result()
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-                raise asyncio.CancelledError("Curator stopped validation review")
+                from .stops import ReviewInterrupted
+
+                raise ReviewInterrupted("Curator stopped validation review")
             return await task
         finally:
             watcher.cancel()
@@ -356,6 +358,9 @@ class ChatReview:
         if context.episode_id in self.reviewed:
             return None
         self.reviewed.add(context.episode_id)
+        saved = await asyncio.to_thread(self.saved_review_outcome, record)
+        if saved is not None:
+            return saved
         ref = record.metadata["chat_review"]
         adapter = ValidatorAdapter(
             context.history_scope,
@@ -456,8 +461,106 @@ class ChatReview:
             if not status["ready"]:
                 outcome = await self.review_result(record)
                 if outcome is not None:
+                    await asyncio.to_thread(self.retain_review_outcome, record, outcome)
                     outcomes.append(outcome)
         return outcomes
+
+    def review_summary_operation(self, context):
+        return "chat-review-summary:" + store.canonical(
+            {
+                "turn_id": self.turn_id,
+                "episode_id": context.episode_id,
+                "actor_id": context.actor_id,
+            }
+        )[0]
+
+    def saved_review_outcome(self, record):
+        """A reconnect reuses the completed phase for this exact durable turn."""
+        from src.models.sql.validation_history import ValidationFact
+
+        context = self.context(record)
+        ref = record.metadata["chat_review"]
+        with store.SessionLocal() as db:
+            store._artifact(db, ref["artifact_id"], context.history_scope)
+            fact = db.scalar(
+                select(ValidationFact).where(
+                    ValidationFact.artifact_id == ref["artifact_id"],
+                    ValidationFact.operation_id == self.review_summary_operation(context),
+                    ValidationFact.kind == "review_supervisor_summary",
+                )
+            )
+            return store._content(db, fact)["outcome"] if fact is not None else None
+
+    def retain_review_outcome(self, record, outcome):
+        """Keep model explanations and expected stop reasons as immutable history."""
+        from .audit import append_fact
+
+        context = self.context(record)
+        ref = record.metadata["chat_review"]
+        with store.SessionLocal.begin() as db:
+            store._artifact(db, ref["artifact_id"], context.history_scope)
+            append_fact(
+                db,
+                ref["artifact_id"],
+                operation_id=self.review_summary_operation(context),
+                kind="review_supervisor_summary",
+                parent_id=context.episode_id,
+                body={
+                    "result_ref": "extraction-result:" + record.extraction_result_id,
+                    "episode_id": context.episode_id,
+                    "actor_id": context.actor_id,
+                    "turn_id": self.turn_id,
+                    "outcome": outcome,
+                },
+            )
+
+    def review_notes(self, *, result_refs=None):
+        """Latest phase explanation per result; older explanations remain auditable."""
+        from src.models.sql.validation_history import ValidationFact
+
+        notes = []
+        for record in self.records():
+            result_ref = "extraction-result:" + record.extraction_result_id
+            if result_refs is not None and result_ref not in result_refs:
+                continue
+            ref = record.metadata["chat_review"]
+            scope = store.HistoryScope(
+                self.owner_id, self.document_id, ref["history_scope_id"]
+            )
+            with store.SessionLocal() as db:
+                store._artifact(db, ref["artifact_id"], scope)
+                fact = db.scalar(
+                    select(ValidationFact)
+                    .where(
+                        ValidationFact.artifact_id == ref["artifact_id"],
+                        ValidationFact.kind == "review_supervisor_summary",
+                        ValidationFact.parent_id == ref["episode_id"],
+                    )
+                    .order_by(ValidationFact.sequence.desc())
+                    .limit(1)
+                )
+                if fact is not None:
+                    notes.append(store._content(db, fact))
+        return notes
+
+    def supervisor_handoff(self):
+        return {"status": self.status(), "review_outcomes": self.review_notes()}
+
+    def render_review_notes(self, *, result_refs=None):
+        notes = []
+        for entry in self.review_notes(result_refs=result_refs):
+            outcome = entry["outcome"]
+            output = outcome.get("output")
+            if output:
+                notes.append(str(output))
+            reason = outcome.get("reason")
+            if reason and reason != "complete":
+                notes.append(
+                    "Review paused: "
+                    + reason.replace("_", " ")
+                    + ". Saved results and history are retained."
+                )
+        return "\n\nReviewer's notes:\n" + "\n\n".join(notes) if notes else ""
 
     def status(self):
         items = []
@@ -534,12 +637,17 @@ class ChatReview:
                     ]
                 }
             )
+        notes = self.render_review_notes(result_refs=result_refs)
         if not results:
-            return "No current reviewed selection is available yet. Any saved original extraction remains accessible in the saved results."
+            return (
+                "No current reviewed selection is available yet. Any saved original extraction remains accessible in the saved results."
+                + notes
+            )
         return (
             "Current saved values, including accepted corrections (review readiness is shown separately):\n\n```json\n"
             + json.dumps(results, indent=2)
             + "\n```"
+            + notes
         )
 
     def checkpoint(self, record):

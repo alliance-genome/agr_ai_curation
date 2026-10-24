@@ -2,6 +2,7 @@
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+from src.lib.validation_review.stops import ReviewInterrupted
 from typing import Annotated
 from fastapi import Header
 from src.lib.executable_runs import (
@@ -561,6 +562,14 @@ async def chat_endpoint(
 
     except HTTPException:
         raise
+    except ReviewInterrupted:
+        _, notice = _persist_failure_notice(
+            session_id=session_id, user_id=user_id, turn_id=turn_id,
+            user_message=effective_user_message,
+            message="Validation review was stopped. Saved results and history remain available for continued review.",
+            partial_response=full_response, trace_id=trace_id, document_id=document_id,
+            persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted")
+        return ChatResponse(response=notice, session_id=session_id)
     except Exception as e:
         _, error_message = _persist_failure_notice(
             session_id=session_id, user_id=user_id, turn_id=turn_id,
@@ -1308,6 +1317,18 @@ async def chat_stream_endpoint(
                     error_type="IncompleteRun",
                 )
             )
+        except ReviewInterrupted:
+            sentry_terminal_status = "cancelled"
+            set_sentry_span_status(sentry_transaction, "cancelled")
+            terminal_type, notice = _persist_failure_notice(
+                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                user_message=prepared_turn.effective_user_message,
+                message="Validation review was stopped. Saved results and history remain available for continued review.",
+                partial_response=full_response, trace_id=trace_id, document_id=document_id,
+                persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted")
+            yield _stream_event_sse(_build_terminal_turn_event(
+                terminal_type, assistant_rescue_allowed=False, session_id=current_session_id,
+                turn_id=current_turn_id, trace_id=trace_id, message=notice))
         except asyncio.CancelledError:
             sentry_terminal_status = "cancelled"
             set_sentry_span_status(sentry_transaction, "cancelled")
