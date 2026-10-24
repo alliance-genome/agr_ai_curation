@@ -40,7 +40,10 @@ representative calibration and cost-policy approval in ALL-1446.
    prerequisites, then invokes a trusted, pure input-selector callback under the
    structural transaction. The builder must use declared structural selectors,
    not a semantic quality test. It receives exact selected answers; returned
-   requests get pinned prerequisite versions and the same episode. No extraction
+   requests must contain a dictionary `request.selected_inputs`, with all
+   prerequisite-derived selector values in that mapping. Other request fields
+   retain original extraction/evidence only. Requests get pinned prerequisite
+   versions and the same episode; malformed shapes are rejected before dispatch. No extraction
    is rerun. Return no requests for structurally missing required inputs. A baseline
    or curator prerequisite returns an explicit `non_validator_prerequisite`
    not-runnable outcome until an actor adapter supports that source.
@@ -49,7 +52,7 @@ representative calibration and cost-policy approval in ALL-1446.
    callback to `scheduling.reconsider` (or the bound tool/reviewer factory). This
    pure callback applies the binding's declared selectors and returns only the new
    `selected_inputs`; return `None` when required inputs are unavailable. The engine
-   freezes current explicitly reviewed prerequisite pins, a fresh request ID, the
+   freezes current explicitly reviewed prerequisite pins, a fresh outer attempt identity, the
    unchanged extraction/evidence/result anchors and the saved validator receipt.
    The retry consumes the same target/run/batch allowances. Changed target lineage
    is never refreshed this way. Replaying an operation returns its original work

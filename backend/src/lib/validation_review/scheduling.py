@@ -326,18 +326,15 @@ def _refresh_prerequisites(db, context, ep, frozen, refresh_inputs):
             db, store._fact(db, ep.artifact_id, selected, kind="completion")
         )
     request = deepcopy(frozen["input"])
+    if not isinstance(request["request"].get("selected_inputs"), dict):
+        raise ValueError("Dependent requests require a selected_inputs mapping")
     values = refresh_inputs(deepcopy(request["request"]), deepcopy(sources))
     if values is None:
         raise ReviewStopped("required_inputs_unavailable")
     if not isinstance(values, dict):
         raise ValueError("Trusted refresh adapter must return selected_inputs")
     request["request"]["selected_inputs"] = values
-    request["request"]["request_id"] = store.canonical(
-        {
-            "prior_request": frozen["input"]["request"],
-            "selected_inputs": values,
-            "pins": pins,
-        }
-    )[0]
+    # The outer frozen attempt input (including new pins and selected values)
+    # supplies the new durable identity. Do not inject fields into validator JSON.
     request["prerequisites"] = pins
     return request

@@ -91,67 +91,71 @@ async def execute(
             work.finish, scope, work_id, claim["lease_token"], outcome=outcome
         )
         return {"state": "completed", "work_id": work_id, **outcome}
-    except (
-        admission.ReviewStopped,
-        ContextRecoveryError,
-        asyncio.TimeoutError,
-        asyncio.CancelledError,
-    ) as stopped:
-        reason = (
-            stopped.reason
-            if isinstance(stopped, admission.ReviewStopped)
-            else "unsupported_exact_context_admission"
-            if isinstance(stopped, ContextRecoveryError)
-            else "expired"
-            if isinstance(stopped, asyncio.TimeoutError)
-            else "cancelled"
-        )
-        resource = getattr(stopped, "resource", None)
-        try:
-            if (
-                isinstance(stopped, (admission.ReviewStopped, ContextRecoveryError))
-                and not budget.execution.provider_admitted
-            ):
-                for attempt in expected:
-                    await asyncio.to_thread(
-                        store.complete_attempt,
-                        scope,
-                        artifact_id,
-                        attempt,
-                        state="failed",
-                        result=None,
-                        diagnostics={
-                            "operational_state": "not_admitted",
-                            "reason": reason,
-                            "resource": resource,
-                        },
-                    )
-                await asyncio.to_thread(
-                    work.mark_not_admitted,
-                    scope,
-                    work_id,
-                    claim["lease_token"],
-                    reason=reason,
-                    resource=resource,
-                )
-            else:
-                # Cancellation may race a submitted provider call. Retain charges.
-                await asyncio.to_thread(
-                    work.mark_uncertain,
-                    scope,
-                    work_id,
-                    claim["lease_token"],
-                    reason=reason,
-                )
-        except Exception as recording_error:
-            from .audit import report_operational_failure
+    except BaseException as error:
+        from .stops import review_stop
 
-            report_operational_failure(recording_error)
-            stopped.add_note(
-                "Review stop recording failed; durable recovery is required"
+        stopped = review_stop(error)
+        if stopped is not None:
+            reason = (
+                stopped.reason
+                if isinstance(stopped, admission.ReviewStopped)
+                else "unsupported_exact_context_admission"
+                if isinstance(stopped, ContextRecoveryError)
+                else "expired"
+                if isinstance(stopped, asyncio.TimeoutError)
+                else "cancelled"
+                if isinstance(stopped, asyncio.CancelledError)
+                else "validator_turns_exhausted"
             )
-        raise
-    except Exception as error:
+            resource = getattr(stopped, "resource", None)
+            try:
+                if (
+                    isinstance(stopped, (admission.ReviewStopped, ContextRecoveryError))
+                    and not budget.execution.provider_admitted
+                ):
+                    for attempt in expected:
+                        await asyncio.to_thread(
+                            store.complete_attempt,
+                            scope,
+                            artifact_id,
+                            attempt,
+                            state="failed",
+                            result=None,
+                            diagnostics={
+                                "operational_state": "not_admitted",
+                                "reason": reason,
+                                "resource": resource,
+                            },
+                        )
+                    await asyncio.to_thread(
+                        work.mark_not_admitted,
+                        scope,
+                        work_id,
+                        claim["lease_token"],
+                        reason=reason,
+                        resource=resource,
+                    )
+                else:
+                    # Cancellation may race a submitted provider call. Retain charges.
+                    await asyncio.to_thread(
+                        work.mark_uncertain,
+                        scope,
+                        work_id,
+                        claim["lease_token"],
+                        reason=reason,
+                    )
+            except Exception as recording_error:
+                from .audit import report_operational_failure
+
+                report_operational_failure(recording_error)
+                stopped.add_note(
+                    "Review stop recording failed; durable recovery is required"
+                )
+            if stopped is not error:
+                raise stopped from error
+            raise
+        if not isinstance(error, Exception):
+            raise
         # Submitted work remains recoverable/uncertain. Respect any existing
         # provider-error capture and mark ownership for enclosing runtimes.
         from .audit import report_operational_failure

@@ -214,3 +214,19 @@ async def test_executor_renews_until_work_finishes_and_cancels_on_lost_ownership
     with pytest.raises(ReviewStopped, match="cancelled"):
         await _while_owned(long_call(), "scope", "work", "fence", 0.01)
     assert cancelled.is_set() and len(pulses) == 2
+
+
+def test_only_sdk_wrappers_are_transparent_to_expected_stops():
+    from agents import UserError
+    from src.lib.validation_review.admission import ReviewStopped
+    from src.lib.validation_review.stops import review_stop
+
+    stop = ReviewStopped("expired")
+    wrapper = UserError("tool failed")
+    wrapper.__cause__ = stop
+    assert review_stop(wrapper) is stop
+    bug = RuntimeError("database failed while handling stop")
+    bug.__context__ = stop
+    assert review_stop(bug) is None
+    wrapper.__cause__ = wrapper
+    assert review_stop(wrapper) is None

@@ -525,6 +525,22 @@ def test_dependent_wave_waits_for_explicit_review_then_pins_selected_answer(scop
                 }
             ],
         )
+    with pytest.raises(ValueError, match="selected_inputs"):
+        waves.advance(
+            scope,
+            ep,
+            **{
+                **args,
+                "operation_id": "bad-shape",
+                "build_requests": lambda sources: [
+                    {
+                        "target_id": second,
+                        "binding_id": "dependent",
+                        "request": {"input": "stale location"},
+                    }
+                ],
+            },
+        )
     result = waves.advance(scope, ep, **args)
     assert (
         result["state"] == "queued" and result["prerequisites"][0]["target_id"] == first
@@ -615,6 +631,7 @@ def test_dependent_wave_waits_for_explicit_review_then_pins_selected_answer(scop
             != payload["requests"][0]["prerequisites"]
         )
         assert b2_payload["receipt"] == {"revision": "dependent"}
+        assert "request_id" not in b2_payload["requests"][0]["request"]
     assert scheduling.reconsider(ctx, **retry_args, refresh_inputs=refresh) == b2_work
     assert len(refreshed) == 1
     with pytest.raises(a.ReviewStopped, match="scientific_attempts"):
@@ -944,7 +961,10 @@ def test_requeued_work_can_be_cancelled_without_audit_identity_collision(scope):
 
 
 @pytest.mark.asyncio
-async def test_pre_send_refusal_records_reason_without_unknown_completion(scope):
+@pytest.mark.parametrize("sdk_wrapped", [False, True])
+async def test_pre_send_refusal_records_reason_without_unknown_completion(
+    scope, monkeypatch, sdk_wrapped
+):
     from src.lib.validation_review import scheduling, execution
     from src.models.sql.validation_history import ValidationFact
 
@@ -970,11 +990,24 @@ async def test_pre_send_refusal_records_reason_without_unknown_completion(scope)
         ],
     )
 
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.validation_review.audit.report_operational_failure", reports.append
+    )
+
     async def refuse(_):
-        raise a.ReviewStopped("budget_exhausted", resource="initial_tokens")
+        try:
+            raise a.ReviewStopped("budget_exhausted", resource="initial_tokens")
+        except a.ReviewStopped as stop:
+            if sdk_wrapped:
+                from agents import UserError
+
+                raise UserError("SDK tool failed") from stop
+            raise
 
     with pytest.raises(a.ReviewStopped, match="budget_exhausted"):
         await execution.execute(scope, wid, call=refuse)
+    assert not reports
     with h.SessionLocal() as db:
         row = db.get(Work, wid)
         assert row.outcome == {
@@ -1021,8 +1054,9 @@ def test_warning_thresholds_are_durable_and_idempotent(scope):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_limit", [256, 1])
 async def test_real_runner_factory_tools_and_measured_seam_with_fake_provider(
-    scope, monkeypatch
+    scope, monkeypatch, tool_limit
 ):
     from unittest.mock import AsyncMock
     from agents import Agent, RunConfig
@@ -1035,6 +1069,11 @@ async def test_real_runner_factory_tools_and_measured_seam_with_fake_provider(
         _final,
     )
 
+    reports = []
+    monkeypatch.setattr(
+        "src.lib.validation_review.audit.report_operational_failure", reports.append
+    )
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TOOLS", str(tool_limit))
     _, ep, _ = admitted(scope)
     monkeypatch.setenv(
         "AGENT_MODEL_CAPACITY_OVERRIDES_JSON",
@@ -1070,12 +1109,21 @@ async def test_real_runner_factory_tools_and_measured_seam_with_fake_provider(
     result = await reviewer.run(
         context, configured, input="Review", run_config=RunConfig(tracing_disabled=True)
     )
-    assert result["output"] == "Still pending"
-    assert len(model.calls) == 3
+    calls = 3 if tool_limit == 256 else 2
+    if tool_limit == 256:
+        assert result["output"] == "Still pending"
+    else:
+        assert result["state"] == "needs_curator_review"
+        assert (
+            result["reason"] == "budget_exhausted"
+            and result["resource"] == "reviewer_tools"
+        )
+    assert not reports
+    assert len(model.calls) == calls
     budget = a.status(scope, ep)["budgets"][-1]["remaining"]
-    assert budget["reviewer_turns"] == 61
-    assert budget["reviewer_tools"] == 254
-    assert budget["reviewer_tokens"] == 1000000 - 3 * 1280
+    assert budget["reviewer_turns"] == 64 - calls
+    assert budget["reviewer_tools"] == max(0, tool_limit - 2)
+    assert budget["reviewer_tokens"] == 1000000 - calls * 1280
     assert not result["review"]["ready"]
     a.cancel(scope, ep, actor_id=scope.owner_id, reason="Done reviewing")
     stopped = await reviewer.run(
@@ -1084,7 +1132,7 @@ async def test_real_runner_factory_tools_and_measured_seam_with_fake_provider(
     assert (
         stopped["state"] == "needs_curator_review" and stopped["reason"] == "cancelled"
     )
-    assert len(model.calls) == 3
+    assert len(model.calls) == calls
 
 
 def test_32_target_run_shares_16_extra_allowance_across_two_episodes(scope):

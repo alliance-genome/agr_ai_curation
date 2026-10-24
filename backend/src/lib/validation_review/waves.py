@@ -49,6 +49,11 @@ def advance(
         requests = build_requests(sources)
         if not requests:
             return {"state": "not_runnable", "reason": "required_inputs_unavailable"}
+        if any(
+            not isinstance(request.get("request", {}).get("selected_inputs"), dict)
+            for request in requests
+        ):
+            raise ValueError("Dependent requests require a selected_inputs mapping")
         frozen = [
             {**request, "review_episode_id": ep.id, "prerequisites": pins}
             for request in requests

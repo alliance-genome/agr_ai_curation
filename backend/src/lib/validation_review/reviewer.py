@@ -1,7 +1,7 @@
 """One configured reviewer for direct/workspace phases; no runtime activation here."""
 
 import asyncio
-from agents import Runner, MaxTurnsExceeded
+from agents import Runner
 
 from . import admission
 from .provider import ExecutionBudget, budget_scope, guarded_await
@@ -46,8 +46,6 @@ async def run(context, agent, *, input, run_config=None):
     )
     from src.lib.validation_history import store
 
-    from src.lib.openai_agents.model_context_view import ContextRecoveryError
-
     install_model_request_measurement()
     try:
 
@@ -75,34 +73,12 @@ async def run(context, agent, *, input, run_config=None):
             result = await guarded_await(
                 Runner.run(agent, input=input, run_config=run_config, max_turns=turns)
             )
-    except (
-        admission.ReviewStopped,
-        ContextRecoveryError,
-        MaxTurnsExceeded,
-        asyncio.TimeoutError,
-    ) as exc:
-        status = await asyncio.to_thread(
-            admission.status, context.history_scope, context.episode_id
-        )
-        return {
-            "state": "complete" if status["ready"] else "needs_curator_review",
-            "reason": (
-                exc.reason
-                if isinstance(exc, admission.ReviewStopped)
-                else (
-                    "expired"
-                    if isinstance(exc, asyncio.TimeoutError)
-                    else "unsupported_exact_context_admission"
-                    if isinstance(exc, ContextRecoveryError)
-                    else "reviewer_turns_exhausted"
-                )
-            ),
-            "resource": (
-                exc.resource if isinstance(exc, admission.ReviewStopped) else None
-            ),
-            "review": status,
-        }
     except Exception as error:
+        from .stops import review_stop
+
+        stopped = review_stop(error)
+        if stopped is not None:
+            return await _stopped_response(context, stopped)
         from .audit import report_operational_failure
 
         report_operational_failure(error)
@@ -112,4 +88,32 @@ async def run(context, agent, *, input, run_config=None):
         "review": await asyncio.to_thread(
             admission.status, context.history_scope, context.episode_id
         ),
+    }
+
+
+async def _stopped_response(context, exc):
+    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+
+    status = await asyncio.to_thread(
+        admission.status, context.history_scope, context.episode_id
+    )
+    return {
+        "state": "complete" if status["ready"] else "needs_curator_review",
+        "reason": (
+            exc.reason
+            if isinstance(exc, admission.ReviewStopped)
+            else (
+                "expired"
+                if isinstance(exc, asyncio.TimeoutError)
+                else "unsupported_exact_context_admission"
+                if isinstance(exc, ContextRecoveryError)
+                else "cancelled"
+                if isinstance(exc, asyncio.CancelledError)
+                else "reviewer_turns_exhausted"
+            )
+        ),
+        "resource": (
+            exc.resource if isinstance(exc, admission.ReviewStopped) else None
+        ),
+        "review": status,
     }
