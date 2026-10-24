@@ -44,7 +44,7 @@ def test_core_package_contains_only_generic_runtime_agent_assets():
         agent_dir.name for agent_dir in _iter_shipped_agent_dirs(CORE_AGENTS_DIR)
     }
 
-    assert actual_agent_names == {"curation_handoff", "curation_prep", "supervisor"}
+    assert actual_agent_names == {"curation_handoff", "curation_prep", "supervisor", "validation_reviewer"}
     assert not (CORE_PACKAGE_DIR / "tools").exists()
     assert not (CORE_AGENTS_DIR / "README.md").exists()
     assert _iter_source_files(CORE_PACKAGE_DIR / "python" / "src" / "agr_ai_curation_core") == {
@@ -97,6 +97,8 @@ def test_core_package_manifest_exports_foundation_runtime_assets_only():
         ),
         (ExportKind.AGENT, "supervisor", "agents/supervisor"),
         (ExportKind.PROMPT, "supervisor.system", "agents/supervisor/prompt.yaml"),
+        (ExportKind.AGENT, "validation_reviewer", "agents/validation_reviewer"),
+        (ExportKind.PROMPT, "validation_reviewer.system", "agents/validation_reviewer/prompt.yaml"),
     }
     assert not any(export.kind is ExportKind.TOOL_BINDING for export in manifest.exports)
 

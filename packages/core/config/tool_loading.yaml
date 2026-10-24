@@ -42,6 +42,8 @@ runtimes:
     eager_tools:
       - record_evidence
       - list_recorded_evidence
+  validation_reviewer:
+    mode: eager
   validator:
     mode: eager
   formatter:

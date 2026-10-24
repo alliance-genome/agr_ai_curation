@@ -1069,3 +1069,42 @@ def test_validation_history_pagination_has_deployment_parity():
     assert _load_compose()["services"]["backend"]["environment"][key] == expected
     assert _list_environment(_load_dev_compose()["services"]["backend"]["environment"])[key] == expected
     assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "5"
+
+
+REVIEW_LIMIT_CONTRACT = [
+    line.split("|") for line in (
+        WORKSPACE_ROOT / "scripts/testing/fixtures/validation_review_env.txt"
+    ).read_text().splitlines() if line and not line.startswith("#")
+]
+
+
+@pytest.mark.parametrize("key,default,override", REVIEW_LIMIT_CONTRACT)
+def test_validation_review_limits_have_deployment_parity(key, default, override, monkeypatch):
+    from src.lib.validation_review.policy import ReviewLimits
+
+    monkeypatch.delenv(key, raising=False)
+    field = key.removeprefix("VALIDATION_REVIEW_").lower()
+    assert str(ReviewLimits.configured().snapshot()[field]) == default
+    expected = "${" + key + ":-" + default + "}"
+    for path, names in (
+        (DEV_COMPOSE_PATH, ("backend", "benchmark_worker")),
+        (COMPOSE_PATH, ("backend", "benchmark_worker")),
+        (TEST_COMPOSE_PATH, ("backend-unit-tests", "backend-persistence-tests", "benchmark-worker-test")),
+    ):
+        services = yaml.safe_load(path.read_text())["services"]
+        for name in names:
+            env = services[name]["environment"]
+            if isinstance(env, list):
+                env = _list_environment(env)
+            assert env[key] == expected
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
+    monkeypatch.setenv(key, override)
+    assert str(ReviewLimits.configured().snapshot()[field]) == override
+
+
+def test_validation_review_deployment_contract_covers_every_getter():
+    from src.lib.validation_review.policy import ReviewLimits
+
+    assert {key for key, _, _ in REVIEW_LIMIT_CONTRACT} == {
+        "VALIDATION_REVIEW_" + field.upper() for field in ReviewLimits.configured().snapshot()
+    }

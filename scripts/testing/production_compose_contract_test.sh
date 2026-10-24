@@ -7,6 +7,7 @@ compose_file="${repo_root}/docker-compose.production.yml"
 preflight="${script_dir}/production_compose_preflight.py"
 fixture_dir="${script_dir}/fixtures"
 provider_boundary_contract="${fixture_dir}/agent_studio_provider_boundary_env.txt"
+review_limit_contract="${fixture_dir}/validation_review_env.txt"
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
 
@@ -16,6 +17,7 @@ rendered_file="${temp_dir}/rendered.json"
 default_rendered_file="${temp_dir}/rendered-defaults.json"
 development_env_file="${temp_dir}/development.env"
 development_rendered_file="${temp_dir}/development-rendered.json"
+development_override_file="${temp_dir}/development-overrides.json"
 frontend_build_metadata_file="${temp_dir}/frontend-build-metadata.json"
 unsafe_frontend_build_metadata_file="${temp_dir}/unsafe-frontend-build-metadata.json"
 
@@ -61,6 +63,12 @@ write_test_env() {
     fi
     printf '%s=%s\n' "${key}" '987654321' >>"${env_file}"
   done <"${provider_boundary_contract}"
+  while IFS='|' read -r key default override; do
+    if [[ -z "${key}" || "${key}" == \#* ]]; then
+      continue
+    fi
+    printf '%s=%s\n' "${key}" "${override}" >>"${env_file}"
+  done <"${review_limit_contract}"
 }
 
 render_with_override() {
@@ -94,7 +102,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -Ev '^(VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(VALIDATION_REVIEW_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -284,6 +292,27 @@ for raw_line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
         assert str(actual) == "987654321", (
             f"{category}: sentinel for {key} did not reach {service_name}: {actual!r}"
         )
+PY
+
+# Exercise every review limit in both consumers and both supported deployments.
+AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
+  -f "${repo_root}/docker-compose.yml" config --format json >"${development_override_file}"
+python3 - "${review_limit_contract}" "${default_rendered_file}" "${development_rendered_file}" \
+  "${rendered_file}" "${development_override_file}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+settings = [line.split("|") for line in Path(sys.argv[1]).read_text().splitlines()
+            if line and not line.startswith("#")]
+assert len(settings) == 16
+for index, path in enumerate(sys.argv[2:]):
+    services = json.loads(Path(path).read_text())["services"]
+    for key, default, override in settings:
+        expected = default if index < 2 else override
+        for service in ("backend", "benchmark_worker"):
+            actual = services[service]["environment"].get(key)
+            assert str(actual) == expected, f"{path}: {service}.{key}: {actual!r} != {expected}"
 PY
 
 python3 - "${repo_root}" <<'PY'

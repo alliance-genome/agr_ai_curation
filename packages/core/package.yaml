@@ -37,3 +37,4 @@ agent_bundles:
   - name: curation_handoff
   - name: curation_prep
   - name: supervisor
+  - name: validation_reviewer

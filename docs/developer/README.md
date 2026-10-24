@@ -44,6 +44,7 @@ Start here for new developers:
 
 | Guide | Description |
 |-------|-------------|
+| [VALIDATION_REVIEW_ENGINE.md](guides/VALIDATION_REVIEW_ENGINE.md) | Shared explicit-review protocol, durable budgets, recovery and runtime adapter contract |
 | [ADMIN_COST_SITE.md](guides/ADMIN_COST_SITE.md) | Admin-only cost explorer, shared versioned valuation, bounded reports and Docker setup |
 | [DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md) | Forward-only development policy: remove fallbacks, avoid compatibility shims, prefer explicit migrations |
 | [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide for repo contributors -- package loading, database runtime, loaders, deployment |

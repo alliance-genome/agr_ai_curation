@@ -444,113 +444,119 @@ def begin_execution(
     and model-facing representation. Initial/reconsidered calls have distinct
     operation IDs; redelivery of the same operation is idempotent.
     """
+    with SessionLocal.begin() as db:
+        return begin_execution_in_transaction(db, scope, artifact_id,
+            operation_id=operation_id, receipt=receipt, requests=requests)
+
+
+def begin_execution_in_transaction(db, scope, artifact_id, *, operation_id, receipt, requests):
+    """Freeze attempts under the caller's admission/outbox transaction."""
     requests = [
         FrozenValidationInput.model_validate(r).model_dump(mode="json")
         for r in requests
     ]
     if not requests or len({r["target_id"] for r in requests}) != len(requests):
         raise ValueError("Execution must explicitly cover distinct targets")
-    with SessionLocal.begin() as db:
-        _artifact(db, artifact_id, scope)
-        # Share the structural lock with retirement/selection so a dispatch
-        # cannot freeze a mixture of versions from a grouped decision.
-        db.scalar(
-            select(ValidationArtifact.id)
-            .where(ValidationArtifact.id == artifact_id)
-            .with_for_update()
+    _artifact(db, artifact_id, scope)
+    # Share the structural lock with retirement/selection so a dispatch
+    # cannot freeze a mixture of versions from a grouped decision.
+    db.scalar(
+        select(ValidationArtifact.id)
+        .where(ValidationArtifact.id == artifact_id)
+        .with_for_update()
+    )
+    existing = db.scalar(
+        select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact_id,
+            ValidationFact.operation_id == "execution:" + operation_id,
         )
-        existing = db.scalar(
-            select(ValidationFact).where(
-                ValidationFact.artifact_id == artifact_id,
-                ValidationFact.operation_id == "execution:" + operation_id,
-            )
-        )
-        execution_body = {
-            "receipt": receipt,
-            "targets": [r["target_id"] for r in requests],
-        }
-        if existing is not None:
-            if _content(db, existing) != canonical(execution_body)[1]:
-                raise HistoryConflict("Execution identity conflict")
-            attempts = []
-            for request in requests:
-                row = db.scalar(
-                    select(ValidationFact).where(
-                        ValidationFact.artifact_id == artifact_id,
-                        ValidationFact.operation_id
-                        == "attempt:" + operation_id + ":" + request["target_id"],
-                    )
-                )
-                if row is None or _content(db, row)["input"] != canonical(request)[1]:
-                    raise HistoryConflict("Execution request identity conflict")
-                attempts.append(row.id)
-            # Redelivery reads the original frozen versions even after retirement.
-            return {"execution_id": existing.id, "attempt_ids": attempts}
-        for request in requests:
-            if request["review_episode_id"] is not None:
-                episode = _fact(db, artifact_id, request["review_episode_id"], kind="review_episode")
-                latest = db.scalar(select(ValidationFact.id).where(
-                    ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_episode",
-                ).order_by(ValidationFact.sequence.desc()).limit(1))
-                if episode.id != latest:
-                    raise HistoryConflict("Validation dispatch belongs to an obsolete review episode")
-            _require_active_target(db, artifact_id, request["target_id"])
-            # Prerequisites stay within the same artifact; one artifact lock makes
-            # snapshotting and grouped selection updates atomic without lock cycles.
-            if any(p["artifact_id"] != artifact_id for p in request["prerequisites"]):
-                raise HistoryConflict("Prerequisites must belong to the same artifact")
-            _prerequisites_current(db, scope, request["prerequisites"])
-            for fact_id in request["available_prior_completions"]:
-                _fact(db, artifact_id, fact_id, kind="completion")
-        execution = _append(
-            db,
-            artifact_id,
-            operation_id="execution:" + operation_id,
-            kind="execution",
-            body=execution_body,
-        )
+    )
+    execution_body = {
+        "receipt": receipt,
+        "targets": [r["target_id"] for r in requests],
+    }
+    if existing is not None:
+        if _content(db, existing) != canonical(execution_body)[1]:
+            raise HistoryConflict("Execution identity conflict")
         attempts = []
         for request in requests:
-            coverage = []
-            for unit in request["decision_units"]:
-                unit_target = _append(
-                    db,
-                    artifact_id,
-                    operation_id="unit:" + request["target_id"] + ":" + unit["key"],
-                    kind="target",
-                    parent_id=request["target_id"],
-                    body={"decision_unit": unit, "binding_id": request["binding_id"]},
+            row = db.scalar(
+                select(ValidationFact).where(
+                    ValidationFact.artifact_id == artifact_id,
+                    ValidationFact.operation_id
+                    == "attempt:" + operation_id + ":" + request["target_id"],
                 )
-                _require_active_target(db, artifact_id, unit_target.id)
-                coverage.append(unit_target.id)
-            if not coverage:
-                coverage = [request["target_id"]]
-            attempt = _append(
+            )
+            if row is None or _content(db, row)["input"] != canonical(request)[1]:
+                raise HistoryConflict("Execution request identity conflict")
+            attempts.append(row.id)
+        # Redelivery reads the original frozen versions even after retirement.
+        return {"execution_id": existing.id, "attempt_ids": attempts}
+    for request in requests:
+        if request["review_episode_id"] is not None:
+            episode = _fact(db, artifact_id, request["review_episode_id"], kind="review_episode")
+            latest = db.scalar(select(ValidationFact.id).where(
+                ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_episode",
+            ).order_by(ValidationFact.sequence.desc()).limit(1))
+            if episode.id != latest:
+                raise HistoryConflict("Validation dispatch belongs to an obsolete review episode")
+        _require_active_target(db, artifact_id, request["target_id"])
+        # Prerequisites stay within the same artifact; one artifact lock makes
+        # snapshotting and grouped selection updates atomic without lock cycles.
+        if any(p["artifact_id"] != artifact_id for p in request["prerequisites"]):
+            raise HistoryConflict("Prerequisites must belong to the same artifact")
+        _prerequisites_current(db, scope, request["prerequisites"])
+        for fact_id in request["available_prior_completions"]:
+            _fact(db, artifact_id, fact_id, kind="completion")
+    execution = _append(
+        db,
+        artifact_id,
+        operation_id="execution:" + operation_id,
+        kind="execution",
+        body=execution_body,
+    )
+    attempts = []
+    for request in requests:
+        coverage = []
+        for unit in request["decision_units"]:
+            unit_target = _append(
                 db,
                 artifact_id,
-                operation_id="attempt:" + operation_id + ":" + request["target_id"],
-                kind="attempt",
-                target_id=request["target_id"],
-                parent_id=execution.id,
-                body={
-                    "input": request,
-                    "coverage": coverage,
-                    "coverage_lineages": {
-                        tid: _target_lineage(db, artifact_id, tid) for tid in coverage
-                    },
-                    "budget_scope_id": canonical(
-                        {"artifact": artifact_id, "target": request["target_id"]}
-                    )[0],
-                    "target_version": _current(db, artifact_id, request["target_id"])[
-                        "version"
-                    ],
-                    "lineage_versions": _target_lineage(
-                        db, artifact_id, request["target_id"]
-                    ),
-                },
+                operation_id="unit:" + request["target_id"] + ":" + unit["key"],
+                kind="target",
+                parent_id=request["target_id"],
+                body={"decision_unit": unit, "binding_id": request["binding_id"]},
             )
-            attempts.append(attempt.id)
-        return {"execution_id": execution.id, "attempt_ids": attempts}
+            _require_active_target(db, artifact_id, unit_target.id)
+            coverage.append(unit_target.id)
+        if not coverage:
+            coverage = [request["target_id"]]
+        attempt = _append(
+            db,
+            artifact_id,
+            operation_id="attempt:" + operation_id + ":" + request["target_id"],
+            kind="attempt",
+            target_id=request["target_id"],
+            parent_id=execution.id,
+            body={
+                "input": request,
+                "coverage": coverage,
+                "coverage_lineages": {
+                    tid: _target_lineage(db, artifact_id, tid) for tid in coverage
+                },
+                "budget_scope_id": canonical(
+                    {"artifact": artifact_id, "target": request["target_id"]}
+                )[0],
+                "target_version": _current(db, artifact_id, request["target_id"])[
+                    "version"
+                ],
+                "lineage_versions": _target_lineage(
+                    db, artifact_id, request["target_id"]
+                ),
+            },
+        )
+        attempts.append(attempt.id)
+    return {"execution_id": execution.id, "attempt_ids": attempts}
 
 
 def complete_attempt(
@@ -777,6 +783,7 @@ def apply_decisions_in_transaction(
             "accept",
             "reject",
             "defer",
+            "acknowledge_failure",
             "retire",
             "restore",
             "revoke",
@@ -793,9 +800,18 @@ def apply_decisions_in_transaction(
         active = state["active"]
         if action == "accept":
             _require_active_target(db, artifact_id, target.id)
-        if action in {"accept", "reject"}:
+        if action in {"accept", "reject", "acknowledge_failure"} or (action == "defer" and entry.get("subject")):
             subject = entry["subject"]
-            if subject == "baseline":
+            uncertain_attempt = False
+            if action == "acknowledge_failure" and subject not in {"baseline", "curator"}:
+                named = _fact(db, artifact_id, subject)
+                uncertain_attempt = named.kind == "attempt"
+            if uncertain_attempt:
+                if target.id not in _content(db, named)["coverage"] or not db.scalar(select(ValidationFact.id).where(
+                    ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_uncertainty",
+                    ValidationFact.parent_id == named.id).limit(1)):
+                    raise HistoryConflict("Attempt has no recorded operational uncertainty for this target")
+            elif subject == "baseline":
                 if artifact.subject_kind == "historical" or not _has_baseline_subject(
                     db, artifact_id, target.id
                 ):
@@ -826,7 +842,11 @@ def apply_decisions_in_transaction(
                     raise HistoryConflict(
                         "Incomplete or failed execution cannot finalize a target"
                     )
-            review = action
+            if action == "acknowledge_failure" and not uncertain_attempt and (
+                subject in {"baseline", "curator"} or _content(db, completion)["state"] == "completed"
+            ):
+                raise HistoryConflict("Only an operationally incomplete attempt can be acknowledged")
+            review = "pending" if action in {"defer", "acknowledge_failure"} else action
             if action == "accept":
                 selected = subject
             # Reject records an opinion about this answer. Removing a current

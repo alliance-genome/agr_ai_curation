@@ -21,6 +21,7 @@ class HistoryDecision(HistoryContract):
         "accept",
         "reject",
         "defer",
+        "acknowledge_failure",
         "retire",
         "restore",
         "revoke",
@@ -34,10 +35,10 @@ class HistoryDecision(HistoryContract):
 
     @model_validator(mode="after")
     def explicit_subject(self):
-        if self.action in {"accept", "reject"}:
+        if self.action in {"accept", "reject", "acknowledge_failure"}:
             if not self.subject:
                 raise ValueError("Review decisions must identify an exact subject")
-        elif self.subject is not None:
+        elif self.subject is not None and self.action != "defer":
             raise ValueError("This lifecycle action does not select a review subject")
         if (self.action == "replace") != (self.replacement_original is not None):
             raise ValueError("Only replacement decisions supply new original content")

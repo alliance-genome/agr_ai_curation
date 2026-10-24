@@ -504,6 +504,7 @@ async def test_core_plus_org_custom_runtime_loads_without_alliance_package(monke
         "curation_prep",
         "demo_agent_validation",
         "supervisor",
+        "validation_reviewer",
     }
     assert agents["demo_agent_validation"].folder_name == "demo_agent"
     assert agents["demo_agent_validation"].tools == ["demo_search_tool"]

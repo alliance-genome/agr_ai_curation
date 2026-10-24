@@ -250,12 +250,13 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
             if selection["action"] != "accept":
                 blockers.append({"target_id": unit["target_id"], "code": "episode_review_pending"})
         # A new answer requires an explicit disposition even if an older one
-        # remains selected. D/E/F must use a distinct episode for reconsideration.
+        # remains selected. Automatic reconsideration stays within this episode;
+        # later human renewal creates a linked episode without resetting parent quotas.
         for attempt_id in attempts_by_target.get(unit["target_id"], ()):
             completion_id = completions.get(attempt_id)
-            if completion_id is None:
+            if completion_id is None and (unit["target_id"], attempt_id) not in reviewed_answers:
                 blockers.append({"target_id": unit["target_id"], "code": "execution_pending"})
-            elif (unit["target_id"], completion_id) not in reviewed_answers:
+            elif completion_id is not None and (unit["target_id"], completion_id) not in reviewed_answers:
                 blockers.append({"target_id": unit["target_id"], "code": "answer_review_pending"})
     manifest = {
         "schema_version": 1,

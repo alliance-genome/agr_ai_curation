@@ -36,6 +36,7 @@ TOOL_LOADING_RUNTIMES = (
     "agent_studio",
     "chat_supervisor",
     "flow_supervisor",
+    "validation_reviewer",
     "extractor",
     "validator",
     "formatter",

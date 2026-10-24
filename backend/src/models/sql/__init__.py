@@ -1,5 +1,7 @@
 """SQL models module."""
 
+from .validation_review import ValidationReviewScope, ValidationReviewEpisode, ValidationReviewReservation, ValidationReviewWork
+
 from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from .benchmark import (
     BenchmarkCell,
@@ -46,6 +48,10 @@ from .term_synonym import TermSynonym
 from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 
 __all__ = [
+    "ValidationReviewScope",
+    "ValidationReviewEpisode",
+    "ValidationReviewReservation",
+    "ValidationReviewWork",
     "AgentHistoryEvent",
     "AgentHistoryPayload",
     "ValidatorResultRecord",
