@@ -230,7 +230,25 @@ def attach_episode(
             raise store.HistoryConflict(
                 "Episode exceeds trusted document episode count"
             )
-        if len(targets) > run.contract["targets"]:
+        previous_targets = sum(
+            len(
+                store._content(
+                    db,
+                    db.scalar(
+                        select(ValidationFact).where(
+                            ValidationFact.artifact_id == row.artifact_id,
+                            ValidationFact.operation_id == "review-admission:" + row.id,
+                        )
+                    ),
+                )["targets"]
+            )
+            for row in admitted
+            if row.predecessor_id is None
+        )
+        if (
+            len(targets) + (previous_targets if predecessor_id is None else 0)
+            > run.contract["targets"]
+        ):
             raise store.HistoryConflict(
                 "Episode exceeds declared document target coverage"
             )
@@ -492,3 +510,30 @@ def status(history_scope, episode_id):
             "budgets": budgets,
             "warnings": warnings,
         }
+
+
+def cancel(history_scope, episode_id, *, actor_id, reason):
+    """Trusted explicit cancellation; retain all history, reservations and late answers."""
+    if (
+        actor_id != history_scope.owner_id
+        or not isinstance(reason, str)
+        or not reason.strip()
+    ):
+        raise store.HistoryAccessError(
+            "Cancellation requires the authenticated owner and reason"
+        )
+    with store.SessionLocal.begin() as db:
+        episode, _ = lock_episode(db, history_scope, episode_id, require_open=False)
+        if episode.state == "cancelled":
+            return
+        if episode.state != "open":
+            raise ReviewStopped(episode.state)
+        episode.state = "cancelled"
+        append_fact(
+            db,
+            episode.artifact_id,
+            operation_id="review-cancel:" + episode.id,
+            kind="review_cancellation",
+            parent_id=episode.id,
+            body={"actor_id": actor_id, "reason": reason},
+        )

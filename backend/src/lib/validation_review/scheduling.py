@@ -36,7 +36,7 @@ def _enqueue(
     receipt,
     identity,
     reconsideration,
-    followup=None
+    followup=None,
 ):
     prior = _existing(db, ep, operation_id, identity)
     if prior is not None:
@@ -131,7 +131,8 @@ def reconsider(
     parent_decision_id,
     target_ids,
     instructions,
-    evidence_refs
+    evidence_refs,
+    refresh_inputs=None,
 ):
     with store.SessionLocal.begin() as db:
         ep, _ = lock_episode(
@@ -224,9 +225,11 @@ def reconsider(
             if not store._attempt_is_current(
                 db, context.history_scope, ep.artifact_id, frozen
             ):
-                raise store.HistoryConflict(
-                    "Reconsideration source is stale; explicit fresh input is required"
+                request = _refresh_prerequisites(
+                    db, context, ep, frozen, refresh_inputs
                 )
+            else:
+                request = deepcopy(frozen["input"])
             prior_completion = db.scalar(
                 select(ValidationFact).where(
                     ValidationFact.artifact_id == ep.artifact_id,
@@ -260,9 +263,8 @@ def reconsider(
                         "answer": store._content(db, prior_completion),
                     }
                 )
-            request = deepcopy(frozen["input"])
-            # The supplied-context request stays fixed. Instructions/evidence
-            # references travel in the immutable invocation identity separately.
+            # Immutable extraction/evidence and saved validator stay fixed.
+            # Only a trusted selector adapter may refresh prerequisite inputs.
             requests.append(request)
             execution = store._fact(
                 db, ep.artifact_id, attempt.parent_id, kind="execution"
@@ -288,3 +290,54 @@ def reconsider(
                 "evidence": evidence,
             },
         )
+
+
+def _refresh_prerequisites(db, context, ep, frozen, refresh_inputs):
+    """Rebuild only selected_inputs through a trusted pure selector callback.
+
+    No network/provider work inside this transaction. The model cannot supply the
+    callback, values, pins, validator identity or extraction/evidence content.
+    """
+    from .admission import ReviewStopped
+    from src.lib.validation_history import selections
+
+    unchanged = deepcopy(frozen)
+    unchanged["input"]["prerequisites"] = []
+    if not store._attempt_is_current(
+        db, context.history_scope, ep.artifact_id, unchanged
+    ):
+        raise store.HistoryConflict("Reconsideration target lineage is stale")
+    targets = [pin["target_id"] for pin in frozen["input"]["prerequisites"]]
+    if not targets or refresh_inputs is None:
+        raise ReviewStopped("fresh_prerequisite_adapter_required")
+    manifest = selections.manifest_in_transaction(
+        db, context.history_scope, ep.artifact_id, episode_id=ep.id
+    )
+    if any(item["target_id"] in targets for item in manifest["blockers"]):
+        raise ReviewStopped("prerequisite_review_pending")
+    pins = selections.selected_prerequisites(manifest, targets)
+    units = {unit["target_id"]: unit for unit in manifest["units"]}
+    sources = {}
+    for tid in targets:
+        selected = units[tid]["selected"]
+        if selected in {"baseline", "curator"}:
+            raise ReviewStopped("non_validator_prerequisite", resource=tid)
+        sources[tid] = store._content(
+            db, store._fact(db, ep.artifact_id, selected, kind="completion")
+        )
+    request = deepcopy(frozen["input"])
+    values = refresh_inputs(deepcopy(request["request"]), deepcopy(sources))
+    if values is None:
+        raise ReviewStopped("required_inputs_unavailable")
+    if not isinstance(values, dict):
+        raise ValueError("Trusted refresh adapter must return selected_inputs")
+    request["request"]["selected_inputs"] = values
+    request["request"]["request_id"] = store.canonical(
+        {
+            "prior_request": frozen["input"]["request"],
+            "selected_inputs": values,
+            "pins": pins,
+        }
+    )[0]
+    request["prerequisites"] = pins
+    return request

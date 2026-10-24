@@ -29,9 +29,11 @@ def advance(
         for tid in prerequisite_targets:
             selected = units[tid]["selected"]
             if selected in {"baseline", "curator"}:
-                raise store.HistoryConflict(
-                    "Dependent validator wave requires exact validator answer sources"
-                )
+                return {
+                    "state": "not_runnable",
+                    "reason": "non_validator_prerequisite",
+                    "targets": [tid],
+                }
             sources[tid] = store._content(
                 db, store._fact(db, ep.artifact_id, selected, kind="completion")
             )

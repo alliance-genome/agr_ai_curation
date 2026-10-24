@@ -16,6 +16,7 @@ def setup(monkeypatch):
         "episode",
         "reviewer_tokens",
         True,
+        reviewer_agent_id="reviewer",
     )
     request = Mock()
     request.effective_model = "model"
@@ -30,6 +31,10 @@ def setup(monkeypatch):
         lambda *a, **kw: ("openai", "responses", "websocket"),
     )
     monkeypatch.setattr(p, "remaining_seconds", lambda _: 30)
+    monkeypatch.setattr(
+        "src.lib.observability.cost_context.get_agent_cost_identity",
+        lambda agent: {"agent_id": "reviewer"},
+    )
     reserve, reconcile = Mock(return_value="reservation"), Mock()
     monkeypatch.setattr(p.admission, "reserve", reserve)
     monkeypatch.setattr(p.admission, "reconcile", reconcile)
@@ -49,6 +54,7 @@ async def admit(settings=None):
         conversation_id=None,
         prompt=None,
         provider_hint="openai",
+        agent=Mock(),
     )
 
 
@@ -88,8 +94,9 @@ async def test_hidden_retry_mode_stops_before_count_or_admission(setup, monkeypa
         "src.lib.openai_agents.model_request_measurement.describe_model",
         lambda *a, **kw: ("openai", "responses", "http"),
     )
-    with p.budget_scope(budget), pytest.raises(
-        ReviewStopped, match="hidden_http_retries"
+    with (
+        p.budget_scope(budget),
+        pytest.raises(ReviewStopped, match="hidden_http_retries"),
     ):
         await admit()
     request.count.assert_not_awaited()
@@ -107,3 +114,52 @@ async def test_nested_scope_restores_parent_and_direct_compaction_is_explicit_st
         assert p.ACTIVE_BUDGET.get() is budget
     assert p.ACTIVE_BUDGET.get() is None
     p.guard_direct_request()
+
+
+def test_reviewer_identity_is_mandatory():
+    with pytest.raises(ValueError, match="explicit reviewer"):
+        p.ExecutionBudget(HistoryScope("o", "d", "s"), "e", "reviewer_tokens", True)
+
+
+@pytest.mark.asyncio
+async def test_stream_waits_read_fixed_deadline_only_once(setup, monkeypatch):
+    import asyncio
+
+    budget, _, _, _ = setup
+    read = Mock(return_value=30)
+    monkeypatch.setattr(p, "remaining_seconds", read)
+    with p.budget_scope(budget):
+        for _ in range(200):
+            await p.guarded_await(asyncio.sleep(0))
+    read.assert_called_once_with(budget)
+
+
+@pytest.mark.asyncio
+async def test_nested_agent_tokens_count_without_spending_reviewer_turns(
+    setup, monkeypatch
+):
+    budget, _, reserve, _ = setup
+    monkeypatch.setattr(
+        "src.lib.observability.cost_context.get_agent_cost_identity",
+        lambda agent: {"agent_id": "paper_reader"},
+    )
+    with p.budget_scope(budget):
+        await admit()
+    assert reserve.call_args.kwargs["charges"] == {"reviewer_tokens": 358000}
+
+
+@pytest.mark.asyncio
+async def test_capacity_incompatibility_is_expected_before_send(setup, monkeypatch):
+    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+
+    budget, _, reserve, _ = setup
+    monkeypatch.setattr(
+        "src.lib.openai_agents.context_capacity.NativeCapacityRequest",
+        Mock(side_effect=ContextRecoveryError("unsupported shape")),
+    )
+    with (
+        p.budget_scope(budget),
+        pytest.raises(ReviewStopped, match="unsupported_exact_context"),
+    ):
+        await admit()
+    reserve.assert_not_called()

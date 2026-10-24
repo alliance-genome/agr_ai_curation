@@ -207,7 +207,8 @@ def test_exact_history_is_readable_in_many_bounded_pages(scope, monkeypatch):
     assert len(chunks) > 10
 
 
-def test_reconsideration_retains_saved_custom_receipt_and_caps_attempts(scope):
+@pytest.mark.asyncio
+async def test_reconsideration_retains_saved_custom_receipt_and_caps_attempts(scope):
     from src.lib.validation_review import scheduling
     from src.lib.validation_review.decisions import ReviewContext
     from src.lib.validation_history import selections
@@ -285,6 +286,44 @@ def test_reconsideration_retains_saved_custom_receipt_and_caps_attempts(scope):
     with pytest.raises(a.ReviewStopped, match="scientific_attempts"):
         scheduling.reconsider(context, **{**args, "operation_id": "third"})
     assert not a.status(scope, ep)["ready"]
+    from src.lib.validation_review.execution import execute, ValidatorOutcome
+
+    async def answer(payload):
+        assert payload["receipt"]["agent_revision"] == "custom-7"
+        assert payload["followup"]["instructions"] == args["instructions"]
+        return [
+            ValidatorOutcome(
+                item, "completed", {"status": "resolved", "value": "corrected"}, {}
+            )
+            for item in payload["invocation"]["attempt_ids"]
+        ]
+
+    await execute(scope, retry, call=answer)
+    with h.SessionLocal.begin() as db:
+        second = db.get(Work, retry).payload["invocation"]["attempt_ids"][0]
+        completion = db.scalar(
+            select(ValidationFact.id).where(
+                ValidationFact.parent_id == second, ValidationFact.kind == "completion"
+            )
+        )
+        selections.decide_episode_in_transaction(
+            db,
+            scope,
+            aid,
+            episode_id=ep,
+            operation_id="accept_retry",
+            actor={"type": "agent", "id": "reviewer"},
+            entries=[
+                {
+                    "target_id": tid,
+                    "expected_version": h._current(db, aid, tid)["version"],
+                    "action": "accept",
+                    "subject": completion,
+                    "reason": "Corrected answer is solid",
+                }
+            ],
+        )
+    assert a.status(scope, ep)["ready"]
 
 
 from tests.integration.persistence.test_curator_selected_authority import scenario
@@ -453,7 +492,10 @@ def test_dependent_wave_waits_for_explicit_review_then_pins_selected_answer(scop
             {
                 "target_id": second,
                 "binding_id": "dependent",
-                "request": {"input": sources[first]["result"]["value"]},
+                "request": {
+                    "selected_inputs": {"input": sources[first]["result"]["value"]},
+                    "evidence": ["original"],
+                },
             }
         ]
 
@@ -489,9 +531,96 @@ def test_dependent_wave_waits_for_explicit_review_then_pins_selected_answer(scop
     )
     with h.SessionLocal() as db:
         payload = db.get(Work, result["work_id"]).payload
-        assert payload["requests"][0]["request"] == {"input": "selected"}
+        assert payload["requests"][0]["request"]["selected_inputs"] == {
+            "input": "selected"
+        }
         assert payload["requests"][0]["review_episode_id"] == ep
     assert not a.status(scope, ep)["ready"]
+    from src.models.sql.validation_history import ValidationFact
+    from src.lib.validation_review.decisions import ReviewContext
+
+    def decide(tid, answer, action):
+        op = uuid4().hex
+        with h.SessionLocal.begin() as db:
+            selections.decide_episode_in_transaction(
+                db,
+                scope,
+                aid,
+                episode_id=ep,
+                operation_id=op,
+                actor={"type": "agent", "id": "reviewer"},
+                entries=[
+                    {
+                        "target_id": tid,
+                        "expected_version": h._current(db, aid, tid)["version"],
+                        "action": action,
+                        "subject": answer,
+                        "reason": "Explicit review",
+                    }
+                ],
+            )
+            return db.scalar(
+                select(ValidationFact.id).where(
+                    ValidationFact.operation_id == "decision:" + op
+                )
+            )
+
+    b1 = payload["invocation"]["attempt_ids"][0]
+    b1_answer = h.complete_attempt(
+        scope, aid, b1, state="completed", result={"value": "B1"}, diagnostics={}
+    )
+    b_parent = decide(second, b1_answer, "reject")
+    a_parent = decide(first, completion, "accept")
+    ctx = ReviewContext(scope, ep, "reviewer")
+    a2_work = scheduling.reconsider(
+        ctx,
+        operation_id="a2",
+        parent_decision_id=a_parent,
+        target_ids=[first],
+        instructions="Check again",
+        evidence_refs=[],
+    )
+    with h.SessionLocal() as db:
+        a2 = db.get(Work, a2_work).payload["invocation"]["attempt_ids"][0]
+    a2_answer = h.complete_attempt(
+        scope, aid, a2, state="completed", result={"value": "A2"}, diagnostics={}
+    )
+    retry_args = dict(
+        operation_id="b2",
+        parent_decision_id=b_parent,
+        target_ids=[second],
+        instructions="Use explicitly selected prerequisite",
+        evidence_refs=[],
+    )
+    # A new answer is not a prerequisite selection until explicitly reviewed.
+    decide(first, a2_answer, "accept")
+    with pytest.raises(a.ReviewStopped, match="adapter_required"):
+        scheduling.reconsider(ctx, **retry_args)
+    refreshed = []
+
+    def refresh(request, sources):
+        refreshed.append(sources)
+        assert request["evidence"] == ["original"]
+        return {"input": sources[first]["result"]["value"]}
+
+    b2_work = scheduling.reconsider(ctx, **retry_args, refresh_inputs=refresh)
+    with h.SessionLocal() as db:
+        b2_payload = db.get(Work, b2_work).payload
+        assert b2_payload["requests"][0]["request"]["selected_inputs"] == {
+            "input": "A2"
+        }
+        assert b2_payload["requests"][0]["request"]["evidence"] == ["original"]
+        assert (
+            b2_payload["requests"][0]["prerequisites"]
+            != payload["requests"][0]["prerequisites"]
+        )
+        assert b2_payload["receipt"] == {"revision": "dependent"}
+    assert scheduling.reconsider(ctx, **retry_args, refresh_inputs=refresh) == b2_work
+    assert len(refreshed) == 1
+    with pytest.raises(a.ReviewStopped, match="scientific_attempts"):
+        scheduling.reconsider(
+            ctx, **{**retry_args, "operation_id": "b3"}, refresh_inputs=refresh
+        )
 
 
 @pytest.mark.asyncio
@@ -725,3 +854,119 @@ def test_uncertain_attempt_can_be_acknowledged_without_fabricating_a_completion(
     assert not manifest["ready"]
     assert any(item["code"] == "answer_review_pending" for item in manifest["blockers"])
     assert h.read_fact(scope, aid, late)["content"]["result"]["value"] == "late"
+
+
+def test_live_lease_heartbeat_and_recovery_cancellation_keep_fixed_deadline(
+    scope, monkeypatch
+):
+    from src.models.sql.validation_review import ValidationReviewEpisode
+
+    _, ep, _ = admitted(scope)
+    wid = queue(scope, ep)
+    claim = w.claim(scope, wid)
+    w.mark_submitted(scope, wid, claim["lease_token"])
+    with h.SessionLocal() as db:
+        started = db.get(ValidationReviewEpisode, ep).started_at
+    future = a.now() + timedelta(seconds=40)
+    monkeypatch.setattr(w, "now", lambda: future)
+    w.heartbeat(scope, wid, claim["lease_token"])
+    future += timedelta(seconds=40)
+    assert w.recover(scope, wid) == "submitted"  # past original 60s lease
+    with h.SessionLocal() as db:
+        assert db.get(ValidationReviewEpisode, ep).started_at == started
+    with pytest.raises(a.ReviewStopped, match="lease_lost"):
+        w.heartbeat(scope, wid, "wrong-token")
+    a.cancel(scope, ep, actor_id=scope.owner_id, reason="Explicit stop")
+    with pytest.raises(a.ReviewStopped, match="cancelled"):
+        w.heartbeat(scope, wid, claim["lease_token"])
+    assert w.recover(scope, wid) == "uncertain"
+    w.finish(scope, wid, claim["lease_token"], outcome={"answer": "late"})
+    assert a.status(scope, ep)["state"] == "cancelled"
+
+
+def test_requeued_work_can_be_cancelled_without_audit_identity_collision(scope):
+    _, ep, _ = admitted(scope)
+    wid = queue(scope, ep)
+    w.claim(scope, wid)
+    expire(wid)
+    assert w.recover(scope, wid) == "queued"
+    a.cancel(scope, ep, actor_id=scope.owner_id, reason="Stop recovered work")
+    assert w.recover(scope, wid) == "cancelled"
+    assert w.recover(scope, wid) == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_pre_send_refusal_records_reason_without_unknown_completion(scope):
+    from src.lib.validation_review import scheduling, execution
+    from src.models.sql.validation_history import ValidationFact
+
+    aid, ep, _ = admitted(scope)
+    with h.SessionLocal() as db:
+        tid = db.scalar(
+            select(ValidationFact.id).where(
+                ValidationFact.artifact_id == aid, ValidationFact.kind == "target"
+            )
+        )
+    wid = scheduling.initial(
+        scope,
+        ep,
+        operation_id="initial",
+        receipt={},
+        requests=[
+            {
+                "target_id": tid,
+                "binding_id": "fixture",
+                "review_episode_id": ep,
+                "request": {},
+            }
+        ],
+    )
+
+    async def refuse(_):
+        raise a.ReviewStopped("budget_exhausted", resource="initial_tokens")
+
+    with pytest.raises(a.ReviewStopped, match="budget_exhausted"):
+        await execution.execute(scope, wid, call=refuse)
+    with h.SessionLocal() as db:
+        row = db.get(Work, wid)
+        assert row.outcome == {
+            "state": "not_admitted",
+            "reason": "budget_exhausted",
+            "resource": "initial_tokens",
+        }
+        completion = db.scalar(
+            select(ValidationFact).where(
+                ValidationFact.artifact_id == aid, ValidationFact.kind == "completion"
+            )
+        )
+        assert h._content(db, completion)["state"] == "failed"
+        assert not db.scalar(
+            select(ValidationFact).where(
+                ValidationFact.artifact_id == aid,
+                ValidationFact.kind == "review_uncertainty",
+            )
+        )
+
+
+def test_warning_thresholds_are_durable_and_idempotent(scope):
+    from src.models.sql.validation_history import ValidationFact
+
+    aid, ep, _ = admitted(scope)
+    for op, count in (("warning", 750000), ("critical", 150000)):
+        a.reserve(
+            scope, ep, operation_id=op, charges={"reviewer_tokens": count}, request={}
+        )
+        a.reserve(
+            scope, ep, operation_id=op, charges={"reviewer_tokens": count}, request={}
+        )
+    with h.SessionLocal() as db:
+        facts = list(
+            db.scalars(
+                select(ValidationFact).where(
+                    ValidationFact.artifact_id == aid,
+                    ValidationFact.kind == "review_budget_warning",
+                )
+            )
+        )
+        assert len(facts) == 4  # run and episode at both thresholds
+        assert {h._content(db, f)["threshold"] for f in facts} == {75, 90}

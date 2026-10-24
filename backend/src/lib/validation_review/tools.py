@@ -5,6 +5,9 @@ import asyncio
 from agents import function_tool
 
 from . import decisions, reads, scheduling
+from .admission import ReviewStopped
+from src.lib.validation_history import store
+from functools import wraps
 from .decisions import ReviewEntry
 
 
@@ -17,10 +20,55 @@ class EvidenceReference(BaseModel):
     sha256: StrictStr
 
 
-def create_tools(context, *, checkpoint_provider):
+def _recoverable_tool(function):
+    @wraps(function)
+    async def invoke(*args, **kwargs):
+        try:
+            return await function(*args, **kwargs)
+        except ReviewStopped as exc:
+            if not (
+                exc.reason
+                in {
+                    "scientific_attempts_exhausted",
+                    "fresh_prerequisite_adapter_required",
+                    "prerequisite_review_pending",
+                    "non_validator_prerequisite",
+                    "required_inputs_unavailable",
+                }
+                or (
+                    exc.reason == "budget_exhausted"
+                    and exc.resource == "extra_attempts"
+                )
+            ):
+                raise
+            return {
+                "state": "not_applied",
+                "code": exc.reason,
+                "resource": exc.resource,
+                "applied": [],
+                "targets": kwargs.get("target_ids", []),
+            }
+        except (store.HistoryConflict, store.HistoryAccessError, ValueError) as exc:
+            return {
+                "state": "conflict",
+                "code": type(exc).__name__,
+                "applied": [],
+                "message": str(exc),
+                "operation_id": kwargs.get("operation_id"),
+                "targets": kwargs.get("target_ids", []),
+                "decision_units": [
+                    e.decision_unit_id for e in kwargs.get("entries", [])
+                ],
+            }
+
+    return invoke
+
+
+def create_tools(context, *, checkpoint_provider, refresh_inputs=None):
     """Context and checkpoint loader come from authenticated runtime, never JSON."""
 
     @function_tool(failure_error_function=None)
+    @_recoverable_tool
     async def get_validation_review_packet(operation_id: str) -> dict:
         """Pin exact original/answer/decision/prerequisite references and budget state.
 
@@ -35,6 +83,7 @@ def create_tools(context, *, checkpoint_provider):
         )
 
     @function_tool(failure_error_function=None)
+    @_recoverable_tool
     async def read_validation_history(
         fact_id: str, sha256: str, offset: int = 0
     ) -> dict:
@@ -53,6 +102,7 @@ def create_tools(context, *, checkpoint_provider):
         )
 
     @function_tool(failure_error_function=None)
+    @_recoverable_tool
     async def record_validation_review(
         operation_id: str, entries: list[ReviewEntry]
     ) -> dict:
@@ -73,6 +123,7 @@ def create_tools(context, *, checkpoint_provider):
         )
 
     @function_tool(failure_error_function=None)
+    @_recoverable_tool
     async def request_validation_reconsideration(
         operation_id: str,
         parent_decision_id: str,
@@ -95,10 +146,12 @@ def create_tools(context, *, checkpoint_provider):
             target_ids=target_ids,
             instructions=instructions,
             evidence_refs=[ref.model_dump(mode="json") for ref in evidence_refs],
+            refresh_inputs=refresh_inputs,
         )
         return {"state": "queued", "work_id": work_id, "coverage": target_ids}
 
     @function_tool(failure_error_function=None)
+    @_recoverable_tool
     async def get_validation_review_status() -> dict:
         """Return readiness and an exact history reference to full budgets/uncovered work.
 

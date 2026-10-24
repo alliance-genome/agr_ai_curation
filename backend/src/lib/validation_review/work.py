@@ -108,6 +108,7 @@ def mark_submitted(scope, work_id, lease_token):
         ):
             raise store.HistoryConflict("Review work lease is stale")
         row.state = "submitted"
+        row.lease_until = now() + timedelta(seconds=episode.policy["lease_seconds"])
         if episode.started_at is None:
             episode.started_at = now()
         append_fact(
@@ -141,7 +142,12 @@ def recover(scope, work_id):
         append_fact(
             db,
             episode.artifact_id,
-            operation_id="review-recovery:" + row.id + ":" + str(row.lease_token),
+            operation_id="review-recovery:"
+            + row.id
+            + ":"
+            + str(row.lease_token)
+            + ":"
+            + row.state,
             kind="review_recovery",
             parent_id=episode.id,
             body={"work_id": row.id, "state": row.state, "reason": reason},
@@ -199,3 +205,36 @@ def mark_uncertain(scope, work_id, lease_token, *, reason):
             return
         row.state = "uncertain"
         _uncertainty(db, episode, row, reason)
+
+
+def heartbeat(scope, work_id, lease_token):
+    """Extend delivery ownership, never the fixed scientific review deadline."""
+    with store.SessionLocal.begin() as db:
+        episode, row = _locked(db, scope, work_id, require_open=True)
+        if (
+            row.lease_token != lease_token
+            or row.state not in {"claimed", "submitted"}
+            or row.lease_until <= now()
+        ):
+            raise ReviewStopped("worker_lease_lost", resource=work_id)
+        row.lease_until = now() + timedelta(seconds=episode.policy["lease_seconds"])
+
+
+def mark_not_admitted(scope, work_id, lease_token, *, reason, resource=None):
+    """A pre-send refusal is a known operational outcome, never a scientific answer."""
+    with store.SessionLocal.begin() as db:
+        episode, row = _locked(db, scope, work_id, require_open=False)
+        if row.lease_token != lease_token or row.state != "submitted":
+            raise store.HistoryConflict("Refusal does not match submitted work")
+        # No provider invocation was admitted. The executor stores operational
+        # failed completions separately, so a reviewer can acknowledge and retry.
+        row.state = "completed"
+        row.outcome = {"state": "not_admitted", "reason": reason, "resource": resource}
+        append_fact(
+            db,
+            episode.artifact_id,
+            operation_id="review-outcome:" + row.id,
+            kind="review_outcome",
+            parent_id=episode.id,
+            body={"work_id": row.id, "outcome": row.outcome},
+        )

@@ -980,6 +980,17 @@ def record_outcome(
     _publish(measurement)
 
 
+async def _record_outcome_async(measurement, **kwargs):
+    # Keep existing telemetry behavior, but never block the event loop on the
+    # review quota transaction. Direct synchronous callers retain record_outcome.
+    from src.lib.validation_review.provider import settle
+    reservation = measurement.get("_review_reservation")
+    if reservation is not None and not measurement.get("_published"):
+        await asyncio.to_thread(settle, reservation, kwargs.get("usage"))
+        measurement["_review_reservation"] = None
+    record_outcome(measurement, **kwargs)
+
+
 def _publish(measurement: dict[str, Any]) -> None:
     measurement["_published"] = True
     record = {key: value for key, value in measurement.items() if not key.startswith("_")}
@@ -1338,11 +1349,11 @@ class MeasuredModel(Model):
             from .run_history import record_model_history
             await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
             self._observe_tool_surface(measurement, None)
-            record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
+            await _record_outcome_async(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
             raise
         from .run_history import record_model_history
         self._observe_tool_surface(measurement, response)
-        record_outcome(
+        await _record_outcome_async(
             measurement,
             outcome="completed",
             usage=usage_from_model_response(response),
@@ -1433,7 +1444,7 @@ class MeasuredModel(Model):
             await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
             if terminal_response is None:
                 self._observe_tool_surface(measurement, None)
-                record_outcome(
+                await _record_outcome_async(
                     measurement,
                     outcome=_failure_outcome(exc),
                     error_type=type(exc).__name__,
@@ -1442,7 +1453,7 @@ class MeasuredModel(Model):
         finally:
             if terminal_response is not None:
                 self._observe_tool_surface(measurement, terminal_response)
-                record_outcome(
+                await _record_outcome_async(
                     measurement,
                     outcome=(terminal_type or "response.completed").removeprefix("response."),
                     usage=usage_from_provider_payload(getattr(terminal_response, "usage", None)),
@@ -1454,7 +1465,7 @@ class MeasuredModel(Model):
                 )
             else:
                 self._observe_tool_surface(measurement, None)
-                record_outcome(measurement, outcome="stream_closed_without_terminal_event")
+                await _record_outcome_async(measurement, outcome="stream_closed_without_terminal_event")
             aclose = getattr(stream, "aclose", None)
             if callable(aclose):
                 with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):

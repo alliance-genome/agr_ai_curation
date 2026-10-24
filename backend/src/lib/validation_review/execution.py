@@ -28,14 +28,23 @@ async def execute(
     execution. Model calls inherit the hard budget through the measured seam.
     The adapter returns per-attempt answers, never selected/public values.
     """
+    from src.lib.openai_agents.model_request_measurement import (
+        install_model_request_measurement,
+    )
+    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+
+    install_model_request_measurement()
     claim = await asyncio.to_thread(work.claim, scope, work_id)
     if claim is None:
         return {"state": "not_claimed", "work_id": work_id}
-    with store.SessionLocal() as db:
-        row = db.get(ValidationReviewWork, work_id)
-        episode_id = row.episode_id
-        ep, _ = admission.lock_episode(db, scope, episode_id)
-        artifact_id = ep.artifact_id
+
+    def details():
+        with store.SessionLocal() as db:
+            row = db.get(ValidationReviewWork, work_id)
+            ep, _ = admission.lock_episode(db, scope, row.episode_id)
+            return ep.id, ep.artifact_id, ep.policy["lease_seconds"]
+
+    episode_id, artifact_id, lease_seconds = await asyncio.to_thread(details)
     from copy import deepcopy
 
     payload = deepcopy(claim["payload"])
@@ -48,11 +57,19 @@ async def execute(
             else None
         ),
     }
-    budget = ExecutionBudget(scope, episode_id, payload["token_pool"], reviewer=False)
+    budget = ExecutionBudget(
+        scope, episode_id, payload["token_pool"], reviewer=False, work_id=work_id
+    )
     await asyncio.to_thread(work.mark_submitted, scope, work_id, claim["lease_token"])
     try:
         with budget_scope(budget):
-            results = await guarded_await(call(payload))
+            results = await _while_owned(
+                guarded_await(call(payload)),
+                scope,
+                work_id,
+                claim["lease_token"],
+                lease_seconds,
+            )
         if len(results) != len(expected) or {r.attempt_id for r in results} != set(
             expected
         ):
@@ -76,30 +93,103 @@ async def execute(
         return {"state": "completed", "work_id": work_id, **outcome}
     except (
         admission.ReviewStopped,
+        ContextRecoveryError,
         asyncio.TimeoutError,
         asyncio.CancelledError,
     ) as stopped:
-        # A cancellation can race a submitted provider call. Do not create a
-        # fictitious scientific failure or release uncertain charges.
-        await asyncio.to_thread(
-            work.mark_uncertain,
-            scope,
-            work_id,
-            claim["lease_token"],
-            reason=type(stopped).__name__,
+        reason = (
+            stopped.reason
+            if isinstance(stopped, admission.ReviewStopped)
+            else "unsupported_exact_context_admission"
+            if isinstance(stopped, ContextRecoveryError)
+            else "expired"
+            if isinstance(stopped, asyncio.TimeoutError)
+            else "cancelled"
         )
+        resource = getattr(stopped, "resource", None)
+        try:
+            if (
+                isinstance(stopped, (admission.ReviewStopped, ContextRecoveryError))
+                and not budget.execution.provider_admitted
+            ):
+                for attempt in expected:
+                    await asyncio.to_thread(
+                        store.complete_attempt,
+                        scope,
+                        artifact_id,
+                        attempt,
+                        state="failed",
+                        result=None,
+                        diagnostics={
+                            "operational_state": "not_admitted",
+                            "reason": reason,
+                            "resource": resource,
+                        },
+                    )
+                await asyncio.to_thread(
+                    work.mark_not_admitted,
+                    scope,
+                    work_id,
+                    claim["lease_token"],
+                    reason=reason,
+                    resource=resource,
+                )
+            else:
+                # Cancellation may race a submitted provider call. Retain charges.
+                await asyncio.to_thread(
+                    work.mark_uncertain,
+                    scope,
+                    work_id,
+                    claim["lease_token"],
+                    reason=reason,
+                )
+        except Exception as recording_error:
+            from .audit import report_operational_failure
+
+            report_operational_failure(recording_error)
+            stopped.add_note(
+                "Review stop recording failed; durable recovery is required"
+            )
         raise
     except Exception as error:
         # Submitted work remains recoverable/uncertain. Respect any existing
         # provider-error capture and mark ownership for enclosing runtimes.
         from .audit import report_operational_failure
 
-        await asyncio.to_thread(
-            work.mark_uncertain,
-            scope,
-            work_id,
-            claim["lease_token"],
-            reason=type(error).__name__,
-        )
+        try:
+            await asyncio.to_thread(
+                work.mark_uncertain,
+                scope,
+                work_id,
+                claim["lease_token"],
+                reason=type(error).__name__,
+            )
+        except Exception:
+            error.add_note(
+                "Uncertain outcome recording failed; durable recovery is required"
+            )
         report_operational_failure(error)
         raise
+
+
+async def _while_owned(awaitable, scope, work_id, token, lease_seconds):
+    async def pulse():
+        while True:
+            # Internal lease polling, derived from the frozen configurable lease.
+            await asyncio.sleep(lease_seconds / 3)
+            await asyncio.to_thread(work.heartbeat, scope, work_id, token)
+
+    task = asyncio.ensure_future(awaitable)
+    heartbeat = asyncio.create_task(pulse())
+    try:
+        done, _ = await asyncio.wait(
+            {task, heartbeat}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if heartbeat in done:
+            await heartbeat
+        return await task
+    finally:
+        for pending in (task, heartbeat):
+            if not pending.done():
+                pending.cancel()
+        await asyncio.gather(task, heartbeat, return_exceptions=True)

@@ -254,9 +254,9 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         # later human renewal creates a linked episode without resetting parent quotas.
         for attempt_id in attempts_by_target.get(unit["target_id"], ()):
             completion_id = completions.get(attempt_id)
-            if completion_id is None:
+            if completion_id is None and (unit["target_id"], attempt_id) not in reviewed_answers:
                 blockers.append({"target_id": unit["target_id"], "code": "execution_pending"})
-            elif (unit["target_id"], completion_id) not in reviewed_answers:
+            elif completion_id is not None and (unit["target_id"], completion_id) not in reviewed_answers:
                 blockers.append({"target_id": unit["target_id"], "code": "answer_review_pending"})
     manifest = {
         "schema_version": 1,

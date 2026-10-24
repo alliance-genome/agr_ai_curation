@@ -49,7 +49,6 @@ def test_tool_schema_cannot_choose_actor_episode_or_validator():
 
 
 def test_review_settings_are_forwarded_to_backend_and_worker():
-    from pathlib import Path
     import yaml
     from tests.unit.test_docker_compose_production import WORKSPACE_ROOT
 
@@ -119,3 +118,50 @@ def test_review_budget_counts_are_not_redacted_as_secrets():
     ):
         assert not _is_secret_key(name)
     assert _is_secret_key("api_token") and _is_secret_key("lease_token")
+
+
+@pytest.mark.asyncio
+async def test_tool_conflicts_and_target_limits_are_recoverable(monkeypatch):
+    import json
+    from agents import RunContextWrapper
+    from src.lib.validation_review import reads, scheduling
+    from src.lib.validation_review.admission import ReviewStopped
+    from src.lib.validation_history import store
+
+    context = ReviewContext(
+        HistoryScope("owner", "doc", "session"), "episode", "reviewer"
+    )
+    tools = {t.name: t for t in create_tools(context, checkpoint_provider=Mock())}
+    monkeypatch.setattr(
+        reads, "read", Mock(side_effect=store.HistoryConflict("stale SHA"))
+    )
+    result = await tools["read_validation_history"].on_invoke_tool(
+        RunContextWrapper(None),
+        json.dumps({"fact_id": "f", "sha256": "s", "offset": 0}),
+    )
+    assert result["state"] == "conflict" and not result["applied"]
+    monkeypatch.setattr(
+        scheduling,
+        "reconsider",
+        Mock(side_effect=ReviewStopped("scientific_attempts_exhausted", resource="t")),
+    )
+    args = json.dumps(
+        {
+            "operation_id": "op",
+            "parent_decision_id": "d",
+            "target_ids": ["t"],
+            "instructions": "retry",
+            "evidence_refs": [],
+        }
+    )
+    result = await tools["request_validation_reconsideration"].on_invoke_tool(
+        RunContextWrapper(None), args
+    )
+    assert result["state"] == "not_applied" and result["targets"] == ["t"]
+    monkeypatch.setattr(
+        scheduling, "reconsider", Mock(side_effect=ReviewStopped("expired"))
+    )
+    with pytest.raises(ReviewStopped, match="expired"):
+        await tools["request_validation_reconsideration"].on_invoke_tool(
+            RunContextWrapper(None), args
+        )

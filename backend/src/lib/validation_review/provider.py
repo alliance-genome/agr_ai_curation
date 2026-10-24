@@ -8,12 +8,19 @@ independent of optional cost telemetry and includes inherited nested calls.
 import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from uuid import uuid4
 
 from . import admission
 from src.lib.validation_history import store
+
+
+@dataclass
+class _ExecutionState:
+    deadline: float | None = None
+    clock_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    provider_admitted: bool = False
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,12 @@ class ExecutionBudget:
     token_pool: str
     reviewer: bool
     reviewer_agent_id: str | None = None
+    work_id: str | None = None
+    execution: _ExecutionState = field(default_factory=_ExecutionState, compare=False)
+
+    def __post_init__(self):
+        if self.reviewer and not self.reviewer_agent_id:
+            raise ValueError("Reviewer budget requires an explicit reviewer agent ID")
 
 
 ACTIVE_BUDGET = ContextVar("validation_review_budget", default=None)
@@ -63,7 +76,14 @@ async def guarded_await(awaitable):
     if budget is None:
         return await awaitable
     try:
-        timeout = remaining_seconds(budget)
+        # The persisted deadline is immutable. Read once, off the event loop;
+        # streaming deltas never take scope/artifact write locks. Admission at
+        # each model/tool and the executor heartbeat still observe cancellation.
+        async with budget.execution.clock_lock:
+            if budget.execution.deadline is None:
+                seconds = await asyncio.to_thread(remaining_seconds, budget)
+                budget.execution.deadline = asyncio.get_running_loop().time() + seconds
+        timeout = max(0, budget.execution.deadline - asyncio.get_running_loop().time())
     except BaseException:
         if hasattr(awaitable, "close"):
             awaitable.close()
@@ -85,7 +105,7 @@ async def admit_model(
     conversation_id,
     prompt,
     provider_hint,
-    agent=None
+    agent=None,
 ):
     budget = ACTIVE_BUDGET.get()
     if budget is None:
@@ -105,45 +125,52 @@ async def admit_model(
     # trusted runtime before entering this context, never silently ignored.
     if transport == "http" and model._get_client().max_retries != 0:
         raise admission.ReviewStopped("unsupported_hidden_http_retries")
-    request = NativeCapacityRequest(
-        model,
-        settings,
-        instructions=instructions,
-        tools=tools,
-        output_schema=output_schema,
-        handoffs=handoffs,
-        previous_response_id=previous_response_id,
-        conversation_id=conversation_id,
-        prompt=prompt,
-    )
-    from src.lib.config.models_loader import get_model
-    from src.lib.openai_agents.config import get_agent_model_capacity_overrides
+    from src.lib.openai_agents.model_context_view import ContextRecoveryError
 
-    wire = request._wire([])
-    if wire.get("context_management"):
-        raise admission.ReviewStopped("unsupported_native_compaction_accounting")
-    ceiling = wire.get("max_output_tokens")
-    if ceiling is None:
-        overrides = get_agent_model_capacity_overrides().get(
-            request.effective_model, {}
+    try:
+        request = NativeCapacityRequest(
+            model,
+            settings,
+            instructions=instructions,
+            tools=tools,
+            output_schema=output_schema,
+            handoffs=handoffs,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
         )
-        definition = get_model(request.effective_model)
-        ceiling = (
-            overrides["max_output_tokens"]
-            if "max_output_tokens" in overrides
-            else (definition.max_output_tokens if definition is not None else None)
+        from src.lib.config.models_loader import get_model
+        from src.lib.openai_agents.config import get_agent_model_capacity_overrides
+
+        wire = request._wire([])
+        if wire.get("context_management"):
+            raise admission.ReviewStopped("unsupported_native_compaction_accounting")
+        ceiling = wire.get("max_output_tokens")
+        if ceiling is None:
+            overrides = get_agent_model_capacity_overrides().get(
+                request.effective_model, {}
+            )
+            definition = get_model(request.effective_model)
+            ceiling = (
+                overrides["max_output_tokens"]
+                if "max_output_tokens" in overrides
+                else (definition.max_output_tokens if definition is not None else None)
+            )
+        if type(ceiling) is not int or ceiling <= 0:
+            raise admission.ReviewStopped("unsupported_output_ceiling")
+        # Preserve the existing permitted ceiling, and explicitly send it.
+        settings = replace(settings, max_tokens=ceiling)
+        request.set_settings(settings)
+        if request._wire([]).get("max_output_tokens") != ceiling:
+            raise admission.ReviewStopped("unsupported_output_override")
+        items = (
+            [{"role": "user", "content": input}] if isinstance(input, str) else input
         )
-    if type(ceiling) is not int or ceiling <= 0:
-        raise admission.ReviewStopped("unsupported_output_ceiling")
-    # Preserve the existing permitted ceiling, and explicitly send it.
-    settings = replace(settings, max_tokens=ceiling)
-    request.set_settings(settings)
-    if request._wire([]).get("max_output_tokens") != ceiling:
-        raise admission.ReviewStopped("unsupported_output_override")
-    items = [{"role": "user", "content": input}] if isinstance(input, str) else input
-    count = await guarded_await(request.count(items))
-    if type(count) is not int or count < 0:
-        raise admission.ReviewStopped("unsupported_input_count")
+        count = await guarded_await(request.count(items))
+        if type(count) is not int or count < 0:
+            raise admission.ReviewStopped("unsupported_input_count")
+    except ContextRecoveryError as exc:
+        raise admission.ReviewStopped("unsupported_exact_context_admission") from exc
     charges: dict[str, int] = {budget.token_pool: count + ceiling}
     from src.lib.observability.cost_context import get_agent_cost_identity
 
@@ -152,18 +179,21 @@ async def admit_model(
     )
     if budget.reviewer and agent_id == budget.reviewer_agent_id:
         charges["reviewer_turns"] = 1
-    rid = admission.reserve(
+    rid = await asyncio.to_thread(
+        admission.reserve,
         budget.scope,
         budget.episode_id,
         operation_id="provider:" + str(uuid4()),
         charges=charges,
         request={
+            "work_id": budget.work_id,
             "model": request.effective_model,
             "input_tokens": count,
             "output_ceiling": ceiling,
             "transport": transport,
         },
     )
+    budget.execution.provider_admitted = True
     return settings, (budget, rid, charges)
 
 
@@ -208,7 +238,7 @@ def wrap_budget_tools(tools):
         wrapped = copy(tool)
 
         async def invoke(ctx, arguments, _tool=tool):
-            charge_tool(_tool.name)
+            await asyncio.to_thread(charge_tool, _tool.name)
             return await guarded_await(_tool.on_invoke_tool(ctx, arguments))
 
         wrapped.on_invoke_tool = invoke
