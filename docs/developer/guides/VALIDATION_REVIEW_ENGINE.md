@@ -158,3 +158,105 @@ output ceiling against a 150k one-target initial pool leaves roughly 22k for inp
 This conservative refusal is visible; D does not silently lower output capacity.
 The fake-provider Runner test exercises the real factory, tools and measured seam
 without production calls. It does not replace H's representative live calibration.
+
+## Chat and direct-agent execution (ALL-1443)
+
+Actual chat routes opt into `validation_review.chat.ChatReview` through the
+server's `inline_chat_persistence` capability. Route labels alone do not activate
+review: shared Studio, flow and benchmark runners retain their explicit lifecycle
+until their own integration work. No deployment is implied by the integration branch.
+
+The extractor's immutable artifact is planned and saved as a discoverable CHAT
+result before initial validator work. The saved plan freezes target-to-binding
+relationships, custom revision pins and executable definitions. Initial calls and
+reconsideration use the same admitted durable work executor. Completion and the
+normalized candidate recipe commit together; only explicit decisions publish a
+selected checkpoint. Curation preparation checks that checkpoint against the same
+source hash and refuses pending results. Initial validation is not repeated by
+curation bootstrap.
+
+After initial answers, the actual supervisor enters a bounded continuation with
+its existing model, settings and policy. Direct/preferred/custom extraction resolves
+the requested supervisor settings for this phase. The runtime replaces its tool
+surface with review/history operations and document-scoped read-only tools, and
+removes handoffs. No generic agent dispatch, extraction, workflow edits or
+model-selected validator replacement is available. A reconsideration uses the
+saved binding and rechecks authorization/configuration before provider submission.
+Validators retain supplied-context-only tools; they never inherit paper readers.
+The supervisor reports a need for new extraction or workflow changes to the curator.
+
+Dependent initial validation can advance only after its configured prerequisites
+have explicit current selections. Selector callbacks run without provider calls
+and pin the exact selected prerequisites. A later retry is an explicit charged
+reconsideration, not an automatic dependency rerun. Scientific acceptance,
+including acceptance with caveats, belongs to the supervisor; readiness and
+ownership checks are structural.
+
+One durable document operation may discover several extraction artifacts. Its
+`discovered_document_run` scope registers append-only coverage once per new
+artifact, adding only the existing per-target/episode allowances. The shared
+16-extra-attempt default is not multiplied by the number of extractors. Policy,
+existing episode deadlines and consumed budgets survive resume. All limits remain
+configured through the existing `VALIDATION_REVIEW_*` environment settings.
+
+Chat dispatch fences prevent a reconnect to the same turn/tool/input from blindly
+resubmitting an uncertain extraction. Stop cancels active processing without
+permanently cancelling the review episode. Saved results remain discoverable;
+queued review work can resume, while ambiguous provider submissions are retained
+as uncertain and are not replayed. Late validator answers retain their immutable
+completion and candidate recipe. Expired work never gets an automatic fresh quota.
+A genuinely new curator extraction request has a new durable turn and preserves
+the earlier source/history.
+
+Terminal `validation_review` metadata comes from the ledger, independently of model
+prose. Pending results also get a visible chat notice. Source inspection remains
+available, but selected exports and curation preparation cannot claim pending
+results are complete. TraceReview's `validation_review.*` timeline includes saved
+plans, coverage grants, executable validator configuration and supervisor phases.
+Expected budget/deadline stops are pending outcomes; operational failures use the
+existing sanitized reporting owner.
+
+Direct extractor follow-ups first use the resolved supervisor to interpret the
+curator's intent. Continuing saved review does not invoke extraction. Only an
+explicit fresh-extraction request permits the already chosen extractor; the
+routing phase has no tools or handoffs and cannot select a different agent.
+Its decision is durably fenced per turn. Lookup, Q&A and formatter calls are not
+subject to the extraction fence. This ordinary intent-routing call does not
+create a review episode or replenish any review budget.
+
+The review phase has a separate trace name and decision actor, with the same
+resolved supervisor model/settings and group policy. Its locked review prompt
+replaces routing instructions; no instruction requests unavailable routing or
+inspection tools. Prompt layers and actual tools are recorded for TraceReview.
+Stop polls the shared cancellation signal during non-streaming review and
+validator work; real answers that arrive after cancellation remain in history.
+
+Direct extraction presentation uses the current selected checkpoint, scoped to
+the current extraction turn. Immutable originals are retained separately. The
+HTTP stream emits `VALIDATION_REVIEW_STATUS`, the durable assistant payload saves
+it, and the chat UI displays readiness independently of prose. Replaying a saved
+direct response refreshes owned references and current selected values without
+model calls or rewriting the historical transcript. Named-supervisor replay
+preserves historical prose and refreshes the separate review status.
+
+The D provider boundary still applies: hard review admission currently supports
+OpenAI Responses with SDK HTTP retries disabled. Unsupported providers are not
+silently switched and cannot receive unmetered review calls; their results remain
+pending with an operational refusal in the review history. This is a release
+constraint, not authorization to weaken admission or activate flows/benchmarks.
+
+The review supervisor's explanation and expected stop reason are append-only
+history facts, keyed by result, episode, actor and durable chat turn. Direct
+presentation and replay include the latest saved explanation; named-supervisor
+handoffs carry it even when a continuation invokes no extractor. Reconnecting
+the same completed review turn reuses that outcome without calling the reviewer
+again. A new curator turn can continue the same episode without resetting budgets.
+Explicit Stop produces a saved interruption notice rather than a provider-error
+alert. Restored chat badges are labelled as status at the time of the response;
+current delivery and authenticated replay still read readiness from the ledger.
+Only notes produced in the current turn are automatically appended to ordinary
+named-supervisor or lookup answers; earlier notes remain reference context. Direct
+saved-review presentation can show the latest notes alongside saved selections.
+Browser-cache restoration also labels readiness as historical. A request-local
+Stop flag survives SDK tool-task cancellation even when the SDK consumes the
+cancellation exception; the outer chat wrapper still reports interruption.

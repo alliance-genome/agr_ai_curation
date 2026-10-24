@@ -410,6 +410,7 @@ export function stripDuplicateEvidenceSections(content: string): string {
 }
 
 export function sanitizeStoredMessage(message: SerializedMessage): Message {
+  message = { ...message, validationReviewSnapshot: Boolean(message.validationReview) }
   const hasEvidenceRecords = (message.evidenceRecords?.length ?? 0) > 0
   const hasExplicitEvidenceCurationMetadata =
     typeof message.evidenceCurationSupported === 'boolean'

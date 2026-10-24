@@ -313,3 +313,34 @@ async def test_concurrent_identical_failure_propagates_to_all_awaiters():
     ok_factory = _CountingFactory(result="ok")
     assert await ledger.run_or_replay("ask_allele_specialist", "same", ok_factory) == "ok"
     assert ok_factory.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_named_fresh_and_replayed_handoff_keep_review_explanation(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from agents import Agent
+    from src.lib.openai_agents.agents import supervisor_agent as module
+    from src.lib.validation_review import chat_dispatch
+    from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+    note = "Extraction omitted an observation; ask curator before re-extraction."
+    review = SimpleNamespace(resume=AsyncMock(), supervisor_handoff=lambda: {
+        "status": {"pending_count": 1}, "review_outcomes": [{"outcome": {"output": note}}]})
+    calls = AsyncMock(return_value="Original manifest")
+    monkeypatch.setattr(module, "run_specialist_with_events", calls)
+    monkeypatch.setattr(module, "pop_last_supervisor_extraction_handoff", lambda: None)
+    monkeypatch.setattr("src.lib.openai_agents.streaming_tools.is_builder_materializer_agent", lambda agent: True)
+    dispatches = iter([{"claimed": True, "id": "dispatch"},
+                      {"claimed": False, "state": "completed", "result": {"output": "Original manifest"}}])
+    monkeypatch.setattr(chat_dispatch, "claim", lambda *args: next(dispatches))
+    monkeypatch.setattr(chat_dispatch, "complete", lambda *args: None)
+    token = ACTIVE_CHAT_REVIEW.set(review)
+    try:
+        for _ in range(2):
+            output = await module._run_streaming_specialist_tool(agent=Agent(name="extractor"),
+                tool_name="ask_extractor", specialist_name="extractor", ctx=SimpleNamespace(),
+                query="Extract", ledger=_make_ledger())
+            assert note in output
+    finally:
+        ACTIVE_CHAT_REVIEW.reset(token)
+    assert calls.await_count == 1

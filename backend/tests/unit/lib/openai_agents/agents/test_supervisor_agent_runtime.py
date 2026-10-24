@@ -35,6 +35,7 @@ def _patch_supervisor_prompt_bundle(monkeypatch, *, version: int = 1):
             if part
         )
         return SimpleNamespace(
+            layers=(),
             render=lambda: rendered,
             static_prefix=lambda: "Base prompt",
             hash=f"hash-{version}",

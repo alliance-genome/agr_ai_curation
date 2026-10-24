@@ -252,3 +252,15 @@ it('restores an interrupted turn without presenting it as completed', () => {
   }])
   expect(messages[0]).toMatchObject({ terminalState: 'turn_interrupted', terminalMessage: 'Request interrupted; try again later.' })
 })
+
+
+it('restores authoritative review status independently of completion prose', () => {
+  const review = { pending_count: 1, results: [{ result_ref: 'saved', episode_id: 'episode', ready: false }] }
+  const [message] = buildRestorableChatMessages([{
+    message_id: 'review', session_id: 'session', chat_kind: 'assistant_chat', role: 'assistant',
+    message_type: 'text', content: 'Everything is complete!', turn_id: 'turn', created_at: '2026-10-24T00:00:00Z',
+    payload_json: { validation_review: review },
+  }])
+  expect(message.validationReview).toEqual(review)
+  expect(message.validationReviewSnapshot).toBe(true)
+})

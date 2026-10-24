@@ -253,11 +253,10 @@ def binding_target(binding: CapturedArtifact, match) -> str:
     )
 
 
-def begin_jobs(
-    binding: CapturedArtifact, jobs, *, operation_id: str, receipt: dict
-) -> dict:
+def frozen_job_requests(binding, jobs):
+    """Shared immutable request shape for historical and admitted executions."""
     from .curator_authority import anchor_for_path
-    requests = [
+    return [
         {
             "target_id": request_target(binding, j),
             "binding_id": j.request.validator_binding_id,
@@ -277,12 +276,17 @@ def begin_jobs(
         }
         for j in jobs
     ]
+
+
+def begin_jobs(
+    binding: CapturedArtifact, jobs, *, operation_id: str, receipt: dict
+) -> dict:
     return store.begin_execution(
         binding.scope,
         binding.artifact_id,
         operation_id=operation_id,
         receipt=receipt,
-        requests=requests,
+        requests=frozen_job_requests(binding, jobs),
     )
 
 
@@ -830,7 +834,7 @@ def capture_curator_objects(binding: CapturedArtifact, envelope, *, actor_id: st
 
 # Context follows the actual logical execution through existing runner adapters;
 # unrelated standalone lookups do not acquire fictional extraction obligations.
-ACTIVE_VALIDATION_EXECUTION = ContextVar("active_validation_execution", default=None)
+ACTIVE_VALIDATION_EXECUTION: ContextVar[tuple[CapturedArtifact, dict] | None] = ContextVar("active_validation_execution", default=None)
 
 
 def record_runner_receipt(agent, *, model: str, input_payload: dict) -> None:
@@ -877,7 +881,7 @@ def record_runner_receipt(agent, *, model: str, input_payload: dict) -> None:
             store._append(
                 db,
                 binding.artifact_id,
-                operation_id="runner-receipt:" + invocation["execution_id"],
+                operation_id="runner-receipt:" + invocation["execution_id"] + ":" + store.canonical(receipt)[0],
                 kind="runner_receipt",
                 parent_id=invocation["execution_id"],
                 body=receipt,

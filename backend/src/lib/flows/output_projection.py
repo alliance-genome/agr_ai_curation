@@ -1602,6 +1602,16 @@ def _build_artifact_from_step(
                 HistoryScope(user_id, source_document_id, review_session_id),
                 history_reference["artifact_id"],
             )
+        if history_reference and selected_reference is None:
+            return FlowOutputArtifact(
+                node_id=str(_step_attr(step, "node_id") or ""),
+                envelope_id=str(payload.get("envelope_id") or ""),
+                domain_pack_id=str(payload.get("domain_pack_id") or ""),
+                review_session_id=review_session_id, artifact_shape="domain_envelope",
+                source_key=str(_step_attr(step, "source_key") or _step_attr(step, "node_id") or payload.get("envelope_id") or ""),
+                is_canonical_curation_data=True,
+                warnings=["Validation review is pending; inspect the original through result inspection."],
+            )
         if selected_reference is not None:
             if not user_id or not review_session_id:
                 raise ValueError("Selected output requires authenticated source scope")

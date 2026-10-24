@@ -17,6 +17,7 @@ class ValidatorOutcome:
     state: str
     result: dict | None
     diagnostics: dict
+    candidate: dict | None = None
 
 
 async def execute(
@@ -85,6 +86,7 @@ async def execute(
                 state=result.state,
                 result=result.result,
                 diagnostics=result.diagnostics,
+                candidate=result.candidate,
             )
         outcome = {"completion_attempts": list(expected)}
         await asyncio.to_thread(

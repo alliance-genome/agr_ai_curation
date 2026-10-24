@@ -6,6 +6,18 @@ from src.lib.domain_packs.validator_result_records import retain_validator_origi
 from . import store
 
 
+def validate_candidate_request(frozen, actual):
+    """Only returned declared optional destinations may extend the frozen recipe."""
+    allowed = {**frozen["expected_result_fields"], **(frozen.get("optional_result_fields") or {})}
+    if (any(actual[key] != value for key, value in frozen.items()
+            if key != "expected_result_fields")
+            or any(allowed.get(key) != value
+                   for key, value in actual["expected_result_fields"].items())
+            or any(actual["expected_result_fields"].get(key) != value
+                   for key, value in frozen["expected_result_fields"].items())):
+        raise store.HistoryConflict("Candidate request differs from frozen input")
+
+
 def _record_recipe(scope, artifact_id, item, source_envelope_revision):
     with store.SessionLocal.begin() as db:
         store._artifact(db, artifact_id, scope)
@@ -22,14 +34,7 @@ def _record_recipe(scope, artifact_id, item, source_envelope_revision):
         attempt = store._fact(db, artifact_id, completion.parent_id, kind="attempt")
         frozen = store._content(db, attempt)["input"]["request"]
         actual = item.request.model_dump(mode="json")
-        allowed = {**frozen["expected_result_fields"], **(frozen.get("optional_result_fields") or {})}
-        if (any(actual[key] != value for key, value in frozen.items()
-                if key != "expected_result_fields")
-                or any(allowed.get(key) != value
-                       for key, value in actual["expected_result_fields"].items())
-                or any(actual["expected_result_fields"].get(key) != value
-                       for key, value in frozen["expected_result_fields"].items())):
-            raise store.HistoryConflict("Candidate request differs from frozen input")
+        validate_candidate_request(frozen, actual)
         store._append(
             db, artifact_id, operation_id="candidate:" + completion.id,
             kind="candidate", parent_id=completion.id,

@@ -958,7 +958,8 @@ def test_fake_chat_history_repository_turn_lookup_requires_existing_session():
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_success(monkeypatch):
+@pytest.mark.parametrize("review_status", [None, {"pending_count": 1, "results": []}])
+async def test_chat_endpoint_success(monkeypatch, review_status):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
@@ -976,7 +977,7 @@ async def test_chat_endpoint_success(monkeypatch):
             ("user", "hello")
         ]
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
-        yield {"type": "RUN_FINISHED", "data": {"response": "final answer"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "final answer", "validation_review": review_status}}
 
     _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
@@ -986,6 +987,8 @@ async def test_chat_endpoint_success(monkeypatch):
         db=_db_stub(commits=commits),
     )
     assert result.response == "final answer"
+    assert result.validation_review == review_status
+    assert (repository.append_calls[-1].get("payload_json") or {}).get("validation_review") == review_status
     assert result.session_id == "session-1"
     assert commits == ["commit", "commit"]
     assert repository.get_or_create_calls == [
@@ -3068,3 +3071,28 @@ def _async_value(value):
         return value
 
     return _inner()
+
+
+@pytest.mark.asyncio
+async def test_nonstream_review_stop_saves_interruption_without_reporting_crash(monkeypatch):
+    from src.lib.validation_review.stops import ReviewInterrupted
+    repository = FakeChatHistoryRepository()
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
+    notices = []
+    def save_notice(**kwargs):
+        notices.append(kwargs)
+        return "turn_interrupted", kwargs["message"]
+    _patch_chat_impl(monkeypatch, "_persist_failure_notice", save_notice)
+    async def stream(**kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace"}}
+        raise ReviewInterrupted("Curator stopped review")
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", stream)
+    response = await chat.chat_endpoint(chat.ChatMessage(message="continue", session_id="session", turn_id="turn"),
+                                       {"sub": "user-1", "cognito:groups": []}, db=_db_stub(commits=[]))
+    assert "review was stopped" in response.response
+    assert notices[0]["failure_state"] == "turn_interrupted"

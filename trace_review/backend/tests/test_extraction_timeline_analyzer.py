@@ -614,3 +614,15 @@ def test_validation_review_operations_keep_exact_history_refs(tmp_path, monkeypa
     result = ExtractionTimelineAnalyzer.analyze(trace_id='review', raw_trace={}, observations=[], include_raw_outputs=True)
     assert result['validation_review']['event_count'] == 1
     assert result['validation_review']['events'][0]['output']['preview']['fact_id'] == 'decision-fact'
+
+
+def test_chat_review_plan_coverage_and_phase_are_visible(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    kinds = ['review_chat_plan', 'review_coverage', 'review_validator_config', 'chat_phase']
+    for sequence, kind in enumerate(kinds, 1):
+        _write_event(tmp_path, 'chat-review', _event('chat-review', sequence, 'validation_review.' + kind,
+            output_summary={'preview': {'artifact_id': 'artifact', 'episode_id': 'episode',
+                                        'actor_id': 'supervisor', 'plan_ref': 'plan'}}))
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='chat-review', raw_trace={}, observations=[], include_raw_outputs=True)
+    assert result['validation_review']['event_count'] == 4
+    assert [item['event_type'] for item in result['validation_review']['events']] == ['validation_review.' + kind for kind in kinds]

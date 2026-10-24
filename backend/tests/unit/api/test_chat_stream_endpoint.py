@@ -158,6 +158,7 @@ def _stub_stream_turn_persistence(monkeypatch):
         persisted_extraction_refs=None,
         document_id: str | None = None,
         flow_terminal_events=None,
+        validation_review=None,
         failure_message=None,
         failure_state="turn_failed",
     ):
@@ -185,7 +186,8 @@ def _stub_stream_turn_persistence(monkeypatch):
     chat.executable_run_manager._active_session_run_ids.clear()
 
 
-def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
+@pytest.mark.parametrize("review_stop", [False, True])
+def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch, review_stop):
     calls = {"register": [], "unregister": [], "clear": []}
 
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
@@ -218,6 +220,9 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
 
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
+        if review_stop:
+            from src.lib.validation_review.stops import ReviewInterrupted
+            raise ReviewInterrupted("Curator stopped validation review")
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
     _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
@@ -236,7 +241,10 @@ def test_chat_stream_endpoint_cleans_up_after_stream_is_consumed(monkeypatch):
     assert isinstance(response, StreamingResponse)
 
     events = asyncio.run(_consume_stream(response))
-    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_interrupted" if review_stop else "turn_completed"]
+    if review_stop:
+        assert "review was stopped" in events[-1]["message"]
+        assert "unexpected" not in str(events) and "SUPERVISOR_ERROR" not in str(events)
 
     assert calls["register"] == [("session-chat-stream", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-chat-stream", "auth-sub", ANY)]
@@ -645,7 +653,8 @@ def test_chat_stream_endpoint_sanitizes_prepare_turn_validation_error(monkeypatc
     assert calls["clear"] == ["session-stream-invalid"]
 
 
-def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch):
+@pytest.mark.parametrize("review_status", [None, {"pending_count": 1, "results": []}])
+def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch, review_status):
     captured_backfill_calls = []
 
     _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
@@ -690,7 +699,7 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
 
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
-        yield {"type": "RUN_FINISHED", "data": {"response": "assistant reply"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "assistant reply", "validation_review": review_status}}
 
     _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
     _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
@@ -710,7 +719,9 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
 
     events = asyncio.run(_consume_stream(response))
 
-    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", *(["VALIDATION_REVIEW_STATUS"] if review_status else []), "turn_completed"]
+    if review_status:
+        assert events[1]["validation_review"] == review_status
     assert captured_backfill_calls == [
         ("session-stream-title", "auth-sub", "assistant-aware-title")
     ]
@@ -2185,7 +2196,14 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
 
 
 @pytest.mark.parametrize("failed_summary", [False, True])
-def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(monkeypatch, failed_summary):
+@pytest.mark.parametrize("has_review", [False, True])
+def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(monkeypatch, failed_summary, has_review):
+    review_status = {"pending_count": 0, "results": []} if has_review else None
+    refreshed = []
+    def refresh(**kwargs):
+        refreshed.append(kwargs)
+        return review_status
+    monkeypatch.setattr("src.lib.validation_review.chat.refresh_saved_status", refresh)
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -2199,7 +2217,7 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
         turn_id="turn-replay",
         content="stored response",
         trace_id="trace-replay",
-        payload_json={"terminal_state": "turn_failed", "terminal_message": "Saved results; summary failed"} if failed_summary else None,
+        payload_json={**({"terminal_state": "turn_failed", "terminal_message": "Saved results; summary failed"} if failed_summary else {}), **({"validation_review": {"pending_count": 1, "results": []}} if has_review else {})},
     )
     _patch_chat_impl(
         monkeypatch,
@@ -2258,10 +2276,17 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
 
     events = asyncio.run(_consume_stream(response))
 
-    assert [event["type"] for event in events] == ["TEXT_MESSAGE_CONTENT", "turn_failed" if failed_summary else "turn_completed"]
+    assert [event["type"] for event in events] == ["TEXT_MESSAGE_CONTENT", *(["VALIDATION_REVIEW_STATUS"] if has_review else []), "turn_failed" if failed_summary else "turn_completed"]
     assert events[0]["content"] == "stored response"
-    assert events[1]["turn_id"] == "turn-replay"
-    assert events[1]["trace_id"] == "trace-replay"
+    assert events[-1]["turn_id"] == "turn-replay"
+    assert events[-1]["trace_id"] == "trace-replay"
+
+
+    if has_review:
+        assert events[1]["validation_review"] == review_status
+        assert refreshed[0]["owner_id"] == "auth-sub"
+        assert refreshed[0]["session_id"] == "session-replay"
+        assert refreshed[0]["saved_status"]["pending_count"] == 1
 
 
 @pytest.mark.parametrize("file_first", [False, True])

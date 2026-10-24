@@ -413,6 +413,15 @@ def ensure_domain_envelope_materialization(
     db: Session | None = None,
 ) -> CurationPrepEnvelopeRef:
     envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
+    if extraction_result.metadata.get("chat_review") is not None:
+        from src.lib.validation_history.store import HistoryScope, SelectionNotReady
+        from src.lib.validation_history.projection import latest_publication_reference, read_published_projection
+        ref = extraction_result.metadata["chat_review"]
+        scope = HistoryScope(extraction_result.user_id, extraction_result.document_id, ref["history_scope_id"])
+        selected = latest_publication_reference(scope, ref["artifact_id"])
+        if selected is None:
+            raise SelectionNotReady("Chat validation review is pending")
+        read_published_projection(scope, selected, finalized=True)
     materializer = _review_row_materializer_for_extraction_result(
         extraction_result,
         domain_pack_id=envelope.domain_pack_id,

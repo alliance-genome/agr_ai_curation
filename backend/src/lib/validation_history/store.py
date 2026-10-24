@@ -567,6 +567,7 @@ def complete_attempt(
     state: Literal["completed", "incomplete", "failed", "interrupted", "unknown"],
     result: dict | None,
     diagnostics: dict,
+    candidate: dict | None = None,
 ) -> str:
     if state not in {"completed", "incomplete", "failed", "interrupted", "unknown"}:
         raise ValueError("Unknown attempt execution state")
@@ -584,6 +585,21 @@ def complete_attempt(
             parent_id=attempt.id,
             body={"state": state, "result": result, "diagnostics": diagnostics},
         )
+        if candidate is not None:
+            if result is None:
+                raise HistoryConflict("A failed attempt cannot have a candidate recipe")
+            frozen = _content(db, attempt)["input"]["request"]
+            from .candidates import validate_candidate_request
+            validate_candidate_request(frozen, candidate["request"])
+            reference = {
+                "artifact_id": artifact_id, "session_id": scope.session_id,
+                "attempt_id": attempt.id, "fact_id": completion.id,
+                "body_sha256": completion.body_sha, "execution_state": state,
+                "sequence": completion.sequence, "created_at": completion.created_at.isoformat(),
+            }
+            _append(db, artifact_id, operation_id="candidate:" + completion.id,
+                kind="candidate", parent_id=completion.id,
+                body={**candidate, "history_ref": reference})
         if not _attempt_is_current(db, scope, artifact_id, _content(db, attempt)):
             _append(
                 db,

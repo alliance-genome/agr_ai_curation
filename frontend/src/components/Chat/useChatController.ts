@@ -795,6 +795,13 @@ export function useChatController({
         return
       }
 
+      if (parsed.type === 'VALIDATION_REVIEW_STATUS' && turnId && parsed.validation_review) {
+        setMessages((prev) => prev.map((message) =>
+          message.role === 'assistant' && message.turnId === turnId
+            ? { ...message, validationReview: parsed.validation_review, validationReviewSnapshot: false } : message))
+        return
+      }
+
       if (isNonRenderedMetadataEvent(parsed.type)) {
         debug.log('[CHAT DEBUG] Received non-rendered chat metadata event', {
           type: parsed.type,

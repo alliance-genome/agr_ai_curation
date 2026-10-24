@@ -93,3 +93,34 @@ class ValidationReviewWork(Base):
     __table_args__ = (
         UniqueConstraint("episode_id", "operation_id", name="uq_review_work_operation"),
     )
+
+
+class ValidationReviewCoverage(Base):
+    """Append-only, server-derived coverage credits; never replenishes retries."""
+
+    __tablename__ = "validation_review_coverage"
+    artifact_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    episode_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
+    scope_id: Mapped[str] = mapped_column(
+        ForeignKey("validation_review_scopes.id"), nullable=False, index=True
+    )
+    targets: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    allowances: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["artifact_id", "episode_id"],
+            ["validation_facts.artifact_id", "validation_facts.id"],
+        ),
+    )
+
+
+class ChatReviewDispatch(Base):
+    """Durable extraction replay fence; started work is never silently replayed."""
+    __tablename__ = "chat_review_dispatches"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_id: Mapped[str] = mapped_column(String, nullable=False)
+    session_id: Mapped[str] = mapped_column(String, nullable=False)
+    turn_id: Mapped[str] = mapped_column(String, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    result: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))

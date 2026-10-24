@@ -5,6 +5,10 @@ import asyncio
 from .admission import ReviewStopped
 
 
+class ReviewInterrupted(asyncio.CancelledError):
+    """An explicit curator Stop, distinct from an unexpected transport cancellation."""
+
+
 def review_stop(error):
     from agents import UserError, MaxTurnsExceeded
     from src.lib.openai_agents.model_context_view import ContextRecoveryError

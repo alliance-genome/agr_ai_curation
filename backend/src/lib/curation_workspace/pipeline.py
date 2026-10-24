@@ -554,7 +554,19 @@ def _refresh_domain_envelope_validation_for_ref(
         profile_context=profile_context,
     )
     validator_envelope = structural_result.envelope
-    if envelope.metadata.get("inline_validator_dispatch_complete"):
+    if envelope.metadata.get("validation_review_runtime") == "chat":
+        from src.lib.validation_history.projection import read_published_projection_in_transaction
+        from src.lib.validation_history.store import HistoryScope, SelectionNotReady
+        if runtime_context is None:
+            raise SelectionNotReady("Chat review requires authenticated context")
+        selected = envelope.metadata.get("selected_projection")
+        if selected is None:
+            raise SelectionNotReady("Chat review must finish before curation preparation")
+        scope = HistoryScope(runtime_context.user_id, runtime_context.document_id,
+            envelope.metadata["validation_history"]["session_id"])
+        read_published_projection_in_transaction(db, scope, selected, finalized=True)
+    if (envelope.metadata.get("inline_validator_dispatch_complete")
+            or envelope.metadata.get("validation_review_runtime") == "chat"):
         # A1: the chat turn already dispatched the active validators and the findings are saved
         # on this envelope. Reuse them; run only the cheap structural checks here, do NOT re-run
         # the validator agents. (Curator edits re-validate via the session validation service.)

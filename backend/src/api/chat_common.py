@@ -1584,6 +1584,7 @@ def _persist_completed_chat_stream_turn(
     persisted_extraction_refs: Sequence[PersistedExtractionResultRef] | None = None,
     document_id: Optional[str],
     flow_terminal_events: Sequence[Dict[str, Any]] | None = None,
+    validation_review: Dict[str, Any] | None = None,
     failure_message: str | None = None,
     failure_state: str = "turn_failed",
 ) -> ChatMessageRecord:
@@ -1665,9 +1666,10 @@ def _persist_completed_chat_stream_turn(
                 trace_id=trace_id,
                 payload_json=(
                     {
+                        **({"validation_review": validation_review} if validation_review else {}),
                         **({"terminal_state": failure_state, "terminal_message": failure_message} if failure_message else {}),
                         **({_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: list(flow_terminal_events)} if flow_terminal_events else {}),
-                    } if failure_message or flow_terminal_events else None
+                    } if failure_message or flow_terminal_events or validation_review else None
                 ),
             )
             _link_persisted_extraction_results_to_chat_turn(

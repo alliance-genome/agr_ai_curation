@@ -68,6 +68,7 @@ class ChatResponse(BaseModel):
     """Response model for non-streaming chat."""
     response: str
     session_id: str
+    validation_review: Optional[Dict[str, Any]] = None
 
 
 class SessionResponse(BaseModel):
