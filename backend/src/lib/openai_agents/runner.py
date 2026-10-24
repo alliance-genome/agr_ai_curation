@@ -2197,7 +2197,8 @@ async def _run_agent_with_owned_resources(
                 execution_receipt=builder_workspace.execution_receipt,
                 builder_finalization=finalization,
                 source_metadata={"execution_context": direct_execution_context.model_dump(mode="json") if direct_execution_context else None,
-                                 "trace_id": trace_id},
+                                 "trace_id": trace_id,
+                                 "specialist_explanation": getattr(result, "final_output", None)},
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=document_id,
                     user_id=user_id,
@@ -2326,7 +2327,10 @@ async def _run_agent_with_owned_resources(
         authored_explanation = getattr(result, "final_output", None)
         if authored_explanation is None:
             authored_explanation = final_message_text if final_message_text is not None else (full_response or None)
-        if isinstance(authored_explanation, str):
+        if (isinstance(authored_explanation, str)
+                and finalization.payload.get("metadata", {}).get("validation_review_runtime") != "chat"):
+            # Chat review already persisted the immutable source; prose belongs
+            # to its first-write metadata, not a second payload version.
             finalization = replace(
                 finalization,
                 payload={**finalization.payload, "specialist_explanation": authored_explanation},

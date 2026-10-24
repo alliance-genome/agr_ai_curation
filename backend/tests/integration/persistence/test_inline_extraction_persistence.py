@@ -170,6 +170,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
     """Actual package stage/finalize -> runner -> committed SQL -> chat ref, no provider."""
     import json
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock
     from agents import Agent
     from agents.tool_context import ToolContext
     from src.api import chat_common
@@ -196,13 +197,37 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
 
     monkeypatch.setattr(runner, "_run_agent_with_tracing", with_resources)
     tool_context = catalog_service.ToolExecutionContext(database_url="unused")
-    agent = Agent(name="Synthetic direct gene", model="gpt-5.6-sol", tools=[
+    agent = Agent(name="Synthetic direct gene", model="gpt-6-astra", tools=[
         catalog_service._resolve_package_tool(name, tool_context)
         for name in ("stage_gene_mention_evidence", "finalize_gene_extraction")
     ])
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    attach_agent_cost_identity(agent, {"agent_id": "gene_extractor", "agent_role": "extractor"})
     agent.agent_key = "gene_extractor"
     agent.curation_metadata = {"launchable": True, "adapter_key": "gene"}
     captured = {}
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    monkeypatch.setattr("src.lib.prompts.assembly.build_agent_prompt_layers",
+                        lambda *a, **k: SimpleNamespace(layers=(), hash="fixture"))
+    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False))
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda *args: [])
+
+    async def initial(adapter):
+        # Replace provider execution, but prove the real chat checkpoint is
+        # committed before the initial-validator boundary can be entered.
+        with SessionLocal() as reader:
+            rows = reader.scalars(select(ExtractionResultModel).where(
+                ExtractionResultModel.document_id == document_id)).all()
+            assert len(rows) == 1
+            captured["pending_payload"] = rows[0].payload_json
+            assert rows[0].extraction_metadata["chat_review"]["episode_id"] == adapter.episode_id
+
+    from src.lib.validation_review.validator_adapter import ValidatorAdapter
+    monkeypatch.setattr(ValidatorAdapter, "initial", initial)
+    monkeypatch.setattr(ValidatorAdapter, "advance", AsyncMock())
+    monkeypatch.setattr("src.lib.validation_review.reviewer.run", AsyncMock(return_value={
+        "output": "Saved for explicit review", "reason": "pending",
+    }))
 
     class Result:
         final_output = "Finalized one synthetic gene; not a canonical envelope."
@@ -263,10 +288,10 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
                     continue
                 assert len(records) == 1
                 record = records[0]
-                assert record.payload_json == {
-                    **captured["validated"].model_dump(mode="json"),
-                    "specialist_explanation": Result.final_output,
-                }
+                assert record.payload_json == captured["pending_payload"]
+                assert record.payload_json["metadata"]["validation_review_runtime"] == "chat"
+                assert record.payload_json["extracted_objects"]
+                assert record.extraction_metadata["specialist_explanation"] == Result.final_output
                 assert record.origin_session_id == session_id
                 assert record.trace_id == captured["trace_id"]
                 assert record.user_id == "test_pdf_owner_inline_extraction"
@@ -290,8 +315,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
         internal[0], tool_agent_map={}, conversation_summary=None) is None
     # The actual persistence primitive's stable identity is reusable, not another row.
     again = persist_inline_validated_extraction_result(
-        payload_json={**captured["validated"].model_dump(mode="json"),
-                      "specialist_explanation": Result.final_output},
+        payload_json=captured["pending_payload"],
         document_id=document_id, agent_key="gene_extractor",
         adapter_key="gene", tool_name="gene_extractor", source_kind=CurationExtractionSourceKind.CHAT,
         origin_session_id=session_id, trace_id=captured["trace_id"], user_id="test_pdf_owner_inline_extraction",
@@ -310,9 +334,10 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
     with SessionLocal() as reader:
         preview = build_chat_curation_prep_preview(
             session_id=session_id, user_id="test_pdf_owner_inline_extraction", db=reader)
-    assert preview.ready
+    assert not preview.ready
     assert preview.extraction_result_count == 1
-    assert preview.preparable_candidate_count == 1
+    assert preview.preparable_candidate_count == 0
+    assert events[-1]["data"]["validation_review"]["pending_count"] == 1
 
 
 def _persist(

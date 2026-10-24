@@ -6516,7 +6516,10 @@ async def run_specialist_with_events(
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
-    if builder_finalization is not None and specialist_explanation is not None:
+    if (builder_finalization is not None and specialist_explanation is not None
+            and builder_finalization.payload.get("metadata", {}).get("validation_review_runtime") != "chat"):
+        # Reviewed chat sources were saved before validation with explanation
+        # metadata. Keep their canonical payload unchanged for idempotent reuse.
         builder_finalization = replace(
             builder_finalization,
             payload={**builder_finalization.payload, "specialist_explanation": specialist_explanation},
