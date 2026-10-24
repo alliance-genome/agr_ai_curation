@@ -1008,6 +1008,90 @@ class _DirectBuilderChatContext:
     turn_id: str | None
 
 
+def _chat_review_terminal(event, status):
+    """A current ledger notice is never replayed from an older model response."""
+    note = ""
+    if status["pending_count"]:
+        note = ("\n\nValidation review is still pending for "
+            f"{status['pending_count']} saved result(s). These results are inspectable "
+            "but are not ready for final export or curation preparation.")
+    response = event["data"]["response"] + note
+    return {**event, "data": {**event["data"], "validation_review": status,
+        "response": response, "response_length": len(response)}}, note
+
+
+async def _run_agent_with_chat_review(*, review_context, **kwargs):
+    """Keep chat-only capability out of flow, benchmark and Studio execution."""
+    from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+    token = ACTIVE_CHAT_REVIEW.set(review_context)
+    try:
+        is_direct = (review_context is not None and kwargs.get("direct_chat_context") is not None
+                     and (getattr(kwargs["agent"], "generic_profile", None) is not None
+                          or is_builder_materializer_agent(kwargs["agent"])))
+        if is_direct:
+            action = await review_context.direct_action(kwargs["agent"], kwargs.get("input_items", []))
+            if action.action == "continue_review":
+                await review_context.resume()
+                selected, status = await asyncio.to_thread(review_context.direct_delivery)
+                response = action.explanation + "\n\n" + selected
+                terminal, _ = _chat_review_terminal(
+                    {"type": "RUN_FINISHED", "data": {"response": response, "trace_id": kwargs["trace_id"]}}, status)
+                yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": terminal["data"]["response"], "observer_reconcile": True}}
+                yield terminal
+                return
+        elif review_context is not None:
+            await review_context.resume()
+        direct_dispatch = None
+        if is_direct:
+            from src.lib.validation_review import chat_dispatch
+            from src.lib.observability.cost_context import get_agent_cost_identity
+            direct_dispatch = await asyncio.to_thread(chat_dispatch.claim, review_context,
+                "direct:" + get_agent_cost_identity(kwargs["agent"])["agent_id"], kwargs["user_message"])
+            if not direct_dispatch["claimed"]:
+                await review_context.resume()
+                if direct_dispatch["state"] == "completed":
+                    terminal = direct_dispatch["result"]
+                else:
+                    terminal = {"type": "RUN_FINISHED", "data": {"response":
+                        "The previous extraction did not finish. Saved results and validation history remain available; the uncertain extraction was not repeated.",
+                        "trace_id": kwargs["trace_id"]}}
+                selected, status = await asyncio.to_thread(review_context.direct_delivery, current_turn_only=True)
+                response = selected if direct_dispatch["state"] == "completed" else terminal["data"]["response"] + "\n\n" + selected
+                terminal = {**terminal, "data": {**terminal["data"], "response": response}}
+                terminal, _ = _chat_review_terminal(terminal, status)
+                yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": terminal["data"]["response"]}}
+                yield terminal
+                return
+        stream = _run_agent_with_groq_retry(**kwargs)
+        try:
+            async for event in stream:
+                # Direct extraction text is provisional. Only the selected result
+                # is delivered as the final answer after the review continuation.
+                if direct_dispatch is not None and event.get("type") in {"TEXT_MESSAGE_CONTENT", "STRUCTURED_RESULT"}:
+                    continue
+                if review_context is not None and event.get("type") == "RUN_FINISHED":
+                    # Retain the raw result once. Current readiness is regenerated
+                    # on every delivery, including a reconnect after later review.
+                    if direct_dispatch is not None:
+                        await asyncio.to_thread(chat_dispatch.complete, review_context, direct_dispatch["id"], event)
+                    await review_context.resume()
+                    if direct_dispatch is not None:
+                        selected, status = await asyncio.to_thread(review_context.direct_delivery, current_turn_only=True)
+                        event = {**event, "data": {**event["data"], "response": selected}}
+                    else:
+                        status = await asyncio.to_thread(review_context.status)
+                    event, note = _chat_review_terminal(event, status)
+                    if direct_dispatch is not None:
+                        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": event["data"]["response"], "observer_reconcile": True}}
+                    elif note:
+                        yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": note}}
+                yield event
+        finally:
+            await stream.aclose()
+    finally:
+        ACTIVE_CHAT_REVIEW.reset(token)
+
+
 async def _run_agent_with_groq_retry(
     *,
     agent: Agent,
@@ -2086,6 +2170,9 @@ async def _run_agent_with_owned_resources(
                 source_agent_key=canonical_agent_key,
                 is_builder_envelope=True,
                 execution_receipt=builder_workspace.execution_receipt,
+                builder_finalization=finalization,
+                source_metadata={"execution_context": direct_execution_context.model_dump(mode="json") if direct_execution_context else None,
+                                 "trace_id": trace_id},
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=document_id,
                     user_id=user_id,
@@ -2723,6 +2810,32 @@ async def run_agent_streamed(
             extra={"user_id": user_id, "session_id": session_id},
         )
 
+    review_context = None
+    if inline_chat_persistence and chat_route_mode in {"automatic", "agent"} and document_id:
+        if not session_id or not turn_id:
+            raise ValueError("Chat review requires a durable session and turn")
+        from src.lib.validation_review.chat import ChatReview
+        review_supervisor = agent
+        if provided_runtime_agent:
+            # Resolve the same supervisor settings the caller requested for ordinary
+            # chat. Never silently use the standalone reviewer's catalog defaults.
+            from src.lib.validation_review.reviewer import create_direct_supervisor
+            review_supervisor = create_direct_supervisor(active_groups=active_groups,
+                model_override=supervisor_model, temperature_override=supervisor_temperature,
+                reasoning_override=supervisor_reasoning)
+        from src.lib.validation_review.protocol import CHAT_REVIEW_HANDOFF_PROTOCOL
+        if not isinstance(review_supervisor.instructions, str):
+            raise ValueError("Chat review requires resolved supervisor instructions")
+        review_supervisor.instructions += "\n\n" + CHAT_REVIEW_HANDOFF_PROTOCOL
+        review_supervisor.tool_surface_base_instructions = review_supervisor.instructions
+        from src.lib.prompts.context import append_pending_prompt_runtime_context
+        append_pending_prompt_runtime_context(review_supervisor,
+            layer_id_suffix="chat_review_handoff", title="Chat validation review handoff",
+            content=CHAT_REVIEW_HANDOFF_PROTOCOL,
+            source_ref="src.lib.validation_review.protocol:CHAT_REVIEW_HANDOFF_PROTOCOL")
+        review_context = ChatReview(user_id, document_id, session_id, turn_id,
+            review_supervisor, tuple(active_groups or ()), user_message)
+
     # Pending prompts for this agent are committed right before its run starts
     # (_run_agent_with_owned_resources), once the compiled tool surface has
     # added any runtime prompt layer.
@@ -2914,7 +3027,8 @@ async def run_agent_streamed(
                 try:
                     # Run agent inside the active span context
                     # All OpenAI calls will automatically be children of root_span
-                    agent_stream = _run_agent_with_groq_retry(
+                    agent_stream = _run_agent_with_chat_review(
+                        review_context=review_context,
                         agent=agent,
                         input_items=input_items,
                         user_id=user_id,
@@ -3211,7 +3325,8 @@ async def run_agent_streamed(
             write_stream_event(supervisor_start_event, trace_id=fallback_trace_id)
             yield supervisor_start_event
             try:
-                agent_stream = _run_agent_with_groq_retry(
+                agent_stream = _run_agent_with_chat_review(
+                        review_context=review_context,
                     agent=agent,
                     input_items=input_items,
                     user_id=user_id,
@@ -3274,7 +3389,8 @@ async def run_agent_streamed(
         write_stream_event(supervisor_start_event, trace_id=fallback_trace_id)
         yield supervisor_start_event
         try:
-            agent_stream = _run_agent_with_groq_retry(
+            agent_stream = _run_agent_with_chat_review(
+                        review_context=review_context,
                 agent=agent,
                 input_items=input_items,
                 user_id=user_id,

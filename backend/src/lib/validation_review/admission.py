@@ -13,6 +13,7 @@ from .audit import append_fact
 from src.models.sql.validation_history import ValidationFact
 from src.models.sql.validation_review import (
     ValidationReviewScope as Scope,
+    ValidationReviewCoverage as Coverage,
     ValidationReviewEpisode as Episode,
     ValidationReviewReservation as Reservation,
 )
@@ -36,19 +37,21 @@ def create_scope(
     history_scope, *, operation_id, kind, targets, episodes, parent_id=None
 ):
     """Called by authenticated orchestration, never with model-created cardinalities."""
-    if kind not in {"batch", "workspace_operation", "document_run"}:
+    if kind not in {"batch", "workspace_operation", "document_run", "discovered_document_run"}:
         raise ValueError("Unknown review scope kind")
     if (
         type(targets) is not int
         or type(episodes) is not int
         or targets < 0
-        or episodes < 1
+        or episodes < (0 if kind == "discovered_document_run" else 1)
     ):
         raise ValueError("Trusted scope requires target and episode cardinalities")
+    if kind == "discovered_document_run" and (targets or episodes or parent_id):
+        raise ValueError("Discovered document scopes register coverage at admission")
     limits = ReviewLimits.configured()
     extras = limits.extra_per_batch if kind == "batch" else limits.extra_per_run
     contract = {
-        "document_id": history_scope.document_id if kind == "document_run" else None,
+        "document_id": history_scope.document_id if kind in {"document_run", "discovered_document_run"} else None,
         "targets": targets,
         "episodes": episodes,
         "policy": limits.snapshot(),
@@ -162,7 +165,7 @@ def attach_episode(
         chain = _scope_chain(db, scope_id, history_scope.owner_id)
         run = chain[-1]
         if (
-            run.kind != "document_run"
+            run.kind not in {"document_run", "discovered_document_run"}
             or run.contract["document_id"] != history_scope.document_id
         ):
             raise store.HistoryAccessError("Episode requires its document-run scope")
@@ -221,9 +224,25 @@ def attach_episode(
             # Component targets are partitions of one binding invocation.
             targets.add(target.parent_id if "decision_unit" in content else target.id)
         policy = ReviewLimits(**run.contract["policy"])
+        discovered = run.kind == "discovered_document_run"
+        if discovered and predecessor_id is None:
+            coverage = db.get(Coverage, artifact_id)
+            if coverage is not None:
+                raise store.HistoryConflict("Artifact coverage already belongs to a review operation")
+            credits = policy.allowances(targets=len(targets), episodes=1, extras=0)
+            db.add(Coverage(
+                artifact_id=artifact_id, episode_id=episode_id, scope_id=run.id,
+                targets=sorted(targets), allowances=credits,
+            ))
+            append_fact(
+                db, artifact_id, operation_id="review-coverage:" + episode_id,
+                kind="review_coverage", parent_id=episode_id,
+                body={"scope_id": run.id, "targets": sorted(targets), "credits": credits},
+            )
         admitted = db.scalars(select(Episode).where(Episode.scope_id == run.id)).all()
         if (
-            predecessor_id is None
+            not discovered
+            and predecessor_id is None
             and sum(row.predecessor_id is None for row in admitted)
             >= run.contract["episodes"]
         ):
@@ -246,7 +265,8 @@ def attach_episode(
             if row.predecessor_id is None
         )
         if (
-            len(targets) + (previous_targets if predecessor_id is None else 0)
+            not discovered
+            and len(targets) + (previous_targets if predecessor_id is None else 0)
             > run.contract["targets"]
         ):
             raise store.HistoryConflict(
@@ -352,8 +372,15 @@ def lock_episode(db, history_scope, episode_id, *, require_open=True):
     return row, chain
 
 
-def _allowances(row):
-    return row.allowances if isinstance(row, Episode) else row.contract["allowances"]
+def _allowances(db, row):
+    if isinstance(row, Episode):
+        return row.allowances
+    allowances = dict(row.contract["allowances"])
+    if row.kind == "discovered_document_run":
+        for credits in db.scalars(select(Coverage.allowances).where(Coverage.scope_id == row.id)):
+            for key, value in credits.items():
+                allowances[key] += value
+    return allowances
 
 
 def reserve_in_transaction(
@@ -375,13 +402,13 @@ def reserve_in_transaction(
         return existing
     for row in [*chain, episode]:
         for key, amount in charges.items():
-            if key not in _allowances(row):
+            if key not in _allowances(db, row):
                 raise ValueError("Unknown review budget resource")
-            if row.charged.get(key, 0) + amount > _allowances(row)[key]:
+            if row.charged.get(key, 0) + amount > _allowances(db, row)[key]:
                 raise ReviewStopped("budget_exhausted", resource=key)
     for row in [*chain, episode]:
         for key, amount in charges.items():
-            before, limit = row.charged.get(key, 0), _allowances(row)[key]
+            before, limit = row.charged.get(key, 0), _allowances(db, row)[key]
             for threshold in (
                 episode.policy["warning_percent"],
                 episode.policy["critical_percent"],
@@ -502,10 +529,10 @@ def status(history_scope, episode_id):
         for row in [*chain, episode]:
             remaining = {
                 k: max(0, v - row.charged.get(k, 0))
-                for k, v in _allowances(row).items()
+                for k, v in _allowances(db, row).items()
             }
             budgets.append({"scope_id": row.id, "remaining": remaining})
-            for key, limit in _allowances(row).items():
+            for key, limit in _allowances(db, row).items():
                 consumed = row.charged.get(key, 0)
                 if (
                     limit

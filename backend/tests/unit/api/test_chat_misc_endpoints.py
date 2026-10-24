@@ -958,7 +958,8 @@ def test_fake_chat_history_repository_turn_lookup_requires_existing_session():
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_success(monkeypatch):
+@pytest.mark.parametrize("review_status", [None, {"pending_count": 1, "results": []}])
+async def test_chat_endpoint_success(monkeypatch, review_status):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
@@ -976,7 +977,7 @@ async def test_chat_endpoint_success(monkeypatch):
             ("user", "hello")
         ]
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
-        yield {"type": "RUN_FINISHED", "data": {"response": "final answer"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "final answer", "validation_review": review_status}}
 
     _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
@@ -986,6 +987,8 @@ async def test_chat_endpoint_success(monkeypatch):
         db=_db_stub(commits=commits),
     )
     assert result.response == "final answer"
+    assert result.validation_review == review_status
+    assert (repository.append_calls[-1].get("payload_json") or {}).get("validation_review") == review_status
     assert result.session_id == "session-1"
     assert commits == ["commit", "commit"]
     assert repository.get_or_create_calls == [

@@ -44,3 +44,21 @@ policy independently; preserve caveats/questions when useful. Do not read the pa
 create or rewrite evidence, rerun extraction, or claim supervisor acceptance.
 </validation_reconsideration_protocol>
 """
+
+CHAT_REVIEW_HANDOFF_PROTOCOL = """
+<chat_validation_review_handoff>
+Extraction manifests describe saved original extraction, not supervisor acceptance.
+The runtime supplies authoritative validation_review status after specialist work.
+Use inspect_results to read the current selected values and exact original/history
+before reporting corrections. Do not infer readiness from a manifest or fluent prose.
+Pending results remain inspectable but cannot be finalized/exported or prepared for
+curation. Explain pending review without claiming completion. Preserve the existing
+two-turn curation-preparation confirmation requirement for ready results.
+
+When continuing saved work, reuse its results and review history. Do not rerun an
+extractor to repair a validator's answer or replenish a review budget. The restricted
+review continuation can revisit only saved authorized validator bindings. If fresh
+extraction or another workflow is necessary, explain that need to the curator; a
+new extraction requires the curator's request, not an automatic recovery loop.
+</chat_validation_review_handoff>
+"""

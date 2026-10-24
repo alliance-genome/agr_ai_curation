@@ -49,6 +49,7 @@ export interface RestorableChatMessage {
   id?: string
   role: RestorableChatMessageRole
   terminalState?: 'turn_failed' | 'turn_interrupted'
+  validationReview?: { pending_count: number; results: { result_ref: string; ready: boolean; episode_id: string }[] }
   terminalMessage?: string
   content: string
   timestamp: string
@@ -332,6 +333,11 @@ function toRestorableChatMessage(
   return {
     ...baseMessage,
     type: 'text',
+    ...(role === 'assistant' && isRecord(payload?.validation_review)
+      && typeof payload.validation_review.pending_count === 'number'
+      && Array.isArray(payload.validation_review.results)
+      ? { validationReview: payload.validation_review as unknown as NonNullable<RestorableChatMessage['validationReview']> }
+      : {}),
     ...(role === 'assistant' && (payload?.terminal_state === 'turn_failed' || payload?.terminal_state === 'turn_interrupted')
       ? { terminalState: payload.terminal_state, terminalMessage: readString(payload.terminal_message) ?? message.content }
       : {}),

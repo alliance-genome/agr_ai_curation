@@ -68,7 +68,8 @@ def _recoverable_tool(function):
     return invoke
 
 
-def create_tools(context, *, checkpoint_provider, refresh_inputs=None):
+def create_tools(context, *, checkpoint_provider, refresh_inputs=None,
+                 execute_work=None, advance_work=None, prepare_inputs=None):
     """Context and checkpoint loader come from authenticated runtime, never JSON."""
 
     @function_tool(failure_error_function=None)
@@ -118,13 +119,16 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None):
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """
         request = await asyncio.to_thread(checkpoint_provider)
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             decisions.record_decisions,
             context,
             checkpoint_request=request,
             operation_id=operation_id,
             entries=[entry.model_dump(mode="json") for entry in entries],
         )
+        if advance_work is not None:
+            result = {**result, "dependent_work": await advance_work()}
+        return result
 
     @function_tool(failure_error_function=None)
     @_recoverable_tool
@@ -142,6 +146,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None):
         Whole-binding retry coverage can exceed an individual decision unit.
         Returns queued work identity, not a validation result or acceptance.
         """
+        if prepare_inputs is not None:
+            await asyncio.to_thread(prepare_inputs)
         work_id = await asyncio.to_thread(
             scheduling.reconsider,
             context,
@@ -152,6 +158,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None):
             evidence_refs=[ref.model_dump(mode="json") for ref in evidence_refs],
             refresh_inputs=refresh_inputs,
         )
+        if execute_work is not None:
+            return {**await execute_work(work_id), "coverage": target_ids,
+                    "instruction": "Read the new answer and record a separate decision."}
         return {"state": "queued", "work_id": work_id, "coverage": target_ids}
 
     @function_tool(failure_error_function=None)

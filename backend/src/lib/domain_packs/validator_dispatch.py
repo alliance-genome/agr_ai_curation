@@ -444,22 +444,24 @@ def _with_returned_optional_fields(
     )
 
 
-def dispatch_active_validator_bindings(
-    envelope: DomainEnvelope,
-    domain_pack: LoadedDomainPack,
-    *,
-    actor_id: str = "domain_validator_dispatch",
-    registry: DomainPackValidationRegistry | None = None,
-    runner: DomainValidatorAgentRunner | None = None,
-    batch_runner: DomainValidatorBatchAgentRunner | None = None,
-    event_emitter: ValidatorDispatchEventEmitter | None = None,
-    source_envelope_revision: int | None = None,
-    max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
-    runtime_context: ValidatorRuntimeContext | None = None,
-    profile_context: ProfileValidationContext | None = None,
-) -> ActiveValidatorDispatchResult:
-    """Dispatch active validator bindings and append result findings."""
+@dataclass(frozen=True)
+class PreparedValidatorDispatch:
+    """Declared coverage and eligible work, before any provider invocation."""
 
+    envelope: DomainEnvelope
+    history_binding: Any
+    registry: DomainPackValidationRegistry
+    matches: tuple[ValidatorBindingMatch, ...]
+    initial_jobs: tuple[ValidatorDispatchJob, ...]
+    findings: tuple[ValidationFinding, ...]
+    binding_audit: tuple[dict[str, Any], ...]
+    suppressed_bindings: tuple[dict[str, Any], ...]
+
+
+def prepare_validator_dispatch(
+    envelope, domain_pack, *, registry=None, runtime_context=None, profile_context=None,
+):
+    """Capture all obligations and selectors without starting validation."""
     from src.lib.validation_history.runtime import bind_artifact
     history_binding = bind_artifact(envelope, runtime_context)
     from src.lib.validation_history.projection import read_dispatch_source
@@ -582,103 +584,76 @@ def dispatch_active_validator_bindings(
             )
         return jobs, findings
 
-    updated_envelope = envelope
-    appended_findings: list[ValidationFinding] = []
-    pending_findings: list[ValidationFinding] = list(eligibility_findings)
-    validator_results: list[DomainValidatorResultBase] = []
-    validator_agent_run_count = 0
-    batch_validator_run_count = 0
-    validator_batch_groups: list[Any] = []
-    # Dependent waves require explicit selected inputs. Completion alone cannot
-    # dispatch a dependent; the supervisor resume contract supplies pinned inputs.
+
+    jobs = []
+    findings = list(eligibility_findings)
     for wave_index, wave in enumerate(
         validator_dispatch_waves({match.binding.binding_id: match.binding for match in eligible_matches}.values())
     ):
         wave_matches = [match for match in eligible_matches if match.binding.binding_id in wave]
         if wave_index:
             for match in wave_matches:
-                record_match_scheduling(
-                    history_binding, match, "awaiting_review",
-                    details={"review_episode_id": envelope.metadata["review_episode_id"]},
-                )
-            # D/E/F resume this episode after explicit selection. Do not turn a
-            # completion into an accepted prerequisite to keep the loop running.
+                record_match_scheduling(history_binding, match, "awaiting_review",
+                    details={"review_episode_id": envelope.metadata["review_episode_id"]})
             continue
-        jobs, selector_findings = wave_jobs(wave_matches)
-        jobs = [replace(job, history_wave=wave_index, history_episode_id=envelope.metadata["review_episode_id"],
-            history_prior_completions=tuple(r._history_ref["fact_id"] for r in validator_results
-                if r._history_ref and r._history_ref.get("attempt_id"))) for job in jobs]
-        pending_findings.extend(selector_findings)
-        job_dispatch = dispatch_validator_jobs(
-            jobs,
-            history_binding=history_binding,
-            runner=runner,
-            batch_runner=batch_runner,
-            event_emitter=event_emitter,
-            max_parallel_validators=max_parallel_validators,
-            runtime_context=runtime_context,
-        )
-        validator_results.extend(job_dispatch.validator_results)
-        validator_agent_run_count += job_dispatch.validator_agent_run_count
-        batch_validator_run_count += job_dispatch.batch_validator_run_count
-        validator_batch_groups.extend(job_dispatch.validator_batch_groups)
-        materialization_items = list(job_dispatch.materialization_inputs)
-
-        if pending_findings:
-            updated_envelope, selector_appended_findings = (
-                append_validation_findings_to_envelope(
-                    updated_envelope,
-                    pending_findings,
-                    actor_id=actor_id,
-                )
-            )
-            appended_findings.extend(selector_appended_findings)
-            pending_findings = []
-        if materialization_items:
-            from src.lib.validation_history.candidates import retain_candidates
-            materialization_result = retain_candidates(
-                updated_envelope, materialization_items, scope=history_binding.scope,
-                source_envelope_revision=source_envelope_revision,
-            )
-            updated_envelope = materialization_result.envelope
-            appended_findings.extend(materialization_result.appended_findings)
-
-    if pending_findings:
-        updated_envelope, selector_appended_findings = append_validation_findings_to_envelope(
-            updated_envelope, pending_findings, actor_id=actor_id,
-        )
-        appended_findings.extend(selector_appended_findings)
-
-    if suppressed_bindings:
-        updated_envelope = updated_envelope.model_copy(update={"metadata": {
-            **updated_envelope.metadata,
-            "suppressed_upstream_validators": suppressed_bindings,
-        }})
-    if any(entry.get("group_scope") is not None for entry in binding_audit):
-        updated_metadata = dict(updated_envelope.metadata)
-        updated_metadata["validator_binding_audit"] = list(binding_audit)
-        updated_envelope = updated_envelope.model_copy(
-            update={"metadata": updated_metadata}
-        )
-
-    from src.lib.validation_history.store import record_scheduling
-    from uuid import uuid4
+        initial, selector_findings = wave_jobs(wave_matches)
+        jobs.extend(replace(job, history_wave=wave_index,
+            history_episode_id=envelope.metadata["review_episode_id"]) for job in initial)
+        findings.extend(selector_findings)
     if not matches:
+        from src.lib.validation_history.store import record_scheduling
         record_scheduling(history_binding.scope, history_binding.artifact_id,
-            operation_id="empty-scheduling:" + str(uuid4()),
+            operation_id="empty-scheduling:" + envelope.metadata["review_episode_id"],
             outcome="zero_item" if not envelope.extracted_objects else "no_validator",
             details={"matched_binding_count": 0})
+    return PreparedValidatorDispatch(envelope, history_binding, validation_registry,
+        tuple(eligible_matches), tuple(jobs), tuple(findings), tuple(binding_audit),
+        tuple(suppressed_bindings))
+
+
+def dispatch_active_validator_bindings(
+    envelope: DomainEnvelope,
+    domain_pack: LoadedDomainPack,
+    *,
+    actor_id: str = "domain_validator_dispatch",
+    registry: DomainPackValidationRegistry | None = None,
+    runner: DomainValidatorAgentRunner | None = None,
+    batch_runner: DomainValidatorBatchAgentRunner | None = None,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
+    source_envelope_revision: int | None = None,
+    max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
+    runtime_context: ValidatorRuntimeContext | None = None,
+    profile_context: ProfileValidationContext | None = None,
+) -> ActiveValidatorDispatchResult:
+    """Dispatch active validator bindings and append result findings."""
+
+
+    plan = prepare_validator_dispatch(envelope, domain_pack, registry=registry,
+        runtime_context=runtime_context, profile_context=profile_context)
+    dispatched = dispatch_validator_jobs(list(plan.initial_jobs), history_binding=plan.history_binding,
+        runner=runner, batch_runner=batch_runner, event_emitter=event_emitter,
+        max_parallel_validators=max_parallel_validators, runtime_context=runtime_context)
+    updated, findings = append_validation_findings_to_envelope(
+        plan.envelope, list(plan.findings), actor_id=actor_id)
+    appended = list(findings)
+    if dispatched.materialization_inputs:
+        from src.lib.validation_history.candidates import retain_candidates
+        retained = retain_candidates(updated, list(dispatched.materialization_inputs),
+            scope=plan.history_binding.scope, source_envelope_revision=source_envelope_revision)
+        updated = retained.envelope
+        appended.extend(retained.appended_findings)
+    if plan.suppressed_bindings:
+        updated = updated.model_copy(update={"metadata": {
+            **updated.metadata, "suppressed_upstream_validators": list(plan.suppressed_bindings)}})
+    if any(entry.get("group_scope") is not None for entry in plan.binding_audit):
+        updated = updated.model_copy(update={"metadata": {
+            **updated.metadata, "validator_binding_audit": list(plan.binding_audit)}})
     return ActiveValidatorDispatchResult(
-        envelope=updated_envelope,
-        registry=validation_registry,
-        matched_bindings=tuple(eligible_matches),
-        appended_findings=tuple(appended_findings),
-        validator_results=tuple(validator_results),
-        validator_agent_run_count=validator_agent_run_count,
-        batch_validator_run_count=batch_validator_run_count,
-        validator_batch_groups=tuple(validator_batch_groups),
-        binding_audit=binding_audit,
-    )
+        envelope=updated, registry=plan.registry, matched_bindings=plan.matches,
+        appended_findings=tuple(appended), validator_results=dispatched.validator_results,
+        validator_agent_run_count=dispatched.validator_agent_run_count,
+        batch_validator_run_count=dispatched.batch_validator_run_count,
+        validator_batch_groups=dispatched.validator_batch_groups, binding_audit=plan.binding_audit)
 
 
 def _normalized_authenticated_groups(
@@ -1430,6 +1405,10 @@ def _execute_validator_job_batch(
     except BenchmarkInvocationBudgetExceeded:
         raise
     except Exception as exc:
+        from src.lib.validation_review.provider import ACTIVE_BUDGET
+        from src.lib.validation_review.stops import review_stop
+        if ACTIVE_BUDGET.get() is not None and review_stop(exc) is not None:
+            raise
         from src.lib.validation_history.store import HistoryRecordingError
         if isinstance(exc, HistoryRecordingError):
             raise
@@ -1535,6 +1514,10 @@ def _execute_single_validator_job(
     except BenchmarkInvocationBudgetExceeded:
         raise
     except Exception as exc:
+        from src.lib.validation_review.provider import ACTIVE_BUDGET
+        from src.lib.validation_review.stops import review_stop
+        if ACTIVE_BUDGET.get() is not None and review_stop(exc) is not None:
+            raise
         from src.lib.validation_history.store import HistoryRecordingError
         if isinstance(exc, HistoryRecordingError):
             raise
@@ -1681,6 +1664,8 @@ def run_package_scoped_validator_agent(
         )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
+    from src.lib.validation_review.validator_adapter import pin_validator_agent
+    pin_validator_agent(agent, request.validator_binding_id)
     if runtime_context is not None:
         agent.cost_boundary = {
             "document_id": runtime_context.document_id,
@@ -1723,6 +1708,11 @@ def run_package_scoped_validator_agent(
     )
 
     provider_payload = validator_request_payload_for_agent(request)
+    from src.lib.validation_review.validator_adapter import RECONSIDERATION_INPUT
+    reconsideration = RECONSIDERATION_INPUT.get()
+    if reconsideration is not None:
+        agent.instructions = (agent.instructions or "") + "\n\n" + reconsideration["protocol"]
+        provider_payload = {**provider_payload, "validation_reconsideration": reconsideration["context"]}
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
@@ -1791,6 +1781,10 @@ def run_package_scoped_validator_agent(
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
+        from src.lib.validation_review.provider import ACTIVE_BUDGET
+        from src.lib.validation_review.stops import review_stop
+        if ACTIVE_BUDGET.get() is not None and review_stop(exc) is not None:
+            raise
         from src.lib.validation_history.store import HistoryRecordingError
         if isinstance(exc, HistoryRecordingError):
             raise
@@ -1911,6 +1905,8 @@ def run_package_scoped_validator_agent_batch(
     )
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
+    from src.lib.validation_review.validator_adapter import pin_validator_agent
+    pin_validator_agent(agent, representative_request.validator_binding_id)
     if runtime_context is not None:
         agent.cost_boundary = {
             "document_id": runtime_context.document_id,
@@ -1977,6 +1973,11 @@ def run_package_scoped_validator_agent_batch(
             "using the tool's declared bulk/list input. Do not loop one lookup per request "
             "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
         )
+    from src.lib.validation_review.validator_adapter import RECONSIDERATION_INPUT
+    reconsideration = RECONSIDERATION_INPUT.get()
+    if reconsideration is not None:
+        agent.instructions = (agent.instructions or "") + "\n\n" + reconsideration["protocol"]
+        provider_payload = {**provider_payload, "validation_reconsideration": reconsideration["context"]}
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
@@ -2060,6 +2061,10 @@ def run_package_scoped_validator_agent_batch(
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
+        from src.lib.validation_review.provider import ACTIVE_BUDGET
+        from src.lib.validation_review.stops import review_stop
+        if ACTIVE_BUDGET.get() is not None and review_stop(exc) is not None:
+            raise
         from src.lib.validation_history.store import HistoryRecordingError
         if isinstance(exc, HistoryRecordingError):
             raise

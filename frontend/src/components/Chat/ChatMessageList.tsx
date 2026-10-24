@@ -125,6 +125,13 @@ function ChatMessageList({
                       message.content
                     )}
                   </div>
+                  {message.validationReview && message.validationReview.results.length > 0 ? (
+                    <div role="status" className="validation-review-status">
+                      {message.validationReview.pending_count > 0
+                        ? `Validation review pending for ${message.validationReview.pending_count} saved result(s). Final export and curation preparation are unavailable for pending results.`
+                        : 'Validation review complete for the saved results.'}
+                    </div>
+                  ) : null}
                   {assistantStatusNotice ? (
                     <div
                       role={assistantStatusNotice.tone === 'info' ? 'status' : 'alert'}

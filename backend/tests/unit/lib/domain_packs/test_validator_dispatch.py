@@ -2786,7 +2786,7 @@ def test_package_scoped_validator_agent_uses_compact_finalization_schema(
 
 
 @pytest.mark.parametrize("output_format", ["csv", "tsv", "json"])
-def test_compact_candidate_science_survives_materialization_and_formatter_cells(tmp_path, output_format):
+def test_compact_candidate_science_is_retained_but_unreviewed_exports_are_blocked(tmp_path, output_format):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
     from src.lib.domain_packs.compact_runtime import runtime_for_schema
     from src.lib.flows.output_projection import (
@@ -2824,40 +2824,21 @@ def test_compact_candidate_science_survives_materialization_and_formatter_cells(
         "candidate": SimpleNamespace(agent_key="gene_extractor", adapter_key="gene", candidate_count=1,
             conversation_summary="Ambiguous gene.", payload_json=dispatched.envelope.model_dump(mode="json")),
     }], flow_name="Compact validation", output_format=output_format)
-    projection = apply_projection_plan(bundle, FlowOutputProjectionPlan.model_validate({
-        "format": output_format, "row_source": "validation_finding", "columns": [
-            {"key": "candidates", "field_ref": "validation.candidate_matches"},
-            {"key": "lookups", "field_ref": "validation.lookup_attempts"},
-            {"key": "target", "field_ref": "validation.target"},
-        ],
-    }))
-    assert projection.rows
-    row = projection.rows[0]
-    if output_format in {"csv", "tsv"}:
-        # File cells hold display text: every candidate, its science and the
-        # lookup audit stay visible (ALL-1115), with no JSON in the cell.
-        cells = " ".join(str(value) for value in row.values())
-        assert "{" not in cells
-        for expected in ("value: RGD:1", "value: RGD:2", "Paper does not distinguish the candidates.",
-                         "evidence-1", "source_call_id: source-call", "method: search_genes",
-                         "symbol: ABC-1", "candidate_count: 2",
-                         f"object_id: {captured['result'].target.object_id}",
-                         f"field_path: {captured['result'].target.field_path}"):
-            assert expected in cells, expected
-        return
-    candidates = json.loads(row["candidates"]) if isinstance(row["candidates"], str) else row["candidates"]
-    assert [candidate["value"] for candidate in candidates] == ["RGD:1", "RGD:2"]
-    for candidate in candidates:
+    # Scientific detail remains available in the original finding, but it is
+    # not an accepted/exportable selection until the supervisor records review.
+    for candidate in finding.details["candidate_matches"]:
         science = candidate["details"]["scientific_assessment"]
         assert science["explanation"] == "Paper does not distinguish the candidates."
         assert science["evidence_record_ids"] == ["evidence-1"]
         assert candidate["details"]["source_call_id"] == "source-call"
-    attempts = json.loads(row["lookups"]) if isinstance(row["lookups"], str) else row["lookups"]
-    assert attempts[0]["candidate_count"] == 2  # Existing finding/export name for the returned lookup count.
-    assert attempts[0]["attempted_query"]["provider_query"] == {"method": "search_genes", "symbol": "ABC-1"}
-    target = json.loads(row["target"]) if isinstance(row["target"], str) else row["target"]
-    assert target["object_id"] == captured["result"].target.object_id
-    assert target["field_path"] == captured["result"].target.field_path
+    with pytest.raises(ValueError, match="not available"):
+        apply_projection_plan(bundle, FlowOutputProjectionPlan.model_validate({
+            "format": output_format, "row_source": "validation_finding", "columns": [
+                {"key": "candidates", "field_ref": "validation.candidate_matches"},
+                {"key": "lookups", "field_ref": "validation.lookup_attempts"},
+                {"key": "target", "field_ref": "validation.target"},
+            ],
+        }))
 
 
 def test_validator_finalization_feedback_accepts_valid_result():

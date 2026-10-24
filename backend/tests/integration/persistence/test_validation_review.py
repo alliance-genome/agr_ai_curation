@@ -1372,3 +1372,35 @@ def test_late_answer_reopens_public_review_without_refilling_budgets(
                 ValidationFact.kind == "review_reopened",
             )
         )
+
+
+def test_discovered_coverage_preserves_shared_extra_cap_and_frozen_policy(scope, monkeypatch):
+    """Discovering more extraction artifacts never replenishes retries already spent."""
+    sid = a.create_scope(scope, operation_id="chat-turn", kind="discovered_document_run", targets=0, episodes=0)
+    episodes = []
+    for index in range(17):
+        aid = h.capture_baseline(scope, producer_id=f"extract-{index}", subject_kind="extracted",
+            typed={}, normalized={}, provenance={})
+        tid = binding(scope, aid)
+        ep = episode(scope, aid, tid)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            assert list(pool.map(lambda _: a.attach_episode(scope, artifact_id=aid,
+                episode_id=ep, scope_id=sid), range(2))) == [ep, ep]
+        episodes.append(ep)
+        if index < 16:
+            a.reserve(scope, ep, operation_id="retry", charges={"extra_attempts": 1}, request={})
+        else:
+            with pytest.raises(a.ReviewStopped, match="budget_exhausted"):
+                a.reserve(scope, ep, operation_id="retry", charges={"extra_attempts": 1}, request={})
+        if index == 0:
+            monkeypatch.setenv("VALIDATION_REVIEW_EXTRA_PER_RUN", "999")
+    from src.models.sql.validation_review import ValidationReviewCoverage, ValidationReviewScope
+    with h.SessionLocal() as db:
+        rows = db.scalars(select(ValidationReviewCoverage).where(ValidationReviewCoverage.scope_id == sid)).all()
+        assert len(rows) == 17
+        assert all(row.allowances["extra_attempts"] == 0 for row in rows)
+        assert db.get(ValidationReviewScope, sid).contract["allowances"]["extra_attempts"] == 16
+    remaining = a.status(scope, episodes[-1])["budgets"][0]["remaining"]
+    assert remaining["extra_attempts"] == 0
+    assert remaining["initial_tokens"] == 17 * 150000
+    assert remaining["reviewer_tokens"] == 17 * 1000000

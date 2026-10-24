@@ -3773,6 +3773,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
     is_builder_envelope: bool = False,
     runtime_context: Optional[Any] = None,
     execution_receipt: Optional[Mapping[str, Any]] = None,
+    source_metadata: Optional[Mapping[str, Any]] = None,
+    builder_finalization: Any = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
 
@@ -3969,6 +3971,25 @@ async def _dispatch_domain_envelope_validators_for_chat(
             typed=json.loads(final_output), envelope=envelope,
             provenance={"agent_key": agent_key, "execution_receipt": execution_receipt},
         )
+
+        from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+        chat_review = ACTIVE_CHAT_REVIEW.get()
+        if chat_review is not None:
+            try:
+                return await chat_review.receive(envelope, domain_pack,
+                    agent_key=candidate.agent_key, adapter_key=candidate.adapter_key,
+                    tool_name=tool_name or candidate.agent_key,
+                    execution_receipt=candidate.execution_receipt, context=runtime_context,
+                    trace_id=get_current_trace_id(), builder_finalization=builder_finalization,
+                    source_metadata={**dict(source_metadata or {}), "specialist_name": specialist_name,
+                                     "domain_pack_id": envelope.domain_pack_id},
+                    event_emitter=_emit_validator_dispatch_event)
+            finally:
+                add_specialist_event({"type": "TOOL_COMPLETE",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "details": {"toolName": "dispatch_active_validator_bindings",
+                                "friendlyName": f"{specialist_name}: Validator dispatch paused or finished; consult review status",
+                                "isSpecialistInternal": True}})
 
         core_dispatch_started_at = time.monotonic()
         dispatch_kwargs: Dict[str, Any] = {
@@ -6366,6 +6387,9 @@ async def run_specialist_with_events(
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
                 execution_receipt=builder_workspace.execution_receipt,
+                builder_finalization=builder_finalization,
+                source_metadata={"execution_context": execution_context.model_dump(mode="json") if execution_context else None,
+                                 "specialist_explanation": specialist_explanation},
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6430,6 +6454,9 @@ async def run_specialist_with_events(
                 source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
                 execution_receipt=builder_workspace.execution_receipt,
+                builder_finalization=builder_finalization,
+                source_metadata={"execution_context": execution_context.model_dump(mode="json") if execution_context else None,
+                                 "specialist_explanation": specialist_explanation},
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
