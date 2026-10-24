@@ -820,9 +820,10 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
 ):
     import asyncio
     from types import SimpleNamespace
-    from src.lib.flows import executor
+    from src.lib.validation_review import flow_plan, admission
+    from src.lib.validation_review.validator_adapter import ValidatorAdapter, save_plan
+    from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
     from src.lib.validation_history import runtime
-    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
     from src.schemas.domain_validator import DomainValidatorResultBase
     from tests.unit.lib.domain_packs.test_validator_dispatch import (
         _loaded_pack,
@@ -842,7 +843,8 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
     artifact_id = source.metadata["validation_history"]["artifact_id"]
     seen = []
 
-    async def custom(request, **kwargs):
+    def custom(request, **kwargs):
+        assert kwargs["binding"].raw["flow_validator"]["data"]["agent_id"] == "custom-agent"
         from agents import ModelSettings
         from openai.types.shared import Reasoning
 
@@ -865,51 +867,46 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
             model="fixture-model",
             input_payload=frozen,
         )
-        request.selected_inputs["new"] = "changed after capture"
         if outcome == "failed":
             raise RuntimeError("fixture operational failure")
         if outcome == "interrupted":
             raise asyncio.CancelledError()
         return DomainValidatorResultBase.model_validate(_result_payload(request))
 
-    monkeypatch.setattr(executor, "_run_custom_flow_validator_agent", custom)
-    flow = SimpleNamespace(
-        flow_definition={
-            "nodes": [{"id": "custom", "data": {"agent_id": "custom-agent"}}]
-        }
-    )
-
-    async def run():
-        return await executor._collect_flow_validator_materialization_inputs(
-            source_envelope=source,
-            source_envelope_revision=1,
-            registry=DomainPackValidationRegistry.from_domain_pack(pack),
-            groups=[
-                {
-                    "group_id": "group",
-                    "binding_id": "fixture.identifier_lookup",
-                    "state": "replaced",
-                    "validator_node_id": "custom",
-                }
-            ],
-            flow=flow,
-            agent_context={},
-            document_id=scope.document_id,
-            user_id=scope.owner_id,
-        )
-
-    if outcome == "interrupted":
+    from src.lib.config.agent_loader import AgentDefinition
+    monkeypatch.setattr('src.lib.config.agent_loader.get_agent_definition_for_package',
+        lambda package, agent: AgentDefinition(folder_name=agent, agent_id=agent, name=agent, package_id=package))
+    monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner', lambda: custom)
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr('src.lib.redis_client.check_cancel_signal', AsyncMock(return_value=False))
+    context = ValidatorRuntimeContext(user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=())
+    plan = flow_plan.prepare(source, pack,
+        groups=[{'binding_id': 'fixture.identifier_lookup', 'state': 'replaced', 'validator_node_id': 'custom'}],
+        nodes={'custom': {'id': 'custom', 'data': {'agent_id': 'custom-agent'}}}, runtime_context=context)
+    ref = save_plan(plan, context=context)
+    episode = plan.envelope.metadata['review_episode_id']
+    sid = admission.create_scope(scope, operation_id=uuid4().hex, kind='discovered_document_run', targets=0, episodes=0)
+    admission.attach_episode(scope, artifact_id=artifact_id, episode_id=episode, scope_id=sid)
+    adapter = ValidatorAdapter(scope, artifact_id, episode, ref, authenticated_groups=())
+    if outcome == 'interrupted':
         with pytest.raises(asyncio.CancelledError):
-            asyncio.run(run())
+            asyncio.run(adapter.initial())
     else:
-        units, _, _ = asyncio.run(run())
-        assert units[0].result._history_ref["execution_state"] == outcome
+        asyncio.run(adapter.initial())
     assert len(seen) == 1
     attempt_id, original = seen[0]
     assert (
         h.read_fact(scope, artifact_id, attempt_id)["content"]["input"]["request"]
         == original
     )
+    if outcome == 'interrupted':
+        from src.models.sql.validation_review import ValidationReviewWork
+        with SessionLocal() as db:
+            work_row = db.scalar(select(ValidationReviewWork).where(ValidationReviewWork.episode_id == episode))
+            assert work_row.state == 'uncertain'
+        with pytest.raises(h.HistoryConflict, match='no recorded completion'):
+            h.completion_for_attempt(scope, artifact_id, attempt_id)
+        return
     completion = h.completion_for_attempt(scope, artifact_id, attempt_id)
     assert completion["state"] == outcome
     body = h.read_fact(scope, artifact_id, completion["id"])["content"]

@@ -39,6 +39,9 @@ async def test_followup_actual_runner_input_and_tools(monkeypatch):
         "assessment": "The paper does not clarify this mention.", "remaining_uncertainty": "Organism unknown",
         "proposed_values": [], "evidence_record_ids": []}]}
     seen = []
+    configs = []
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    monkeypatch.setattr('src.lib.validation_review.phase_observability.log_agent_config', lambda **kwargs: configs.append(kwargs))
 
     async def run(phase, input_value, **kwargs):
         seen.append(phase)
@@ -55,9 +58,14 @@ async def test_followup_actual_runner_input_and_tools(monkeypatch):
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_with_owned_openai_resources", run)
     result = await extractor_phase.invoke(agent,
         scope=HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
-        artifact_id="artifact", packet=packet, packet_bytes=2048, max_turns=17)
+        artifact_id="artifact", packet=packet, packet_bytes=2048, max_turns=17, evidence_records=[])
     assert result.model_dump(mode="json") == answer
     assert len(seen) == 1
+    assert configs[0]['agent_name'] == seen[0].name
+    assert configs[0]['instructions'] == seen[0].instructions
+    assert configs[0]['tools'] == [tool.name for tool in seen[0].tools]
+    assert configs[0]['metadata']['review_phase'] == 'extractor_followup'
+    assert configs[0]['metadata']['effective_prompt_hash']
     assert len(agent.tools) == 3
     assert agent.instructions == "Domain extraction policy"
 

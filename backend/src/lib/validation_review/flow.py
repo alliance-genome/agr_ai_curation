@@ -24,6 +24,7 @@ class FlowReview(ChatReview):
     parent_scope_id: str | None = None
     record: ExtractionRecord | None = None
     source_agent: object | None = None
+    initial_stop: BaseException | None = field(default=None, repr=False)
 
     def reference(self, record):
         return record.metadata["flow_review"]
@@ -77,7 +78,16 @@ class FlowReview(ChatReview):
         self.source_agent = source_agent
         adapter = ValidatorAdapter(binding.scope, binding.artifact_id, episode_id, plan_ref,
             authenticated_groups=self.authenticated_groups, event_emitter=event_emitter)
-        await self.until_stop(adapter.initial())
+        try:
+            await self.until_stop(adapter.initial())
+        except Exception as error:
+            from .stops import review_stop
+            stopped = review_stop(error)
+            if stopped is None:
+                raise
+            # Return the retained source through the streaming capture boundary,
+            # then propagate the exact expected stop from the ordered review gate.
+            self.initial_stop = stopped
         return plan.envelope.model_dump_json()
 
     def restore_source(self, claim):
@@ -108,6 +118,8 @@ class FlowReview(ChatReview):
             checkpoint_provider=checkpoint, source_agent=self.source_agent)
 
     async def finish_review(self):
+        if self.initial_stop is not None:
+            raise self.initial_stop
         if self.record is None:
             raise store.HistoryConflict("Flow extraction did not retain a reviewable source")
         outcome = await self.until_stop(self.review_result(self.record))

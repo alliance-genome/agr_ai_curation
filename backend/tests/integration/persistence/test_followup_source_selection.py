@@ -224,3 +224,80 @@ async def test_queued_old_input_is_stopped_before_provider(planned, monkeypatch)
         assert row.state == "completed"
         assert row.outcome["state"] == "not_admitted"
         assert row.outcome["reason"] == "source_input_changed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('planned', ['nested'], indirect=True)
+async def test_split_reparents_retained_and_revised_children_with_attempt_history(planned, monkeypatch):
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+    from src.lib.validation_review.attempt_lineage import counts
+    from src.lib.validation_history.projection import read_dispatch_source
+    from tests.unit.lib.validation_review.test_item_relationships import relation
+
+    item = planned
+    baseline = store.read_baseline(item.scope, item.aid)
+    calls = []
+    def run(request, binding, **kwargs):
+        calls.append(request.selected_inputs)
+        return {**_result_payload(request, resolved_values={'curie': 'ECO:resolved'}), 'resolved_objects': []}
+    monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner', lambda: run)
+    monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner',
+                        lambda: lambda *a, **kw: pytest.fail('Unexpected batch'))
+    await item.adapter.initial()
+    assert len(calls) == 2
+    args = request_args(item)
+    context = ReviewContext(item.scope, item.ep, 'supervisor')
+    wid = extraction_scheduling.request(context, **args)
+    claim = work.claim(item.scope, wid)
+    work.mark_submitted(item.scope, wid, claim['lease_token'])
+    refs = item.plan.envelope.extracted_objects[0].metadata['validation_history']
+    gene, = refs['elements']['genes']
+    a, b = refs['elements']['genes[0].aliases']
+    expected = [{'aliases': ['eco:1']}, {'aliases': ['eco:new']}]
+    mappings = [
+        {'collection_path': 'genes', 'source_collection_id': refs['fields']['genes'],
+         'items': [relation('first', [gene], 'split'), relation('second', [gene], 'split')]},
+        {'collection_path': 'genes[0].aliases', 'source_collection_id': refs['fields']['genes[0].aliases'],
+         'items': [relation('a', [a], 'retain')]},
+        {'collection_path': 'genes[1].aliases', 'source_collection_id': refs['fields']['genes[0].aliases'],
+         'items': [relation('b', [b], 'revise')]},
+    ]
+    for mapping in mappings:
+        mapping.update(retired_item_ids=[], retirement_reason='')
+    result = extraction_results.retain(item.scope, wid, claim['lease_token'], {'entries': [{
+        'entry_id': refs['target_id'], 'outcome': 'proposed_correction', 'assessment': 'Two separate entities',
+        'remaining_uncertainty': '', 'evidence_record_ids': [], 'proposed_values': [{
+            'field_path': 'genes', 'value': expected, 'evidence_record_ids': [], 'collection_mappings': mappings}]}]}, evidence_records=[])
+    work.finish(item.scope, wid, claim['lease_token'], outcome=result)
+    with store.SessionLocal() as db:
+        digest = selections.source_state_digest(db, item.aid)
+    checkpoint = checkpoint_provider(item)
+    selected = await item.adapter.select_source(context, checkpoint, operation_id='split-with-intact-children',
+        contribution_ref=result['contributions'][0], field_paths=['genes'], evidence_ids=[],
+        expected_source_sha=digest, reason='Approve the explicit relationships')
+    source = read_dispatch_source(item.plan.history_binding, checkpoint().envelope)
+    assert source.extracted_objects[0].payload['genes'] == expected
+    new_refs = source.extracted_objects[0].metadata['validation_history']
+    children = [new_refs['elements'][f'genes[{index}].aliases'][0] for index in range(2)]
+    assert not set(children) & {a, b}
+    targets = [entry['target_id'] for entry in selected['affected_bindings']]
+    assert len(targets) == 2
+    with store.SessionLocal.begin() as db:
+        for child, predecessor in zip(children, [a, b], strict=True):
+            fact = store._fact(db, item.aid, child, kind='target')
+            assert store._content(db, fact)['origin']['predecessor_ids'] == [predecessor]
+            store._require_active_target(db, item.aid, child)
+            assert store._fact(db, item.aid, predecessor, kind='target')
+            with pytest.raises(store.HistoryConflict):
+                store._require_active_target(db, item.aid, predecessor)
+        ep, _ = admission.lock_episode(db, item.scope, item.ep)
+        assert set(counts(db, ep, targets).values()) == {1}
+    outcome = await item.adapter.assess_source(context, operation_id='assess-split', selection_id=selected['selection_id'],
+        target_ids=targets, instructions='Assess the two clarified entities')
+    assert outcome['state'] == 'completed'
+    assert len(calls) == 4
+    with store.SessionLocal.begin() as db:
+        ep, _ = admission.lock_episode(db, item.scope, item.ep)
+        assert set(counts(db, ep, targets).values()) == {2}
+    assert store.read_baseline(item.scope, item.aid) == baseline

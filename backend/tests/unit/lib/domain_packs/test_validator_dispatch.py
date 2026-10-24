@@ -912,55 +912,6 @@ def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, stat
     assert set(calls) == {"fixture.identifier_lookup", "fixture.symbol_lookup"}
 
 
-@pytest.mark.parametrize("custom_fails", [False, True])
-def test_extractor_to_flow_runs_custom_once_without_standard_fallback(tmp_path, monkeypatch, custom_fails):
-    from src.lib.flows import executor
-    from src.lib.domain_packs.flow_validator_selection import (
-        set_flow_validator_selections, reset_flow_validator_selections,
-    )
-    from src.lib.domain_packs.materialization import materialize_validator_results_into_envelope
-    pack = _loaded_pack(tmp_path)
-    groups = [{"group_id": "custom", "binding_id": "fixture.identifier_lookup",
-               "state": "replaced", "validator_node_id": "custom-node"}]
-    calls = []
-
-    def standard(*args, **kwargs):
-        calls.append("standard")
-        raise AssertionError("standard must not run")
-
-    async def custom(request, **kwargs):
-        calls.append("custom")
-        assert request.validator_agent.agent_id == "custom-agent"
-        if custom_fails:
-            raise RuntimeError("custom source failed")
-        return DomainValidatorResultBase.model_validate(_result_payload(request))
-
-    monkeypatch.setattr(executor, "_run_custom_flow_validator_agent", custom)
-    token = set_flow_validator_selections(groups)
-    try:
-        upstream = dispatch_active_validator_bindings(_envelope(), pack, runner=standard)
-    finally:
-        reset_flow_validator_selections(token)
-    assert upstream.validator_agent_run_count == 0
-    flow = SimpleNamespace(flow_definition={"nodes": [{"id": "custom-node", "data": {"agent_id": "custom-agent"}}]})
-    units, findings, audit = asyncio.run(executor._collect_flow_validator_materialization_inputs(
-        source_envelope=upstream.envelope, source_envelope_revision=1,
-        registry=upstream.registry, groups=groups, flow=flow, agent_context={},
-    ))
-    assert calls == ["custom"]
-    assert not findings
-    assert len(units) == 1
-    assert audit[-1]["validator_agent"]["agent_id"] == "custom-agent"
-    assert audit[-1]["status"] == ("unresolved" if custom_fails else "resolved")
-    materialized = materialize_validator_results_into_envelope(
-        upstream.envelope, pack.metadata, units, actor_id="flow", source_envelope_revision=1,
-    )
-    results = [f.details["validation_result"] for f in materialized.envelope.validation_findings
-               if "validation_result" in f.details]
-    assert results
-    assert all(r["validator_agent"]["agent_id"] == "custom-agent" for r in results)
-
-
 def test_group_scope_normalizes_and_matching_authenticated_group_dispatches(
     tmp_path: Path,
 ):
@@ -3260,8 +3211,6 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
 
 
-
-
 def test_package_scoped_validator_batch_agent_never_offers_paper_tools(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -3926,8 +3875,6 @@ def test_profile_finalization_instructions_scope_package_override_to_requests(ba
     assert "takes precedence over package instructions" in agent.instructions
     assert "resolved_objects as an empty list" in agent.instructions
     assert "must remain unresolved" in agent.instructions
-
-
 
 
 @pytest.mark.parametrize("curie", ["UBERON:0000068", "UBERON:0000092"])

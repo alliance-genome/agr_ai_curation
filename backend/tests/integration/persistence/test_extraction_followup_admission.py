@@ -155,3 +155,113 @@ async def test_executor_uses_shared_budget_without_reviewer_tool_charge_and_neve
     assert ACTIVE_BUDGET.get() is None
     with store.SessionLocal() as db:
         assert db.get(ValidationReviewWork, work_id).state == ("uncertain" if cancel else "completed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', [False, True])
+@pytest.mark.parametrize('planned', ['evidence'], indirect=True)
+async def test_followup_workspace_cannot_mutate_original_and_failure_is_sanitized(planned, monkeypatch, failure):
+    from agents import Agent
+    from src.lib.validation_review import extraction_execution, extractor_phase
+    from src.lib.openai_agents.tools.evidence_workspace import (
+        create_discard_recorded_evidence_tool, get_active_evidence_records_snapshot,
+    )
+    from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
+    item = planned
+    agent = Agent(name='Saved extractor', model='test', instructions='Saved')
+    args = request_args(item)
+    args['receipt'] = {'contract': extractor_phase.contract(agent, max_turns=17)}
+    wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, 'supervisor'), **args)
+    reports = []
+    monkeypatch.setattr('src.lib.observability.runtime.report_runtime_exception', lambda error, **kw: reports.append(error) or True)
+    async def invoke(actual, **kwargs):
+        assert kwargs['packet']['context']['original_evidence'][0]['evidence_record_id'] == 'original-evidence'
+        assert get_active_evidence_records_snapshot() == []
+        discard = _unwrap_function_tool(create_discard_recorded_evidence_tool(item.scope.document_id, item.scope.owner_id))
+        result = await discard(evidence_record_id='original-evidence', reason='Do not mutate old evidence')
+        assert result['status'] == 'not_found'
+        if failure:
+            raise RuntimeError('PRIVATE_PAPER_PROVIDER_MESSAGE secret-token')
+        return {'entries': [{'entry_id': args['entry_ids'][0], 'outcome': 'no_new_information',
+            'assessment': 'No clarification', 'remaining_uncertainty': 'Still unclear',
+            'proposed_values': [], 'evidence_record_ids': []}]}
+    monkeypatch.setattr(extractor_phase, 'invoke', invoke)
+    before = store.read_baseline(item.scope, item.aid)
+    if failure:
+        with pytest.raises(RuntimeError, match='PRIVATE_PAPER'):
+            await extraction_execution.execute(item.scope, wid, resolve_agent=lambda _: agent)
+        assert len(reports) == 1
+        assert 'PRIVATE' not in str(reports[0]) and 'secret-token' not in str(reports[0])
+        assert reports[0].__cause__ is None and reports[0].__context__ is None
+    else:
+        result = await extraction_execution.execute(item.scope, wid, resolve_agent=lambda _: agent)
+        assert result['state'] == 'completed'
+        assert not reports
+    assert store.read_baseline(item.scope, item.aid) == before
+
+
+@pytest.mark.asyncio
+async def test_followup_reads_real_paper_tools_and_retains_exact_new_evidence(planned, monkeypatch):
+    """Only provider and paper storage are fake; tool selection/verification/history are real."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+    from agents import Agent
+    from agr_ai_curation_alliance.tools import documents, weaviate_search
+    from src.lib.openai_agents import document_references as refs
+    from src.lib.openai_agents.run_history import HistoryScope, HistoryStore
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    from src.lib.validation_review import extraction_execution, extractor_phase
+    import json
+
+    item = planned
+    doc, owner = item.scope.document_id, item.scope.owner_id
+    history = HistoryStore(store.SessionLocal)
+    history_scope = HistoryScope(owner, uuid4().hex, uuid4().hex, 'extractor', 'followup/', item.scope.session_id)
+    binding = refs.SourceBinding(doc, owner, 'fixture-generation', history_scope, history, [])
+    binding.pin_generation()
+    @asynccontextmanager
+    async def scoped(document, user):
+        assert (document, user) == (doc, owner)
+        token = refs._ACTIVE_SOURCE.set(binding)
+        try:
+            yield
+        finally:
+            refs._ACTIVE_SOURCE.reset(token)
+    chunk = {'id': str(uuid4()), 'chunk_index': 42, 'text': 'Methods identify the organism.',
+             'document_id': doc, 'page_number': 3, 'parent_section': 'Methods', 'section_title': 'Methods',
+             'metadata': {'page_number': 3, 'section_title': 'Methods'}}
+    monkeypatch.setattr(refs, 'document_reference_scope', scoped)
+    monkeypatch.setattr(refs, 'get_chunk_by_index', AsyncMock(return_value=chunk))
+    monkeypatch.setattr(weaviate_search, 'get_chunk_by_index', AsyncMock(return_value=chunk))
+    monkeypatch.setattr(weaviate_search, 'get_chunk_neighbor_ids', AsyncMock(return_value={}))
+    monkeypatch.setattr(record_evidence, 'get_chunk_by_id', AsyncMock(return_value=chunk))
+    monkeypatch.setattr('src.lib.weaviate_client.chunks.get_chunk_by_id', AsyncMock(return_value=chunk))
+    monkeypatch.setattr('src.lib.context.get_current_user_id', lambda: owner)
+    monkeypatch.setattr('src.lib.prompts.assembly.get_all_active_prompts', lambda: {})
+    tools = [documents.create_read_chunk_tool({'document_id': doc, 'user_id': owner}),
+             documents.create_record_evidence_tool({'document_id': doc, 'user_id': owner})]
+    agent = Agent(name='Saved extractor', model='test', instructions='Extract evidence', tools=tools)
+    args = request_args(item)
+    args['receipt'] = {'contract': extractor_phase.contract(agent, max_turns=17)}
+    wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, 'supervisor'), **args)
+    async def provider(phase, input_value, **kwargs):
+        available = {tool.name: tool for tool in phase.tools}
+        assert set(available) == {'read_chunk', 'record_evidence', 'read_supplied_history'}
+        read = available['read_chunk']
+        await read.on_invoke_tool(_build_tool_context(read.name, {}), '{"chunk_index":42}')
+        record = available['record_evidence']
+        evidence = await record.on_invoke_tool(_build_tool_context(record.name, {}), json.dumps({
+            'entity': 'organism', 'selections': [{'chunk_index': 42, 'span_index': 0}]}))
+        assert evidence['verified_quote'] == chunk['text']
+        return type('Answer', (), {'final_output': {'entries': [{'entry_id': args['entry_ids'][0],
+            'outcome': 'additional_information', 'assessment': 'Methods clarify the organism',
+            'remaining_uncertainty': '', 'evidence_record_ids': [evidence['evidence_record_id']], 'proposed_values': []}]}})()
+    monkeypatch.setattr('src.lib.openai_agents.runner.run_agent_with_owned_openai_resources', provider)
+    result = await extraction_execution.execute(item.scope, wid, resolve_agent=lambda _: agent)
+    assert result['state'] == 'completed'
+    fact = store.read_fact(item.scope, item.aid, result['contributions'][0]['fact_id'])
+    saved, = fact['content']['evidence']
+    assert saved['origin'] == 'followup'
+    assert saved['record']['verified_quote'] == chunk['text']
+    assert saved['record']['chunk_id'] == chunk['id']

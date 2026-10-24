@@ -57,6 +57,12 @@ def planned(scope, tmp_path, monkeypatch, request):
         pack = replace(
             pack, metadata=pack.metadata.model_copy(update={"metadata": raw})
         )
+    if getattr(request, "param", None) == "nested":
+        from src.lib.domain_packs.loader import load_domain_pack_metadata
+        text = pack.metadata_path.read_text().replace("evidence_code_curies", "genes.aliases")
+        text = text.replace("    fields:\n", "    fields:\n      - field_path: genes\n        field_type: string\n        metadata:\n          multivalued: true\n")
+        pack.metadata_path.write_text(text)
+        pack = replace(pack, metadata=load_domain_pack_metadata(pack.metadata_path))
     groups = ()
     if getattr(request, "param", None) == "authorized":
         from copy import deepcopy
@@ -76,10 +82,16 @@ def planned(scope, tmp_path, monkeypatch, request):
             CuratableObjectEnvelope(
                 object_type="Annotation",
                 pending_ref_id="one",
-                payload={"evidence_code_curies": ["eco:1", "eco:2"]},
+                payload=({"genes": [{"aliases": ["eco:1", "eco:2"]}]}
+                         if getattr(request, "param", None) == "nested"
+                         else {"evidence_code_curies": ["eco:1", "eco:2"]}),
             )
         ],
     )
+    if getattr(request, "param", None) == "evidence":
+        env.extracted_objects[0].evidence_record_ids = ["original-evidence"]
+        env.metadata["evidence_records"] = [{"evidence_record_id": "original-evidence",
+            "document_id": scope.document_id, "verified_quote": "Original quoted evidence"}]
     env = runtime.capture_extraction(
         scope=scope,
         producer_id=uuid4().hex,

@@ -16,9 +16,11 @@ from .item_relationships import validate, value_at
 def plan(source_entry, proposals, *, contribution_id):
     result = deepcopy(source_entry)
     old_refs = source_entry["metadata"]["validation_history"]
+    element_parents = {target: anchor_for_path(old_refs, path)["target_id"]
+                       for path, targets in old_refs["elements"].items() for target in targets}
     fields_by_parent = {}
     for path, target in old_refs["fields"].items():
-        parts = parse_field_path(path)
+        parts = list(parse_field_path(path))
         if not parts:
             raise store.HistoryConflict("Source field must name a path")
         parent_path = path[:path.rfind(".")] if len(parts) > 1 else ""
@@ -71,7 +73,8 @@ def plan(source_entry, proposals, *, contribution_id):
                 ids = []
                 for index, (item, child) in enumerate(zip(mapping["items"], value, strict=True)):
                     predecessors = item["predecessor_ids"]
-                    if item["relationship"] in {"retain", "revise"}:
+                    if (item["relationship"] in {"retain", "revise"}
+                            and element_parents[predecessors[0]] == parent):
                         tid = predecessors[0]
                     else:
                         tid = register("item:" + path + ":" + item["item_key"],

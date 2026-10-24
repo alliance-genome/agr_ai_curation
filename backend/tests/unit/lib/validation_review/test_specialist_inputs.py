@@ -23,7 +23,8 @@ def test_validator_runner_receives_history_and_locked_independence_prompt(monkey
     from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
 
     request = _verbose_validation_request()
-    agent = SimpleNamespace(output_type=GeneResultEnvelope, tools=[_compact_lookup_tool()],
+    from agents import Agent
+    agent = Agent(name="Saved validator", output_type=GeneResultEnvelope, tools=[_compact_lookup_tool()],
                             instructions="Configured scientific policy", model="test-model")
     monkeypatch.setattr("src.lib.config.agent_loader.get_agent_definition_for_package",
         lambda package_id, agent_id: AgentDefinition(folder_name="gene", agent_id=agent_id,
@@ -41,6 +42,9 @@ def test_validator_runner_receives_history_and_locked_independence_prompt(monkey
     refs = {"records": [{"fact_id": "scoped-context", "sha256": "exact-sha"}],
             "reader": "read_supplied_history"}
     calls = []
+    configs = []
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    monkeypatch.setattr("src.lib.validation_review.phase_observability.log_agent_config", lambda **kw: configs.append(kw))
 
     def run(actual_agent, **kwargs):
         payload = json.loads(kwargs["input"])
@@ -70,3 +74,6 @@ def test_validator_runner_receives_history_and_locked_independence_prompt(monkey
     finally:
         RECONSIDERATION_INPUT.reset(token)
     assert len(calls) == 1
+    assert configs[-1]["metadata"]["review_phase"] == "validator_reconsideration"
+    assert "read_supplied_history" in configs[-1]["tools"]
+    assert RECONSIDERATION_PROTOCOL in configs[-1]["instructions"]

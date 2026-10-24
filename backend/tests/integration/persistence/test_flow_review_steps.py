@@ -139,7 +139,7 @@ def test_discovered_batch_credits_are_shared_and_never_refill(planned):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('accept', [True, False])
+@pytest.mark.parametrize('accept', [True, False, 'commit_failure', 'budget_exhausted'])
 async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned, monkeypatch, accept):
     """Real wrapper, source persistence, validators and decisions; only providers are fake."""
     import json
@@ -168,6 +168,13 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
     env = runtime.capture_extraction(scope=source_scope, producer_id=uuid4().hex,
         envelope=env, typed=env.model_dump(mode='json'), provenance={})
     calls = []
+    if accept == 'budget_exhausted':
+        async def stop_initial(self):
+            raise admission.ReviewStopped('budget_exhausted', resource='reviewer_tokens')
+        monkeypatch.setattr('src.lib.validation_review.validator_adapter.ValidatorAdapter.initial', stop_initial)
+        monkeypatch.setattr('src.lib.curation_workspace.domain_envelope_normalization.domain_envelope_from_extraction_result',
+                            lambda *a, **kw: env)
+        monkeypatch.setattr(runtime, 'capture_extraction', lambda **kw: env)
     def validate(request, binding, **kwargs):
         calls.append('validate')
         return {**_result_payload(request, resolved_values={'curie': 'ECO:chosen'}), 'resolved_objects': []}
@@ -185,8 +192,18 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
     async def review(self, record):
         calls.append('review')
         if accept:
-            decisions.record_decisions(self.context(record), checkpoint_request=self.checkpoint(record),
-                operation_id='accept', entries=entries_for(fixture(self), 'accept'))
+            from sqlalchemy import event
+            from sqlalchemy.orm import Session
+            def reject_commit(session):
+                raise RuntimeError('fixture review checkpoint commit rejected')
+            if accept == 'commit_failure':
+                event.listen(Session, 'before_commit', reject_commit)
+            try:
+                decisions.record_decisions(self.context(record), checkpoint_request=self.checkpoint(record),
+                    operation_id='accept', entries=entries_for(fixture(self), 'accept'))
+            finally:
+                if accept == 'commit_failure':
+                    event.remove(Session, 'before_commit', reject_commit)
         return {'state': 'completed' if accept else 'pending', 'output': 'Reviewed'}
     monkeypatch.setattr(FlowReview, 'review_result', review)
     def streaming(agent, tool_name, tool_description, specialist_name, **kwargs):
@@ -196,7 +213,16 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
                 calls.append('extract')
                 active = ACTIVE_CHAT_REVIEW.get()
                 assert active is not None
-                payload = await active.receive(env, item.pack, agent_key='gene', adapter_key='fixture',
+                if accept == 'budget_exhausted':
+                    from src.lib.openai_agents.streaming_tools import _dispatch_domain_envelope_validators_for_chat
+                    payload = await _dispatch_domain_envelope_validators_for_chat(env.model_dump_json(),
+                        history_scope_id=source_scope.session_id, producer_id='streamed-source', expected_output_type=None,
+                        specialist_name='gene', tool_name=tool_name, source_agent_key='gene_extractor',
+                        adapter_key='gene', is_builder_envelope=True, source_agent=agent, source_max_turns=4,
+                        runtime_context=ValidatorRuntimeContext(user_id=item.scope.owner_id,
+                            document_id=item.scope.document_id, authenticated_groups=()))
+                else:
+                    payload = await active.receive(env, item.pack, agent_key='gene', adapter_key='fixture',
                     tool_name=tool_name, execution_receipt=None, context=ValidatorRuntimeContext(
                         user_id=item.scope.owner_id, document_id=item.scope.document_id, authenticated_groups=()),
                     source_agent=agent)
@@ -219,7 +245,34 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         flow_run_id=run_id, enable_result_inspection=False)
     state['supervisor'] = supervisor
     context = SimpleNamespace(tool_name='step', run_config=None)
-    if accept:
+    if accept == 'budget_exhausted':
+        with pytest.raises(admission.ReviewStopped, match='budget_exhausted') as stopped:
+            await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert state['next_tool_index'] == 0 and not state['completed_steps']
+        assert calls == ['extract']
+        pending = state['pending_review']
+        assert pending.record is not None
+        with store.SessionLocal() as db:
+            assert db.get(FlowReviewStep, pending.step_id).state == 'review_pending'
+        from src.lib.validation_review.flow_outcome import status_for_reason
+        assert status_for_reason(stopped.value.reason) == 'review_exhausted'
+    elif accept == 'commit_failure':
+        with pytest.raises(RuntimeError, match='fixture review checkpoint commit rejected'):
+            await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert state['next_tool_index'] == 0 and not state['completed_steps']
+        assert 'step order is strict' in (await tools[1].on_invoke_tool(context, json.dumps({'query': 'next'}))).lower()
+        assert calls == ['extract', 'validate', 'validate', 'review']
+        from sqlalchemy import select
+        from src.lib.curation_workspace.models import CurationExtractionResultRecord, DomainEnvelopeModel
+        with store.SessionLocal() as db:
+            row = db.scalar(select(CurationExtractionResultRecord).where(CurationExtractionResultRecord.flow_run_id == run_id))
+            assert row.payload_json['extracted_objects'][0]['payload']['evidence_code_curies'] == ['eco:1', 'eco:2']
+            assert 'inspection_checkpoint' not in row.extraction_metadata
+            checkpoint_row = db.get(DomainEnvelopeModel, env.envelope_id)
+            assert checkpoint_row is None or checkpoint_row.revision == 1
+            saved_step = db.scalar(select(FlowReviewStep).where(FlowReviewStep.run_id == run_id))
+            assert saved_step.state != 'completed'
+    elif accept:
         await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
         assert state['next_tool_index'] == 1
         await tools[1].on_invoke_tool(context, json.dumps({'query': 'next'}))

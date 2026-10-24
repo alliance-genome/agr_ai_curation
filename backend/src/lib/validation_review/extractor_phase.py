@@ -1,6 +1,7 @@
 """A narrow phase of the saved extractor, separate from full extraction capture."""
 import json
 from dataclasses import asdict
+from copy import copy
 
 from pydantic_core import to_jsonable_python
 
@@ -47,7 +48,7 @@ def contract(agent, *, max_turns):
     })
 
 
-def create_phase(agent, *, scope, artifact_id, packet, packet_bytes):
+def create_phase(agent, *, scope, artifact_id, packet, packet_bytes, evidence_records):
     """Retain only configured paper tools; no staging, full finalizer or dispatch."""
     from src.lib.packages.tool_roles import tool_metadata_by_name
     from src.lib.openai_agents.tool_surface import apply_tool_surface
@@ -58,6 +59,24 @@ def create_phase(agent, *, scope, artifact_id, packet, packet_bytes):
                    if metadata.get(tool.name, {}).get("paper_source") is True
                    and not metadata.get(tool.name, {}).get("builder_run_state")
                    and not metadata.get(tool.name, {}).get("builder_finalization")]
+    from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
+    from src.lib.openai_agents.streaming_tools import _append_live_evidence_record
+
+    def capture_evidence(tool):
+        # The nonstreaming SDK runner does not perform streaming_tools' output
+        # collection. Retain the same verified tool result here, before return.
+        wrapped = copy(tool)
+        async def invoke(context, arguments):
+            result = await tool.on_invoke_tool(context, arguments)
+            record = build_record_evidence_summary_record(tool_name=tool.name,
+                tool_input=arguments, tool_output=result)
+            if record is not None:
+                _append_live_evidence_record(evidence_records, record)
+            return result
+        wrapped.on_invoke_tool = invoke
+        return wrapped
+
+    paper_tools = [capture_evidence(tool) for tool in paper_tools]
     history_reader = create_history_reader(scope, artifact_id,
         records=packet["history"]["records"], packet_bytes=packet_bytes)
     instructions = (agent.instructions + "\n\n"
@@ -75,14 +94,17 @@ def create_phase(agent, *, scope, artifact_id, packet, packet_bytes):
     phase.tool_surface_runtime = "extractor_followup"
     attach_agent_cost_identity(phase, get_agent_cost_identity(agent))
     apply_tool_surface(phase, runtime="extractor_followup")
+    from .phase_observability import record_phase
+    record_phase(phase, phase="extractor_followup", original_instructions=agent.instructions,
+        metadata={"artifact_id": artifact_id})
     return phase
 
 
-async def invoke(agent, *, scope, artifact_id, packet, packet_bytes, max_turns):
+async def invoke(agent, *, scope, artifact_id, packet, packet_bytes, max_turns, evidence_records):
     """Caller owns the admitted budget, lease and verified paper-tool context."""
     from src.lib.openai_agents.runner import run_agent_with_owned_openai_resources
     phase = create_phase(agent, scope=scope, artifact_id=artifact_id,
-                         packet=packet, packet_bytes=packet_bytes)
+                         packet=packet, packet_bytes=packet_bytes, evidence_records=evidence_records)
     result = await run_agent_with_owned_openai_resources(
         phase, input_value=json.dumps(packet, ensure_ascii=True, sort_keys=True), max_turns=max_turns)
     return TargetedFollowupResult.model_validate(result.final_output)

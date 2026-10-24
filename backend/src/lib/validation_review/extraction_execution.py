@@ -38,7 +38,9 @@ async def execute(scope, work_id, *, resolve_agent):
     # Explicit submission fence covers authorization/setup failures too. It is
     # marked not-admitted when we know no provider admission occurred.
     await asyncio.to_thread(work.mark_submitted, scope, work_id, claim["lease_token"])
-    evidence = deepcopy(payload["specialist_input"]["context"]["original_evidence"])
+    # Original records are read-only context, never mutable run-workspace entries.
+    # Tools can revise/discard only evidence created by this follow-up invocation.
+    evidence = []
     evidence_token = set_active_evidence_records(evidence)
 
     async def invoke():
@@ -48,7 +50,7 @@ async def execute(scope, work_id, *, resolve_agent):
             raise admission.ReviewStopped("configured_extractor_changed")
         result = await extractor_phase.invoke(agent, scope=scope, artifact_id=artifact_id,
             packet=payload["specialist_input"], packet_bytes=policy["packet_bytes"],
-            max_turns=pinned["max_turns"])
+            max_turns=pinned["max_turns"], evidence_records=evidence)
         return await asyncio.to_thread(extraction_results.retain, scope, work_id,
             claim["lease_token"], result, evidence_records=evidence)
 

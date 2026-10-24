@@ -86,3 +86,26 @@ def test_profile_mappings_cannot_be_omitted_replaced_or_extended(tmp_path, monke
                    [{'binding_id': 'saved-mapping', 'state': 'automatic'}] * 2):
         with pytest.raises(store.HistoryConflict, match='exact saved profile'):
             prepare(object(), object(), groups=groups, nodes={}, runtime_context=runtime)
+
+
+def test_custom_flow_validator_rejects_stale_frozen_benchmark_revision(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from src.lib.validation_review.flow_plan import build_validator
+    from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+    from src.lib.benchmarks.models import BenchmarkSuiteRoute
+    from src.lib.benchmarks.source_revisions import benchmark_source_revisions
+    from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
+    key = 'ca_pinned_validator'
+    frozen = source_receipt().model_copy(update={'agent_key': key})
+    stale = frozen.model_copy(update={'revision': frozen.revision + 1})
+    constructor = Mock()
+    monkeypatch.setattr('src.lib.agent_studio.catalog_service.get_benchmark_agent_by_id', constructor)
+    monkeypatch.setattr('src.lib.agent_studio.custom_profile_validators.runtime_validator_user_id', lambda _: 7)
+    routes = {'agent:' + key: BenchmarkSuiteRoute(provider='openai', model='fixture-model', reasoning_effort='low')}
+    with benchmark_route_plan(routes), benchmark_source_revisions({'agent:' + key: frozen}):
+        with pytest.raises(store.HistoryConflict, match='differs from the frozen benchmark source'):
+            build_validator({'node_id': 'saved', 'data': {'agent_id': key,
+                'agent_revision_id': str(stale.agent_revision_id), 'execution_receipt': stale.model_dump(mode='json')}},
+                SimpleNamespace(user_id='owner', document_id='paper', authenticated_groups=()))
+    constructor.assert_not_called()

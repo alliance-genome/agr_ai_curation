@@ -282,12 +282,18 @@ extractors retain only their configured paper tools and that history reader;
 full builders, finalizers and arbitrary agent dispatch are unavailable. Follow-up
 uses the existing reviewer token pool, while its child budget does not consume
 reviewer-turn counts. Existing deadlines and saved extractor max-turn settings apply.
+Original evidence stays read-only in supplied history. The follow-up workspace
+contains only newly recorded evidence, collected from verified paper-tool outputs
+before immutable contributions are retained. Both specialist phases log their actual
+prompt/tool configuration and bind an application-owned prompt manifest for TraceReview.
 
 Contributions are immutable proposals. The supervisor explicitly selects fields
 and evidence before they affect current values. Collections require explicit
 retain/revise/merge/split/add/retire relationships from the extractor. The runtime
 checks identity coverage and ancestry, never infers scientific identity from text
-or array positions. Nested split collections retain predecessor ancestry. Original
+or array positions. Nested split collections retain predecessor ancestry. A retained
+or revised child moving under a new immutable parent receives a successor identity;
+its original identity and consumed validation attempts remain in that ancestry. Original
 items and earlier validator answers remain auditable; retired items are not deleted.
 Affected validator inputs receive new version pins; unchanged siblings remain current.
 Curator edits have authority and cannot be silently overwritten by source selection.

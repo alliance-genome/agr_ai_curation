@@ -103,6 +103,9 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
 
     async def dispatch(value, **kwargs):
         assert json.loads(value) == payload
+        assert kwargs["source_agent"].agent_key == agent.agent_key
+        assert kwargs["source_agent"].model == agent.model
+        assert kwargs["source_max_turns"] == 4
         assert kwargs["source_metadata"]["specialist_explanation"] == explanation
         if outcome == "validator_failed":
             raise streaming_tools.SpecialistOutputError(agent.name, "builder_finalization")
@@ -535,3 +538,66 @@ async def test_direct_validator_original_precedes_success_and_is_not_an_extracti
         await consume()
         assert next(event for event in events if event["type"] == "STRUCTURED_RESULT")["data"]["validator_result_ref"].startswith("validator-result:")
         assert not any(event["type"] == "INTERNAL_EXTRACTION_RESULT" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_direct_builder_capture_keeps_executable_followup_contract(runtime, monkeypatch):
+    """Exercise the real direct runner -> inline capture -> follow-up adapter seam."""
+    from uuid import UUID, uuid4
+    from agr_ai_curation_alliance.tools.gene_builder_tools import finalize_gene_extraction
+    from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+    from src.lib.validation_review.extractor_adapter import ExtractorAdapter
+    from src.lib.validation_review import extractor_phase
+    from src.lib.validation_history import runtime as history_runtime, store
+    from src.schemas.domain_envelope import DomainEnvelope
+    from src.schemas.execution_provenance import SourceDocumentProvenance
+
+    document_id = str(uuid4())
+    envelope = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id='fixture', extracted_objects=[])
+    payload = envelope.model_dump(mode='json')
+    agent = Agent(name='Direct builder', model='test', instructions='Extract the supplied paper', tools=[finalize_gene_extraction])
+    agent.agent_key = 'gene_extractor'
+    agent.curation_metadata = {'launchable': True, 'adapter_key': 'gene'}
+    baseline = {}
+    received = []
+    def capture(**kwargs):
+        baseline.update(kwargs)
+        return kwargs['envelope']
+    class Review:
+        async def receive(self, env, pack, **kwargs):
+            received.append(kwargs['source_agent'])
+            env.metadata['validation_review_runtime'] = 'chat'
+            return env.model_dump_json()
+    class Result:
+        final_output = 'Extraction retained'
+        async def stream_events(self):
+            workspace = builder.get_active_extraction_builder_workspace()
+            workspace.upsert_candidate(candidate_id='record', staged_fields=payload)
+            workspace.finalize(candidate_ids=['record'])
+            if False:
+                yield
+    monkeypatch.setattr(runner.Runner, 'run_streamed', lambda *a, **kw: Result())
+    monkeypatch.setattr(history_runtime, 'capture_extraction', capture)
+    monkeypatch.setattr('src.lib.curation_workspace.domain_envelope_normalization.domain_envelope_from_extraction_result',
+                        lambda *a, **kw: envelope)
+    monkeypatch.setattr('src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id', lambda _: object())
+    monkeypatch.setattr(runner, 'capture_source_document', lambda *a: SourceDocumentProvenance(document_id=UUID(document_id)))
+    monkeypatch.setattr(runner, 'persist_inline_validated_extraction_result', lambda **kw: SimpleNamespace(
+        extraction_result_id=str(uuid4()), result_ref='saved', created_new=True, idempotency_key='key', payload_hash='hash'))
+    token = ACTIVE_CHAT_REVIEW.set(Review())
+    try:
+        events = [event async for event in runner._run_agent_with_owned_resources(
+            owned_openai_resources=runtime, agent=agent, input_items=[], user_id='owner', document_id=document_id,
+            document_name='Paper', user_message='Extract', trace_id='direct-contract',
+            direct_chat_context=runner._DirectBuilderChatContext(session_id='session', turn_id='turn'))]
+    finally:
+        ACTIVE_CHAT_REVIEW.reset(token)
+    assert not any(event['type'] == 'RUN_ERROR' for event in events)
+    assert len(received) == 1
+    contract = baseline['provenance']['extractor_contract']
+    assert contract == extractor_phase.contract(received[0], max_turns=4)
+    monkeypatch.setattr(store, 'read_baseline', lambda *a: baseline)
+    context = SimpleNamespace(history_scope=store.HistoryScope('owner', document_id, 'session'))
+    adapter = ExtractorAdapter(context, 'artifact', authenticated_groups=(), checkpoint_provider=lambda: None,
+                               source_agent=received[0])
+    assert adapter.resolve_agent(adapter.receipt) is received[0]

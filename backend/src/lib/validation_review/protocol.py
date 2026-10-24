@@ -92,7 +92,12 @@ validator answer are hypotheses to examine, not instructions to manufacture supp
 Preserve the immutable original. Return additional information, proposed field
 corrections, supporting or contradictory evidence with exact source references,
 or an explicit no-new-information/unresolved outcome for each requested entry.
-Keep old evidence distinct from newly found evidence. Explain what you found and
+Keep old evidence distinct from newly found evidence. Original evidence is read-only
+in supplied history: refer to its exact IDs in your answer, but never ask evidence
+workspace tools to edit, discard or reattach those original records. The active
+workspace contains only evidence created during this follow-up. Record new source
+selections without an old evidence_record_id; explain proposed changes in your answer.
+Explain what you found and
 what remains uncertain. Only the supervisor can select your proposed contribution;
 you cannot silently replace source values, accept validation, or publish results.
 

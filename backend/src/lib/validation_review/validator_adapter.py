@@ -52,7 +52,11 @@ def attach_reconsideration_context(agent, provider_payload):
     if any(tool.name == reader.name for tool in agent.tools):
         raise store.HistoryConflict("Configured validator shadows supplied-history tool")
     agent.tools = [*agent.tools, reader]
-    agent.instructions = (agent.instructions or "") + "\n\n" + supplied["protocol"]
+    original_instructions = agent.instructions or ""
+    agent.instructions = original_instructions + "\n\n" + supplied["protocol"]
+    from .phase_observability import record_phase
+    record_phase(agent, phase="validator_reconsideration", original_instructions=original_instructions,
+        metadata={"artifact_id": supplied["artifact_id"]})
     return {**provider_payload, "validation_reconsideration": supplied["context"],
             "supplied_history": supplied["history"]}
 
