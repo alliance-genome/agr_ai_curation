@@ -81,12 +81,11 @@ async def run(context, agent, *, input, run_config=None):
         MaxTurnsExceeded,
         asyncio.TimeoutError,
     ) as exc:
+        status = await asyncio.to_thread(
+            admission.status, context.history_scope, context.episode_id
+        )
         return {
-            "state": (
-                "complete"
-                if isinstance(exc, admission.ReviewStopped) and exc.reason == "complete"
-                else "needs_curator_review"
-            ),
+            "state": "complete" if status["ready"] else "needs_curator_review",
             "reason": (
                 exc.reason
                 if isinstance(exc, admission.ReviewStopped)
@@ -101,9 +100,7 @@ async def run(context, agent, *, input, run_config=None):
             "resource": (
                 exc.resource if isinstance(exc, admission.ReviewStopped) else None
             ),
-            "review": await asyncio.to_thread(
-                admission.status, context.history_scope, context.episode_id
-            ),
+            "review": status,
         }
     except Exception as error:
         from .audit import report_operational_failure

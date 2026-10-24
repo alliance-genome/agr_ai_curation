@@ -70,7 +70,11 @@ again. Once submission starts, a disconnected worker is uncertain: do not replay
 its provider call. Keep the reservation. Recovery/uncertainty facts remain in the
 immutable ledger, and late results are retained without granting selection rights.
 An acknowledgement can name the exact uncertain attempt without inventing a
-completion. A later real answer still requires its own explicit review.
+completion. A later real answer still requires its own explicit review. If that
+answer arrives after a retry completed the episode, the next authorized ledger
+operation structurally reopens the same episode and records why. It retains the
+accepted retry, original deadline and all charges. Expired, cancelled, superseded
+and retired episodes cannot publish late selections; no new allowance is granted.
 
 Expiry cancels awaited work through the deadline timeout and prevents new work or
 selection publication. Hosts call `admission.cancel` with the authenticated owner and reason, and cancel

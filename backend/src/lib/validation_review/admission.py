@@ -319,6 +319,30 @@ def lock_episode(db, history_scope, episode_id, *, require_open=True):
         )
         if latest != row.id:
             raise ReviewStopped("superseded")
+        if row.state == "complete":
+            from src.lib.validation_history.selections import manifest_in_transaction
+
+            manifest = manifest_in_transaction(
+                db, history_scope, row.artifact_id, episode_id=row.id
+            )
+            if any(
+                item["code"] == "answer_review_pending" for item in manifest["blockers"]
+            ):
+                # A late original answer is a new review obligation, not a new
+                # episode or a grant of more time/tokens/attempts. Preserve prior
+                # selections until an explicit decision changes them.
+                row.state = "open"
+                append_fact(
+                    db,
+                    row.artifact_id,
+                    operation_id="review-reopened:" + row.id + ":" + manifest["sha256"],
+                    kind="review_reopened",
+                    parent_id=row.id,
+                    body={
+                        "reason": "late_answer_review_pending",
+                        "manifest_sha256": manifest["sha256"],
+                    },
+                )
         if row.state != "open":
             raise ReviewStopped(row.state)
         if row.started_at and now() >= row.started_at + timedelta(

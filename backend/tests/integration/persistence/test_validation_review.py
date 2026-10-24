@@ -1095,8 +1095,14 @@ def test_32_target_run_shares_16_extra_allowance_across_two_episodes(scope):
     )
     episodes = []
     for index in range(2):
-        aid = h.capture_baseline(scope, producer_id=f"step:{index}", subject_kind="extracted",
-                                 typed={"mention": "original"}, normalized={"items": []}, provenance={})
+        aid = h.capture_baseline(
+            scope,
+            producer_id=f"step:{index}",
+            subject_kind="extracted",
+            typed={"mention": "original"},
+            normalized={"items": []},
+            provenance={},
+        )
         targets = [
             h.register_target(
                 scope, aid, identity=f"target:{n}", original={"binding_id": "fixture"}
@@ -1137,3 +1143,184 @@ def test_32_target_run_shares_16_extra_allowance_across_two_episodes(scope):
     assert remaining["reconsideration_tokens"] == 2400000
     assert remaining["reviewer_tokens"] == 2000000
     assert remaining["extra_attempts"] == 0
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_late_answer_reopens_public_review_without_refilling_budgets(
+    scope, scenario, monkeypatch, expired
+):
+    from copy import deepcopy
+    from dataclasses import replace
+    from src.lib.validation_review import scheduling
+    from src.lib.validation_review.decisions import ReviewContext, record_decisions
+    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+    from src.lib.validation_history.projection import read_published_projection
+    from src.models.sql.validation_history import ValidationFact
+    from src.models.sql.validation_review import ValidationReviewEpisode
+
+    x = scenario
+    old_answer = h.read_fact(scope, x.aid, x.first)
+    old_attempt = h.read_fact(scope, x.aid, old_answer["parent_id"])
+    x.episode_fn()
+    sid = a.create_scope(
+        scope, operation_id=uuid4().hex, kind="document_run", targets=1, episodes=1
+    )
+    a.attach_episode(scope, artifact_id=x.aid, episode_id=x.episode, scope_id=sid)
+    request = deepcopy(old_attempt["content"]["input"])
+    request["review_episode_id"] = x.episode
+    wid = scheduling.initial(
+        scope,
+        x.episode,
+        operation_id="unknown",
+        requests=[request],
+        receipt={"revision": "saved"},
+    )
+    claimed = w.claim(scope, wid)
+    w.mark_submitted(scope, wid, claimed["lease_token"])
+    w.mark_uncertain(scope, wid, claimed["lease_token"], reason="disconnected")
+    original_attempt = claimed["payload"]["invocation"]["attempt_ids"][0]
+    context = ReviewContext(scope, x.episode, "reviewer")
+    checkpoint = DomainEnvelopeCheckpointRequest(
+        project_key="fixture",
+        envelope=x.env,
+        expected_revision=x.revision,
+        document_id=scope.document_id,
+        adapter_key="fixture",
+        source_extraction_result_id=x.source,
+    )
+
+    def decide(attempt, action):
+        nonlocal checkpoint
+        with h.SessionLocal() as db:
+            version = h._current(db, x.aid, x.target)["version"]
+        response = record_decisions(
+            context,
+            checkpoint_request=checkpoint,
+            operation_id=uuid4().hex,
+            entries=[
+                {
+                    "target_id": x.target,
+                    "decision_unit_id": x.target,
+                    "logical_attempt_id": attempt,
+                    "expected_version": version,
+                    "action": action,
+                    "reason": "Explicit review",
+                }
+            ],
+        )
+        projected, _ = read_published_projection(scope, response["publication"])
+        checkpoint = replace(
+            checkpoint,
+            envelope=projected,
+            expected_revision=response["envelope_revision"],
+        )
+        return response
+
+    acknowledged = decide(original_attempt, "acknowledge_failure")
+    retry = scheduling.reconsider(
+        context,
+        operation_id="retry",
+        parent_decision_id=acknowledged["decision_id"],
+        target_ids=[x.target],
+        instructions="Check original supplied evidence",
+        evidence_refs=[],
+    )
+    with h.SessionLocal() as db:
+        attempt = db.get(Work, retry).payload["invocation"]["attempt_ids"][0]
+    retry_completion = h.complete_attempt(
+        scope,
+        x.aid,
+        attempt,
+        state="completed",
+        result=old_answer["content"]["result"],
+        diagnostics={},
+    )
+    # Actor adapters retain the normalized candidate after durable completion,
+    # exactly as existing runtime producers do before public publication.
+    from src.lib.validation_history.candidates import retain_candidates
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+    from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
+    from src.schemas.domain_validator import (
+        DomainValidationRequest,
+        DomainValidatorResultBase,
+    )
+
+    completion = h.read_fact(scope, x.aid, retry_completion)
+    result = DomainValidatorResultBase.model_validate(completion["content"]["result"])
+    result._history_ref = {
+        "artifact_id": x.aid,
+        "session_id": scope.session_id,
+        "attempt_id": attempt,
+        "fact_id": retry_completion,
+        "body_sha256": completion["sha256"],
+        "execution_state": "completed",
+        "sequence": completion["sequence"],
+        "created_at": completion["created_at"],
+    }
+    match = DomainPackValidationRegistry.from_domain_pack(x.pack).match_bindings(x.env)[
+        0
+    ]
+    retained = retain_candidates(
+        checkpoint.envelope,
+        [
+            ValidatorResultMaterializationInput(
+                match,
+                DomainValidationRequest.model_validate(request["request"]),
+                result,
+            )
+        ],
+        scope=scope,
+        source_envelope_revision=checkpoint.expected_revision,
+    )
+    checkpoint = replace(checkpoint, envelope=retained.envelope)
+    assert decide(attempt, "accept")["ready"]
+    before = a.status(scope, x.episode)
+    with h.SessionLocal() as db:
+        ep = db.get(ValidationReviewEpisode, x.episode)
+        assert ep.state == "complete"
+        started, deadline = ep.started_at, ep.policy["deadline_seconds"]
+    h.complete_attempt(
+        scope,
+        x.aid,
+        original_attempt,
+        state="completed",
+        result=old_answer["content"]["result"],
+        diagnostics={},
+    )
+    if expired:
+        monkeypatch.setattr(a, "now", lambda: started + timedelta(seconds=deadline + 1))
+    status = a.status(scope, x.episode)
+    assert not status["ready"] and status["state"] == (
+        "expired" if expired else "pending"
+    )
+    assert status["budgets"] == before["budgets"]
+    if expired:
+        with pytest.raises(a.ReviewStopped, match="expired"):
+            decide(original_attempt, "reject")
+    else:
+        rejected = decide(original_attempt, "reject")
+        assert not rejected[
+            "ready"
+        ]  # C keeps the selection, but the latest review is reject.
+        assert decide(attempt, "accept")[
+            "ready"
+        ]  # explicit reaffirmation, never autoaccept
+        assert h.complete_attempt(
+            scope,
+            x.aid,
+            original_attempt,
+            state="completed",
+            result=old_answer["content"]["result"],
+            diagnostics={},
+        )
+        assert a.status(scope, x.episode)[
+            "ready"
+        ]  # identical late completion cannot reopen again
+    with h.SessionLocal() as db:
+        assert db.get(ValidationReviewEpisode, x.episode).started_at == started
+        assert db.scalar(
+            select(ValidationFact.id).where(
+                ValidationFact.artifact_id == x.aid,
+                ValidationFact.kind == "review_reopened",
+            )
+        )
