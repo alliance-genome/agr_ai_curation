@@ -63,12 +63,12 @@ def planned(scope, tmp_path, monkeypatch, request):
 
         raw = deepcopy(pack.metadata.metadata)
         raw["validator_bindings"]["active"][0]["group_scope"] = {
-            "required_any_active_group": ["ZFIN"]
+            "required_any_active_group": ["TEST_GROUP"]
         }
         pack = replace(
             pack, metadata=pack.metadata.model_copy(update={"metadata": raw})
         )
-        groups = ("ZFIN",)
+        groups = ("TEST_GROUP",)
     env = DomainEnvelope(
         envelope_id=uuid4().hex,
         domain_pack_id=pack.pack_id,

@@ -349,7 +349,7 @@ def test_direct_supervisor_resolves_requested_settings_without_routing_agent(
 
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", settings)
     agent = create_direct_supervisor(
-        active_groups=["FB"],
+        active_groups=["TEST_GROUP"],
         model_override="gpt-6-astra",
         temperature_override=0.2,
         reasoning_override="high",
