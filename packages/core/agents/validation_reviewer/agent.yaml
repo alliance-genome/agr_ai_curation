@@ -1,0 +1,21 @@
+agent_id: validation_reviewer
+name: "Validation Reviewer"
+description: >
+  Reviews exact extraction and validator history and records explicit decisions.
+  Invoked within an authenticated pending review episode by runtime orchestration.
+category: "Curation"
+subcategory: "Review"
+supervisor_routing:
+  enabled: false
+tools: []
+model_config:
+  model: "${AGENT_VALIDATION_REVIEWER_MODEL:-gpt-6.1-sol}"
+  temperature: 0.1
+  reasoning: "medium"
+requires_document: true
+required_params:
+  - document_id
+frontend:
+  icon: "VR"
+  show_in_palette: false
+group_rules_enabled: true

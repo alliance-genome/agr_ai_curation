@@ -1,5 +1,7 @@
 """SQL models module."""
 
+from .validation_review import ValidationReviewScope, ValidationReviewEpisode, ValidationReviewReservation, ValidationReviewWork
+
 from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from .benchmark import (
     BenchmarkCell,

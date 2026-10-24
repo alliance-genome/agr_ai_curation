@@ -604,3 +604,13 @@ def test_capacity_event_writer_and_timeline_keep_counts_and_redact_credentials(t
         writer.clear_extraction_trace_run()
     result = ExtractionTimelineAnalyzer.analyze(trace_id="capacity", raw_trace={}, observations=[], include_raw_outputs=True)
     assert result["timeline"][0]["output"]["preview"] == {**metrics, "access_token": "<redacted>"}
+
+
+def test_validation_review_operations_keep_exact_history_refs(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    _write_event(tmp_path, 'review', _event('review', 1, 'validation_review.review_response',
+        output_summary={'preview': {'artifact_id': 'artifact', 'fact_id': 'decision-fact',
+                                    'sha256': 'exact-body', 'content': {'reason': 'Caveat accepted'}}}))
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='review', raw_trace={}, observations=[], include_raw_outputs=True)
+    assert result['validation_review']['event_count'] == 1
+    assert result['validation_review']['events'][0]['output']['preview']['fact_id'] == 'decision-fact'

@@ -376,6 +376,16 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
 
 def publish_decisions(scope, *, checkpoint_request, episode_id, operation_id, actor, entries):
     """Select, rebuild and checkpoint in one transaction; no provider calls inside."""
+    with store.SessionLocal.begin() as db:
+        return publish_decisions_in_transaction(
+            db, scope, checkpoint_request=checkpoint_request, episode_id=episode_id,
+            operation_id=operation_id, actor=actor, entries=entries,
+        )
+
+
+def publish_decisions_in_transaction(db, scope, *, checkpoint_request, episode_id,
+                                     operation_id, actor, entries):
+    """Shared atomic boundary for review admission plus publication."""
     from dataclasses import replace
     from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
     from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
@@ -383,37 +393,35 @@ def publish_decisions(scope, *, checkpoint_request, episode_id, operation_id, ac
 
     envelope = checkpoint_request.envelope
     artifact_id = envelope.metadata["validation_history"]["artifact_id"]
-    with store.SessionLocal.begin() as db:
-        selections._lock_artifact(db, scope, artifact_id, write=True)
-        selections.decide_episode_in_transaction(
-            db, scope, artifact_id, episode_id=episode_id,
-            operation_id=operation_id, actor=actor, entries=entries,
-        )
-        from .curator_authority import release_accepted_overlays
-        release_accepted_overlays(db, scope, artifact_id, episode_id=episode_id,
-                                 operation_id=operation_id, accepted_entries=entries)
-        manifest = selections.manifest_in_transaction(db, scope, artifact_id, episode_id=episode_id)
-        pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
-        if pack is None:
-            raise store.HistoryConflict("Selected projection domain pack is unavailable")
-        profile = resolve_envelope_profile_validation(
-            envelope, pack, db=db, user_id=scope.owner_id,
-            active_group_ids=checkpoint_request.authenticated_groups or (),
-        )
-        projected = rebuild_selected_envelope(
-            db, scope, artifact_id, envelope=envelope, manifest=manifest,
-            domain_pack=pack, profile_context=profile,
-        )
-        projected = pin_publication_in_transaction(
-            db, scope, artifact_id, operation_id=operation_id,
-            manifest=manifest, envelope=projected, envelope_revision=checkpoint_request.expected_revision + 1,
-        )
-        checkpoint = write_domain_envelope_checkpoint(
-            db, replace(checkpoint_request, envelope=projected),
-        )
-        refresh_workspace_projection(db, projected, checkpoint.revision)
-        return projected, manifest, checkpoint
-
+    selections._lock_artifact(db, scope, artifact_id, write=True)
+    selections.decide_episode_in_transaction(
+        db, scope, artifact_id, episode_id=episode_id,
+        operation_id=operation_id, actor=actor, entries=entries,
+    )
+    from .curator_authority import release_accepted_overlays
+    release_accepted_overlays(db, scope, artifact_id, episode_id=episode_id,
+                             operation_id=operation_id, accepted_entries=entries)
+    manifest = selections.manifest_in_transaction(db, scope, artifact_id, episode_id=episode_id)
+    pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if pack is None:
+        raise store.HistoryConflict("Selected projection domain pack is unavailable")
+    profile = resolve_envelope_profile_validation(
+        envelope, pack, db=db, user_id=scope.owner_id,
+        active_group_ids=checkpoint_request.authenticated_groups or (),
+    )
+    projected = rebuild_selected_envelope(
+        db, scope, artifact_id, envelope=envelope, manifest=manifest,
+        domain_pack=pack, profile_context=profile,
+    )
+    projected = pin_publication_in_transaction(
+        db, scope, artifact_id, operation_id=operation_id,
+        manifest=manifest, envelope=projected, envelope_revision=checkpoint_request.expected_revision + 1,
+    )
+    checkpoint = write_domain_envelope_checkpoint(
+        db, replace(checkpoint_request, envelope=projected),
+    )
+    refresh_workspace_projection(db, projected, checkpoint.revision)
+    return projected, manifest, checkpoint
 
 def latest_publication_reference(scope, artifact_id):
     """Discover a publication only inside the caller-authorized exact artifact."""

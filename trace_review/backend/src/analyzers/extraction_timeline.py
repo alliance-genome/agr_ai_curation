@@ -1025,6 +1025,11 @@ class ExtractionTimelineAnalyzer:
             "feedback_artifact_event_count": len(feedback_events),
             "observation_event_count": len(observation_events),
             "event_type_counts": counts,
+            "validation_review": {
+                "event_count": sum(count for kind, count in counts.items() if kind.startswith("validation_review.")),
+                "events": [item for item in timeline if str(item.get("event_type", "")).startswith("validation_review.")],
+                "note": "Committed review operations only. Exact bodies are pinned by artifact/fact ID and SHA; scientific decisions are not inferred from execution completion.",
+            },
             "size_summary": _payload_size_summary(timeline),
             "reasoning_summary": {
                 "status": reasoning_status,

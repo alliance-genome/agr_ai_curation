@@ -957,6 +957,8 @@ def record_outcome(
 
     if measurement.get("_published"):
         return
+    from src.lib.validation_review.provider import settle
+    settle(measurement.get("_review_reservation"), usage)
     accounting = measurement.get("_runtime_accounting")
     if accounting is not None:
         from src.lib.cost_ledger.runtime_writes import finish_runtime_request
@@ -1240,7 +1242,9 @@ class MeasuredModel(Model):
         from .context_capacity import NativeCapacityRequest
         from .context_compaction import native_compaction_settings
         from .model_context_view import ContextRecoveryError
-        settings = native_compaction_settings(self._inner, settings, provider_hint=self._provider_hint)
+        from src.lib.validation_review.provider import ACTIVE_BUDGET
+        if ACTIVE_BUDGET.get() is None:
+            settings = native_compaction_settings(self._inner, settings, provider_hint=self._provider_hint)
         if self._context_policy is None or describe_model(self._inner, provider_hint=self._provider_hint)[:2] != ("openai", "responses"):
             return input, settings
         if previous_response_id or conversation_id:
@@ -1293,6 +1297,12 @@ class MeasuredModel(Model):
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
+        from src.lib.validation_review.provider import admit_model, guarded_await
+        model_settings, review_reservation = await admit_model(
+            self._inner, model_settings, instructions=system_instructions, input=input,
+            tools=tools, output_schema=output_schema, handoffs=handoffs,
+            previous_response_id=previous_response_id, conversation_id=conversation_id,
+            prompt=prompt, provider_hint=self._provider_hint, agent=self._agent)
         measurement = self._measure(
             system_instructions,
             input,
@@ -1305,10 +1315,14 @@ class MeasuredModel(Model):
             prompt,
             prompt_cache_tool_surface,
         )
+        measurement["_review_reservation"] = review_reservation
+        if review_reservation is not None:
+            measurement["review_reservation_id"] = review_reservation[1]
+            measurement["review_episode_id"] = review_reservation[0].episode_id
         try:
             from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
             with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
-                response = await self._inner.get_response(
+                response = await guarded_await(self._inner.get_response(
                     system_instructions,
                     input,
                     model_settings,
@@ -1319,7 +1333,7 @@ class MeasuredModel(Model):
                     previous_response_id=previous_response_id,
                     conversation_id=conversation_id,
                     prompt=prompt,
-                )
+                ))
         except BaseException as exc:
             from .run_history import record_model_history
             await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
@@ -1361,6 +1375,12 @@ class MeasuredModel(Model):
         model_settings, prompt_cache_tool_surface = bind_prompt_cache_tool_surface(
             model_settings, tools, handoffs
         )
+        from src.lib.validation_review.provider import admit_model, guarded_await
+        model_settings, review_reservation = await admit_model(
+            self._inner, model_settings, instructions=system_instructions, input=input,
+            tools=tools, output_schema=output_schema, handoffs=handoffs,
+            previous_response_id=previous_response_id, conversation_id=conversation_id,
+            prompt=prompt, provider_hint=self._provider_hint, agent=self._agent)
         measurement = self._measure(
             system_instructions,
             input,
@@ -1373,6 +1393,10 @@ class MeasuredModel(Model):
             prompt,
             prompt_cache_tool_surface,
         )
+        measurement["_review_reservation"] = review_reservation
+        if review_reservation is not None:
+            measurement["review_reservation_id"] = review_reservation[1]
+            measurement["review_episode_id"] = review_reservation[0].episode_id
         stream = self._inner.stream_response(
             system_instructions,
             input,
@@ -1391,7 +1415,7 @@ class MeasuredModel(Model):
         try:
             # The adapter opens this attempt's tracing span on its first step.
             with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
-                event = await anext(stream, _STREAM_END)
+                event = await guarded_await(anext(stream, _STREAM_END))
             while event is not _STREAM_END:
                 event_type = getattr(event, "type", None)
                 if event_type in {"response.completed", "response.incomplete", "response.failed"}:
@@ -1403,7 +1427,7 @@ class MeasuredModel(Model):
                         _observe_service_tier(measurement, event)
                 yield event
                 with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
-                    event = await anext(stream, _STREAM_END)
+                    event = await guarded_await(anext(stream, _STREAM_END))
         except BaseException as exc:
             from .run_history import record_model_history
             await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
@@ -1656,6 +1680,8 @@ async def call_measured_direct_request(
 ) -> Any:
     """Measure, enforce, send and record one direct client request."""
 
+    from src.lib.validation_review.provider import guard_direct_request
+    guard_direct_request()
     measurement = measure_direct_request(
         surface=surface,
         provider=provider,
