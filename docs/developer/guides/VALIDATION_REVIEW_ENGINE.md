@@ -254,3 +254,9 @@ again. A new curator turn can continue the same episode without resetting budget
 Explicit Stop produces a saved interruption notice rather than a provider-error
 alert. Restored chat badges are labelled as status at the time of the response;
 current delivery and authenticated replay still read readiness from the ledger.
+Only notes produced in the current turn are automatically appended to ordinary
+named-supervisor or lookup answers; earlier notes remain reference context. Direct
+saved-review presentation can show the latest notes alongside saved selections.
+Browser-cache restoration also labels readiness as historical. A request-local
+Stop flag survives SDK tool-task cancellation even when the SDK consumes the
+cancellation exception; the outer chat wrapper still reports interruption.

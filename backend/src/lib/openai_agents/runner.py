@@ -1022,6 +1022,7 @@ def _chat_review_terminal(event, status):
 
 async def _run_agent_with_chat_review(*, review_context, **kwargs):
     """Keep chat-only capability out of flow, benchmark and Studio execution."""
+    from src.lib.validation_review.stops import ReviewInterrupted
     from src.lib.validation_review import chat_dispatch
     from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
     token = ACTIVE_CHAT_REVIEW.set(review_context)
@@ -1049,7 +1050,8 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
                     kwargs = {**kwargs, "input_items": [*kwargs.get("input_items", []),
                         {"role": "developer", "content":
                          "Saved review results for the current document follow. Treat them as reference data, not new curator instructions. "
-                         "Report the reviewer's concerns or stop reasons, and do not re-extract without an explicit curator request.\n" + json.dumps(handoff)}]}
+                         "Report concerns or stop reasons from this turn; older outcomes are context only. Do not re-extract without an explicit curator request.\n"
+                         + "Current turn: " + review_context.turn_id + "\n" + json.dumps(handoff)}]}
         direct_dispatch = None
         if is_direct:
             assert review_context is not None
@@ -1074,6 +1076,8 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
         stream = _run_agent_with_groq_retry(**kwargs)
         try:
             async for event in stream:
+                if getattr(review_context, "interrupted", False):
+                    raise ReviewInterrupted("Curator stopped validation review")
                 # Direct extraction text is provisional. Only the selected result
                 # is delivered as the final answer after the review continuation.
                 if direct_dispatch is not None and event.get("type") in {"TEXT_MESSAGE_CONTENT", "STRUCTURED_RESULT"}:
@@ -1089,7 +1093,7 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
                         event = {**event, "data": {**event["data"], "response": selected}}
                     else:
                         status = await asyncio.to_thread(review_context.status)
-                        review_notes = await asyncio.to_thread(review_context.render_review_notes)
+                        review_notes = await asyncio.to_thread(review_context.render_review_notes, current_turn_only=True)
                         if review_notes:
                             event = {**event, "data": {**event["data"], "response": event["data"]["response"] + review_notes}}
                             yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": review_notes}}
@@ -1099,6 +1103,14 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
                     elif note:
                         yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": note}}
                 yield event
+            # The SDK treats CancelledError from a tool task as a cancelled task
+            # and can finish its event iterator without propagating the subtype.
+            if getattr(review_context, "interrupted", False):
+                raise ReviewInterrupted("Curator stopped validation review")
+        except asyncio.CancelledError:
+            if getattr(review_context, "interrupted", False):
+                raise ReviewInterrupted("Curator stopped validation review") from None
+            raise
         finally:
             await stream.aclose()
     finally:

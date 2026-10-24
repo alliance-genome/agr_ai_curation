@@ -45,6 +45,7 @@ class ChatReview:
     user_request: str
     phase_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     reviewed: set[str] = field(default_factory=set)
+    interrupted: bool = False
 
     async def until_stop(self, awaitable):
         """Stop interrupts non-streaming phases; submitted late answers stay durable."""
@@ -64,6 +65,7 @@ class ChatReview:
             )
             if watcher in done:
                 watcher.result()
+                self.interrupted = True
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
                 from .stops import ReviewInterrupted
@@ -514,7 +516,7 @@ class ChatReview:
                 },
             )
 
-    def review_notes(self, *, result_refs=None):
+    def review_notes(self, *, result_refs=None, current_turn_only=False):
         """Latest phase explanation per result; older explanations remain auditable."""
         from src.models.sql.validation_history import ValidationFact
 
@@ -540,15 +542,19 @@ class ChatReview:
                     .limit(1)
                 )
                 if fact is not None:
-                    notes.append(store._content(db, fact))
+                    entry = store._content(db, fact)
+                    if not current_turn_only or entry["turn_id"] == self.turn_id:
+                        notes.append(entry)
         return notes
 
     def supervisor_handoff(self):
         return {"status": self.status(), "review_outcomes": self.review_notes()}
 
-    def render_review_notes(self, *, result_refs=None):
+    def render_review_notes(self, *, result_refs=None, current_turn_only=False):
         notes = []
-        for entry in self.review_notes(result_refs=result_refs):
+        for entry in self.review_notes(
+            result_refs=result_refs, current_turn_only=current_turn_only
+        ):
             outcome = entry["outcome"]
             output = outcome.get("output")
             if output:

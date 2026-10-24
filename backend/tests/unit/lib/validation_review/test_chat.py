@@ -117,7 +117,7 @@ async def test_pending_terminal_is_authoritative_even_if_model_claims_complete(
         resume=AsyncMock(),
         status=lambda: {"pending_count": 1, "results": []},
         supervisor_handoff=lambda: {"review_outcomes": []},
-        render_review_notes=lambda: "",
+        render_review_notes=lambda **kwargs: "",
     )
     events = [
         event
@@ -309,7 +309,7 @@ async def test_direct_lookup_preserves_own_answer_and_never_claims_extraction(
         resume=AsyncMock(),
         status=lambda: {"pending_count": 0, "results": []},
         supervisor_handoff=lambda: {"review_outcomes": []},
-        render_review_notes=lambda: "",
+        render_review_notes=lambda **kwargs: "",
     )
     events = [
         event
@@ -376,8 +376,9 @@ async def test_named_resume_without_extractor_delivers_actual_review_notes(monke
     context = SimpleNamespace(
         resume=AsyncMock(),
         status=lambda: {"pending_count": 1, "results": []},
-        supervisor_handoff=lambda: {"review_outcomes": [{"outcome": {"output": note}}]},
-        render_review_notes=lambda: "\n\nReviewer's notes:\n" + note,
+        turn_id="current-turn",
+        supervisor_handoff=lambda: {"review_outcomes": [{"turn_id": "current-turn", "outcome": {"output": note}}]},
+        render_review_notes=lambda **kwargs: "\n\nReviewer's notes:\n" + note,
     )
     events = [
         event
@@ -387,3 +388,93 @@ async def test_named_resume_without_extractor_delivers_actual_review_notes(monke
     ]
     assert note in events[-1]["data"]["response"]
     assert any(note in event.get("data", {}).get("delta", "") for event in events)
+
+
+@pytest.mark.asyncio
+async def test_later_unrelated_turn_does_not_repeat_previous_review_notes(monkeypatch):
+    from src.lib.openai_agents import runner
+    from src.lib.validation_review.chat import ChatReview
+
+    note = "Earlier review concern."
+    context = SimpleNamespace(
+        turn_id="second-turn", resume=AsyncMock(),
+        status=lambda: {"pending_count": 0, "results": []},
+        supervisor_handoff=lambda: {"review_outcomes": [
+            {"turn_id": "first-turn", "outcome": {"output": note}}
+        ]},
+        review_notes=lambda **kwargs: [] if kwargs.get("current_turn_only") else [
+            {"turn_id": "first-turn", "outcome": {"output": note}}
+        ],
+    )
+    context.render_review_notes = lambda **kwargs: ChatReview.render_review_notes(context, **kwargs)
+
+    async def stream(**kwargs):
+        reference = kwargs["input_items"][-1]["content"]
+        assert "older outcomes are context only" in reference
+        assert "Current turn: second-turn" in reference
+        yield {"type": "RUN_FINISHED", "data": {"response": "Unrelated answer."}}
+
+    monkeypatch.setattr(runner, "_run_agent_with_groq_retry", stream)
+    events = [event async for event in runner._run_agent_with_chat_review(
+        review_context=context, input_items=[]
+    )]
+    assert events[-1]["data"]["response"] == "Unrelated answer."
+    assert note not in str(events)
+
+
+@pytest.mark.asyncio
+async def test_stop_inside_real_sdk_tool_survives_sdk_cancellation_handling(monkeypatch):
+    import asyncio
+    from agents import Model, RunConfig, Runner
+    from openai.types.responses import Response, ResponseCompletedEvent, ResponseFunctionToolCall
+    from src.lib.openai_agents import runner
+    from src.lib.validation_review.chat import ChatReview
+    from src.lib.validation_review.stops import ReviewInterrupted
+
+    context = ChatReview("owner", "doc", "session", "turn", None, (), "Extract")
+    context.resume = AsyncMock()
+    context.supervisor_handoff = lambda: {"review_outcomes": []}
+    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=True))
+    called = []
+
+    @function_tool
+    async def extractor_tool() -> str:
+        called.append(True)
+        await context.until_stop(asyncio.Event().wait())
+        return "unreachable"
+
+    class ToolModel(Model):
+        async def get_response(self, *args, **kwargs):
+            raise AssertionError("Expected streamed SDK")
+
+        async def stream_response(self, *args, **kwargs):
+            response = Response.model_construct(
+                id="response-1", created_at=0, model="fixture", object="response",
+                status="completed", usage=None,
+                output=[ResponseFunctionToolCall(
+                    id="fc1", call_id="call1", name="extractor_tool",
+                    arguments="{}", type="function_call",
+                )],
+            )
+            yield ResponseCompletedEvent(type="response.completed", sequence_number=0, response=response)
+
+    async def sdk_stream(**kwargs):
+        result = Runner.run_streamed(
+            Agent(name="Supervisor", model=ToolModel(), tools=[extractor_tool]),
+            "Extract", max_turns=1, run_config=RunConfig(tracing_disabled=True),
+        )
+        async for event in result.stream_events():
+            yield {"type": "SDK_EVENT", "data": {}}
+        # Some SDK versions consume tool cancellation and finish normally.
+        yield {"type": "RUN_FINISHED", "data": {"response": "Must not complete"}}
+
+    monkeypatch.setattr(runner, "_run_agent_with_groq_retry", sdk_stream)
+
+    async def collect():
+        return [event async for event in runner._run_agent_with_chat_review(
+            review_context=context, input_items=[]
+        )]
+
+    with pytest.raises(ReviewInterrupted):
+        await asyncio.wait_for(collect(), timeout=5)
+    assert called == [True] and context.interrupted

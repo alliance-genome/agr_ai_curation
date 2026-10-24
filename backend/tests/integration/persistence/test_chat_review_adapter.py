@@ -362,6 +362,14 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
             )
         ).all()
         assert len(summaries) == 1
+    later = ChatReview(
+        scope.owner_id, scope.document_id, scope.session_id,
+        uuid4().hex, supervisor, (), "Unrelated question",
+    )
+    assert later.review_notes() == chat.review_notes()
+    assert later.review_notes(current_turn_only=True) == []
+    assert later.render_review_notes(current_turn_only=True) == ""
+    assert chat.review_notes(current_turn_only=True) == chat.review_notes()
     assert len(chat.records()) == 1
     record = records[0]
     assert record.payload_json["extracted_objects"][0]["payload"][

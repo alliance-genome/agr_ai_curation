@@ -47,6 +47,22 @@ describe('chatMessageUtils', () => {
     expect(restoredMessage.timestamp.toISOString()).toBe('2026-02-03T04:05:06.000Z')
   })
 
+  it('labels cached live review status as a historical snapshot on reload', () => {
+    const storageKeys = getChatLocalStorageKeys('user-1')
+    localStorage.setItem(storageKeys.messages, JSON.stringify({
+      session_id: 'session-1',
+      messages: [{
+        role: 'assistant', content: 'Saved result',
+        timestamp: '2026-02-03T04:05:06.000Z',
+        validationReview: { pending_count: 1, results: [] },
+        validationReviewSnapshot: false,
+      }],
+    }))
+    const [restored] = loadMessagesFromStorage(storageKeys, 'session-1')
+    expect(restored.validationReviewSnapshot).toBe(true)
+    expect(restored.validationReview?.pending_count).toBe(1)
+  })
+
   it('restores session-scoped messages only when the stored session matches', () => {
     const storageKeys = getChatLocalStorageKeys('user-1')
     const storedData: StoredChatData = {
