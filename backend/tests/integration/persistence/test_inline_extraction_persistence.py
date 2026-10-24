@@ -206,6 +206,9 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
     agent.agent_key = "gene_extractor"
     agent.curation_metadata = {"launchable": True, "adapter_key": "gene"}
     captured = {}
+    # This provider-free persistence fixture must also work in CI without secrets.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("src.lib.openai_agents.config.get_model_for_agent", lambda model, **kwargs: model)
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
     monkeypatch.setattr("src.lib.prompts.assembly.build_agent_prompt_layers",
                         lambda *a, **k: SimpleNamespace(layers=(), hash="fixture"))
