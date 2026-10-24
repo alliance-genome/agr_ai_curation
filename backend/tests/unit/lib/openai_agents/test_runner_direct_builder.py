@@ -41,10 +41,11 @@ async def run_direct(resources, agent, trace):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("profile_bound", [False, True])
-@pytest.mark.parametrize("text_source", ["final_output", "message"])
+@pytest.mark.parametrize("reviewed_chat", [False, True])
+@pytest.mark.parametrize("text_source", ["final_output", "message", "stream"])
 @pytest.mark.parametrize("outcome", ["persisted", "persistence_failed", "missing_owner", "missing_session",
                                      "missing_finalization", "validator_failed"])
-async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkeypatch, outcome, profile_bound, text_source):
+async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkeypatch, outcome, profile_bound, text_source, reviewed_chat):
     from uuid import UUID
     from agr_ai_curation_alliance.tools.gene_builder_tools import finalize_gene_extraction
     from src.api import chat_common
@@ -102,8 +103,12 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
 
     async def dispatch(value, **kwargs):
         assert json.loads(value) == payload
+        assert kwargs["source_metadata"]["specialist_explanation"] == explanation
         if outcome == "validator_failed":
             raise streaming_tools.SpecialistOutputError(agent.name, "builder_finalization")
+        if reviewed_chat:
+            validated["metadata"]["validation_review_runtime"] = "chat"
+            validated["specialist_explanation"] = explanation
         return json.dumps(validated)
 
     explanation = "  Findings, exclusions and uncertainty.\nComplete authored explanation.  "
@@ -120,6 +125,12 @@ async def test_direct_chat_builder_requires_owned_durable_result(runtime, monkey
                 workspace.finalize(candidate_ids=["materialized"])
             if text_source == "message":
                 yield SimpleNamespace(type="run_item_stream_event", item=SimpleNamespace(type="message_output_item"))
+            if text_source == "stream":
+                from openai.types.responses import ResponseTextDeltaEvent
+                yield SimpleNamespace(type="raw_response_event", data=ResponseTextDeltaEvent(
+                    type="response.output_text.delta", delta=explanation, item_id="item-1",
+                    output_index=0, content_index=0, sequence_number=0, logprobs=[],
+                ))
 
     monkeypatch.setattr(runner, "capture_source_document", capture)
     monkeypatch.setattr(runner, "persist_inline_validated_extraction_result", persist)

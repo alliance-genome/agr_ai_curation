@@ -3964,16 +3964,24 @@ async def _dispatch_domain_envelope_validators_for_chat(
         from src.lib.validation_history.store import HistoryScope
         if runtime_context is None:
             raise ValueError("Extraction history requires authenticated source context")
+        from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+        chat_review = ACTIVE_CHAT_REVIEW.get()
+        source_payload = json.loads(final_output)
+        if chat_review is not None:
+            explanation = (source_metadata or {}).get("specialist_explanation")
+            if isinstance(explanation, str):
+                # Make authored context part of the one immutable source, before
+                # capture/planning/persistence; readers use the envelope field.
+                envelope.specialist_explanation = explanation
+                source_payload["specialist_explanation"] = explanation
         envelope = await asyncio.to_thread(
             capture_extraction,
             scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, history_scope_id),
             producer_id=producer_id,
-            typed=json.loads(final_output), envelope=envelope,
+            typed=source_payload, envelope=envelope,
             provenance={"agent_key": agent_key, "execution_receipt": execution_receipt},
         )
 
-        from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
-        chat_review = ACTIVE_CHAT_REVIEW.get()
         if chat_review is not None:
             try:
                 return await chat_review.receive(envelope, domain_pack,

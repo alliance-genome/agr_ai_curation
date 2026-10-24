@@ -291,6 +291,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
                 assert record.payload_json == captured["pending_payload"]
                 assert record.payload_json["metadata"]["validation_review_runtime"] == "chat"
                 assert record.payload_json["extracted_objects"]
+                assert record.payload_json["specialist_explanation"] == Result.final_output
                 assert record.extraction_metadata["specialist_explanation"] == Result.final_output
                 assert record.origin_session_id == session_id
                 assert record.trace_id == captured["trace_id"]
@@ -313,6 +314,20 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
     assert persisted_ref is not None
     assert chat_common._build_extraction_candidate_from_tool_event(
         internal[0], tool_agent_map={}, conversation_summary=None) is None
+    from src.lib.openai_agents import inspect_results as inspection
+    from src.lib.openai_agents.extraction_manifest import (
+        build_extraction_manifest_page, render_extraction_manifest_page,
+    )
+    monkeypatch.setattr(inspection, "get_current_session_id", lambda: session_id)
+    monkeypatch.setattr(inspection, "get_current_user_id", lambda: "test_pdf_owner_inline_extraction")
+    monkeypatch.setattr(inspection.document_state, "get_document", lambda _: {"id": document_id})
+    explanation_result = json.loads(await inspection.inspect_results(
+        action="explanation", result_ref="extraction-result:" + str(persisted_ref.extraction_result_id),
+    ))
+    assert explanation_result["status"] == "ok"
+    assert explanation_result["value"] == Result.final_output
+    manifest = build_extraction_manifest_page(captured["pending_payload"])
+    assert Result.final_output in render_extraction_manifest_page(manifest)
     # The actual persistence primitive's stable identity is reusable, not another row.
     again = persist_inline_validated_extraction_result(
         payload_json=captured["pending_payload"],

@@ -2174,6 +2174,12 @@ async def _run_agent_with_owned_resources(
                         }
                     }
 
+        authored_explanation = getattr(result, "final_output", None)
+        if authored_explanation is None:
+            authored_explanation = final_message_text if final_message_text is not None else (full_response or None)
+        if not isinstance(authored_explanation, str):
+            authored_explanation = None
+
         if builder_materializer_agent and builder_workspace.finalization is not None:
             finalization = builder_workspace.finalization
             if generic_profile is not None:
@@ -2198,7 +2204,7 @@ async def _run_agent_with_owned_resources(
                 builder_finalization=finalization,
                 source_metadata={"execution_context": direct_execution_context.model_dump(mode="json") if direct_execution_context else None,
                                  "trace_id": trace_id,
-                                 "specialist_explanation": getattr(result, "final_output", None)},
+                                 "specialist_explanation": authored_explanation},
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=document_id,
                     user_id=user_id,
@@ -2324,9 +2330,6 @@ async def _run_agent_with_owned_resources(
             return
         # The original extraction was checked before dispatch; the shared
         # validator returns a normalized DomainEnvelope with retained findings.
-        authored_explanation = getattr(result, "final_output", None)
-        if authored_explanation is None:
-            authored_explanation = final_message_text if final_message_text is not None else (full_response or None)
         if (isinstance(authored_explanation, str)
                 and finalization.payload.get("metadata", {}).get("validation_review_runtime") != "chat"):
             # Chat review already persisted the immutable source; prose belongs

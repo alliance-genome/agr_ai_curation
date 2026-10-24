@@ -1690,6 +1690,7 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
         envelope = domain_envelope_from_extraction_result(record, stored=False)
         if reviewed_chat:
             envelope.metadata["validation_review_runtime"] = "chat"
+            envelope.specialist_explanation = _kwargs["source_metadata"]["specialist_explanation"]
         source_payloads.append(envelope.model_dump(mode="json"))
         return envelope.model_dump_json()
 
@@ -1726,6 +1727,7 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
     event = next(event for event in events if event.get("type") == "INTERNAL_EXTRACTION_RESULT")
     assert event["internal"]["extraction_result_id"] == expected.extraction_result_id
 
+    assert explanation in handoff_text
     if reviewed_chat:
         assert source_metadata[0]["specialist_explanation"] == explanation
         assert finalization.payload == source_payloads[0]
