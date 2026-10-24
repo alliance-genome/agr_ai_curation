@@ -234,6 +234,7 @@ class TestAgentDocumentationCoverage:
             "supervisor",
             "curation_handoff",
             "curation_prep",
+            "validation_reviewer",
         }
         assert "pdf_extraction" not in registry
         assert "gene" not in registry

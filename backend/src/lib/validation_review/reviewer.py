@@ -3,9 +3,15 @@
 import asyncio
 from agents import Runner
 
+from src.lib.openai_agents.model_request_measurement import (
+    install_model_request_measurement,
+)
+
 from . import admission
 from .provider import ExecutionBudget, budget_scope, guarded_await
 from .tools import create_tools
+
+install_model_request_measurement()
 
 
 def create_reviewer(
@@ -41,12 +47,8 @@ def create_reviewer(
 
 async def run(context, agent, *, input, run_config=None):
     """A model's final prose cannot mark the episode complete; consult the ledger."""
-    from src.lib.openai_agents.model_request_measurement import (
-        install_model_request_measurement,
-    )
     from src.lib.validation_history import store
 
-    install_model_request_measurement()
     try:
 
         def policy_turns():

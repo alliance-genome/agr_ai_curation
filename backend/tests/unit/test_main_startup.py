@@ -689,7 +689,7 @@ async def test_lifespan_supports_core_only_runtime_packages(
                  "updated": 0,
                  "reactivated": 0,
                  "deactivated": 0,
-                 "discovered": 4,
+                 "discovered": 5,
              },
          ), \
          patch("src.lib.agent_studio.catalog_service.validate_active_agent_output_schemas"), \
@@ -708,6 +708,7 @@ async def test_lifespan_supports_core_only_runtime_packages(
                          "curation_handoff": "gpt-6.1-sol",
                          "curation_prep": "gpt-6.1-sol",
                          "supervisor": "gpt-6.1-sol",
+                         "validation_reviewer": "gpt-6.1-sol",
                      }[agent_key],
                      model_reasoning=None,
                      tool_ids=[],
@@ -718,6 +719,7 @@ async def test_lifespan_supports_core_only_runtime_packages(
                      "curation_handoff",
                      "curation_prep",
                      "supervisor",
+                     "validation_reviewer",
                  )
              ],
          ), \
