@@ -105,6 +105,8 @@ async def invoke(agent, *, scope, artifact_id, packet, packet_bytes, max_turns, 
     from src.lib.openai_agents.runner import run_agent_with_owned_openai_resources
     phase = create_phase(agent, scope=scope, artifact_id=artifact_id,
                          packet=packet, packet_bytes=packet_bytes, evidence_records=evidence_records)
+    from .phase_observability import emit_phase
+    emit_phase(phase)
     result = await run_agent_with_owned_openai_resources(
         phase, input_value=json.dumps(packet, ensure_ascii=True, sort_keys=True), max_turns=max_turns)
     return TargetedFollowupResult.model_validate(result.final_output)

@@ -11,7 +11,7 @@ from src.lib.validation_review.protocol import TARGETED_EXTRACTION_PROTOCOL
 
 
 @pytest.mark.asyncio
-async def test_followup_actual_runner_input_and_tools(monkeypatch):
+async def test_followup_actual_runner_input_and_tools(phase_trace, monkeypatch):
     @function_tool
     def read_section(section: str) -> str:
         return "Materials and Methods"
@@ -39,12 +39,15 @@ async def test_followup_actual_runner_input_and_tools(monkeypatch):
         "assessment": "The paper does not clarify this mention.", "remaining_uncertainty": "Organism unknown",
         "proposed_values": [], "evidence_record_ids": []}]}
     seen = []
-    configs = []
-    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
-    monkeypatch.setattr('src.lib.validation_review.phase_observability.log_agent_config', lambda **kwargs: configs.append(kwargs))
+    configs = phase_trace.configs
 
     async def run(phase, input_value, **kwargs):
         seen.append(phase)
+        from src.lib.prompts.context import get_used_prompt_runs
+        assert get_used_prompt_runs()[-1].agent_name == phase.name
+        assert phase_trace.events[-1]['trace_context'] == {'trace_id': 'phase-trace', 'parent_span_id': 'phase-parent'}
+        assert configs[-1]['instructions'] == phase.instructions
+        assert configs[-1]['tools'] == [tool.name for tool in phase.tools]
         assert json.loads(input_value) == packet
         assert kwargs["max_turns"] == 17
         assert phase.model == agent.model

@@ -1780,6 +1780,8 @@ def run_package_scoped_validator_agent(
     try:
         from src.lib.validation_history.runtime import record_runner_receipt
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
+        from src.lib.validation_review.phase_observability import emit_phase
+        emit_phase(agent)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
         from src.lib.validation_review.provider import ACTIVE_BUDGET
@@ -2057,6 +2059,8 @@ def run_package_scoped_validator_agent_batch(
     try:
         from src.lib.validation_history.runtime import record_runner_receipt
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
+        from src.lib.validation_review.phase_observability import emit_phase
+        emit_phase(agent)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
         from src.lib.validation_review.provider import ACTIVE_BUDGET

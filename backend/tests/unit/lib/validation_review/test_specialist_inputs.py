@@ -18,7 +18,7 @@ from tests.unit.lib.domain_packs.test_validator_dispatch import (
 
 
 @pytest.mark.parametrize("batch", [False, True])
-def test_validator_runner_receives_history_and_locked_independence_prompt(monkeypatch, batch):
+def test_validator_runner_receives_history_and_locked_independence_prompt(phase_trace, monkeypatch, batch):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
     from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
 
@@ -42,11 +42,14 @@ def test_validator_runner_receives_history_and_locked_independence_prompt(monkey
     refs = {"records": [{"fact_id": "scoped-context", "sha256": "exact-sha"}],
             "reader": "read_supplied_history"}
     calls = []
-    configs = []
-    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
-    monkeypatch.setattr("src.lib.validation_review.phase_observability.log_agent_config", lambda **kw: configs.append(kw))
+    configs = phase_trace.configs
 
     def run(actual_agent, **kwargs):
+        from src.lib.prompts.context import get_used_prompt_runs
+        assert get_used_prompt_runs()[-1].agent_name == actual_agent.name
+        assert phase_trace.events[-1]['trace_context'] == {'trace_id': 'phase-trace', 'parent_span_id': 'phase-parent'}
+        assert configs[-1]['instructions'] == actual_agent.instructions
+        assert configs[-1]['tools'] == [tool.name for tool in actual_agent.tools]
         payload = json.loads(kwargs["input"])
         calls.append(payload)
         assert payload["validation_reconsideration"] == context
