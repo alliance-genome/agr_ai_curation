@@ -199,3 +199,49 @@ def test_only_sdk_wrappers_are_transparent_to_expected_stops():
     assert review_stop(bug) is None
     wrapper.__cause__ = wrapper
     assert review_stop(wrapper) is None
+
+
+def test_extraction_followup_limit_is_separate_and_configurable(monkeypatch):
+    monkeypatch.delenv("VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY", raising=False)
+    original = ReviewLimits.configured()
+    assert original.extraction_attempts_per_entry == 2
+    monkeypatch.setenv("VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY", "3")
+    changed = ReviewLimits.configured()
+    assert changed.extraction_attempts_per_entry == 3
+    assert changed.attempts_per_target == original.attempts_per_target
+    assert changed.allowances(targets=2, episodes=1, extras=16) == original.allowances(
+        targets=2, episodes=1, extras=16
+    )
+
+
+def test_review_tool_boundary_rejects_package_paper_capabilities(monkeypatch):
+    from src.lib.packages import tool_roles
+
+    monkeypatch.setattr(tool_roles, "validator_forbidden_tool_names", lambda: frozenset({"custom_paper_reader"}))
+    with pytest.raises(ValueError, match="cannot directly read papers"):
+        tool_roles.require_supervisor_review_tool_boundary(["read_validation_history", "custom_paper_reader"])
+    tool_roles.require_supervisor_review_tool_boundary(["read_validation_history", "record_validation_review"])
+
+
+@pytest.mark.asyncio
+async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection():
+    import json
+    from unittest.mock import AsyncMock
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    extraction, selection, assessment = AsyncMock(), AsyncMock(), AsyncMock(return_value={"state": "completed"})
+    tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
+        request_extraction=extraction, select_source=selection, assess_source=assessment)}
+    assert len(tools) == 8
+    for tool in tools.values():
+        assert not {"actor_id", "episode_id", "validator_agent", "receipt", "scope_id", "extractor_agent"}.intersection(
+            tool.params_json_schema["properties"])
+    arguments = {"operation_id": "retry", "selection_id": "approved-selection",
+                 "target_ids": ["changed-target"], "instructions": "Assess the Methods clarification"}
+    from agents.tool_context import ToolContext
+    await tools["validate_selected_extraction_source"].on_invoke_tool(
+        ToolContext(context=None, tool_name="validate_selected_extraction_source", tool_call_id="test",
+                    tool_arguments=json.dumps(arguments)), json.dumps(arguments))
+    assessment.assert_awaited_once_with(**arguments)
+    with pytest.raises(ValueError, match="must be wired together"):
+        create_tools(context, checkpoint_provider=Mock(), request_extraction=extraction, select_source=selection)

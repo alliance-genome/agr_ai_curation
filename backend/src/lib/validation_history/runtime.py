@@ -172,23 +172,28 @@ def request_target(binding: CapturedArtifact, job) -> str:
     return binding_target(binding, job.match)
 
 
-def binding_target(binding: CapturedArtifact, match) -> str:
+def binding_target(binding: CapturedArtifact, match, *, db=None) -> str:
     """Binding target identity pins stable element, never a mutable array position."""
     from src.schemas.domain_envelope import parse_field_path
+
+    if db is None:
+        with store.SessionLocal.begin() as session:
+            return binding_target(binding, match, db=session)
+    store._artifact(db, binding.artifact_id, binding.scope)
 
     obj = match.object_envelope
     if obj is None:
         root_target = match.envelope.metadata["validation_history"]["target_id"]
-        return store.register_target(
-            binding.scope,
+        return store.register_target_in_transaction(
+            db,
             binding.artifact_id,
             identity="envelope-binding:" + match.binding.binding_id,
             original={"binding_id": match.binding.binding_id},
             parent_target_id=root_target,
         )
     refs = obj.metadata["validation_history"]
-    original = store.read_fact(binding.scope, binding.artifact_id, refs["target_id"])
-    if original["kind"] != "target" or original["content"]["object_ref"] not in {
+    original = store._fact(db, binding.artifact_id, refs["target_id"], kind="target")
+    if store._content(db, original)["object_ref"] not in {
         obj.object_id,
         obj.pending_ref_id,
     }:
@@ -240,8 +245,8 @@ def binding_target(binding: CapturedArtifact, match) -> str:
             "path": stable,
         }
     )[0]
-    return store.register_target(
-        binding.scope,
+    return store.register_target_in_transaction(
+        db,
         binding.artifact_id,
         identity="binding:" + identity,
         original={
@@ -253,12 +258,17 @@ def binding_target(binding: CapturedArtifact, match) -> str:
     )
 
 
-def frozen_job_requests(binding, jobs):
+def frozen_job_requests(binding, jobs, *, db=None):
     """Shared immutable request shape for historical and admitted executions."""
     from .curator_authority import anchor_for_path
+    if db is None:
+        with store.SessionLocal.begin() as session:
+            return frozen_job_requests(binding, jobs, db=session)
+    from src.lib.validation_review.source_inputs import latest, reference
     return [
         {
-            "target_id": request_target(binding, j),
+            "target_id": target,
+            "source_input_ref": reference(latest(db, binding.artifact_id, target)),
             "binding_id": j.request.validator_binding_id,
             "request": j.request.model_dump(mode="json"),
             "result_fields": [
@@ -275,6 +285,7 @@ def frozen_job_requests(binding, jobs):
             "prerequisites": list(j.history_prerequisites),
         }
         for j in jobs
+        for target in [binding_target(binding, j.match, db=db)]
     ]
 
 

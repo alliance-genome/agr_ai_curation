@@ -68,6 +68,15 @@ def _has_completed_empty_output(output_status: str | None, branches: list[dict[s
     return True
 
 
+class BatchReviewOutcome(Exception):
+    """Expected saved review outcome; no operational error notification."""
+    def __init__(self, status, reason, details):
+        self.status = BatchDocumentStatus(status)
+        self.reason = reason
+        self.details = details
+        super().__init__(reason)
+
+
 class BatchFlowExecutionError(RuntimeError):
     """Raised when a flow emits a terminal failure during batch processing."""
 
@@ -455,6 +464,22 @@ def _process_single_document(
             batch.id, batch_doc.document_id, processing_time_ms, batch_doc.result_files
         )
 
+    except BatchReviewOutcome as outcome:
+        db.rollback()
+        _require_running_batch(db, batch, lock_for_update=True, lease_owner=lease_owner)
+        db.refresh(batch_doc)
+        require_batch_document_status_transition(batch_doc.status, outcome.status)
+        batch_doc.status = outcome.status
+        batch_doc.review_details = outcome.details
+        batch_doc.error_message = outcome.reason
+        batch_doc.output_status = "none"
+        batch_doc.result_files = None
+        batch_doc.review_session_ids = None
+        batch_doc.processing_time_ms = int((time.time() - start_time) * 1000)
+        batch_doc.processed_at = datetime.now(timezone.utc)
+        BatchService(db).recompute_batch_counters(batch)
+        db.commit()
+        return
     except BatchCancelled:
         db.rollback()
         raise
@@ -556,6 +581,12 @@ async def _execute_flow_for_document(
     flow_failure_message: Optional[str] = None
     flow_failure_already_reported = False
     flow_failure_event_seen = False
+    review_outcome = None
+    from src.lib.validation_history.store import HistoryScope
+    from src.lib.validation_review import admission
+    review_parent = await asyncio.to_thread(admission.create_scope,
+        HistoryScope(cognito_sub, document_id, session_id), operation_id="batch:" + batch_id,
+        kind="discovered_batch", targets=0, episodes=0)
 
     try:
         # Execute the flow and collect events
@@ -569,6 +600,7 @@ async def _execute_flow_for_document(
             user_query=None,  # Use task_instructions from flow
             active_groups=active_groups,
             flow_run_id=batch_id,
+            review_parent_scope_id=review_parent,
         ):
             event_type = event.get("type", "")
 
@@ -632,6 +664,10 @@ async def _execute_flow_for_document(
 
             if event_type == "FLOW_FINISHED":
                 finished_data = event.get("data", {}) or {}
+                if finished_data.get("status") in {"review_pending", "review_exhausted", "interrupted"}:
+                    review_outcome = BatchReviewOutcome(finished_data["status"],
+                        finished_data.get("review_reason") or "Review remains incomplete",
+                        finished_data.get("review_details") or {})
                 raw_output_status = finished_data.get("output_status")
                 if (
                     finished_data.get("status") == "completed"
@@ -734,6 +770,8 @@ async def _execute_flow_for_document(
         broadcaster.publish_sync(batch_uuid, error_event)
         raise
 
+    if review_outcome is not None:
+        raise review_outcome
     if flow_failure_message:
         # A late flow error invalidates any earlier output event; do not return
         # a partial file or review handoff as a successful batch document.

@@ -155,7 +155,7 @@ describe('BatchPage', () => {
       payload: {
         type: 'BATCH_STATUS',
         batch_id: 'batch-live',
-        failed_documents: 0,
+        failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
       },
       message: 'BATCH_STATUS event omitted or corrupted the canonical completed_documents field',
     },
@@ -167,7 +167,7 @@ describe('BatchPage', () => {
         status: 'finished',
         total_documents: 1,
         completed_documents: 1,
-        failed_documents: 0,
+        failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
         partial_documents: 0,
       },
       message: 'BATCH_COMPLETE event omitted or corrupted the canonical status field',
@@ -201,7 +201,7 @@ describe('BatchPage', () => {
             status: 'running',
             total_documents: 1,
             completed_documents: 0,
-            failed_documents: 0,
+            failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
             created_at: '2026-04-03T00:00:00Z',
           }],
         }))
@@ -214,7 +214,7 @@ describe('BatchPage', () => {
           status: 'running',
           total_documents: 1,
           completed_documents: 0,
-          failed_documents: 0,
+          failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
           documents: [{
             id: 'batch-doc-1',
             document_id: 'doc-1',
@@ -327,7 +327,7 @@ describe('BatchPage', () => {
             status: 'running',
             total_documents: 1,
             completed_documents: 0,
-            failed_documents: 0,
+            failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
             created_at: '2026-04-03T00:00:00Z',
           }],
         }))
@@ -340,7 +340,7 @@ describe('BatchPage', () => {
           status: 'running',
           total_documents: 1,
           completed_documents: 0,
-          failed_documents: 0,
+          failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
           documents: [{
             id: 'batch-doc-1',
             document_id: 'doc-1',
@@ -434,13 +434,13 @@ describe('BatchPage', () => {
         return Promise.resolve(jsonResponse({ batches: [{
           id: 'batch-empty', flow_id: 'flow-1', flow_name: 'Empty extraction flow', status,
           total_documents: 1, completed_documents: mode === 'history' ? 1 : 0,
-          failed_documents: 0, created_at: '2026-04-03T00:00:00Z',
+          failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0, created_at: '2026-04-03T00:00:00Z',
         }] }))
       }
       if (url === '/api/batches/batch-empty') {
         return Promise.resolve(jsonResponse({
           id: 'batch-empty', flow_id: 'flow-1', status, total_documents: 1,
-          completed_documents: mode === 'history' ? 1 : 0, failed_documents: 0,
+          completed_documents: mode === 'history' ? 1 : 0, failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
           documents: [{
             id: 'batch-doc-1', document_id: 'doc-1', document_title: 'Source document', position: 0,
             status: mode === 'history' ? 'completed' : 'pending', result_files: [],
@@ -462,7 +462,7 @@ describe('BatchPage', () => {
       })
       MockEventSource.instances[0].emit({
         type: 'BATCH_COMPLETE', status: 'completed', completed_documents: 1,
-        failed_documents: 0, partial_documents: 0, total_documents: 1,
+        failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0, partial_documents: 0, total_documents: 1,
       })
     }
     expect(await screen.findByText(/An extraction finished with zero objects/)).toHaveTextContent(
@@ -470,6 +470,36 @@ describe('BatchPage', () => {
     )
     expect(screen.getByRole('button', { name: 'Download ZIP' })).toBeDisabled()
     expect(screen.queryByRole('button', { name: /Download .*\.(csv|tsv|json)/ })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['review_pending', 'Awaiting review', 'awaiting review'],
+    ['review_exhausted', 'Review limit reached', 'review limits reached'],
+    ['interrupted', 'Interrupted', 'interrupted'],
+  ] as const)('retains %s outcomes without claiming an export', async (status, label, counter) => {
+    const counts = {
+      completed_documents: 0, failed_documents: 0,
+      review_pending_documents: Number(status === 'review_pending'),
+      review_exhausted_documents: Number(status === 'review_exhausted'),
+      interrupted_documents: Number(status === 'interrupted'),
+    }
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.startsWith('/api/flows?')) return Promise.resolve(jsonResponse({ flows: [], total: 0, page: 1, page_size: DEFAULT_FLOW_LIST_PAGE_SIZE }))
+      const batch = { id: 'batch-review', flow_id: 'flow-1', flow_name: 'Review flow', status: 'completed', total_documents: 1, ...counts, created_at: '2026-04-03T00:00:00Z' }
+      if (url === '/api/batches' || url === '/api/batches?status=active') return Promise.resolve(jsonResponse({ batches: [batch] }))
+      if (url === '/api/batches/batch-review') return Promise.resolve(jsonResponse({ ...batch, documents: [{
+        id: 'batch-doc-1', document_id: 'doc-1', document_title: 'Saved source', position: 0,
+        status, result_files: [], output_branches: [], review_details: { episode_id: 'retained-episode' },
+      }] }))
+      return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+    })
+    renderPage()
+    fireEvent.click(await screen.findByText('Review flow'))
+    expect(await screen.findByText(`${label} — saved results retained`)).toBeInTheDocument()
+    expect(screen.getByText(`1 ${counter}`)).toBeInTheDocument()
+    expect(screen.getByText('0 successful')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download ZIP' })).toBeDisabled()
   })
 
   it('opens completed document feedback modeless with the active batch session and trace id', async () => {
@@ -520,7 +550,7 @@ describe('BatchPage', () => {
                 status: 'completed',
                 total_documents: 1,
                 completed_documents: 1,
-                failed_documents: 0,
+                failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
                 created_at: '2026-04-03T00:00:00Z',
               },
             ],
@@ -536,7 +566,7 @@ describe('BatchPage', () => {
             status: 'completed',
             total_documents: 1,
             completed_documents: 1,
-            failed_documents: 0,
+            failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
             documents: [
               {
                 id: 'batch-doc-1',

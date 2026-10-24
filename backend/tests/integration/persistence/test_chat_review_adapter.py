@@ -63,12 +63,12 @@ def planned(scope, tmp_path, monkeypatch, request):
 
         raw = deepcopy(pack.metadata.metadata)
         raw["validator_bindings"]["active"][0]["group_scope"] = {
-            "required_any_active_group": ["TEST_GROUP"]
+            "required_any_active_group": ["WB"]
         }
         pack = replace(
             pack, metadata=pack.metadata.model_copy(update={"metadata": raw})
         )
-        groups = ("TEST_GROUP",)
+        groups = ("WB",)
     env = DomainEnvelope(
         envelope_id=uuid4().hex,
         domain_pack_id=pack.pack_id,
@@ -583,6 +583,13 @@ async def test_reconsideration_uses_saved_binding_and_durable_queued_work(
         calls[-1][1]["context"]["instructions"]
         == "Check the supplied identifier carefully"
     )
+    supplied = calls[-1][1]["context"]["specialist_context"]
+    assert supplied["previous_validation"][0]["assessed_input"]["request"]
+    assert supplied["original_entries"]
+    assert supplied["current_selected_entries"]
+    assert supplied["attempt"]["targets"][entries[0]["target_id"]] == {
+        "ordinal": 2, "ceiling": 2, "remaining_after": 0}
+    assert calls[-1][1]["history"]["reader"] == "read_supplied_history"
     assert (
         admission.status(item.scope, item.ep)["budgets"][0]["remaining"][
             "extra_attempts"

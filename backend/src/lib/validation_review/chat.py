@@ -46,6 +46,7 @@ class ChatReview:
     phase_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     reviewed: set[str] = field(default_factory=set)
     interrupted: bool = False
+    source_agents: dict[str, Any] = field(default_factory=dict)
 
     async def until_stop(self, awaitable):
         """Stop interrupts non-streaming phases; submitted late answers stay durable."""
@@ -231,6 +232,7 @@ class ChatReview:
         source_metadata=None,
         builder_finalization=None,
         event_emitter=None,
+        source_agent=None,
     ):
         from src.lib.domain_packs.validator_dispatch import prepare_validator_dispatch
         from src.lib.curation_workspace.extraction_results import (
@@ -240,6 +242,8 @@ class ChatReview:
         from src.models.sql.validation_history import ValidationFact
 
         binding = runtime.bind_artifact(envelope, context)
+        if source_agent is not None:
+            self.source_agents[binding.artifact_id] = source_agent
 
         def existing_plan():
             with store.SessionLocal() as db:
@@ -342,10 +346,19 @@ class ChatReview:
             )
             return [_record_to_schema(row) for row in rows]
 
+    def reference(self, record):
+        return record.metadata["chat_review"]
+
+    def extractor_adapter(self, context, artifact_id, checkpoint):
+        from .extractor_adapter import ExtractorAdapter
+        return ExtractorAdapter(context, artifact_id,
+            authenticated_groups=self.authenticated_groups, checkpoint_provider=checkpoint,
+            source_agent=self.source_agents.get(artifact_id))
+
     def context(self, record):
         from src.lib.observability.cost_context import get_agent_cost_identity
 
-        ref = record.metadata["chat_review"]
+        ref = self.reference(record)
         scope = store.HistoryScope(
             self.owner_id, self.document_id, ref["history_scope_id"]
         )
@@ -363,7 +376,7 @@ class ChatReview:
         saved = await asyncio.to_thread(self.saved_review_outcome, record)
         if saved is not None:
             return saved
-        ref = record.metadata["chat_review"]
+        ref = self.reference(record)
         adapter = ValidatorAdapter(
             context.history_scope,
             ref["artifact_id"],
@@ -378,6 +391,7 @@ class ChatReview:
         try:
             await adapter.initial()
             await adapter.advance(checkpoint)
+            extractor = self.extractor_adapter(context, ref["artifact_id"], checkpoint)
             agent = reviewer.create_supervisor_phase(
                 context,
                 supervisor=self.supervisor,
@@ -387,6 +401,9 @@ class ChatReview:
                 advance_work=lambda: adapter.advance(checkpoint),
                 prepare_inputs=lambda: adapter.prepare_inputs(checkpoint),
                 refresh_inputs=adapter.refresh_inputs,
+                request_extraction=extractor.request,
+                select_source=lambda **arguments: adapter.select_source(context, checkpoint, **arguments),
+                assess_source=lambda **arguments: adapter.assess_source(context, **arguments),
             )
             from src.lib.openai_agents.extraction_trace_events import (
                 write_extraction_trace_event,
@@ -409,7 +426,7 @@ class ChatReview:
                 input=json.dumps(
                     {
                         "user_request": self.user_request,
-                        "instruction": "Review this saved extraction. Read the review packet first. Record explicit decisions; do not re-extract.",
+                        "instruction": "Review this saved extraction. Read the review packet first. Record explicit decisions. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
                         "result_ref": (
                             "extraction-result:" + record.extraction_result_id
                         ),
@@ -434,7 +451,7 @@ class ChatReview:
         for record in records:
             context = self.context(record)
             # Preserve the original operation policy, deadline and charges.
-            ref = record.metadata["chat_review"]
+            ref = self.reference(record)
             scope_id = await asyncio.to_thread(
                 admission.create_scope,
                 context.history_scope,
@@ -481,7 +498,7 @@ class ChatReview:
         from src.models.sql.validation_history import ValidationFact
 
         context = self.context(record)
-        ref = record.metadata["chat_review"]
+        ref = self.reference(record)
         with store.SessionLocal() as db:
             store._artifact(db, ref["artifact_id"], context.history_scope)
             fact = db.scalar(
@@ -498,7 +515,7 @@ class ChatReview:
         from .audit import append_fact
 
         context = self.context(record)
-        ref = record.metadata["chat_review"]
+        ref = self.reference(record)
         with store.SessionLocal.begin() as db:
             store._artifact(db, ref["artifact_id"], context.history_scope)
             append_fact(
@@ -525,7 +542,7 @@ class ChatReview:
             result_ref = "extraction-result:" + record.extraction_result_id
             if result_refs is not None and result_ref not in result_refs:
                 continue
-            ref = record.metadata["chat_review"]
+            ref = self.reference(record)
             scope = store.HistoryScope(
                 self.owner_id, self.document_id, ref["history_scope_id"]
             )
@@ -571,7 +588,7 @@ class ChatReview:
     def status(self):
         items = []
         for record in self.records():
-            ref = record.metadata["chat_review"]
+            ref = self.reference(record)
             scope = store.HistoryScope(
                 self.owner_id, self.document_id, ref["history_scope_id"]
             )
@@ -596,7 +613,7 @@ class ChatReview:
             "extraction-result:" + record.extraction_result_id
             for record in records
             if not current_turn_only
-            or record.metadata["chat_review"]["operation_turn_id"] == self.turn_id
+            or self.reference(record)["operation_turn_id"] == self.turn_id
         }
         status = self.status()
         items = [item for item in status["results"] if item["result_ref"] in refs]
@@ -620,7 +637,7 @@ class ChatReview:
                 not in result_refs
             ):
                 continue
-            ref = record.metadata["chat_review"]
+            ref = self.reference(record)
             scope = store.HistoryScope(
                 self.owner_id, self.document_id, ref["history_scope_id"]
             )

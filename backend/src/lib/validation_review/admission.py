@@ -37,19 +37,21 @@ def create_scope(
     history_scope, *, operation_id, kind, targets, episodes, parent_id=None
 ):
     """Called by authenticated orchestration, never with model-created cardinalities."""
-    if kind not in {"batch", "workspace_operation", "document_run", "discovered_document_run"}:
+    if kind not in {"batch", "discovered_batch", "workspace_operation", "document_run", "discovered_document_run"}:
         raise ValueError("Unknown review scope kind")
     if (
         type(targets) is not int
         or type(episodes) is not int
         or targets < 0
-        or episodes < (0 if kind == "discovered_document_run" else 1)
+        or episodes < (0 if kind in {"discovered_document_run", "discovered_batch"} else 1)
     ):
         raise ValueError("Trusted scope requires target and episode cardinalities")
-    if kind == "discovered_document_run" and (targets or episodes or parent_id):
-        raise ValueError("Discovered document scopes register coverage at admission")
+    if kind in {"discovered_document_run", "discovered_batch"} and (targets or episodes):
+        raise ValueError("Discovered scopes register coverage at admission")
+    if kind == "discovered_batch" and parent_id:
+        raise ValueError("A discovered batch is a root review scope")
     limits = ReviewLimits.configured()
-    extras = limits.extra_per_batch if kind == "batch" else limits.extra_per_run
+    extras = limits.extra_per_batch if kind in {"batch", "discovered_batch"} else limits.extra_per_run
     contract = {
         "document_id": history_scope.document_id if kind in {"document_run", "discovered_document_run"} else None,
         "targets": targets,
@@ -66,10 +68,9 @@ def create_scope(
             parent = _scope_chain(db, parent_id, history_scope.owner_id)[-1]
             if parent is None or parent.owner_id != history_scope.owner_id:
                 raise store.HistoryAccessError("Review parent scope unavailable")
-            if kind != "document_run" or parent.kind not in {
-                "batch",
-                "workspace_operation",
-            }:
+            ordinary_child = kind == "document_run" and parent.kind in {"batch", "workspace_operation"}
+            discovered_child = kind == "discovered_document_run" and parent.kind == "discovered_batch"
+            if not (ordinary_child or discovered_child):
                 raise store.HistoryConflict("Invalid review scope hierarchy")
             inherited = ReviewLimits(**parent.contract["policy"])
             contract = {
@@ -281,10 +282,10 @@ def attach_episode(
             allowances=policy.allowances(
                 targets=len(targets),
                 episodes=1,
-                extras=min(
-                    len(targets) * (policy.attempts_per_target - 1),
-                    policy.extra_per_run,
-                ),
+                # Explicit split/add contributions may add binding targets.
+                # Keep the existing shared document ceiling available; per-target
+                # ancestry and parent charges independently prevent any refill.
+                extras=policy.extra_per_run if targets else 0,
             ),
             charged={},
             state="open",
@@ -376,8 +377,10 @@ def _allowances(db, row):
     if isinstance(row, Episode):
         return row.allowances
     allowances = dict(row.contract["allowances"])
-    if row.kind == "discovered_document_run":
-        for credits in db.scalars(select(Coverage.allowances).where(Coverage.scope_id == row.id)):
+    if row.kind in {"discovered_document_run", "discovered_batch"}:
+        coverage_scope = (Coverage.scope_id == row.id if row.kind == "discovered_document_run"
+                          else Coverage.scope_id.in_(select(Scope.id).where(Scope.parent_id == row.id)))
+        for credits in db.scalars(select(Coverage.allowances).where(coverage_scope)):
             for key, value in credits.items():
                 allowances[key] += value
     return allowances

@@ -49,6 +49,8 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
     baseline_objects = {
         obj.get("object_id") or obj.get("pending_ref_id"): obj for obj in baseline["extracted_objects"]
     }
+    from src.lib.validation_review.source_selection import selected_entries
+    source_selections = selected_entries(db, artifact_id)
     objects = []
     for obj in envelope.extracted_objects:
         refs = obj.metadata.get("validation_history")
@@ -64,6 +66,30 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
             continue
         if root.get("object_ref") not in {obj.object_id, obj.pending_ref_id}:
             raise store.HistoryConflict("Projection object identity mismatch")
+
+        selected_values = {}
+        selected_record = source_selections.get(refs["target_id"])
+        if selected_record is not None:
+            from src.lib.validation_review.item_relationships import value_at as selected_value_at
+            selected = selected_record[1]["entry"]
+            selected_refs = selected["metadata"]["validation_history"]
+            if obj.metadata.get("selected_extractor_contribution") != selected["metadata"]["selected_extractor_contribution"]:
+                refs = selected_refs
+            for path, target in selected_refs["fields"].items():
+                selected_values[target] = selected_value_at(selected["payload"], path)
+            for path, ids in selected_refs["elements"].items():
+                values = selected_value_at(selected["payload"], path)
+                selected_values.update(zip(ids, values, strict=True))
+            obj = obj.model_copy(update={
+                "metadata": {**obj.metadata, "validation_history": deepcopy(refs),
+                    "selected_extractor_contribution": selected["metadata"]["selected_extractor_contribution"]},
+                "evidence_record_ids": list(selected["evidence_record_ids"]),
+            })
+
+        def source_value(tid, body):
+            # A later curator source replacement has its own ID and immutable
+            # value. Existing IDs may have explicitly selected extractor values.
+            return selected_values.get(tid, body["value"])
 
         def value_at(value, path, parent):
             if isinstance(value, dict):
@@ -85,7 +111,7 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
                     if row.parent_id != parent:
                         raise store.HistoryConflict("Source field belongs to another parent")
                     store._require_active_target(db, artifact_id, tid)
-                    result[key] = value_at(body["value"], child_path, tid)
+                    result[key] = value_at(source_value(tid, body), child_path, tid)
                 return result
             if isinstance(value, list):
                 if path not in refs["elements"]:
@@ -96,16 +122,28 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
                     if row.parent_id != parent:
                         raise store.HistoryConflict("Source element belongs to another list")
                     store._require_active_target(db, artifact_id, tid)
-                    result.append(value_at(body["value"], f"{path}[{index}]", tid))
+                    result.append(value_at(source_value(tid, body), f"{path}[{index}]", tid))
                 return result
             return deepcopy(value)
 
-        payload = value_at(root["payload"], "", refs["target_id"])
+        payload = value_at(selected_record[1]["entry"]["payload"] if selected_record else root["payload"], "", refs["target_id"])
         from src.schemas.domain_envelope import ObjectRef
         source_record = baseline_objects.get(root["object_ref"], root)
         source_refs = [ObjectRef.model_validate(ref) for ref in source_record.get("object_refs", [])]
         objects.append(obj.model_copy(update={"payload": payload, "object_refs": source_refs}))
-    return envelope.model_copy(update={"extracted_objects": objects})
+    metadata = deepcopy(envelope.metadata)
+    if source_selections:
+        from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+        records = metadata.setdefault("evidence_records", [])
+        for _, body in source_selections.values():
+            for record in body["evidence"]:
+                snapshot = EvidenceSnapshot([*records, record])
+                resolved, error = snapshot.resolve(record["evidence_record_id"])
+                if error:
+                    raise store.HistoryConflict("Selected extractor evidence has conflicting provenance")
+                if not any(item.get("evidence_record_id") == record["evidence_record_id"] for item in records):
+                    records.append(resolved)
+    return envelope.model_copy(update={"extracted_objects": objects, "metadata": metadata})
 
 
 def read_dispatch_source(binding, envelope):

@@ -9,7 +9,7 @@ from src.lib.validation_history import store
 from .audit import append_fact
 from src.lib.validation_history.selections import manifest_in_transaction
 from src.models.sql.validation_history import ValidationFact, ValidationBody
-from .admission import lock_episode
+from .admission import lock_episode, _allowances
 
 
 def status_reference(scope, episode_id):
@@ -77,9 +77,7 @@ def snapshot(scope, episode_id, *, operation_id):
                 {
                     "scope_id": row.id,
                     "charged": row.charged,
-                    "allowances": (
-                        row.allowances if row is ep else row.contract["allowances"]
-                    ),
+                    "allowances": _allowances(db, row),
                 }
                 for row in [*chain, ep]
             ],

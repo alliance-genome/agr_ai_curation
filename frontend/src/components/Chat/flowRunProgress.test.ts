@@ -63,6 +63,13 @@ describe('deriveFlowRunProgress', () => {
     expect(progress?.status).toBe('completed')
   })
 
+  it.each(['review_pending', 'review_exhausted', 'interrupted'] as const)('preserves %s without claiming failure or completion', (status) => {
+    const progress = deriveFlowRunProgress([flowStarted, stepStarted(1, 'Extract'),
+      { type: 'FLOW_FINISHED', status }, stepStarted(2, 'Late event')], 'session-1')
+    expect(progress?.status).toBe(status)
+    expect(progress?.currentStep?.step).toBe(1)
+  })
+
   it('keeps the step a failed run stopped on', () => {
     const finishedFailed = deriveFlowRunProgress([
       flowStarted,

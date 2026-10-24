@@ -3286,6 +3286,42 @@ def get_all_agent_tools(
             selection_token = set_flow_validator_selections(
                 effective_validation_groups
             )
+            flow_review = None
+            review_token = None
+            try:
+                if candidate_expected_from:
+                    from src.lib.validation_history.store import HistoryScope
+                    from src.lib.validation_review import flow_steps
+                    from src.lib.validation_review.admission import ReviewStopped
+                    from src.lib.validation_review.flow import FlowReview
+                    from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+                    if not document_id or not user_id or not session_id or not flow_run_id:
+                        raise ValueError("Extraction flow review requires durable run, document and owner identities")
+                    step_scope = HistoryScope(user_id, document_id, session_id)
+                    claim = await asyncio.to_thread(flow_steps.claim, step_scope,
+                        run_id=flow_run_id, node_id=node_id,
+                        contract={"flow_id": str(flow.id), "definition": flow.flow_definition,
+                                  "extractor": agent_id, "query": resolved_query})
+                    flow_review = FlowReview(owner_id=user_id, document_id=document_id,
+                        session_id=session_id, turn_id=flow_run_id, supervisor=execution_state["supervisor"],
+                        authenticated_groups=tuple(active_groups or ()), user_request=resolved_query,
+                        flow_run_id=flow_run_id, step_id=claim["step_id"], node_id=node_id,
+                        validation_groups=effective_validation_groups, configured_nodes=_flow_node_by_id(flow),
+                        execution_context=execution_context.model_dump(mode="json"),
+                        parent_scope_id=execution_state.get("review_parent_scope_id"))
+                    execution_state["pending_review"] = flow_review
+                    if not claim["claimed"]:
+                        await asyncio.to_thread(flow_review.restore_source, claim)
+                        raise ReviewStopped("flow_step_already_submitted", resource=claim["step_id"])
+                    review_token = ACTIVE_CHAT_REVIEW.set(flow_review)
+            except BaseException:
+                if review_token is not None:
+                    ACTIVE_CHAT_REVIEW.reset(review_token)
+                reset_flow_validator_selections(selection_token)
+                if output_attachment_token is not None:
+                    reset_current_flow_output_attachment(output_attachment_token)
+                reset_current_output_filename_stem(output_filename_token)
+                raise
             try:
                 if hasattr(tool_callable, "on_invoke_tool"):
                     # Newer openai-agents tool invokers dereference ctx.tool_name and,
@@ -3319,6 +3355,8 @@ def get_all_agent_tools(
                 else:
                     result = await tool_callable(query=resolved_query)
             finally:
+                if review_token is not None:
+                    ACTIVE_CHAT_REVIEW.reset(review_token)
                 reset_flow_validator_selections(selection_token)
                 if output_attachment_token is not None:
                     reset_current_flow_output_attachment(output_attachment_token)
@@ -3391,6 +3429,11 @@ def get_all_agent_tools(
                     },
                 )
             )
+            if flow_review is not None and flow_review.record is not None and candidate is not None:
+                # The inline capture is the single immutable source owner. Reuse
+                # its stored envelope instead of recapturing the builder output.
+                candidate = replace(candidate, payload_json=flow_review.record.payload_json,
+                    metadata={**candidate.metadata, "flow_review_result_id": str(flow_review.record.extraction_result_id)})
             phase_timings_ms["candidate_evidence_build_ms"] = _elapsed_ms(
                 candidate_started_at
             )
@@ -3463,17 +3506,18 @@ def get_all_agent_tools(
                 if manifest_error is not None:
                     raise manifest_error
             validation_started_at = time.monotonic()
-            validation_group_metadata = await _execute_validation_groups_for_step(
-                flow=flow,
-                candidate=candidate,
-                node_data=node_data,
-                document_id=document_id,
-                user_id=user_id,
-                session_id=session_id,
-                flow_run_id=flow_run_id,
-                agent_context=context,
-                flow_conversation_summary=flow_conversation_summary,
-            )
+            if flow_review is not None:
+                reviewed_envelope = await flow_review.finish_review()
+                if candidate is None:
+                    raise RuntimeError("Reviewed extraction has no flow candidate")
+                validation_group_metadata = {"validated_candidate": replace(candidate,
+                    payload_json=reviewed_envelope.model_dump(mode="json")),
+                    "validation_review": {"episode_id": flow_review.reference(flow_review.record)["episode_id"],
+                                          "ready": True}}
+            else:
+                if (candidate is not None and is_canonical_domain_envelope_payload(candidate.payload_json)) or effective_validation_groups:
+                    raise RuntimeError("Extraction or configured validation cannot bypass the flow review lifecycle")
+                validation_group_metadata = {}
             phase_timings_ms["validation_groups_ms"] = _elapsed_ms(
                 validation_started_at
             )
@@ -3589,6 +3633,7 @@ def get_all_agent_tools(
                 _merge_persisted_flow_extraction_results(execution_state, records)
                 if extraction_handoff_audit is not None:
                     extraction_handoff_audit.update(persistenceAttempted=True, persistedResultCount=1)
+            execution_state.pop("pending_review", None)
             execution_state["completed_steps"].append(completed_step)
             execution_state["next_tool_index"] = claimed_step_index + 1
             phase_timings_ms["state_update_ms"] = _elapsed_ms(
@@ -3728,6 +3773,18 @@ def get_all_agent_tools(
                     getattr(ctx, "tool_call_id", None),
                 )):
                     return await _run_claimed_ordered_tool(ctx, query, next_idx)
+            except BaseException as error:
+                pending = execution_state.get("pending_review")
+                from src.lib.validation_review.stops import review_stop
+                expected_stop = review_stop(error)
+                if pending is not None and (expected_stop is None or isinstance(error, asyncio.CancelledError)):
+                    from src.lib.validation_review import flow_steps
+                    from src.lib.validation_history.store import HistoryScope
+                    await asyncio.shield(asyncio.to_thread(flow_steps.stop,
+                        HistoryScope(pending.owner_id, pending.document_id, pending.session_id), pending.step_id,
+                        interrupted=isinstance(error, asyncio.CancelledError),
+                        reason=getattr(error, "reason", None) or type(error).__name__))
+                raise
             finally:
                 async with execution_state["step_claim_lock"]:
                     in_flight_step = execution_state["in_flight_step"]
@@ -4363,6 +4420,9 @@ def create_flow_supervisor(
     from src.lib.benchmarks.source_revisions import active_supervisor_source
 
     frozen_supervisor = active_supervisor_source() if benchmark_routes is not None else None
+    if frozen_supervisor is not None:
+        from src.lib.benchmarks.supervisor_snapshot import require_current_review_runtime
+        require_current_review_runtime(frozen_supervisor)
     config = frozen_supervisor if frozen_supervisor is not None else get_agent_config("supervisor")
     benchmark_reasoning_override = None
     if benchmark_routes is not None:
@@ -4466,6 +4526,14 @@ def create_flow_supervisor(
                 for step in execution_state["completed_steps"]
                 if "inspection_result_ref" in step
             })
+            pending = execution_state.get("pending_review")
+            if pending is not None and pending.record is not None:
+                record = pending.record
+                refs["extraction-result:" + str(record.extraction_result_id)] = {
+                    "user_id": user_id, "origin_session_id": session_id,
+                    "document_id": document_id, "flow_run_id": flow_run_id,
+                    "metadata": {key: record.metadata[key] for key in ("idempotency_key", "flow_step_key")},
+                    "post_validation_checkpoint": record.metadata.get("inspection_checkpoint")}
             return refs
 
         def record_inspection(action, result_ref, output):
@@ -4544,6 +4612,15 @@ Preferred-flow follow-up inspection context:
         **agent_identity("supervisor", supervisor.name, "supervisor"),
         "provider": model_provider,
     })
+    from src.lib.prompts.assembly import build_agent_prompt_layers, PromptLayer
+    if frozen_supervisor is not None:
+        supervisor.validation_review_policy_layers = tuple(PromptLayer(**layer)
+            for layer in frozen_supervisor.review_policy_layers)
+    else:
+        review_policy = build_agent_prompt_layers("supervisor", group_id=active_groups)
+        supervisor.validation_review_policy_layers = tuple(
+            layer for layer in review_policy.layers if layer.kind in {"group_rules", "curator_overlay"})
+    execution_state["supervisor"] = supervisor
     setattr(supervisor, "_flow_execution_state", execution_state)
 
     logger.info(
@@ -4574,7 +4651,27 @@ def _persist_flow_extraction_candidates(
         return []
 
     requests: list[CurationExtractionPersistenceRequest] = []
-    for candidate in candidates:
+    retained = {}
+    request_indexes = []
+    for index, candidate in enumerate(candidates):
+        saved_id = candidate.metadata.get("flow_review_result_id")
+        if saved_id is not None:
+            from src.lib.curation_workspace.extraction_results import _record_to_schema
+            session = db or SessionLocal()
+            try:
+                row = session.get(ExtractionResultModel, UUID(str(saved_id)))
+                if (row is None or str(row.document_id) != str(document_id)
+                        or row.user_id != user_id or row.origin_session_id != session_id
+                        or str(row.flow_run_id) != str(flow_run_id)):
+                    raise ValueError("Saved flow review extraction is outside this run")
+                if not row.extraction_metadata.get("flow_review"):
+                    raise ValueError("Saved flow extraction has no review authority")
+                retained[index] = _record_to_schema(row)
+            finally:
+                if db is None:
+                    session.close()
+            continue
+        request_indexes.append(index)
         _validate_flow_extraction_candidate_payload(candidate.payload_json)
         payload_json = _sanitize_flow_extraction_candidate_payload(candidate.payload_json)
         flow_step_key = _flow_candidate_persistence_key(candidate)
@@ -4631,12 +4728,14 @@ def _persist_flow_extraction_candidates(
         if db is not None
         else persist_idempotent_extraction_results(requests)
     )
-    ordered_records = [
-        response.extraction_result for response in persistence_responses
-    ]
-
-    _materialize_flow_domain_envelope_records(ordered_records, db=db)
-    return ordered_records
+    newly_saved = [response.extraction_result for response in persistence_responses]
+    _materialize_flow_domain_envelope_records(newly_saved, db=db)
+    if len(newly_saved) > len(request_indexes):
+        raise RuntimeError("Extraction persistence returned more records than requested")
+    # Preserve partial counts so the caller can identify an incomplete atomic
+    # persistence response and block completion with its dedicated diagnostic.
+    retained.update(zip(request_indexes, newly_saved))
+    return [retained[index] for index in sorted(retained)]
 
 
 def _materialize_flow_domain_envelope_records(
@@ -4993,6 +5092,7 @@ async def execute_flow(
     model_id_override: str | None = None,
     model_provider_override: str | None = None,
     benchmark_routes: Mapping[str, Any] | None = None,
+    review_parent_scope_id: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -5167,6 +5267,7 @@ async def execute_flow(
     pending_output_events: list[dict[str, Any]] = []
     pending_run_finished_event: Optional[dict[str, Any]] = None
     flow_execution_state = supervisor._flow_execution_state
+    flow_execution_state["review_parent_scope_id"] = review_parent_scope_id
     completed_steps = flow_execution_state["completed_steps"]
     evidence_registry = flow_execution_state["evidence_registry"]
     consumed_tool_completions: set[str] = {
@@ -5297,6 +5398,15 @@ async def execute_flow(
             except BenchmarkInvocationBudgetExceeded:
                 raise
             except Exception as exc:
+                from src.lib.validation_review.stops import review_stop
+                stopped = review_stop(exc)
+                pending_review = flow_execution_state.get("pending_review")
+                if stopped is not None and (pending_review is not None or getattr(stopped, "reason", None) == "flow_step_already_submitted"):
+                    from src.lib.validation_review.flow_outcome import status_for_reason
+                    reason = getattr(stopped, "reason", None) or "reviewer_turns_exhausted"
+                    flow_status = status_for_reason(reason)
+                    failure_reason = reason
+                    break
                 raise_if_document_read_failed(exc)
                 raise_if_provider_budget_exhausted()
                 terminal_output_ready = bool(pending_output_events) and not (
@@ -5562,6 +5672,19 @@ async def execute_flow(
         # nested runner so its provider teardown cannot be bypassed.
         await runner_stream.aclose()
 
+    if flow_status in {"review_pending", "review_exhausted", "interrupted"}:
+        pending_review = flow_execution_state.get("pending_review")
+        record = pending_review.record if pending_review is not None else None
+        yield {"type": "FLOW_FINISHED", "timestamp": _now_iso(), "data": {
+            "flow_id": str(flow.id), "flow_name": flow.name, "flow_run_id": flow_run_id, "document_id": document_id,
+            "origin_session_id": session_id, "status": flow_status, "output_status": "none",
+            "total_evidence_records": len(flow_execution_state.get("evidence_registry", {})),
+            "extraction_result_ids": [str(record.extraction_result_id)] if record is not None else [],
+            "review_reason": failure_reason,
+            "review_details": {"step_id": pending_review.step_id if pending_review is not None else None,
+                "result_ref": "extraction-result:" + str(record.extraction_result_id) if record is not None else None,
+                "episode_id": pending_review.reference(record)["episode_id"] if record is not None else None}}}
+        return
     raise_if_provider_budget_exhausted()
     inspected_result_refs = sorted(
         str(result_ref)

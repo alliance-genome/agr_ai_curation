@@ -83,6 +83,7 @@ class ValidationReviewWork(Base):
     )
     operation_id: Mapped[str] = mapped_column(String, nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False, default="validator")
     state: Mapped[str] = mapped_column(String, nullable=False)
     lease_token: Mapped[str | None] = mapped_column(String(36))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -124,3 +125,19 @@ class ChatReviewDispatch(Base):
     turn_id: Mapped[str] = mapped_column(String, nullable=False)
     state: Mapped[str] = mapped_column(String, nullable=False)
     result: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+
+
+class FlowReviewStep(Base):
+    """One durable extraction submission and review boundary per configured step."""
+    __tablename__ = "flow_review_steps"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_id: Mapped[str] = mapped_column(String, nullable=False)
+    session_id: Mapped[str] = mapped_column(String, nullable=False)
+    run_id: Mapped[str] = mapped_column(String, nullable=False)
+    node_id: Mapped[str] = mapped_column(String, nullable=False)
+    contract: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("validation_artifacts.id"))
+    episode_id: Mapped[str | None] = mapped_column(ForeignKey("validation_review_episodes.id"))
+    outcome: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))

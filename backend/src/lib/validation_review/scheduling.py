@@ -11,7 +11,9 @@ from sqlalchemy import select
 
 from src.lib.validation_history import store
 from src.models.sql.validation_history import ValidationFact
-from src.models.sql.validation_review import ValidationReviewWork as Work
+from src.models.sql.validation_review import (
+    ValidationReviewWork as Work, ValidationReviewEpisode as Episode,
+)
 from .admission import ReviewStopped, lock_episode
 from .decisions import bounded_text
 from .work import enqueue_in_transaction
@@ -19,7 +21,10 @@ from .work import enqueue_in_transaction
 
 def _existing(db, ep, operation_id, identity):
     row = db.scalar(
-        select(Work).where(Work.episode_id == ep.id, Work.operation_id == operation_id)
+        select(Work).join(Episode, Episode.id == Work.episode_id).where(
+            Episode.scope_id == ep.scope_id, Episode.artifact_id == ep.artifact_id,
+            Work.operation_id == operation_id,
+        )
     )
     if row is not None and row.payload["identity"] != store.canonical(identity)[1]:
         raise store.HistoryConflict("Validation dispatch identity conflict")
@@ -37,11 +42,13 @@ def _enqueue(
     identity,
     reconsideration,
     followup=None,
+    first_from_source=False,
 ):
     prior = _existing(db, ep, operation_id, identity)
     if prior is not None:
         return prior.id
-    declared = store._content(db, store._fact(db, ep.artifact_id, ep.id))["obligations"]
+    from src.lib.validation_history.selections import effective_episode
+    declared = effective_episode(db, store._fact(db, ep.artifact_id, ep.id))["obligations"]
     obligations = {}
     for item in declared:
         if item["mode"] == "validation":
@@ -59,20 +66,11 @@ def _enqueue(
             or request["review_episode_id"] != ep.id
         ):
             raise store.HistoryConflict("Request is outside admitted binding coverage")
-        attempts = db.scalars(
-            select(ValidationFact).where(
-                ValidationFact.artifact_id == ep.artifact_id,
-                ValidationFact.kind == "attempt",
-                ValidationFact.target_id == tid,
-            )
-        ).all()
-        count = sum(
-            store._content(db, att)["input"]["review_episode_id"] == ep.id
-            for att in attempts
-        )
+        from .attempt_lineage import counts
+        count = counts(db, ep, [tid])[tid]
         if not reconsideration and count:
             raise store.HistoryConflict("Target already has its initial attempt")
-        if reconsideration and not count:
+        if reconsideration and not count and not first_from_source:
             raise store.HistoryConflict("Reconsideration requires an initial attempt")
         if count >= ep.policy["attempts_per_target"]:
             raise ReviewStopped("scientific_attempts_exhausted", resource=tid)
@@ -218,10 +216,9 @@ def reconsider(
                 )
             attempt = candidates[0]
             frozen = store._content(db, attempt)
-            if frozen["input"]["review_episode_id"] != ep.id:
-                raise store.HistoryConflict(
-                    "Reconsidered answer belongs to another episode"
-                )
+            previous_episode = db.get(Episode, frozen["input"]["review_episode_id"])
+            if previous_episode is None or (previous_episode.scope_id, previous_episode.artifact_id) != (ep.scope_id, ep.artifact_id):
+                raise store.HistoryConflict("Reconsidered answer belongs to another document operation")
             if not store._attempt_is_current(
                 db, context.history_scope, ep.artifact_id, frozen
             ):
@@ -263,6 +260,7 @@ def reconsider(
                         "answer": store._content(db, prior_completion),
                     }
                 )
+            request["review_episode_id"] = ep.id
             # Immutable extraction/evidence and saved validator stay fixed.
             # Only a trusted selector adapter may refresh prerequisite inputs.
             requests.append(request)
@@ -285,6 +283,7 @@ def reconsider(
             reconsideration=True,
             followup={
                 "instructions": instructions,
+                "parent_decision_id": parent_decision_id,
                 "parent_decision": store._content(db, parent),
                 "previous_answers": previous_answers,
                 "evidence": evidence,
@@ -301,13 +300,26 @@ def _refresh_prerequisites(db, context, ep, frozen, refresh_inputs):
     from .admission import ReviewStopped
     from src.lib.validation_history import selections
 
+    from .source_inputs import latest, reference
+    current_source = latest(db, ep.artifact_id, frozen["input"]["target_id"])
+    source_changed = frozen["input"].get("source_input_ref") != reference(current_source)
+    request = deepcopy(frozen["input"])
+    if source_changed:
+        request = deepcopy(store._content(db, current_source)["request"])
+        if (request["target_id"], request["binding_id"]) != (
+                frozen["input"]["target_id"], frozen["input"]["binding_id"]):
+            raise store.HistoryConflict("Source revision changes the authorized validator target")
+        request["source_input_ref"] = reference(current_source)
     unchanged = deepcopy(frozen)
+    unchanged["input"] = deepcopy(request)
     unchanged["input"]["prerequisites"] = []
     if not store._attempt_is_current(
         db, context.history_scope, ep.artifact_id, unchanged
     ):
         raise store.HistoryConflict("Reconsideration target lineage is stale")
-    targets = [pin["target_id"] for pin in frozen["input"]["prerequisites"]]
+    targets = [pin["target_id"] for pin in request["prerequisites"]]
+    if not targets and source_changed:
+        return request
     if not targets or refresh_inputs is None:
         raise ReviewStopped("fresh_prerequisite_adapter_required")
     manifest = selections.manifest_in_transaction(
@@ -325,7 +337,6 @@ def _refresh_prerequisites(db, context, ep, frozen, refresh_inputs):
         sources[tid] = store._content(
             db, store._fact(db, ep.artifact_id, selected, kind="completion")
         )
-    request = deepcopy(frozen["input"])
     if not isinstance(request["request"].get("selected_inputs"), dict):
         raise ValueError("Dependent requests require a selected_inputs mapping")
     values = refresh_inputs(deepcopy(request["request"]), deepcopy(sources))

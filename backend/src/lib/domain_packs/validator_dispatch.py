@@ -1649,7 +1649,11 @@ def run_package_scoped_validator_agent(
 
     benchmark_slot = f"validator:{request.validator_binding_id}"
     custom_pin = binding.raw.get("custom_validator")
-    if custom_pin:
+    flow_pin = binding.raw.get("flow_validator")
+    if flow_pin:
+        from src.lib.validation_review.flow_plan import build_validator
+        agent = build_validator(flow_pin, runtime_context)
+    elif custom_pin:
         from src.lib.agent_studio.custom_profile_validators import build_custom_validator_agent
         agent = build_custom_validator_agent(custom_pin, runtime_context, benchmark_slot=benchmark_slot)
     else:
@@ -1708,11 +1712,8 @@ def run_package_scoped_validator_agent(
     )
 
     provider_payload = validator_request_payload_for_agent(request)
-    from src.lib.validation_review.validator_adapter import RECONSIDERATION_INPUT
-    reconsideration = RECONSIDERATION_INPUT.get()
-    if reconsideration is not None:
-        agent.instructions = (agent.instructions or "") + "\n\n" + reconsideration["protocol"]
-        provider_payload = {**provider_payload, "validation_reconsideration": reconsideration["context"]}
+    from src.lib.validation_review.validator_adapter import attach_reconsideration_context
+    provider_payload = attach_reconsideration_context(agent, provider_payload)
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
@@ -1973,11 +1974,8 @@ def run_package_scoped_validator_agent_batch(
             "using the tool's declared bulk/list input. Do not loop one lookup per request "
             "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
         )
-    from src.lib.validation_review.validator_adapter import RECONSIDERATION_INPUT
-    reconsideration = RECONSIDERATION_INPUT.get()
-    if reconsideration is not None:
-        agent.instructions = (agent.instructions or "") + "\n\n" + reconsideration["protocol"]
-        provider_payload = {**provider_payload, "validation_reconsideration": reconsideration["context"]}
+    from src.lib.validation_review.validator_adapter import attach_reconsideration_context
+    provider_payload = attach_reconsideration_context(agent, provider_payload)
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",

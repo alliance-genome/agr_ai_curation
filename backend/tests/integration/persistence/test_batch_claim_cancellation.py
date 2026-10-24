@@ -330,7 +330,7 @@ def test_missing_flow_stale_worker_cannot_cancel_takeover_owner():
         _delete_batch(batch_id)
 
 
-def test_restart_claim_preserves_terminal_outputs_and_fails_only_interrupted_work():
+def test_restart_claim_preserves_terminal_outputs_and_marks_interrupted_work():
     batch_id, document_ids = _create_batch_with_statuses(
         BatchStatus.RUNNING,
         [
@@ -353,7 +353,7 @@ def test_restart_claim_preserves_terminal_outputs_and_fails_only_interrupted_wor
             assert [document.status for document in documents] == [
                 BatchDocumentStatus.COMPLETED,
                 BatchDocumentStatus.PENDING,
-                BatchDocumentStatus.FAILED,
+                BatchDocumentStatus.INTERRUPTED,
                 BatchDocumentStatus.FAILED,
             ]
             assert documents[0].result_files[0]["filename"] == "result-0.json"
@@ -362,7 +362,8 @@ def test_restart_claim_preserves_terminal_outputs_and_fails_only_interrupted_wor
                 "Worker lease expired during processing; document was not re-run"
             )
             assert batch.completed_documents == 1
-            assert batch.failed_documents == 2
+            assert batch.failed_documents == 1
+            assert batch.interrupted_documents == 1
             assert batch.completed_documents + batch.failed_documents <= batch.total_documents
     finally:
         _delete_batch(batch_id)
@@ -395,3 +396,24 @@ def test_startup_scan_includes_pending_and_stale_running_only():
     finally:
         for batch_id in batch_ids:
             _delete_batch(batch_id)
+
+
+def test_review_outcomes_have_separate_counts_and_allow_batch_to_finish():
+    owner = uuid4()
+    batch_id, _ = _create_batch_with_statuses(BatchStatus.RUNNING,
+        [BatchDocumentStatus.COMPLETED, BatchDocumentStatus.REVIEW_PENDING,
+         BatchDocumentStatus.REVIEW_EXHAUSTED, BatchDocumentStatus.INTERRUPTED],
+        lease_owner=owner, lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5))
+    try:
+        with SessionLocal() as db:
+            service = BatchService(db)
+            assert service.complete_running_batch(batch_id, owner)
+            batch = db.get(Batch, batch_id)
+            assert batch.status == BatchStatus.COMPLETED
+            assert batch.completed_documents == 1
+            assert batch.failed_documents == 0
+            assert batch.review_pending_documents == 1
+            assert batch.review_exhausted_documents == 1
+            assert batch.interrupted_documents == 1
+    finally:
+        _delete_batch(batch_id)

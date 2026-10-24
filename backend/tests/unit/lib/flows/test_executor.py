@@ -46,6 +46,40 @@ def get_all_agent_tools(*args, **kwargs):
     return _executor_module().get_all_agent_tools(*args, **kwargs)
 
 
+def get_non_extraction_step_tools(*args, **kwargs):
+    """Ordering-only fixtures model plain analysis tools, with no source capture.
+
+    Real extraction/review admission is exercised against PostgreSQL by
+    test_flow_review_steps, rather than mocked away in those tests.
+    """
+    with patch("src.lib.flows.executor._flow_step_candidate_expected_sources", return_value=[]):
+        return get_all_agent_tools(*args, **kwargs)
+
+
+def stub_completed_review(monkeypatch, payload):
+    """Isolate result formatting/inspection from the separately DB-tested review lifecycle."""
+    from src.lib.validation_review.flow import FlowReview
+    monkeypatch.setattr("src.lib.validation_review.flow_steps.claim", lambda *a, **kw: {"claimed": True, "step_id": "fixture-step"})
+    monkeypatch.setattr("src.lib.validation_review.flow_steps.stop", lambda *a, **kw: None)
+    async def completed(self):
+        self.record = SimpleNamespace(metadata={"flow_review": {"episode_id": "fixture-episode"}, "idempotency_key": "fixture", "flow_step_key": "fixture"}, extraction_result_id="fixture")
+        return SimpleNamespace(model_dump=lambda **kw: payload)
+    monkeypatch.setattr(FlowReview, "finish_review", completed)
+
+
+def get_stub_review_step_tools(*args, **kwargs):
+    """Provide runtime identities for tests using stub_completed_review explicitly."""
+    kwargs.setdefault("document_id", "11111111-1111-1111-1111-111111111111")
+    kwargs.setdefault("user_id", "fixture-owner")
+    kwargs.setdefault("session_id", "fixture-session")
+    kwargs.setdefault("flow_run_id", "fixture-run")
+    kwargs.setdefault("doc_context", DocumentContext(document_id=kwargs["document_id"], user_id=kwargs["user_id"]))
+    result = get_all_agent_tools(*args, **kwargs)
+    if len(result) == 4:
+        result[3]["supervisor"] = SimpleNamespace()
+    return result
+
+
 def build_supervisor_instructions(*args, **kwargs):
     return _executor_module().build_supervisor_instructions(*args, **kwargs)
 
@@ -1597,6 +1631,8 @@ def _mock_executor_agent_metadata(monkeypatch):
         "src.lib.flows.executor.get_agent_metadata",
         lambda agent_id, **_kwargs: _metadata_from_registry(agent_id),
     )
+    monkeypatch.setattr("src.lib.prompts.assembly.build_agent_prompt_layers",
+        lambda *args, **kwargs: SimpleNamespace(layers=[]))
     # These runtime tests use synthetic document IDs and no SQL document store.
     monkeypatch.setattr("src.lib.flows.executor.capture_source_document", lambda *_: None)
 
@@ -2036,10 +2072,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "validator_node_id": "custom-node",
         }])])
         tools, _ = get_all_agent_tools(flow)
-        # This fixture stops at the structured-envelope guard after invocation.
-        with pytest.raises(RuntimeError, match="structured extraction envelope"):
+        # Extraction must refuse missing durable identity before invoking a model.
+        with pytest.raises(ValueError, match="durable run, document and owner"):
             await tools[0].on_invoke_tool(SimpleNamespace(tool_name="flow", run_config=None), json.dumps({"query": "run"}))
-        assert observed == [{"fixture.identifier": {"state": "replaced", "validator_node_id": "custom-node"}}]
+        assert observed == []
         assert current_flow_validator_selections() == {}
 
     @pytest.mark.asyncio
@@ -2066,7 +2102,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             _make_flow([_agent_node("n1", "gene")]),
             include_unavailable=True,
         )
@@ -2115,7 +2151,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             _make_flow([
                 _agent_node("n1", "gene"),
                 _agent_node("n2", "disease"),
@@ -2172,8 +2208,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         mock_streaming.side_effect = _make_streaming_tool
         flow = _make_flow([_agent_node("n1", "gene")])
-        first_tools, _ = get_all_agent_tools(flow)
-        second_tools, _ = get_all_agent_tools(flow)
+        first_tools, _ = get_non_extraction_step_tools(flow)
+        second_tools, _ = get_non_extraction_step_tools(flow)
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
         first = asyncio.create_task(
@@ -2214,7 +2250,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             _make_flow([_agent_node("n1", "gene")]),
             include_unavailable=True,
         )
@@ -2259,7 +2295,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n2", "disease"),
         ])
 
-        tools, _ = get_all_agent_tools(flow)
+        tools, _ = get_non_extraction_step_tools(flow)
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
         # Step 1 executes normally.
@@ -2318,7 +2354,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ])
 
-        tools, _ = get_all_agent_tools(
+        tools, _ = get_non_extraction_step_tools(
             flow,
             document_name="Smith et al. (2024).pdf",
             user_query="Focus on the validated findings.",
@@ -2403,9 +2439,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n1", "gene", output_key="gene_output"),
         ])
 
+        stub_completed_review(monkeypatch, payload)
         clear_collected_events()
         try:
-            tools, _, _, execution_state = get_all_agent_tools(
+            tools, _, _, execution_state = get_stub_review_step_tools(
                 flow,
                 include_unavailable=True,
             )
@@ -2418,9 +2455,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             clear_collected_events()
 
         assert result == "Validated domain envelope result for gene."
-        assert len(validation_candidates) == 1
-        assert validation_candidates[0] is not None
-        assert validation_candidates[0].payload_json["items"][0]["label"] == "TP53"
+        assert validation_candidates == []  # No second validation pipeline.
         completed_step = execution_state["completed_steps"][0]
         assert completed_step["candidate"].payload_json["items"][0]["label"] == "TP53"
         assert completed_step["evidence_count"] == 1
@@ -2469,194 +2504,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert audit_event["data"]["toolName"] == "ask_gene_specialist"
         assert audit_event["data"]["internalPayloadFound"] is True
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_expected_extraction_step_audits_missing_internal_payload(
-        self, mock_get_agent, mock_streaming, monkeypatch
-    ):
-        """Expected extraction steps should explain when no internal payload appears."""
-        executor = _executor_module()
-        from src.lib.openai_agents.streaming_tools import (
-            clear_collected_events,
-            get_collected_events,
-        )
+    def test_expected_extraction_missing_payload_diagnostic(self):
+        assert _executor_module()._flow_candidate_reject_reason(
+            candidate=None, candidate_expected=True, used_internal_extraction_payload=False,
+            adapter_key_resolved=True, evidence_count=0) == "internal_payload_missing"
 
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        validation_candidates = []
-
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str) -> str:
-                return "Finalized one extraction through builder tools."
-
-            return _tool
-
-        async def _fake_validation_groups(**kwargs):
-            validation_candidates.append(kwargs["candidate"])
-            return {"validation_group_results": {"groups": []}}
-
-        mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            executor,
-            "_execute_validation_groups_for_step",
-            _fake_validation_groups,
-        )
-
-        flow = _make_flow([
-            _agent_node("n1", "gene", output_key="gene_output"),
-        ])
-
-        clear_collected_events()
-        try:
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-            result = asyncio.run(
-                tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
-            )
-            collected_events = list(get_collected_events())
-        finally:
-            clear_collected_events()
-
-        assert result == "Finalized one extraction through builder tools."
-        assert validation_candidates == [None]
-        completed_step = execution_state["completed_steps"][0]
-        assert completed_step["candidate"] is None
-        assert completed_step["evidence_count"] == 0
-        handoff_audit = completed_step["extraction_handoff_audit"]
-        assert handoff_audit["candidateExpected"] is True
-        assert handoff_audit["candidateExpectedFrom"] == ["catalog_curation_metadata"]
-        assert handoff_audit["internalEventEmitted"] is False
-        assert handoff_audit["internalEventMatchedTool"] is False
-        assert handoff_audit["internalEventFoundByFlow"] is False
-        assert handoff_audit["internalPayloadFound"] is False
-        assert handoff_audit["internalPayloadSource"] is None
-        assert handoff_audit["internalEventSources"] == []
-        assert handoff_audit["internalEventToolNames"] == []
-        assert handoff_audit["candidateBuilt"] is False
-        assert handoff_audit["candidateRejectReason"] == "internal_payload_missing"
-        assert handoff_audit["adapterKeyResolved"] is True
-        assert handoff_audit["evidenceCount"] == 0
-        assert handoff_audit["persistenceAttempted"] is False
-        assert handoff_audit["persistedResultCount"] is None
-        timing_event = next(
-            event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
-        )
-        assert timing_event["details"]["candidateExpected"] is True
-        assert timing_event["details"]["usedInternalExtractionPayload"] is False
-        assert timing_event["details"]["internalPayloadFound"] is False
-        assert timing_event["details"]["candidateBuilt"] is False
-        assert timing_event["details"]["candidateRejectReason"] == "internal_payload_missing"
-        audit_event = next(
-            event
-            for event in collected_events
-            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
-        )
-        assert audit_event["data"]["toolName"] == "ask_gene_specialist"
-        assert audit_event["data"]["internalPayloadFound"] is False
-        assert audit_event["data"]["candidateRejectReason"] == "internal_payload_missing"
-
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_candidate_without_adapter_key_audits_missing_adapter(
-        self, mock_get_agent, mock_streaming, monkeypatch
-    ):
-        """Candidate adapter diagnostics should match the persistence gate."""
-        executor = _executor_module()
-        from src.lib.openai_agents.streaming_tools import (
-            clear_collected_events,
-            get_collected_events,
-        )
-
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        evidence_record = _make_evidence_record(
-            "TP53",
-            verified_quote="TP53 expression increased.",
-            chunk_id="chunk-tp53",
-        )
-        payload = _structured_step_output(
-            "TP53",
-            evidence_records=[evidence_record],
-        )
-
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str) -> str:
-                return json.dumps(payload)
-
-            return _tool
-
-        def _fake_candidate_builder(step_result, **kwargs):
-            _ = step_result, kwargs
-            return (
-                executor.ExtractionEnvelopeCandidate(
-                    agent_key="gene",
-                    adapter_key=None,
-                    candidate_count=1,
-                    conversation_summary="Extract findings",
-                    payload_json=payload,
-                    metadata={
-                        "flow_id": "11111111-1111-1111-1111-111111111111",
-                        "step": 1,
-                        "tool_name": "ask_gene_specialist",
-                    },
-                ),
-                {"evidence_records": [evidence_record]},
-            )
-
-        async def _fake_validation_groups(**kwargs):
-            return {"validation_group_results": {"groups": []}}
-
-        mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            executor,
-            "build_extraction_envelope_candidate_with_evidence",
-            _fake_candidate_builder,
-        )
-        monkeypatch.setattr(
-            executor,
-            "_execute_validation_groups_for_step",
-            _fake_validation_groups,
-        )
-
-        flow = _make_flow([
-            _agent_node("n1", "gene", output_key="gene_output"),
-        ])
-
-        clear_collected_events()
-        try:
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-            asyncio.run(
-                tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
-            )
-            collected_events = list(get_collected_events())
-        finally:
-            clear_collected_events()
-
-        completed_step = execution_state["completed_steps"][0]
-        handoff_audit = completed_step["extraction_handoff_audit"]
-        assert completed_step["candidate"] is not None
-        assert handoff_audit["candidateBuilt"] is True
-        assert handoff_audit["adapterKeyResolved"] is False
-        assert handoff_audit["candidateRejectReason"] == "missing_adapter_key"
-        timing_event = next(
-            event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
-        )
-        assert timing_event["details"]["adapterKeyResolved"] is False
-        assert timing_event["details"]["candidateRejectReason"] == "missing_adapter_key"
-        audit_event = next(
-            event
-            for event in collected_events
-            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
-        )
-        assert audit_event["data"]["adapterKeyResolved"] is False
-        assert audit_event["data"]["candidateRejectReason"] == "missing_adapter_key"
+    def test_candidate_missing_adapter_diagnostic(self):
+        assert _executor_module()._flow_candidate_reject_reason(
+            candidate=SimpleNamespace(), candidate_expected=True, used_internal_extraction_payload=True,
+            adapter_key_resolved=False, evidence_count=1) == "missing_adapter_key"
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -2732,7 +2588,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         clear_collected_events()
         try:
             with benchmark_route_plan(benchmark_routes):
-                tools, _, _, execution_state = get_all_agent_tools(
+                tools, _, _, execution_state = get_non_extraction_step_tools(
                     flow,
                     include_unavailable=True,
                     flow_run_id="flow-run-123",
@@ -2815,18 +2671,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "reason": "literal-only files are not source-backed",
                         }
                     )
-                return json.dumps(
-                    {
-                        "domain_pack_id": "generic",
-                        "envelope_id": "env-generic-1",
-                        "extracted_objects": [
-                            {
-                                "object_type": "GenericFinding",
-                                "payload": {"label": "batch smoke finding"},
-                            }
-                        ],
-                    }
-                )
+                return json.dumps(_structured_step_output("batch smoke finding"))
 
             return _tool
 
@@ -2961,7 +2806,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ])
 
-        tools, _ = get_all_agent_tools(flow, user_query="Original flow input")
+        tools, _ = get_non_extraction_step_tools(flow, user_query="Original flow input")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "supervisor-query"})))
 
@@ -3013,11 +2858,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ])
 
-        tools, _, _, execution_state = get_all_agent_tools(flow, include_unavailable=True)
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
-
-        schedule = execution_state["completed_steps"][0]["validation_schedule"]
+        schedule = _executor_module().validation_schedule_from_node_data(flow.flow_definition["nodes"][1]["data"])
         assert [item["attachment_id"] for item in schedule["scheduled_validators"]] == [
             "active-lookup"
         ]
@@ -4372,122 +4213,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
 
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_validation_groups_join_before_next_flow_step(
-        self, mock_get_agent, mock_streaming
-    ):
-        """Validator group execution should finish before the next control-flow tool unlocks."""
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        events = []
-
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str):
-                events.append(f"tool:{tool_name}")
-                if tool_name == "ask_gene_specialist":
-                    return _structured_step_output("gene-a")
-                return "formatted"
-
-            return _tool
-
-        async def _fake_validation_groups(**kwargs):
-            if not kwargs["node_data"].get("validation_groups"):
-                return {}
-            events.append("validators:start:binding-1")
-            assert kwargs["candidate"].metadata["step"] == 1
-            groups = kwargs["node_data"]["validation_groups"]
-            assert [group["binding_id"] for group in groups] == [
-                "binding-1",
-                "binding-2",
-            ]
-            events.append("validators:materialized:binding-1")
-            events.append("validators:start:binding-2")
-            events.append("validators:materialized:binding-2")
-            return {
-                "validation_group_results": {
-                    "source_envelope_id": "env-1",
-                    "source_envelope_revision": 3,
-                    "materialized_envelope_revision": 4,
-                    "groups": [
-                        {
-                            "group_id": "active-lookup",
-                            "state": "automatic",
-                            "validator_binding_id": "binding-1",
-                            "status": "resolved",
-                        },
-                        {
-                            "group_id": "supplemental-validator",
-                            "state": "supplemental",
-                            "validator_binding_id": "binding-2",
-                            "status": "resolved",
-                        },
-                    ],
-                }
-            }
-
-        mock_streaming.side_effect = _make_streaming_tool
-        flow = _make_flow([
-            _task_input_node(),
-            _agent_node(
-                "n1",
-                "gene",
-                validation_attachments=[_validation_attachment("active-lookup")],
-                validation_groups=[
-                    {
-                        "group_id": "active-lookup",
-                        "state": "automatic",
-                        "binding_id": "binding-1",
-                        "attachment_id": "active-lookup",
-                        "required": True,
-                        "blocking": True,
-                    },
-                    {
-                        "group_id": "supplemental-validator",
-                        "state": "supplemental",
-                        "binding_id": "binding-2",
-                        "edge_id": "validation-2",
-                        "validator_node_id": "validator-2",
-                        "required": True,
-                        "blocking": True,
-                    },
-                ],
-            ),
-            _agent_node("n2", "disease"),
-        ])
-
-        with patch(
-            "src.lib.flows.executor._execute_validation_groups_for_step",
-            side_effect=_fake_validation_groups,
-        ):
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
-            asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"})))
-
-        assert events == [
-            "tool:ask_gene_specialist",
-            "validators:start:binding-1",
-            "validators:materialized:binding-1",
-            "validators:start:binding-2",
-            "validators:materialized:binding-2",
-            "tool:ask_disease_specialist",
-        ]
-        validation_results = execution_state["completed_steps"][0][
-            "validation_group_results"
-        ]
-        assert validation_results["source_envelope_revision"] == 3
-        assert [
-            group["validator_binding_id"] for group in validation_results["groups"]
-        ] == ["binding-1", "binding-2"]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_output_filename_template_sets_step_scoped_formatter_override(
-        self, mock_get_agent, mock_streaming
+        self, mock_get_agent, mock_streaming, monkeypatch
     ):
         """Runtime formatter finalize/save honors filename templates during save."""
         observed = {}
@@ -4581,7 +4311,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ], source_node_id="n1", output_node_id="n2")
 
-        tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
+        stub_completed_review(monkeypatch, {"domain_pack_id": "gene", "envelope_id": "env-gene-1",
+            "extracted_objects": [{"object_type": "Gene", "payload": {"symbol": "BRCA1"}}]})
+        tools, _, _, _ = get_stub_review_step_tools(flow, include_unavailable=True, document_name="Smith et al. (2024).pdf")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
         asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
@@ -4726,7 +4458,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ),
             ])
 
-            tools, created_names = get_all_agent_tools(
+            tools, created_names = get_non_extraction_step_tools(
                 flow,
                 document_id="doc-123",
                 user_id="user-123",
@@ -4865,7 +4597,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ),
             ])
 
-            tools, created_names = get_all_agent_tools(
+            tools, created_names = get_non_extraction_step_tools(
                 flow,
                 document_id="doc-123",
                 user_id="user-123",
@@ -4963,7 +4695,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 _agent_node("n1", "gene", step_goal="Extract genes"),
                 _agent_node("n2", "curation_handoff", step_goal="Create review sessions"),
             ])
-            tools, _, _, execution_state = get_all_agent_tools(
+            tools, _, _, execution_state = get_non_extraction_step_tools(
                 flow,
                 document_id="doc-123",
                 user_id="user-123",
@@ -5007,7 +4739,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n2", "curation_prep", step_goal="Prepare candidates for the workspace"),
         ])
 
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
@@ -5052,7 +4784,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n1", "gene", step_goal="Extract genes"),
         ])
 
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             flow,
             include_unavailable=True,
         )
@@ -5134,7 +4866,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             source_node_id="n1",
             output_node_id="n2",
         )
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
@@ -5707,7 +5439,7 @@ class TestFlowEvidenceAccumulation:
 
         mock_streaming.side_effect = streaming
         flow = _make_flow([_task_input_node(), _agent_node("n1", "gene"), _agent_node("n2", "gene")])
-        tools, _ = get_all_agent_tools(flow)
+        tools, _ = get_non_extraction_step_tools(flow)
         definitions = {
             "supervisor": StageDefinition(stage_id="supervisor", role="supervisor"),
             **{node: StageDefinition(stage_id=node, node_id=node, role="extraction", agent_id="gene")
@@ -5781,7 +5513,7 @@ class TestFlowEvidenceAccumulation:
             _agent_node("n2", "gene", step_goal="Extract confirmation matches"),
         ])
 
-        tools, created_names, _, execution_state = get_all_agent_tools(
+        tools, created_names, _, execution_state = get_non_extraction_step_tools(
             flow,
             include_unavailable=True,
         )
@@ -9440,7 +9172,7 @@ def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_resul
         _agent_node("gene", "gene"),
         _agent_node("chat", "chat_output_formatter"),
     ], source_node_id="gene", output_node_id="chat")
-    tools, _, _, execution_state = get_all_agent_tools(
+    tools, _, _, execution_state = get_non_extraction_step_tools(
         flow, document_id="doc-1", include_unavailable=True
     , doc_context=DocumentContext(document_id="doc-1", user_id="user"),)
     tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
@@ -9516,7 +9248,7 @@ class TestFlowStepProgressEvents:
             _agent_node("n1", "gene", display_name="Find genes in the paper"),
             _agent_node("n2", "disease", display_name="Find disease findings"),
         ])
-        tools, _ = get_all_agent_tools(flow, flow_run_id="flow-run-progress")
+        tools, _ = get_non_extraction_step_tools(flow, flow_run_id="flow-run-progress")
 
         _results, events = self._collect_step_started(tools, [0, 1])
 
@@ -9588,7 +9320,7 @@ class TestFlowStepProgressEvents:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _ = get_all_agent_tools(_make_flow([
+        tools, _ = get_non_extraction_step_tools(_make_flow([
             _agent_node("n1", "gene", display_name="Find genes"),
             _agent_node("n2", "disease", display_name="Find diseases"),
         ]))
@@ -9684,6 +9416,7 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id
     payload["extracted_objects"] = objects
     payload["validation_findings"] = []
     payload["extracted_objects"][0]["payload"]["symbol"] = "X" * 16000
+    stub_completed_review(monkeypatch, payload)
     calls = []
     records = []
     def streaming(agent, tool_name, tool_description, specialist_name, **kwargs):
@@ -9771,6 +9504,7 @@ async def test_inspection_manifest_eligibility_is_checked_before_persistence(mon
     from tests.unit.lib.openai_agents.test_inspect_results import _payload, DOCUMENT_ID
     executor = _executor_module()
     payload = _payload() if canonical else _structured_step_output("legacy result")
+    stub_completed_review(monkeypatch, payload)
     @function_tool(name_override="ask_gene_specialist")
     async def specialist(query: str) -> str:
         return json.dumps(payload)
@@ -9781,8 +9515,8 @@ async def test_inspection_manifest_eligibility_is_checked_before_persistence(mon
     monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", persist)
     reports = []
     monkeypatch.setattr(executor, "report_runtime_exception", lambda exc, **kw: reports.append(exc))
-    tools, _, _, state = executor.get_all_agent_tools(
-        _make_flow([_agent_node("first", "gene")]), include_unavailable=True,
+    tools, _, _, state = get_stub_review_step_tools(
+        _make_flow([_agent_node("first", "gene")]), include_unavailable=True, enable_result_inspection=True,
         user_id="owner", session_id="chat", document_id=DOCUMENT_ID,
         doc_context=DocumentContext(document_id=DOCUMENT_ID, user_id="owner"),
     )

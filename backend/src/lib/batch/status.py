@@ -19,10 +19,14 @@ BATCH_DOCUMENT_STATUS_TRANSITIONS: Mapping[
         {BatchDocumentStatus.PROCESSING, BatchDocumentStatus.FAILED}
     ),
     BatchDocumentStatus.PROCESSING: frozenset(
-        {BatchDocumentStatus.COMPLETED, BatchDocumentStatus.FAILED}
+        {BatchDocumentStatus.COMPLETED, BatchDocumentStatus.FAILED, BatchDocumentStatus.REVIEW_PENDING,
+         BatchDocumentStatus.REVIEW_EXHAUSTED, BatchDocumentStatus.INTERRUPTED}
     ),
     BatchDocumentStatus.COMPLETED: frozenset(),
     BatchDocumentStatus.FAILED: frozenset(),
+    BatchDocumentStatus.REVIEW_PENDING: frozenset(),
+    BatchDocumentStatus.REVIEW_EXHAUSTED: frozenset(),
+    BatchDocumentStatus.INTERRUPTED: frozenset(),
 }
 
 

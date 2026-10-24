@@ -418,6 +418,9 @@ def _prerequisites_current(db, scope, references):
 def _attempt_is_current(db, scope, artifact_id, attempt_content, target_id=None):
     if _document_retirement(db, artifact_id) is not None:
         return False
+    from src.lib.validation_review.source_inputs import current as source_input_current
+    if not source_input_current(db, artifact_id, attempt_content["input"]):
+        return False
     for tid, generations in attempt_content["coverage_lineages"].items():
         if target_id is not None and tid != target_id:
             continue
@@ -493,6 +496,9 @@ def begin_execution_in_transaction(db, scope, artifact_id, *, operation_id, rece
         # Redelivery reads the original frozen versions even after retirement.
         return {"execution_id": existing.id, "attempt_ids": attempts}
     for request in requests:
+        from src.lib.validation_review.source_inputs import current as source_input_current
+        if not source_input_current(db, artifact_id, request):
+            raise HistoryConflict("Validator source input version is stale")
         if request["review_episode_id"] is not None:
             episode = _fact(db, artifact_id, request["review_episode_id"], kind="review_episode")
             latest = db.scalar(select(ValidationFact.id).where(

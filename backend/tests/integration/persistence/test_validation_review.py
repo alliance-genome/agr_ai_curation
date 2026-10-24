@@ -54,7 +54,8 @@ def expire(work_id):
         row.lease_until = a.now() - timedelta(seconds=1)
 
 
-def test_concurrent_reservation_cannot_overspend(scope):
+def test_concurrent_reservation_cannot_overspend(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_EXTRA_PER_RUN", "1")
     _, ep, _ = admitted(scope)
 
     def reserve(_):

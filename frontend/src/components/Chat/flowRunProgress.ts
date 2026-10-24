@@ -1,6 +1,6 @@
 import type { SSEEvent } from '@/hooks/useChatStream'
 
-export type FlowRunStatus = 'running' | 'completed' | 'partial' | 'failed' | 'stopped'
+export type FlowRunStatus = 'running' | 'completed' | 'partial' | 'failed' | 'stopped' | 'review_pending' | 'review_exhausted' | 'interrupted'
 
 export interface FlowRunStep {
   step: number
@@ -67,7 +67,9 @@ export function deriveFlowRunProgress(
     }
 
     if (event.type === 'FLOW_FINISHED') {
-      progress = { ...progress, status: event.status === 'completed' ? (event.output_status === 'partial' ? 'partial' : 'completed') : 'failed' }
+      const status = event.status
+      progress = { ...progress, status: status === 'review_pending' || status === 'review_exhausted' || status === 'interrupted'
+        ? status : status === 'completed' ? (event.output_status === 'partial' ? 'partial' : 'completed') : 'failed' }
     } else if (event.type === 'RUN_ERROR') {
       progress = {
         ...progress,

@@ -28,6 +28,8 @@ function useNow(active: boolean): number {
  */
 export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps) {
   const isRunning = progress.status === 'running'
+  const reviewStopped = ['review_pending', 'review_exhausted', 'interrupted'].includes(progress.status)
+  const isWarning = progress.status === 'partial' || reviewStopped
   const now = useNow(isRunning)
 
   if (progress.status === 'completed') return null
@@ -42,6 +44,11 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
   if (isRunning) {
     headline = progress.flowName ? `Running ${flowLabel}` : 'Running the flow'
     detail = stepText
+  } else if (reviewStopped) {
+    headline = progress.status === 'review_pending' ? `${flowLabel} is awaiting review`
+      : progress.status === 'review_exhausted' ? `${flowLabel} reached its review limits`
+      : `${flowLabel} was interrupted`
+    detail = 'Saved extraction and review history are retained. Downstream steps have not run.'
   } else if (progress.status === 'partial') {
     headline = `${flowLabel} produced a partial result`
     detail = 'Some requested outputs are missing. Review the saved outputs and the chat notice.'
@@ -67,7 +74,7 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
         px: 2,
         py: 1.5,
         borderRadius: 1,
-        border: `1px solid ${isRunning ? theme.palette.divider : (progress.status === 'partial' ? theme.palette.warning.main : theme.palette.error.main)}`,
+        border: `1px solid ${isRunning ? theme.palette.divider : (isWarning ? theme.palette.warning.main : theme.palette.error.main)}`,
         backgroundColor: theme.palette.background.paper,
       })}
     >
@@ -77,7 +84,7 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
       <LinearProgress
         variant="determinate"
         value={value}
-        color={isRunning ? 'primary' : (progress.status === 'partial' ? 'warning' : 'error')}
+        color={isRunning ? 'primary' : (isWarning ? 'warning' : 'error')}
         aria-label="Flow progress"
         aria-valuetext={`${finishedSteps} of ${progress.totalSteps} steps finished`}
         sx={{ height: 6, borderRadius: 3 }}
@@ -85,7 +92,7 @@ export default function FlowRunProgressBar({ progress }: FlowRunProgressBarProps
       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
         <Typography
           variant="body2"
-          color={isRunning ? 'text.secondary' : (progress.status === 'partial' ? 'warning.main' : 'error')}
+          color={isRunning ? 'text.secondary' : (isWarning ? 'warning.main' : 'error')}
           aria-live="polite"
           aria-atomic="true"
         >
