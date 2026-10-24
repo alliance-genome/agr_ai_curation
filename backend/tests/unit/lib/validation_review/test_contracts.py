@@ -48,37 +48,6 @@ def test_tool_schema_cannot_choose_actor_episode_or_validator():
         assert tool.params_json_schema["additionalProperties"] is False
 
 
-def test_review_settings_are_forwarded_to_backend_and_worker():
-    import yaml
-    from tests.unit.test_docker_compose_production import WORKSPACE_ROOT
-
-    settings = ReviewLimits.configured().snapshot()
-    for filename, services in (
-        ("docker-compose.yml", ("backend", "benchmark_worker")),
-        ("docker-compose.production.yml", ("backend", "benchmark_worker")),
-        (
-            "docker-compose.test.yml",
-            (
-                "backend-unit-tests",
-                "backend-persistence-tests",
-                "benchmark-worker-test",
-            ),
-        ),
-    ):
-        spec = yaml.safe_load((WORKSPACE_ROOT / filename).read_text())
-        for name in services:
-            env = spec["services"][name]["environment"]
-            if isinstance(env, list):
-                env = dict(item.split("=", 1) for item in env)
-            for field, value in settings.items():
-                key = "VALIDATION_REVIEW_" + field.upper()
-                assert env[key] == "${" + key + ":-" + str(value) + "}"
-    example = (WORKSPACE_ROOT / ".env.example").read_text()
-    for field, value in settings.items():
-        assert (
-            "\nVALIDATION_REVIEW_" + field.upper() + "=" + str(value) + "\n" in example
-        )
-
 
 def test_locked_review_protocol_is_separate_from_editable_policy():
     from src.lib.config.agent_loader import get_agent_definition

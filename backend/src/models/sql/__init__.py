@@ -48,6 +48,10 @@ from .term_synonym import TermSynonym
 from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 
 __all__ = [
+    "ValidationReviewScope",
+    "ValidationReviewEpisode",
+    "ValidationReviewReservation",
+    "ValidationReviewWork",
     "AgentHistoryEvent",
     "AgentHistoryPayload",
     "ValidatorResultRecord",

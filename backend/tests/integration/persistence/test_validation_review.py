@@ -11,11 +11,13 @@ from src.lib.validation_history import store as h
 from src.lib.validation_review import admission as a, work as w
 from src.models.sql.validation_review import ValidationReviewWork as Work
 from tests.integration.persistence.test_validation_history import (
-    scope,
-    migrated,
+    scope as scope,
+    migrated as migrated,
     artifact,
 )
 from tests.integration.persistence.test_selected_value_authority import binding, episode
+
+from tests.integration.persistence.test_curator_selected_authority import scenario as scenario
 
 
 def admitted(scope, *, parent=None, operation=None):
@@ -326,7 +328,6 @@ async def test_reconsideration_retains_saved_custom_receipt_and_caps_attempts(sc
     assert a.status(scope, ep)["ready"]
 
 
-from tests.integration.persistence.test_curator_selected_authority import scenario
 
 
 def test_public_decisions_publish_atomically_and_replay_without_new_revision(
@@ -690,7 +691,6 @@ async def test_fake_executor_uses_frozen_requests_and_leaves_answer_unreviewed(s
 def test_grouped_public_review_accepts_caveat_and_unresolved_but_omissions_stay_pending(
     scope, tmp_path, monkeypatch
 ):
-    from dataclasses import replace
     from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
     from src.lib.domain_packs.input_selectors import build_domain_validation_request
     from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
