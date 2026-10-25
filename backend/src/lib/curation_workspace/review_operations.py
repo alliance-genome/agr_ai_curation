@@ -732,6 +732,7 @@ async def _execute(operation_id, lease_token, trace_id):
                 "failed",
                 {"message": "Validation could not finish. Saved history is retained."},
             )
+    close_prepared_children = None
     with store.SessionLocal.begin() as db:
         row = db.scalar(
             select(Operation).where(Operation.id == operation_id).with_for_update()
@@ -745,6 +746,7 @@ async def _execute(operation_id, lease_token, trace_id):
                     reason="Preparation ended before admission",
                 )
                 if abandoned:
+                    close_prepared_children = (row.owner_id, list(row.artifacts))
                     result = {
                         **result,
                         "preparation_reason": result.get("reason"),
@@ -757,6 +759,12 @@ async def _execute(operation_id, lease_token, trace_id):
                 None,
             )
         terminal_state = row.state
+    if close_prepared_children is not None:
+        child_owner, children = close_prepared_children
+        _cancel_admitted_children(
+            children, owner_id=child_owner,
+            reason="Workspace preparation failed before execution; closing already admitted children",
+        )
     from src.lib.openai_agents.extraction_trace_events import (
         write_extraction_trace_event,
     )
@@ -883,6 +891,12 @@ def cancel(operation_id, *, owner_id):
         )
         artifacts = list(row.artifacts)
         result = response(row)
+    _cancel_admitted_children(artifacts, owner_id=owner_id,
+        reason="Curator stopped workspace revalidation")
+    return result
+
+
+def _cancel_admitted_children(artifacts, *, owner_id, reason):
     for item in artifacts:
         if "episode_id" not in item:
             continue
@@ -899,11 +913,10 @@ def cancel(operation_id, *, owner_id):
                 scope,
                 item["episode_id"],
                 actor_id=owner_id,
-                reason="Curator stopped workspace revalidation",
+                reason=reason,
             )
         except admission.ReviewStopped:
             pass  # An already terminal episode keeps its recorded state and usage.
-    return result
 
 
 def resume(db, operation_id, *, owner_id, groups):

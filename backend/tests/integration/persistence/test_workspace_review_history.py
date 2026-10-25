@@ -853,6 +853,12 @@ def test_stop_before_admission_preserves_manual_decision_and_finalization(
         import asyncio
 
         asyncio.run(operations._execute(saved["operation_id"], "lease", "test-trace"))
+        with h.SessionLocal() as db:
+            stopped = db.get(WorkspaceReviewOperation, saved["operation_id"])
+            assert stopped.state == "needs_review"
+            assert stopped.outcome["reason"] == "preparation_abandoned"
+            with pytest.raises(h.HistoryConflict, match="Preparation was abandoned"):
+                operations.resume(db, saved["operation_id"], owner_id=scope.owner_id, groups=[])
     elif interruption == "stop":
         with pytest.raises(admission.ReviewStopped):
             operations.prepare(saved["operation_id"], "lease")
@@ -917,3 +923,53 @@ def test_stop_before_admission_preserves_manual_decision_and_finalization(
             )
     with h.SessionLocal() as db:
         assert h._fact(db, scenario.aid, abandoned_episode[0]).kind == "review_episode"
+
+
+@pytest.mark.asyncio
+async def test_partial_admission_failure_closes_admitted_children(scope, scenario, candidate, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from src.lib.validation_review import validator_adapter, admission
+    from src.lib.validation_history.episodes import is_abandoned
+    from src.models.sql.validation_review import ValidationReviewEpisode
+    from .test_curator_selected_authority import scenario as make_scenario
+    second_path = tmp_path / "second"
+    second_path.mkdir()
+    second = make_scenario.__wrapped__(scope, second_path, monkeypatch, SimpleNamespace(param=False))
+    sid, _ = candidate
+    with h.SessionLocal.begin() as db:
+        db.get(DomainEnvelopeModel, second.env.envelope_id).session_id = UUID(sid)
+        db.add(CurationCandidate(session_id=UUID(sid), adapter_key="fixture",
+            source=CurationCandidateSource.MANUAL, envelope_id=second.env.envelope_id,
+            object_id="one", envelope_revision=second.revision))
+        db.flush()
+        saved = operations.submit(db, owner_id=scope.owner_id, session_id=sid,
+            request_id=str(uuid4()), candidate_ids=[], guidance=None, groups=[])
+        row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+        assert len(row.artifacts) == 2
+        attempts_before = {item["artifact_id"]: db.scalar(select(func.count()).select_from(ValidationFact).where(
+            ValidationFact.artifact_id == item["artifact_id"], ValidationFact.kind == "attempt")) for item in row.artifacts}
+        row.state, row.lease_token = "preparing", "partial-lease"
+    monkeypatch.setattr(validator_adapter, "binding_contract", lambda match: {"binding_id": match.binding.binding_id})
+    original_attach = admission.attach_episode
+    attached = []
+    def attach_first(*args, **kwargs):
+        if attached:
+            raise h.HistoryConflict("Second source changed before admission")
+        result = original_attach(*args, **kwargs)
+        attached.append(kwargs["episode_id"])
+        return result
+    monkeypatch.setattr(admission, "attach_episode", attach_first)
+    monkeypatch.setattr(validator_adapter, "_default_package_scoped_validator_runner", lambda: pytest.fail("No execution before full preparation"))
+    await operations._execute(saved["operation_id"], "partial-lease", "partial-trace")
+    with h.SessionLocal() as db:
+        row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+        assert row.state == "needs_review"
+        assert row.outcome["reason"] == "preparation_abandoned"
+        first, second = row.artifacts
+        assert db.get(ValidationReviewEpisode, first["episode_id"]).state == "cancelled"
+        assert not is_abandoned(db, first["artifact_id"], first["episode_id"])
+        assert db.get(ValidationReviewEpisode, second["episode_id"]) is None
+        assert is_abandoned(db, second["artifact_id"], second["episode_id"])
+        for item in row.artifacts:
+            assert db.scalar(select(func.count()).select_from(ValidationFact).where(
+                ValidationFact.artifact_id == item["artifact_id"], ValidationFact.kind == "attempt")) == attempts_before[item["artifact_id"]]

@@ -132,6 +132,12 @@ def test_explicit_manual_review_persists_receipt_and_plan_without_paid_calls(man
     artifact_id = operation.artifacts[0]["artifact_id"]
     facts = list(db.scalars(select(ValidationFact).where(ValidationFact.artifact_id == artifact_id)))
     assert any(f.kind == "review_chat_plan" for f in facts)
+    from src.lib.validation_history import selections, store
+    manifest = selections.read_manifest(
+        store.HistoryScope(_history_context(candidate).user_id, str(candidate.session.document_id), str(candidate.session_id)),
+        artifact_id, episode_id=operation.artifacts[0]["episode_id"])
+    unavailable = [b for b in manifest["blockers"] if b["code"] == "required_validator_unavailable"]
+    assert bool(unavailable) == (not available)
     assert not any(f.kind == "attempt" for f in facts)
     assert candidate.draft.fields[0]["value"] == {"paper_name": "A"}
     operations.cancel(saved["operation_id"], owner_id=_history_context(candidate).user_id)
