@@ -107,7 +107,8 @@ def _fixture_extraction_result(
             "created_at": datetime.now(timezone.utc),
             "metadata": {
                 "fixture_id": evidence_fixture["fixture_id"],
-                "envelope_id": f"{evidence_fixture['fixture_id']}-review-envelope",
+                # Immutable checkpoints outlive the disposable live projection.
+                "envelope_id": f"{evidence_fixture['fixture_id']}-{document_id}-{origin_session_id}",
             },
         }
     )

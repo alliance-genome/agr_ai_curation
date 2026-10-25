@@ -48,6 +48,7 @@ def _record_recipe(scope, artifact_id, item, source_envelope_revision):
                 "result": item.result.model_dump(mode="json"),
                 "history_ref": deepcopy(reference),
                 "source_envelope_revision": source_envelope_revision,
+                "dispatch_context": deepcopy(item.dispatch_context),
             },
         )
 

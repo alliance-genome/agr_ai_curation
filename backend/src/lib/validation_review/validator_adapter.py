@@ -24,6 +24,8 @@ from src.lib.domain_packs.validator_dispatch import (
     _execute_validator_run_group_uncaptured,
     _default_package_scoped_validator_runner,
     _default_package_scoped_validator_batch_runner,
+    _normalized_authenticated_groups,
+    group_dispatch_context,
 )
 from src.lib.domain_packs.validation_registry import ValidatorBindingMatch, DomainPackValidationRegistry
 from src.lib.validation_history import store, runtime
@@ -353,7 +355,13 @@ class ValidatorAdapter:
             raise store.HistoryAccessError(
                 "Validator dispatch differs from configured binding"
             )
-        return ValidatorDispatchJob(match, request, history_episode_id=self.episode_id)
+        return ValidatorDispatchJob(
+            match, request, history_episode_id=self.episode_id,
+            dispatch_context=(
+                group_dispatch_context(_normalized_authenticated_groups(self.context))
+                if match.binding.required_any_active_group else None
+            ),
+        )
 
     def receipt(self, jobs, *, batch_key):
         contracts = {
@@ -672,7 +680,9 @@ class ValidatorAdapter:
             )
 
             item = _with_returned_optional_fields(
-                ValidatorResultMaterializationInput(job.match, job.request, answer)
+                ValidatorResultMaterializationInput(
+                    job.match, job.request, answer, dispatch_context=job.dispatch_context,
+                )
             )
             candidate = (
                 None
@@ -691,6 +701,7 @@ class ValidatorAdapter:
                     "request": item.request.model_dump(mode="json"),
                     "result": normalized,
                     "source_envelope_revision": 1,
+                    "dispatch_context": item.dispatch_context,
                 }
             )
             outcomes.append(

@@ -1362,6 +1362,22 @@ def test_collection_materialization_rejects_whole_rewrites_but_preserves_indexed
         obj.metadata["validation_history"]
         == envelope.extracted_objects[0].metadata["validation_history"]
     )
+    unresolved = envelope.model_copy(deep=True).extracted_objects[0]
+    unresolved.payload["terms"][0]["lookup_outcome"] = "not_found"
+    with pytest.raises(h.HistoryConflict, match="Whole-element"):
+        runtime._check_collection_materialization(envelope.extracted_objects[0], unresolved)
+    unresolved.metadata["validator_unresolved_value_materialization"] = [
+        {"field_paths": ["terms[0].label"]}
+    ]
+    runtime._check_collection_materialization(envelope.extracted_objects[0], unresolved)
+    from src.lib.domain_packs.resolvable_values import validator_event_covers
+    assert not validator_event_covers(unresolved.metadata, "terms[0].label")
+    # A whole-element declaration still cannot authorize a list-object rewrite.
+    unresolved.metadata["validator_unresolved_value_materialization"] = [
+        {"field_paths": ["terms[0]"]}
+    ]
+    with pytest.raises(h.HistoryConflict, match="Whole-element"):
+        runtime._check_collection_materialization(envelope.extracted_objects[0], unresolved)
     corrupted = envelope.model_copy(deep=True)
     corrupted.extracted_objects[0].payload["terms"].pop()
     with pytest.raises(h.HistoryConflict):

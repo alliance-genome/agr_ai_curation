@@ -244,6 +244,9 @@ def test_each_value_takes_its_own_decision_and_unlisted_values_get_no_write():
     assert setting["host"]["validator_explanation"] == NOT_VALIDATED_EXPLANATION
     event = patched.metadata["validator_resolved_value_materialization"][-1]
     assert event["materialized_field_paths"] == ["setting.kind.curie", "setting.kind.name"]
+    unresolved_event = patched.metadata["validator_unresolved_value_materialization"][-1]
+    assert unresolved_event["field_paths"] == ["setting.agent.curie"]
+    assert unresolved_event["lookup_outcome"] == "not_found"
 
     by_path = {
         finding.field_ref.field_path: finding
