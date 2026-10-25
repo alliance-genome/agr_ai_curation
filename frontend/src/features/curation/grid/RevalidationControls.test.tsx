@@ -10,7 +10,7 @@ vi.mock('../services/validationHistoryService', () => ({
 const saved = { operation_id: 'existing', session_id: 'session', state: 'running', artifact_count: 1, outcome: null }
 
 describe('Record revalidation', () => {
-  beforeEach(() => { vi.resetAllMocks() })
+  beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear() })
   it('reopens an existing round without requesting another validation', async () => {
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(saved)
     render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
@@ -34,4 +34,21 @@ describe('Record revalidation', () => {
     expect(first.slice(0, 3)).toEqual(['session', ['B'], null])
     expect(vi.mocked(service.requestReview).mock.calls[1]).toEqual(first)
   })
+  it('restores an ambiguous request identity after the panel closes', async () => {
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(null)
+    vi.mocked(service.requestReview).mockRejectedValueOnce(new Error('Lost reply')).mockResolvedValueOnce(saved)
+    const user = userEvent.setup()
+    const firstPanel = render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Revalidate record' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Revalidate record' }))
+    await screen.findByText('Lost reply')
+    const firstRequest = vi.mocked(service.requestReview).mock.calls[0]
+    firstPanel.unmount()
+    render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry this request' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Retry this request' }))
+    await screen.findByText('Revalidation: running')
+    expect(vi.mocked(service.requestReview).mock.calls[1]).toEqual(firstRequest)
+  })
+
 })

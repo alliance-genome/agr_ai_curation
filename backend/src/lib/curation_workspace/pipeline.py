@@ -372,6 +372,12 @@ def _execute_pipeline_steps(
         adapter_key=adapter_key,
         review_session_id=persistence_result.session_id,
     )
+    _enqueue_workspace_bootstrap(db, request, persistence_result)
+    return persistence_result, str(prep_extraction_result.id)
+
+
+def _enqueue_workspace_bootstrap(db, request, persistence_result):
+    """Only new captured, unreviewed sources admit automatic model work."""
     if persistence_result.created and request.user_id:
         from src.lib.curation_workspace.review_operations import submit
         from src.lib.curation_workspace.models import CurationCandidate
@@ -396,7 +402,6 @@ def _execute_pipeline_steps(
             submit(db, owner_id=request.user_id, session_id=persistence_result.session_id,
                 request_id=str(uuid5(NAMESPACE_URL, "workspace-bootstrap:" + persistence_result.session_id)),
                 candidate_ids=pending, guidance=None, groups=request.active_groups or (), origin="bootstrap")
-    return persistence_result, str(prep_extraction_result.id)
 
 
 def _bind_envelopes_to_review_session(

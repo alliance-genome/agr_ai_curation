@@ -1,3 +1,4 @@
+import { useWorkspaceReviewCompletion } from '@/features/curation/workspace/useWorkspaceReviewCompletion'
 import RevalidationControls from '@/features/curation/grid/RevalidationControls'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -393,6 +394,12 @@ function CurationWorkspacePageContent({
     await refreshCurationWorkspaceEnvelopeReviewRows(queryClient, nextWorkspace)
   }, [queryClient, setWorkspace, workspace.session.session_id])
 
+  const refreshAfterReview = useCallback(async () => {
+    if (!await autosave.flush()) throw new Error('Save your current edits before refreshing the completed validation.')
+    await refreshWorkspace(activeCandidateId)
+  }, [autosave, activeCandidateId, refreshWorkspace])
+  const backgroundReviewError = useWorkspaceReviewCompletion(workspace.session.session_id, refreshAfterReview)
+
   const setCandidateBusy = useCallback((
     setter: typeof setDecidingCandidateIds,
     candidateId: string,
@@ -578,6 +585,7 @@ function CurationWorkspacePageContent({
         </Alert>
       ) : null}
 
+      {backgroundReviewError && <Alert severity="error">{backgroundReviewError}</Alert>}
       {tableError ? (
         <Alert severity="error">
           {tableError}
@@ -594,7 +602,7 @@ function CurationWorkspacePageContent({
         <DialogTitle>Revalidate all records</DialogTitle>
         <DialogContent><RevalidationControls sessionId={workspace.session.session_id}
           beforeChange={async () => { if (!await autosave.flush()) throw new Error('Save your current edits before requesting validation.') }}
-          onChanged={() => refreshWorkspace(activeCandidateId)} /></DialogContent>
+          onChanged={refreshAfterReview} /></DialogContent>
         <DialogActions><Button onClick={() => setRevalidationDialogOpen(false)}>Close</Button></DialogActions>
       </Dialog>
       <WorkspaceShell
@@ -716,7 +724,7 @@ function CurationWorkspacePageContent({
                 </Alert>
               ))}
             {horizontalGridModel ? (
-              <InteractiveHorizontalCurationGrid model={horizontalGridModel} onReviewChanged={() => refreshWorkspace(activeCandidateId)} />
+              <InteractiveHorizontalCurationGrid model={horizontalGridModel} onReviewChanged={refreshAfterReview} />
             ) : envelopeRowsQuery.isPending ? (
               <Typography role="status">Loading review fields…</Typography>
             ) : !envelopeReviewRowsError ? (

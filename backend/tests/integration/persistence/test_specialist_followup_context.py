@@ -61,3 +61,34 @@ async def test_followup_context_retains_actual_previous_input_and_scopes_reads(p
         await reader.on_invoke_tool(ToolContext(context=None, tool_name="read_supplied_history", tool_call_id="test", tool_arguments="{}"), json.dumps({**unrelated_reference, "offset": 0}))
     with pytest.raises(store.HistoryAccessError):
         await reader.on_invoke_tool(ToolContext(context=None, tool_name="read_supplied_history", tool_call_id="test", tool_arguments="{}"), json.dumps({"fact_id": "baseline", "sha256": context["baseline_sha"], "offset": 0}))
+
+
+@pytest.mark.parametrize("planned", ["three"], indirect=True)
+def test_workspace_envelope_context_keeps_all_entries_beyond_decision_command_limit(planned):
+    from types import SimpleNamespace
+    item = planned
+    envelope = item.plan.envelope
+    roots = [obj.metadata["validation_history"]["target_id"] for obj in envelope.extracted_objects]
+    target = store.register_target(item.scope, item.aid, identity="envelope-context-test",
+        original={"binding_id": "envelope-context-test"},
+        parent_target_id=envelope.metadata["validation_history"]["target_id"])
+    with store.SessionLocal.begin() as db:
+        request = store._append(db, item.aid, operation_id=uuid4().hex,
+            kind="workspace_revalidation_request", parent_id=item.ep,
+            body={"actor": {"type": "curator", "id": item.scope.owner_id},
+                  "entries": [{"target_id": roots[0], "action": "request_revalidation", "reason": "Check all supplied context"}]})
+        request_id = request.id
+        ep, _ = admission.lock_episode(db, item.scope, item.ep)
+        context_episode = SimpleNamespace(id=ep.id, artifact_id=ep.artifact_id, policy={**ep.policy, "decision_entries": 1})
+        packet = specialist_context.assemble_in_transaction(db, item.scope, context_episode,
+            operation_id="full-batch-context", entry_ids=roots, parent_decision_id=request_id,
+            instructions="Use the supplied records and history", current_entries={
+                obj.metadata["validation_history"]["target_id"]: obj.model_dump(mode="json") for obj in envelope.extracted_objects},
+            attempt={}, purpose="validation_reconsideration", additional_target_ids=[target])
+        assert len(packet["context"]["original_entries"]) == 3
+    packet = item.adapter.specialist_packet({
+        "requests": [{"target_id": target}],
+        "invocation": {"execution_id": uuid4().hex, "attempt_ids": []},
+        "followup": {"parent_decision_id": request_id, "instructions": "Check the envelope"},
+    })
+    assert len(packet["context"]["original_entries"]) == 3

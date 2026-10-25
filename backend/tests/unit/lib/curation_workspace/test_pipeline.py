@@ -1348,3 +1348,60 @@ async def test_run_post_curation_pipeline_schedules_async_for_large_sets():
     assert result.execution_mode is module.PipelineExecutionMode.ASYNC
     assert result.task_name is not None
     assert scheduler.calls[0]["task_name"].startswith("curation-post-agent-pipeline:")
+
+
+@pytest.mark.parametrize(
+    "created,metadata,subject_kind,expected",
+    [
+        (True, {"validation_history": {"artifact_id": "artifact"}}, "extracted", 1),
+        (False, {"validation_history": {"artifact_id": "artifact"}}, "extracted", 0),
+        (True, {"validation_history": {"artifact_id": "artifact"}}, "historical", 0),
+        (True, {}, "extracted", 0),
+        (
+            True,
+            {
+                "validation_history": {"artifact_id": "artifact"},
+                "review_episode_id": "flow-reviewed",
+            },
+            "extracted",
+            0,
+        ),
+        (
+            True,
+            {
+                "validation_history": {"artifact_id": "artifact"},
+                "selected_projection": {"id": "chat-reviewed"},
+            },
+            "extracted",
+            0,
+        ),
+    ],
+)
+def test_bootstrap_only_queues_fresh_captured_unreviewed_sources(
+    monkeypatch, created, metadata, subject_kind, expected
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from src.lib.curation_workspace import review_operations
+
+    session_id = str(uuid4())
+    candidate_id = str(uuid4())
+    db = Mock()
+    db.scalars.return_value = [SimpleNamespace(id=candidate_id, envelope_id="envelope")]
+    db.get.side_effect = lambda model, key: (
+        SimpleNamespace(envelope_json={"metadata": metadata})
+        if key == "envelope"
+        else SimpleNamespace(owner_id="owner", subject_kind=subject_kind)
+    )
+    submit = Mock()
+    monkeypatch.setattr(review_operations, "submit", submit)
+    module._enqueue_workspace_bootstrap(
+        db,
+        SimpleNamespace(user_id="owner", active_groups=("group",)),
+        SimpleNamespace(created=created, session_id=session_id),
+    )
+    assert submit.call_count == expected
+    if expected:
+        assert submit.call_args.kwargs["origin"] == "bootstrap"
+        assert submit.call_args.kwargs["candidate_ids"] == [candidate_id]
+        assert submit.call_args.kwargs["groups"] == ("group",)

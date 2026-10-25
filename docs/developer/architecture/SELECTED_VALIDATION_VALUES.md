@@ -61,13 +61,13 @@ and pins the selected projection in the same transaction. Replaying selected
 recipes never recreates or rewrites old execution history events. The publication
 reference pins the checkpoint revision as well as the selection manifest.
 
-The authenticated validation API accepts `replace_curator_override=true` for an
-explicit Revalidate action, plus optional advisory `guidance`. This is different
-from `force`, which only bypasses a cached snapshot. Autosave and readiness reads
-cannot create replacement authority. The intent pins the review episode, actor,
-requested object/fields and exact current overlay fact IDs. The existing frontend
-service types expose this contract; wiring a Revalidate control and history UI
-belongs to the dependent UI work, not this foundational PR.
+The authenticated `POST /sessions/{session_id}/review-operations` command accepts
+an explicit Revalidate action with optional advisory `guidance`. Its request ID
+makes delivery idempotent. The server captures replacement authority as of the
+request, including the authenticated actor, requested records and exact overlay
+history cutoff. Autosave, history reads and structural snapshot refreshes cannot
+create this authority. The workspace's record control and all-records dialog
+submit these durable commands; only the worker performs model execution.
 
 During execution and review the curator value remains current. Only explicit
 acceptance of a structurally complete answer from this episode can supersede the

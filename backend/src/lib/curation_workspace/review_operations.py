@@ -17,6 +17,7 @@ from src.models.sql.validation_review import WorkspaceReviewOperation as Operati
 from src.lib.curation_workspace.models import CurationCandidate
 from src.schemas.domain_envelope import DomainEnvelope
 from .review_history_service import candidate_binding
+from .review_authorization import require_current_access
 
 
 def response(row):
@@ -85,6 +86,7 @@ def submit(
     if not candidates:
         raise store.HistoryConflict("No records are available for revalidation")
     snapshots = {}
+    excluded = []
     operation_id = str(uuid4())
     for candidate_id in candidates:
         candidate = db.get(CurationCandidate, UUID(candidate_id))
@@ -110,9 +112,28 @@ def submit(
                     candidate, user_id=owner_id, authenticated_groups=groups
                 ),
             )
-        candidate, row, envelope, scope, artifact_id = candidate_binding(
-            db, candidate_id, owner_id=owner_id
-        )
+        from fastapi import HTTPException
+
+        try:
+            candidate, row, envelope, scope, artifact_id = candidate_binding(
+                db, candidate_id, owner_id=owner_id
+            )
+        except HTTPException as error:
+            if candidate_ids or error.status_code != 409:
+                raise
+            if (
+                candidate is None
+                or candidate.session.created_by_id != owner_id
+                or str(candidate.session_id) != session_id
+            ):
+                raise store.HistoryAccessError("Workspace record unavailable") from None
+            excluded.append(
+                {
+                    "candidate_id": candidate_id,
+                    "reason": "No durable validation source is available for this record.",
+                }
+            )
+            continue
         if str(candidate.session_id) != session_id:
             raise store.HistoryAccessError("Candidate belongs to another workspace")
         store._require_live_artifact(db, artifact_id)
@@ -153,7 +174,11 @@ def submit(
         request_id=request_id,
         request=identity,
         artifacts=list(snapshots.values()),
-        state="queued",
+        state="queued" if snapshots else "needs_review",
+        outcome={
+            "excluded_records": excluded,
+            **({"reason": "no_eligible_records"} if not snapshots else {}),
+        },
     )
     db.add(row)
     db.flush()
@@ -165,12 +190,27 @@ def get(db, operation_id, *, owner_id):
     if row is None or row.owner_id != owner_id:
         raise store.HistoryAccessError("Workspace operation unavailable")
     for item in row.artifacts:
-        candidate_binding(db, item["candidate_id"], owner_id=owner_id)
+        store._artifact(
+            db,
+            item["artifact_id"],
+            store.HistoryScope(
+                owner_id, item["document_id"], item["history_session_id"]
+            ),
+        )
     return row
 
 
 def latest_for_candidate(db, candidate_id, *, owner_id):
     """Reopening a record observes its last command without creating a round."""
+    candidate = db.get(CurationCandidate, UUID(str(candidate_id)))
+    if candidate is None:
+        raise store.HistoryAccessError("Workspace record unavailable")
+    # A manual record has no captured source until the explicit submit action.
+    # Observing an absent command must not require or create that source.
+    if candidate.envelope_id is None:
+        if candidate.session.created_by_id != owner_id:
+            raise store.HistoryAccessError("Workspace record unavailable")
+        return None
     candidate, _, _, _, artifact_id = candidate_binding(
         db, candidate_id, owner_id=owner_id
     )
@@ -200,7 +240,7 @@ def latest_for_session(db, session_id, *, owner_id):
         .where(
             Operation.owner_id == owner_id,
             Operation.session_id == str(session_id),
-            Operation.request.contains({"candidate_ids": []}),
+            func.jsonb_array_length(Operation.request["candidate_ids"]) == 0,
         )
         .order_by(Operation.created_at.desc(), Operation.id.desc())
         .limit(1)
@@ -310,6 +350,7 @@ def prepare(operation_id, lease_token):
             artifacts.append(item)
         row.artifacts = artifacts
         owner, groups = row.owner_id, tuple(row.request["groups"])
+    require_current_access(owner, groups)
     # Work identities are deterministic; preparation is safe to recover before
     # provider submission. Existing immutable plans win over recomputation.
     prepared = []
@@ -350,7 +391,6 @@ def prepare(operation_id, lease_token):
                 curator_revalidation=item["intents"]
                 if item["origin"] == "curator"
                 else None,
-                explicit_validation_requested=True,
                 review_episode_key=item["episode_key"],
                 review_object_ids=tuple(
                     intent["object_id"] for intent in item["intents"]
@@ -435,6 +475,15 @@ def prepare(operation_id, lease_token):
                 "targets": len(targets),
             }
         )
+    # Publish episode references before attaching grants, so cancellation can
+    # always find admitted children even if preparation is interrupted.
+    with store.SessionLocal.begin() as db:
+        row = db.scalar(
+            select(Operation).where(Operation.id == operation_id).with_for_update()
+        )
+        if row.state != "preparing" or row.lease_token != lease_token:
+            raise admission.ReviewStopped(row.state)
+        row.artifacts = prepared
     first = prepared[0]
     root_scope = store.HistoryScope(
         owner, first["document_id"], first["history_session_id"]
@@ -467,18 +516,25 @@ def prepare(operation_id, lease_token):
                 if previous and db.get(ValidationReviewEpisode, previous) is not None
                 else None
             )
-        admission.attach_episode(
-            scope,
-            artifact_id=item["artifact_id"],
-            episode_id=item["episode_id"],
-            scope_id=child,
-            predecessor_id=predecessor,
-            renewal_actor_id=owner if predecessor else None,
-            renewal_reason="Explicit curator Revalidate action"
-            if predecessor
-            else None,
-            curator_round=bool(predecessor),
-        )
+        # Serialize attachment with Stop. No provider runs under this lock.
+        with store.SessionLocal.begin() as operation_db:
+            command = operation_db.scalar(
+                select(Operation).where(Operation.id == operation_id).with_for_update()
+            )
+            if command.state != "preparing" or command.lease_token != lease_token:
+                raise admission.ReviewStopped(command.state)
+            admission.attach_episode(
+                scope,
+                artifact_id=item["artifact_id"],
+                episode_id=item["episode_id"],
+                scope_id=child,
+                predecessor_id=predecessor,
+                renewal_actor_id=owner if predecessor else None,
+                renewal_reason="Explicit curator Revalidate action"
+                if predecessor
+                else None,
+                curator_round=bool(predecessor),
+            )
     with store.SessionLocal.begin() as db:
         row = db.scalar(
             select(Operation).where(Operation.id == operation_id).with_for_update()
@@ -510,7 +566,7 @@ async def _execute(operation_id, lease_token, trace_id):
     from src.lib.validation_review.validator_adapter import ValidatorAdapter
     from src.lib.validation_review.extractor_adapter import ExtractorAdapter
     from src.lib.observability.cost_context import get_agent_cost_identity
-    from src.lib.validation_review.stops import review_stop
+    from src.lib.validation_review.stops import review_stop, stop_reason
     from src.lib.validation_review.audit import report_operational_failure
     import json
 
@@ -521,6 +577,7 @@ async def _execute(operation_id, lease_token, trace_id):
         supervisor = reviewer.create_direct_supervisor(active_groups=list(groups))
         outcomes = []
         for item in artifacts:
+            await asyncio.to_thread(require_current_access, owner, groups)
             scope = store.HistoryScope(
                 owner, item["document_id"], item["history_session_id"]
             )
@@ -589,7 +646,9 @@ async def _execute(operation_id, lease_token, trace_id):
         stopped = review_stop(error)
         from fastapi import HTTPException
 
-        if isinstance(error, (store.HistoryAccessError, store.HistoryConflict)) or (
+        if stopped is not None:
+            state, result = "needs_review", {"reason": stop_reason(stopped)}
+        elif isinstance(error, (store.HistoryAccessError, store.HistoryConflict)) or (
             isinstance(error, HTTPException) and error.status_code < 500
         ):
             state, result = (
@@ -599,14 +658,12 @@ async def _execute(operation_id, lease_token, trace_id):
                     "message": "Refresh the record and inspect its saved history before continuing.",
                 },
             )
-        elif stopped is None:
+        else:
             report_operational_failure(error)
             state, result = (
                 "failed",
                 {"message": "Validation could not finish. Saved history is retained."},
             )
-        else:
-            state, result = "needs_review", {"reason": type(stopped).__name__}
     with store.SessionLocal.begin() as db:
         row = db.scalar(
             select(Operation).where(Operation.id == operation_id).with_for_update()
@@ -614,9 +671,18 @@ async def _execute(operation_id, lease_token, trace_id):
         if row.state in {"preparing", "running"} and row.lease_token == lease_token:
             row.state, row.outcome, row.lease_until = (
                 state,
-                {**result, "trace_id": trace_id},
+                {**(row.outcome or {}), **result, "trace_id": trace_id},
                 None,
             )
+        terminal_state = row.state
+    from src.lib.openai_agents.extraction_trace_events import (
+        write_extraction_trace_event,
+    )
+
+    write_extraction_trace_event(
+        event_type="validation_review.workspace_operation",
+        output_summary={"operation_id": operation_id, "state": terminal_state},
+    )
 
 
 def claim():
@@ -631,16 +697,16 @@ def claim():
         )
         # No provider replay after an expired running lease. Its answers, if any,
         # still belong to the original episode and retain all charges.
-        db.execute(
-            update(Operation)
+        for interrupted in db.scalars(
+            select(Operation)
             .where(Operation.state == "running", Operation.lease_until < now)
-            .values(
-                state="uncertain",
-                outcome={
-                    "message": "Execution was interrupted; inspect saved history before requesting another round."
-                },
-            )
-        )
+            .with_for_update()
+        ):
+            interrupted.state = "uncertain"
+            interrupted.outcome = {
+                **(interrupted.outcome or {}),
+                "message": "Execution was interrupted; inspect saved history before requesting another round.",
+            }
         db.execute(
             update(Operation)
             .where(Operation.state == "preparing", Operation.lease_until < now)
@@ -731,6 +797,11 @@ def cancel(operation_id, *, owner_id):
     for item in artifacts:
         if "episode_id" not in item:
             continue
+        from src.models.sql.validation_review import ValidationReviewEpisode
+
+        with store.SessionLocal() as db:
+            if db.get(ValidationReviewEpisode, item["episode_id"]) is None:
+                continue  # Preparation never admitted this child; no grant exists.
         scope = store.HistoryScope(
             owner_id, item["document_id"], item["history_session_id"]
         )
@@ -749,15 +820,31 @@ def cancel(operation_id, *, owner_id):
 def resume(db, operation_id, *, owner_id, groups):
     row = get(db, operation_id, owner_id=owner_id)
     db.refresh(row, with_for_update=True)
-    if sorted(groups) != row.request["groups"]:
+    if not set(row.request["groups"]).issubset(groups):
         raise store.HistoryAccessError(
             "Access groups changed; request a new authorized round"
         )
     if row.state == "needs_review":
+        if not row.artifacts:
+            raise store.HistoryConflict("No eligible records exist in this round")
         row.state = "queued"
-        row.outcome = None
+        row.outcome = {
+            "excluded_records": (row.outcome or {}).get("excluded_records", [])
+        }
     elif row.state not in {"queued", "preparing", "running", "complete"}:
         raise store.HistoryConflict(
             "This operation cannot be replayed; inspect its history and explicitly request a new round"
         )
     return response(row)
+
+
+def active_for_session(db, session_id, *, owner_id):
+    """Small live command set for page-level completion observation."""
+    rows = db.scalars(
+        select(Operation).where(
+            Operation.owner_id == owner_id,
+            Operation.session_id == str(session_id),
+            Operation.state.in_(["queued", "preparing", "running"]),
+        )
+    )
+    return [response(get(db, row.id, owner_id=owner_id)) for row in rows]

@@ -1232,3 +1232,14 @@ async def post_workspace_validation_decision(
             groups=_authenticated_active_groups(user))
     except ValueError as error:
         _workspace_review_error(error)
+
+
+@router.get('/sessions/{session_id}/review-operations')
+async def get_active_workspace_review_operations(
+    session_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
+) -> list[dict]:
+    from src.lib.curation_workspace import review_operations
+    try:
+        return review_operations.active_for_session(db, str(session_id), owner_id=_require_current_user_id(user))
+    except ValueError as error:
+        _workspace_review_error(error)

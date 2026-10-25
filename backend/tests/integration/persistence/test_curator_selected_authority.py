@@ -71,7 +71,7 @@ def scenario(scope, tmp_path, monkeypatch, request):
         state.env, manifest, checkpoint = publish_decisions(scope,
             checkpoint_request=DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=state.env,
                 expected_revision=state.revision, document_id=scope.document_id,
-                adapter_key="fixture", source_extraction_result_id=state.source),
+                session_id=getattr(state, "workspace_session_id", None), adapter_key="fixture", source_extraction_result_id=state.source),
             episode_id=state.episode, operation_id=uuid4().hex,
             actor={"type": "agent", "id": "supervisor"},
             entries=[{"target_id": target, "expected_version": version, "action": action,

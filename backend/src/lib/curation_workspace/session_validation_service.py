@@ -221,7 +221,6 @@ def _compute_candidate_validation(
         draft_fields=draft_fields,
         validated_at=validated_at,
         runtime_context=runtime_context,
-        force=force,
     )
     warnings.extend(envelope_warnings)
 
@@ -383,8 +382,6 @@ def _lock_unlinked_manual_candidate(db: Session, candidate_id: UUID) -> None:
         raise HTTPException(status_code=409, detail="Candidate source changed during validation; reload and retry")
 
 
-
-
 def _profile_validation_cache_is_current(
     db: Session, candidate: CurationCandidate, runtime_context: ValidatorRuntimeContext | None,
 ) -> bool:
@@ -467,7 +464,6 @@ def _envelope_validation_results_for_candidate(
     draft_fields: Sequence[CurationDraftFieldSchema],
     validated_at: datetime,
     runtime_context: ValidatorRuntimeContext | None = None,
-    force: bool = False,
 ) -> tuple[dict[str, FieldValidationResult] | None, list[str], str | None, int | None]:
     if (
         candidate.envelope_id is None
@@ -543,10 +539,6 @@ def _envelope_validation_results_for_candidate(
             ),
         ]
     return field_results, dedupe(warnings), envelope.envelope_id, envelope_revision
-
-
-
-
 
 
 

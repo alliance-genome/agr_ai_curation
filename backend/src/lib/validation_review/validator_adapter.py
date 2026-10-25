@@ -611,12 +611,19 @@ class ValidatorAdapter:
             entry_ids = []
             for request in payload["requests"]:
                 fact = store._fact(db, self.artifact_id, request["target_id"], kind="target")
-                while "object_ref" not in store._content(db, fact):
-                    if fact.parent_id is None:
-                        raise store.HistoryConflict("Validator request has no original entry")
+                while "object_ref" not in store._content(db, fact) and fact.parent_id is not None:
                     fact = store._fact(db, self.artifact_id, fact.parent_id, kind="target")
-                if fact.id not in entry_ids:
-                    entry_ids.append(fact.id)
+                if "object_ref" in store._content(db, fact):
+                    roots = [fact.id]
+                elif fact.id == envelope.metadata["validation_history"]["target_id"]:
+                    # An authorized envelope binding receives its whole declared
+                    # input, including the object histories that inform it.
+                    roots = [obj.metadata["validation_history"]["target_id"] for obj in envelope.extracted_objects]
+                else:
+                    raise store.HistoryConflict("Validator request has no original entry")
+                for root in roots:
+                    if root not in entry_ids:
+                        entry_ids.append(root)
             current = {obj.metadata["validation_history"]["target_id"]: obj.model_dump(mode="json")
                        for obj in envelope.extracted_objects
                        if obj.metadata["validation_history"]["target_id"] in entry_ids}
@@ -636,6 +643,7 @@ class ValidatorAdapter:
                              "remaining_after": max(0, ep.policy["attempts_per_target"] - count)}
                              for target, count in counts.items()}},
                 purpose="validation_reconsideration",
+                additional_target_ids=[item["target_id"] for item in payload["requests"]],
             )
             return {**packet, "packet_bytes": ep.policy["packet_bytes"]}
 

@@ -233,9 +233,6 @@ class ValidatorRuntimeContext:
     curator_revalidation: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
     review_episode_key: str | None = None
     review_object_ids: tuple[str, ...] | None = None
-    explicit_validation_requested: bool = False
-    refresh_scopes: Sequence[tuple[str, Sequence[str]]] | None = None
-    dispatch_receipt: dict[str, bool] | None = None
 
 
 @dataclass(frozen=True)

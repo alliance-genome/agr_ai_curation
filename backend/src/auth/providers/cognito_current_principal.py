@@ -98,3 +98,52 @@ def resolve_current_principal(frozen: PrincipalLookupIdentity) -> AuthPrincipal:
     finally:
         client.close()
 
+
+
+def _lookup_subject(subject: str, *, client: Any, pool_id: str, issuer: str) -> AuthPrincipal:
+    """Discover a username by exact subject; AdminGetUser is the authority."""
+    if not subject or subject != subject.strip() or any(char in subject for char in ('"', '\\')):
+        raise CurrentPrincipalDenied("Invalid current account subject")
+    request = {"UserPoolId": pool_id, "Filter": f'sub = "{subject}"'}
+    usernames = set()
+    seen_tokens = set()
+    while True:
+        page = client.list_users(**request)
+        for account in page["Users"]:
+            subjects = [value["Value"] for value in account["Attributes"] if value["Name"] == "sub"]
+            if subjects != [subject]:
+                raise CurrentPrincipalDenied("Account discovery subject mismatch")
+            usernames.add(account["Username"])
+        token = page.get("PaginationToken")
+        if token is None:
+            break
+        if not isinstance(token, str) or not token or token in seen_tokens:
+            raise ValueError("Current account discovery pagination is invalid")
+        seen_tokens.add(token)
+        request["PaginationToken"] = token
+    if len(usernames) != 1:
+        raise CurrentPrincipalDenied("Current account is unavailable or ambiguous")
+    return _lookup_cognito_principal(PrincipalLookupIdentity(
+        subject=subject, auth_provider="oidc", auth_issuer=issuer,
+        provider_username=usernames.pop(),
+    ), client=client, pool_id=pool_id, issuer=issuer)
+
+
+def resolve_current_subject(subject: str) -> AuthPrincipal:
+    region, pool_id = get_cognito_region(), get_cognito_user_pool_id()
+    if not region or not pool_id:
+        raise ValueError("Current account lookup requires a configured user pool")
+    timeout = get_benchmark_curator_auth_timeout_seconds()
+    client = boto3.client("cognito-idp", region_name=region, config=Config(
+        connect_timeout=timeout, read_timeout=timeout,
+        retries={"mode": "standard", "total_max_attempts": get_benchmark_curator_auth_max_attempts()},
+    ))
+    try:
+        return _lookup_subject(subject, client=client, pool_id=pool_id,
+                               issuer=f"https://cognito-idp.{region}.amazonaws.com/{pool_id}")
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "UserNotFoundException":
+            raise CurrentPrincipalDenied("Current curator account no longer exists") from None
+        raise
+    finally:
+        client.close()

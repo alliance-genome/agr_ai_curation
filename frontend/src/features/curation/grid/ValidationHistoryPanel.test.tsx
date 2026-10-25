@@ -15,6 +15,7 @@ describe('Validation history', () => {
     vi.resetAllMocks()
     vi.mocked(service.fetchValidationHistory).mockResolvedValue({
       entries: [], baseline: reference, next_after: null, episode_id: 'episode',
+      record: { original: null, current: null, curator_overrides: [], selections: [] },
     })
   })
   it('reads saved metadata without starting validation or loading exact bodies', async () => {
@@ -35,6 +36,36 @@ describe('Validation history', () => {
     await user.click(await screen.findByRole('button', { name: 'Load more saved details' }))
     await screen.findByText('{"original":"X"}')
     expect(service.fetchValidationHistoryDetail).toHaveBeenNthCalledWith(2, 'record', reference, 12)
+    expect(service.requestReview).not.toHaveBeenCalled()
+  })
+  it('distinguishes scientific outcome, decisions, selected version and later curator edits', async () => {
+    const summary = (value: string) => ({ fields: [{ field: 'term', value }], truncated: false })
+    const answer = (id: string, review: string, selected: boolean): service.HistoryEntry => ({
+      id, sha256: id, kind: 'completion', sequence: 1, created_at: '2026-10-25T00:00:00Z',
+      actor: null, reason: null, state: 'completed', choices: [], decisions: [],
+      scientific_status: 'unresolved', answer: { fields: [{ field: 'unresolved_questions', value: 'The paper names two alternatives.' }], truncated: false },
+      answer_states: [{ target_id: 'term', selected, review, stale: !selected, version: 3 }],
+    })
+    vi.mocked(service.fetchValidationHistory).mockResolvedValue({
+      entries: [answer('first', 'reject', false), {
+        ...answer('retry', 'pending', false), kind: 'decision', state: null, scientific_status: null, answer: null,
+        decisions: [{ action: 'reconsider', reason: 'Check the nomenclature again' }], answer_states: [],
+      }, answer('second', 'accept', true)],
+      baseline: reference, next_after: null, episode_id: 'episode',
+      record: { original: summary('original mention'), current: summary('curator correction'),
+        curator_overrides: [summary('curator correction')],
+        selections: [{ target_id: 'term', version: 3, selected: 'second', review: 'accept', reason: null, scientific_status: 'unresolved' }],
+      },
+    })
+    render(<ValidationHistoryPanel candidateId="record" />)
+    await screen.findByText('original mention')
+    expect(screen.getByText('Current record values')).toBeInTheDocument()
+    expect(screen.getAllByText('curator correction')).toHaveLength(2)
+    expect(screen.getAllByText('Scientific outcome: unresolved')).toHaveLength(2)
+    expect(screen.getByText(/Not selected · Rejected · Stale/)).toBeInTheDocument()
+    expect(screen.getByText(/Selected answer · Accepted/)).toBeInTheDocument()
+    expect(screen.getByText(/reconsider: Check the nomenclature again/)).toBeInTheDocument()
+    expect(screen.getByText(/Curator edits are current/)).toBeInTheDocument()
     expect(service.requestReview).not.toHaveBeenCalled()
   })
   it('shows access failures instead of inventing an empty successful history', async () => {

@@ -7,7 +7,11 @@ export interface HistoryChoice {
   expected_version: number
   logical_attempt_id: string
 }
+export interface ValueSummary { fields: { field: string; value: string }[]; truncated: boolean }
 export interface HistoryEntry extends HistoryReference {
+  scientific_status: string | null
+  answer: ValueSummary | null
+  answer_states: { target_id: string; selected: boolean; review: string; stale: boolean; version: number }[]
   kind: string
   sequence: number
   created_at: string
@@ -18,6 +22,11 @@ export interface HistoryEntry extends HistoryReference {
   decisions: { action: string; reason: string }[]
 }
 export interface HistoryPage {
+  record: {
+    original: ValueSummary | null; current: ValueSummary | null
+    curator_overrides: ValueSummary[]
+    selections: { target_id: string; version: number; selected: string | null; review: string; reason: string | null; scientific_status: string | null }[]
+  }
   entries: HistoryEntry[]
   next_after: number | null
   baseline: HistoryReference
@@ -42,7 +51,7 @@ export function fetchValidationHistoryDetail(candidateId: string, ref: HistoryRe
 }
 
 
-export interface ReviewOperation { operation_id: string; session_id: string; state: string; artifact_count: number; outcome: unknown }
+export interface ReviewOperation { operation_id: string; session_id: string; state: string; artifact_count: number; outcome: { excluded_records?: { candidate_id: string; reason: string }[]; message?: string; reason?: string; results?: { reason?: string; review: { state: string; ready: boolean } }[] } | null }
 async function command<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`/api/curation-workspace/${path}`, {
     method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -50,10 +59,12 @@ async function command<T>(path: string, body: unknown): Promise<T> {
   if (!response.ok) throw new Error(await readCurationApiError(response))
   return response.json() as Promise<T>
 }
-export function requestReview(sessionId: string, candidateIds: string[], guidance: string | null, requestId: string) {
-  return command<ReviewOperation>(`sessions/${encodeURIComponent(sessionId)}/review-operations`, {
+export async function requestReview(sessionId: string, candidateIds: string[], guidance: string | null, requestId: string) {
+  const operation = await command<ReviewOperation>(`sessions/${encodeURIComponent(sessionId)}/review-operations`, {
     request_id: requestId, candidate_ids: candidateIds, guidance,
   })
+  window.dispatchEvent(new CustomEvent('workspace-review-started', { detail: operation }))
+  return operation
 }
 export function fetchSessionReviewOperation(sessionId: string, signal?: AbortSignal) {
   return read<ReviewOperation | null>(`/api/curation-workspace/sessions/${encodeURIComponent(sessionId)}/review-operation`, signal)
@@ -72,4 +83,8 @@ export function decideValidation(candidateId: string, episodeId: string, choices
     request_id: requestId, episode_id: episodeId,
     entries: choices.map(choice => ({ ...choice, action, reason })),
   })
+}
+
+export function fetchActiveReviewOperations(sessionId: string, signal?: AbortSignal) {
+  return read<ReviewOperation[]>(`/api/curation-workspace/sessions/${encodeURIComponent(sessionId)}/review-operations`, signal)
 }
