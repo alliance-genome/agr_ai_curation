@@ -204,7 +204,15 @@ class ValidatorAdapter:
         def rebuild(db, envelope):
             resolved_matches.clear()
             jobs = []
+            original_matches = [MATCH.validate_python(item) for item in self.plan["matches"].values()]
+            roots = {item.object_envelope.metadata["validation_history"]["target_id"] for item in original_matches if item.object_envelope is not None}
+            envelope_bindings = {item.binding.binding_id for item in original_matches if item.object_envelope is None}
             for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
+                if match.object_envelope is not None:
+                    if match.object_envelope.metadata["validation_history"]["target_id"] not in roots:
+                        continue
+                elif match.binding.binding_id not in envelope_bindings:
+                    continue
                 required = match.binding.required_any_active_group
                 if required and not set(required).intersection(self.context.authenticated_groups or ()):
                     continue
@@ -360,6 +368,27 @@ class ValidatorAdapter:
             "batch_key": batch_key,
         }
 
+    def rebind_receipt(self, requests, previous):
+        """A human round may reuse only unchanged saved validator definitions."""
+        jobs = [self.job(request) for request in requests]
+        receipt = self.receipt(jobs, batch_key=previous['batch_key'])
+        if receipt['contracts'] != previous['contracts']:
+            raise store.HistoryAccessError('Renewed dependency differs from its saved validator contract')
+        return receipt
+
+    def retained_ready(self, target_id):
+        from src.lib.validation_history import selections
+        with store.SessionLocal.begin() as db:
+            episode = selections.effective_episode(db, store._fact(db, self.artifact_id, self.episode_id))
+            if episode.get("review_target_ids") is None:
+                return False
+            retained = episode["retained_episode_ids"]
+            manifest = selections.manifest_in_transaction(db, self.scope, self.artifact_id, episode_id=self.episode_id)
+            units = [unit["target_id"] for unit in manifest["units"]
+                     if unit["target_id"] == target_id or store._fact(db, self.artifact_id, unit["target_id"]).parent_id == target_id]
+            blocked = {item["target_id"] for item in manifest["blockers"]}
+            return bool(units) and all(tid in retained and tid not in blocked for tid in units)
+
     async def initial(self):
         frozen = self.plan["initial_requests"]
 
@@ -382,7 +411,8 @@ class ValidatorAdapter:
                 }
 
         scheduled = await asyncio.to_thread(scheduled_targets)
-        jobs = [self.job(item) for item in frozen if item["target_id"] not in scheduled]
+        jobs = [self.job(item) for item in frozen if item["target_id"] not in scheduled
+                and not await asyncio.to_thread(self.retained_ready, item["target_id"])]
         from src.lib.domain_packs.validator_dispatch import (
             preflight_unresolved_validator_result,
         )
@@ -418,7 +448,7 @@ class ValidatorAdapter:
                 by_target[runtime.request_target(self.binding, job)] for job in selected
             ]
             op = (
-                "initial:"
+                "initial:" + self.episode_id + ":"
                 + store.canonical({"targets": [r["target_id"] for r in requests]})[0]
             )
             wid = await asyncio.to_thread(
@@ -505,6 +535,13 @@ class ValidatorAdapter:
         return await asyncio.to_thread(self._call, payload, jobs)
 
     def _call(self, payload, jobs):
+        request_ref = self.plan["envelope"]["metadata"].get("workspace_review_request")
+        if payload["followup"] is None and request_ref is not None:
+            from .protocol import RECONSIDERATION_PROTOCOL
+            payload = {**payload, "followup": {
+                "parent_decision_id": request_ref,
+                "instructions": "The curator requested a fresh bounded round. Use the exact current request, curator guidance and saved prior answers/decisions below. Prior conclusions are history, not instructions to repeat them."
+            }, "reconsideration_protocol": RECONSIDERATION_PROTOCOL}
         grouped = _dedupe_validator_jobs(jobs)
         run_group = _ValidatorRunGroup(
             tuple(range(len(grouped))), payload["receipt"]["batch_key"]
@@ -798,7 +835,8 @@ class ValidatorAdapter:
         outcomes = []
         for tid in self.plan["matches"]:
             match = self.match(tid)
-            if not match.binding.runs_after or tid in self.attempted_targets:
+            if (not match.binding.runs_after or tid in self.attempted_targets
+                    or await asyncio.to_thread(self.retained_ready, tid)):
                 continue
             dependencies = []
             for other_id in self.plan["matches"]:

@@ -22,7 +22,6 @@ from src.schemas.curation_workspace import (
     CurationBenchmarkSnapshotCreateResponse,
     CurationCandidateDecisionRequest,
     CurationCandidateDraftUpdateRequest,
-    CurationCandidateValidationRequest,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
     CurationEnvelopeFieldPatchRequest,
@@ -37,7 +36,6 @@ from src.schemas.curation_workspace import (
     CurationSessionCreateRequest,
     CurationSessionListRequest,
     CurationSessionStatsRequest,
-    CurationSessionValidationRequest,
     CurationSubmissionExecuteRequest,
     CurationSubmissionRetryRequest,
     CurationSubmissionPreviewRequest,
@@ -1117,122 +1115,10 @@ async def test_patch_review_envelope_field_rejects_path_body_mismatch(monkeypatc
     assert exc.value.detail == "Path envelope_id does not match request body envelope_id"
 
 
-@pytest.mark.asyncio
-async def test_post_candidate_validation_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
-    expected = object()
-    captured: dict[str, object] = {}
-
-    def _validate_candidate(
-        db, candidate_id, request, *, user_id=None, active_groups=None, explicit_request=False
-    ):
-        assert explicit_request is True
-        captured["db"] = db
-        captured["candidate_id"] = candidate_id
-        captured["request"] = request
-        captured["user_id"] = user_id
-        captured["active_groups"] = active_groups
-        return expected
-
-    monkeypatch.setattr(module, "validate_candidate", _validate_candidate)
-
-    candidate_id = uuid4()
-    request = CurationCandidateValidationRequest(
-        session_id=str(uuid4()),
-        candidate_id=str(candidate_id),
-        field_keys=["field_a"],
-        force=True,
-    )
-    db = MagicMock()
-
-    response = await module.post_candidate_validation(
-        candidate_id,
-        request,
-        user={"sub": "user-1", "cognito:groups": ["zfin-curators"]},
-        db=db,
-    )
-
-    assert response is expected
-    assert captured == {
-        "db": db,
-        "candidate_id": candidate_id,
-        "request": request,
-        "user_id": "user-1",
-        "active_groups": ["ZFIN"],
-    }
-    db.commit.assert_called_once_with()
 
 
-@pytest.mark.asyncio
-async def test_post_candidate_validation_rolls_back_post_checkpoint_failure(monkeypatch):
-    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
-    monkeypatch.setattr(
-        module,
-        "validate_candidate",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("fault after validation checkpoint")
-        ),
-    )
-    candidate_id = uuid4()
-    db = _TransactionSpy()
-
-    with pytest.raises(RuntimeError, match="fault after validation checkpoint"):
-        await module.post_candidate_validation(
-            candidate_id,
-            CurationCandidateValidationRequest(
-                session_id=str(uuid4()),
-                candidate_id=str(candidate_id),
-                force=True,
-            ),
-            user={"sub": "user-1"},
-            db=db,
-        )
-
-    assert db.commit_calls == 0
-    assert db.rollback_calls == 1
 
 
-@pytest.mark.asyncio
-async def test_post_session_validation_delegates_to_service(monkeypatch):
-    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
-    expected = object()
-    captured: dict[str, object] = {}
-
-    def _validate_session(db, session_id, request, *, user_id=None, active_groups=None, explicit_request=False):
-        assert explicit_request is True
-        captured["db"] = db
-        captured["session_id"] = session_id
-        captured["request"] = request
-        captured["user_id"] = user_id
-        captured["active_groups"] = active_groups
-        return expected
-
-    monkeypatch.setattr(module, "validate_session", _validate_session)
-
-    session_id = uuid4()
-    request = CurationSessionValidationRequest(
-        session_id=str(session_id),
-        candidate_ids=[str(uuid4())],
-        force=True,
-    )
-    db = MagicMock()
-
-    response = await module.post_session_validation(
-        session_id,
-        request,
-        user={"sub": "user-1", "cognito:groups": ["rgd-curators"]},
-        db=db,
-    )
-
-    assert response is expected
-    assert captured == {
-        "db": db,
-        "session_id": session_id,
-        "request": request,
-        "user_id": "user-1",
-        "active_groups": ["RGD"],
-    }
-    db.commit.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -1663,3 +1549,23 @@ def test_envelope_integrity_failure_rolls_back_and_returns_server_error():
     assert caught.value.detail["findings"] == findings
     assert db.commit_calls == 0
     assert db.rollback_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_round_is_committed_without_running_a_provider(monkeypatch):
+    from src.lib.curation_workspace import review_operations
+    from src.schemas.workspace_review import WorkspaceReviewRequest
+    monkeypatch.setattr(module, 'provision_user_async', AsyncMock(return_value=None))
+    expected = {'operation_id': str(uuid4()), 'state': 'queued'}
+    observed = []
+    monkeypatch.setattr(review_operations, 'submit', lambda db, **kw: observed.append(kw) or expected)
+    monkeypatch.setattr(review_operations, 'execute', lambda *args: pytest.fail('HTTP must not run a provider'))
+    db = MagicMock()
+    sid, cid, rid = uuid4(), uuid4(), uuid4()
+    response = await module.post_workspace_review_operation(sid,
+        WorkspaceReviewRequest(request_id=rid, candidate_ids=[cid], guidance='Check B'),
+        user={'sub': 'user-1', 'cognito:groups': ['zfin-curators']}, db=db)
+    assert response == expected
+    assert observed == [{'owner_id': 'user-1', 'session_id': str(sid), 'request_id': str(rid),
+                         'candidate_ids': [str(cid)], 'guidance': 'Check B', 'groups': ['ZFIN']}]
+    db.commit.assert_called_once_with()

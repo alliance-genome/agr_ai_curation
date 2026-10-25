@@ -231,6 +231,8 @@ class ValidatorRuntimeContext:
     user_id: str | None = None
     authenticated_groups: tuple[str, ...] | None = None
     curator_revalidation: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None
+    review_episode_key: str | None = None
+    review_object_ids: tuple[str, ...] | None = None
     explicit_validation_requested: bool = False
     refresh_scopes: Sequence[tuple[str, Sequence[str]]] | None = None
     dispatch_receipt: dict[str, bool] | None = None
@@ -489,6 +491,8 @@ def prepare_validator_dispatch(
     )
     from src.lib.validation_history.selections import declare_envelope_episode
     envelope = declare_envelope_episode(history_binding, envelope, matches,
+        episode_key=runtime_context.review_episode_key if runtime_context else None,
+        review_object_ids=runtime_context.review_object_ids if runtime_context else None,
         authenticated_groups=authenticated_groups, flow_selections=current_flow_validator_selections(),
         curator_revalidation=runtime_context.curator_revalidation if runtime_context else None,
         unavailable_bindings=[item.mapping.mapping_id for item in profile_context.unavailable if item.mapping.policy.blocks_readiness] if profile_context else ())
@@ -503,6 +507,11 @@ def prepare_validator_dispatch(
                 list(_ordered_matches(matches)), authenticated_groups=authenticated_groups,
             )
         )
+    if runtime_context is not None and runtime_context.review_object_ids is not None:
+        from src.lib.validation_review.record_scope import compile_matches
+        requested, allowed = compile_matches(history_binding, matches, set(runtime_context.review_object_ids))
+        from src.lib.validation_history.runtime import binding_target
+        eligible_matches = [match for match in eligible_matches if binding_target(history_binding, match) in allowed]
     dispatch_context = group_dispatch_context(authenticated_groups)
     flow_selections = current_flow_validator_selections()
     from src.lib.validation_history.runtime import record_match_scheduling

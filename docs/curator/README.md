@@ -57,3 +57,5 @@ Saved flows keep their selected agent revisions. Updating an agent does not sile
 Use AI Chat in Agent Studio for help with agents, prompts, fields, validators, and flows. Choose **New chat** in its header when you want a fresh conversation.
 
 For a problem with an extraction result, use the response's **three-dot menu (⋮)** to send feedback or **Open in Agent Studio**. Include what you expected and the paper passage or result that needs attention. The linked conversation and available trace information help the development team investigate.
+
+- [Validation history and another review round](validation-history.md)

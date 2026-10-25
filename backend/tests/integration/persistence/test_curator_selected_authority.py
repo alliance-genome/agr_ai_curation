@@ -631,3 +631,24 @@ def test_null_parent_then_new_leaf_cannot_resurrect_old_aggregate(scope, request
             object_id="one", field_paths=requested, actor_id=scope.owner_id)
     with h.SessionLocal.begin() as db:
         assert c.apply_overlays(db, aid, env).extracted_objects[0].payload["terms"][0]["label"] == "new"
+
+
+def test_queued_revalidation_cannot_authorize_edit_made_after_click(scope, scenario):
+    from sqlalchemy import select, func
+    from src.models.sql.validation_history import ValidationFact
+    x = scenario
+    original_edit = x.edit('ECO:AT_CLICK')
+    with h.SessionLocal() as db:
+        sequence = db.scalar(select(func.max(ValidationFact.sequence)).where(ValidationFact.artifact_id == x.aid))
+    later_edit = x.edit('ECO:AFTER_CLICK')
+    x.episode_fn()
+    with h.SessionLocal.begin() as db:
+        intent = c.record_revalidation_intent_in_transaction(db, x.bound, envelope=x.env,
+            episode_id=x.episode, object_id='one', field_paths=[], actor_id=scope.owner_id,
+            through_sequence=sequence)
+    saved = h.read_fact(scope, x.aid, intent)['content']
+    assert saved['overlay_ids'] == [original_edit]
+    assert later_edit not in saved['overlay_ids']
+    completion = x.propose('ECO:NEW_ANSWER')
+    x.publish(completion)
+    assert x.env.extracted_objects[0].payload['evidence_code_curies'] == ['ECO:AFTER_CLICK']

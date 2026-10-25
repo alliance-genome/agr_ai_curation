@@ -90,6 +90,9 @@ def planned(scope, tmp_path, monkeypatch, request):
             )
         ],
     )
+    if getattr(request, "param", None) == "three":
+        env.extracted_objects = [CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=name,
+            payload={"evidence_code_curies": ["eco:" + name]}) for name in "ABC"]
     if getattr(request, "param", None) == "evidence":
         env.extracted_objects[0].evidence_record_ids = ["original-evidence"]
         env.metadata["evidence_records"] = [{"evidence_record_id": "original-evidence",
@@ -892,3 +895,118 @@ async def test_changed_groups_refuse_queued_work_without_provider_or_uncertain_s
         resumed.initial()
     )  # Completed work is not rebuilt/revalidated after access changes.
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["three"], indirect=True)
+async def test_workspace_b_round_calls_only_b_and_retains_a_c(planned, monkeypatch):
+    from datetime import datetime, timezone
+    from src.lib.curation_workspace import review_operations as ops
+    from src.lib.curation_workspace.models import CurationCandidate, CurationReviewSession, DomainEnvelopeModel
+    from src.models.sql.validation_review import WorkspaceReviewOperation
+    from src.schemas.curation_workspace import CurationCandidateSource
+    from src.lib.validation_history import selections
+    from src.lib.validation_review.validator_adapter import RECONSIDERATION_INPUT
+    item = planned
+    calls = []
+    contexts = []
+    def run(request, binding, **kwargs):
+        calls.append(request.target.model_dump(mode="json"))
+        contexts.append(RECONSIDERATION_INPUT.get())
+        return {**_result_payload(request, resolved_values={"curie": "ECO:correct"}), "resolved_objects": []}
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner",
+                        lambda: lambda *args, **kwargs: pytest.fail("Unexpected batch"))
+    await item.adapter.initial()
+    checkpoint = checkpoint_provider(item)
+    decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint(), operation_id="accept-original", entries=entries_for(item, "accept"))
+    before = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert before['ready'] and len(calls) == 3
+    with store.SessionLocal.begin() as db:
+        session = CurationReviewSession(adapter_key='fixture', document_id=item.scope.document_id,
+            created_by_id=item.scope.owner_id, prepared_at=datetime.now(timezone.utc))
+        db.add(session)
+        db.flush()
+        db.get(DomainEnvelopeModel, item.plan.envelope.envelope_id).session_id = session.id
+        candidate = CurationCandidate(session=session, adapter_key='fixture', source=CurationCandidateSource.MANUAL,
+            envelope_id=item.plan.envelope.envelope_id, object_id='B', envelope_revision=1)
+        db.add(candidate)
+        db.flush()
+        saved = ops.submit(db, owner_id=item.scope.owner_id, session_id=str(session.id), request_id=str(uuid4()),
+                           candidate_ids=[str(candidate.id)], guidance='Please reconsider B', groups=[])
+        row = db.get(WorkspaceReviewOperation, saved['operation_id'])
+        row.state, row.lease_token = 'preparing', 'test-lease'
+    owner, groups, artifacts = ops.prepare(saved['operation_id'], 'test-lease')
+    current = artifacts[0]
+    adapter = ValidatorAdapter(item.scope, item.aid, current['episode_id'], current['plan_ref'], authenticated_groups=groups)
+    assert len(adapter.plan['initial_requests']) == 1
+    await adapter.initial()
+    assert len(calls) == 4
+    assert calls[-1] == adapter.plan['initial_requests'][0]['request']['target']
+    assert contexts[-1] is not None
+    assert 'Please reconsider B' in str(contexts[-1])
+    # Exact history reaches the specialist, but untouched records are not dispatched.
+    await adapter.initial()
+    assert len(calls) == 4
+    with store.SessionLocal() as db:
+        attempts = list(db.scalars(select(ValidationFact).where(ValidationFact.artifact_id == item.aid, ValidationFact.kind == 'attempt')))
+        new_attempt = next(f for f in attempts if store._content(db, f)['input']['review_episode_id'] == current['episode_id'])
+        version = store._current(db, item.aid, new_attempt.target_id)['version']
+    decisions.record_decisions(decisions.ReviewContext(item.scope, current['episode_id'], 'supervisor'),
+        checkpoint_request=ops.checkpoint(owner, current, groups), operation_id='accept-B', entries=[{
+            'target_id': new_attempt.target_id, 'decision_unit_id': new_attempt.target_id, 'expected_version': version,
+            'logical_attempt_id': new_attempt.id, 'action': 'accept', 'reason': 'Reviewed B again'}])
+    after = selections.read_manifest(item.scope, item.aid, episode_id=current['episode_id'])
+    assert after['review_ready']
+    for old in before['units']:
+        if old['target_id'] == new_attempt.target_id:
+            continue
+        retained = next(unit for unit in after['units'] if unit['target_id'] == old['target_id'])
+        for key in ('selected', 'selection_id', 'version'):
+            assert retained[key] == old[key]
+
+
+@pytest.mark.asyncio
+async def test_curator_round_reuses_accepted_dependency_until_supervisor_explicitly_reconsiders(planned, monkeypatch):
+    from src.lib.validation_history import selections
+    from src.lib.validation_review import scheduling
+    item = planned
+    calls = []
+    def run(request, binding, **kwargs):
+        calls.append(request.request_id)
+        return {**_result_payload(request, resolved_values={'curie': 'ECO:correct'}), 'resolved_objects': []}
+    monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner', lambda: run)
+    monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner', lambda: lambda *a, **k: pytest.fail('Unexpected batch'))
+    await item.adapter.initial()
+    checkpoint = checkpoint_provider(item)
+    old_entries = entries_for(item, 'accept')
+    decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, 'supervisor'),
+        checkpoint_request=checkpoint(), operation_id='accept-old', entries=old_entries)
+    dependency, requested = [entry['target_id'] for entry in old_entries]
+    with store.SessionLocal() as db:
+        original = store._content(db, store._fact(db, item.aid, item.ep))
+    episode = selections.start_episode(item.scope, item.aid, episode={
+        'episode_id': str(uuid4()), 'reason': 'Record plus previously reviewed dependency',
+        'obligations': original['obligations'], 'review_target_ids': [dependency, requested],
+        'retained_episode_ids': {dependency: item.ep}})
+    root = admission.create_scope(item.scope, operation_id=str(uuid4()), kind='workspace_operation', targets=2, episodes=1)
+    child = admission.create_scope(item.scope, operation_id=str(uuid4()), kind='document_run', targets=2, episodes=1, parent_id=root)
+    admission.attach_episode(item.scope, artifact_id=item.aid, episode_id=episode, scope_id=child,
+        predecessor_id=item.ep, renewal_actor_id=item.scope.owner_id, renewal_reason='Explicit curator round', curator_round=True)
+    plan = replace(item.plan, envelope=item.plan.envelope.model_copy(deep=True),
+                   initial_jobs=tuple(replace(job, history_episode_id=episode) for job in item.plan.initial_jobs))
+    plan.envelope.metadata['review_episode_id'] = episode
+    plan_ref = save_plan(plan, context=item.adapter.context)
+    adapter = ValidatorAdapter(item.scope, item.aid, episode, plan_ref, authenticated_groups=())
+    await adapter.initial()
+    assert len(calls) == 3  # Two original calls, only the requested target in the fresh round.
+    ctx = decisions.ReviewContext(item.scope, episode, 'supervisor')
+    entry = next(entry for entry in entries_for(item, 'defer') if entry['target_id'] == dependency)
+    parent = decisions.record_decisions(ctx, checkpoint_request=checkpoint(), operation_id='question-dependency', entries=[entry])
+    adapter.prepare_inputs(checkpoint)
+    wid = scheduling.reconsider(ctx, operation_id='reconsider-dependency', parent_decision_id=parent['decision_id'],
+        target_ids=[dependency], instructions='Reconsider the dependency needed by this record', evidence_refs=[],
+        refresh_inputs=adapter.refresh_inputs, rebind_receipt=adapter.rebind_receipt)
+    await adapter.execute(wid)
+    assert len(calls) == 4

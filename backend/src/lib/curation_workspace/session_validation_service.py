@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from copy import deepcopy
 from datetime import datetime, timezone
 import json
 from typing import Any, Sequence
@@ -12,16 +10,13 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
-from src.lib.domain_packs.not_validatable import supersede_not_validatable_findings
 from src.lib.curation_workspace.execution_contracts import require_candidate_conformance
 
 from src.lib.curation_workspace.adapter_registry import (
-    resolve_curation_domain_envelope_validator_by_id,
     resolve_curation_domain_pack_by_id,
 )
 from src.lib.curation_workspace.models import (
     CurationCandidate,
-    CurationDraft,
     CurationReviewSession as ReviewSessionModel,
     DomainEnvelopeModel,
 )
@@ -45,21 +40,8 @@ from src.lib.curation_workspace.validation_runtime import (
     field_validation_status,
     increment_validation_count,
 )
-from src.lib.domain_envelopes.persistence import (
-    DomainEnvelopeCheckpointRequest,
-    DomainEnvelopePersistenceError,
-    lock_projection_artifact,
-    write_domain_envelope_checkpoint,
-)
-from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
-from src.lib.domain_packs.validation_findings import (
-    append_validation_findings_to_envelope,
-    remove_open_validation_findings_for_scope,
-    resolve_stale_validation_findings_after_refresh,
-)
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorRuntimeContext,
-    dispatch_active_validator_bindings,
 )
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
@@ -170,8 +152,6 @@ def _compute_candidate_validation(
     field_keys: Sequence[str] | None = None,
 ) -> CandidateValidationComputation:
     require_candidate_conformance(db, candidate)
-    if force or (runtime_context and runtime_context.explicit_validation_requested):
-        _ensure_manual_profile_envelope(db, candidate, runtime_context=runtime_context)
     profile_cache_current = _profile_validation_cache_is_current(db, candidate, runtime_context)
     requested_field_keys = set(field_keys or [])
     draft_fields = [
@@ -403,16 +383,6 @@ def _lock_unlinked_manual_candidate(db: Session, candidate_id: UUID) -> None:
         raise HTTPException(status_code=409, detail="Candidate source changed during validation; reload and retry")
 
 
-def _lock_unchanged_validation_draft(db, candidate, envelope, version, fields):
-    # Model work runs without a draft lock. Publication and curator edits take
-    # the artifact lock before projection rows; retain that order here.
-    with db.no_autoflush:
-        lock_projection_artifact(db, envelope.metadata["validation_history"]["artifact_id"])
-        current = db.execute(select(CurationDraft.version, CurationDraft.fields).where(
-            CurationDraft.id == candidate.draft.id,
-        ).with_for_update()).one()
-    if current.version != version or current.fields != fields:
-        raise HTTPException(status_code=409, detail="Curator draft changed during validation; reload and retry")
 
 
 def _profile_validation_cache_is_current(
@@ -530,7 +500,7 @@ def _envelope_validation_results_for_candidate(
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
     reference = envelope.metadata.get("selected_projection")
-    if reference is not None and not force:
+    if reference is not None:
         # A readiness check consumes selection; it must not create another review
         # episode just because its display/validation snapshot needs refreshing.
         from src.lib.validation_history.projection import read_published_projection_in_transaction
@@ -549,19 +519,9 @@ def _envelope_validation_results_for_candidate(
                 dispatch_warnings.append("Selected values remain current; another review episode is pending.")
         except HistoryConflict:
             dispatch_warnings.append("Selected projection awaits refresh; finalization is blocked.")
-    elif not force and not (runtime_context and runtime_context.explicit_validation_requested):
+    else:
         envelope_revision = int(envelope_row.revision)
         dispatch_warnings = ["Current values await explicit validation/review."]
-    else:
-        envelope, envelope_revision, dispatch_warnings = _dispatch_workspace_envelope_validation(
-            db,
-            candidate,
-            envelope_row=envelope_row,
-            envelope=envelope,
-            field_paths=_candidate_validation_field_paths(draft_fields),
-            validated_at=validated_at,
-            runtime_context=runtime_context,
-        )
     field_results, warnings = domain_envelope_field_validation_results(
         envelope,
         envelope_revision=envelope_revision,
@@ -585,196 +545,12 @@ def _envelope_validation_results_for_candidate(
     return field_results, dedupe(warnings), envelope.envelope_id, envelope_revision
 
 
-def _candidate_validation_field_paths(
-    draft_fields: Sequence[CurationDraftFieldSchema],
-) -> tuple[str, ...]:
-    paths: list[str] = []
-    for field in draft_fields:
-        for path in field_validation_aliases(field.field_key, field.metadata):
-            if path not in paths:
-                paths.append(path)
-    return tuple(paths)
 
 
-def _curator_revalidation_field_paths(draft_fields):
-    """Exact declared destinations; display aliases must never grant authority."""
-    paths = []
-    for field in draft_fields:
-        metadata = field.metadata or {}
-        candidates = [metadata.get("source_field_path") or field.field_key,
-                      *(metadata.get("materializes_to_field_paths") or [])]
-        for path in candidates:
-            if isinstance(path, str) and path and path not in paths:
-                paths.append(path)
-    return tuple(paths)
 
 
-def _require_revalidation_context(context, candidate, user_id):
-    if not user_id:
-        raise HTTPException(status_code=403, detail="Explicit revalidation requires an authenticated curator")
-    if context is None or candidate.domain_envelope is None or not candidate.object_id or candidate.envelope_revision is None:
-        raise HTTPException(status_code=409, detail="Explicit revalidation requires an envelope target and document context")
-    history = candidate.domain_envelope.envelope_json.get("metadata", {}).get("validation_history", {})
-    if not history.get("artifact_id") or not history.get("session_id"):
-        raise HTTPException(status_code=409, detail="Explicit revalidation requires durable validation history")
 
 
-def _dispatch_workspace_envelope_validation(
-    db: Session,
-    candidate: CurationCandidate,
-    *,
-    envelope_row: DomainEnvelopeModel,
-    envelope: DomainEnvelope,
-    field_paths: Sequence[str],
-    validated_at: datetime,
-    runtime_context: ValidatorRuntimeContext | None = None,
-) -> tuple[DomainEnvelope, int, list[str]]:
-    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
-    if domain_pack is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Domain pack {envelope.domain_pack_id} is not available for "
-                "workspace candidate validation."
-            ),
-        )
-
-    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
-    profile_context = resolve_envelope_profile_validation(
-        envelope, domain_pack, db=db, user_id=runtime_context.user_id if runtime_context else None,
-        active_group_ids=(runtime_context.authenticated_groups or ()) if runtime_context is not None else (),
-    )
-    if profile_context is not None:
-        domain_pack = profile_context.registry.domain_pack
-    source_revision = int(envelope_row.revision)
-    draft_version = candidate.draft.version
-    draft_fields = deepcopy(candidate.draft.fields)
-    from src.lib.validation_history.runtime import bind_artifact
-    from src.lib.validation_history.projection import read_dispatch_source
-    source_envelope = read_dispatch_source(bind_artifact(envelope, runtime_context), envelope)
-    scopes = runtime_context.refresh_scopes if runtime_context and runtime_context.refresh_scopes else [(candidate.object_id, field_paths)]
-    package_envelope = source_envelope
-    removed_findings = []
-    for object_id, paths in scopes:
-        refreshed = remove_open_validation_findings_for_scope(package_envelope, object_id=object_id, field_paths=paths)
-        package_envelope = refreshed.envelope
-        removed_findings.extend(refreshed.removed_findings)
-    # The package validator runs first: an object it marks not validatable
-    # (not_validatable.NOT_VALIDATABLE_DETAIL_KEY) is skipped by the structural
-    # checks and the binding dispatch below.
-    package_validator = resolve_curation_domain_envelope_validator_by_id(
-        envelope.domain_pack_id
-    )
-    package_appended_findings = ()
-    if package_validator is not None and profile_context is None:
-        package_findings = package_validator(package_envelope)
-        package_envelope, package_appended_findings = (
-            append_validation_findings_to_envelope(
-                supersede_not_validatable_findings(
-                    package_envelope,
-                    package_findings,
-                    actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
-                ),
-                package_findings,
-                actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
-            )
-        )
-    structural_result = run_domain_envelope_structural_checks(
-        package_envelope,
-        domain_pack,
-        registry=profile_context.registry if profile_context is not None else None,
-        profile_context=profile_context,
-    )
-    validator_envelope = structural_result.envelope.model_copy(update={"extracted_objects": envelope.extracted_objects})
-    from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
-    try:
-        dispatch_result = dispatch_active_validator_bindings(
-            validator_envelope,
-            domain_pack,
-            actor_id="workspace_candidate_validation",
-            profile_context=profile_context,
-            registry=structural_result.registry,
-            source_envelope_revision=source_revision,
-            runtime_context=runtime_context,
-        )
-    except HistoryAccessError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except HistoryConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if runtime_context is not None and runtime_context.dispatch_receipt is not None:
-        runtime_context.dispatch_receipt["executed"] = True
-    _lock_unchanged_validation_draft(db, candidate, envelope, draft_version, draft_fields)
-    stale_resolution = resolve_stale_validation_findings_after_refresh(
-        original_envelope=envelope,
-        refreshed_envelope=dispatch_result.envelope,
-        removed_findings=removed_findings,
-        actor_id="workspace_candidate_validation",
-    )
-    appended_findings = (
-        *structural_result.appended_findings,
-        *package_appended_findings,
-        *dispatch_result.appended_findings,
-        *stale_resolution.resolved_findings,
-    )
-    group_sensitive = any(
-        entry.get("group_scope") is not None
-        for entry in getattr(dispatch_result, "binding_audit", ())
-    )
-    context_changed = (
-        group_sensitive
-        and _envelope_group_context_identity(envelope)
-        != _runtime_group_context_identity(runtime_context)
-    )
-    if (not appended_findings and not stale_resolution.changed and not context_changed
-            and stale_resolution.envelope.metadata == envelope.metadata):
-        return stale_resolution.envelope, source_revision, []
-
-    try:
-        checkpoint = write_domain_envelope_checkpoint(
-            db,
-            DomainEnvelopeCheckpointRequest(
-                project_key=envelope_row.project_key,
-                envelope=stale_resolution.envelope,
-                expected_revision=source_revision,
-                document_id=envelope_row.document_id,
-                session_id=envelope_row.session_id,
-                flow_run_id=envelope_row.flow_run_id,
-                object_model_ref_json=dict(envelope_row.object_model_ref_json),
-                model_field_ref_json=dict(envelope_row.model_field_ref_json),
-                authenticated_groups=(
-                    runtime_context.authenticated_groups
-                    if group_sensitive and runtime_context is not None
-                    else None
-                ),
-            ),
-        )
-    except DomainEnvelopePersistenceError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-
-    candidate.envelope_revision = checkpoint.revision
-    candidate.updated_at = validated_at
-    from src.lib.curation_workspace.session_mutation_service import (
-        _refresh_candidate_projection_from_envelope, load_envelope_candidates_for_patch,
-    )
-    linked = load_envelope_candidates_for_patch(db, session_id=candidate.session_id,
-                                                envelope_id=envelope.envelope_id)
-    for linked_candidate in linked:
-        linked_candidate.envelope_revision = checkpoint.revision
-        linked_candidate.updated_at = validated_at
-    if profile_context is not None:
-        for projection in [candidate, *(item for item in linked if item.id != candidate.id)]:
-            obj = next(item for item in stale_resolution.envelope.extracted_objects
-                       if projection.object_id in (item.object_id, item.pending_ref_id))
-            _refresh_candidate_projection_from_envelope(
-                projection, obj, envelope_revision=checkpoint.revision,
-                changed_field_path=[path for binding in profile_context.registry.bindings
-                                    for path in binding.expected_result_fields.values()],
-                updated_at=validated_at,
-            )
-    return stale_resolution.envelope, checkpoint.revision, []
 
 
 def _aggregate_session_validation_snapshot(
@@ -846,7 +622,6 @@ def validate_candidate(
     *,
     user_id: str | None = None,
     active_groups: Sequence[str] | None = None,
-    explicit_request: bool = False,
 ) -> CurationCandidateValidationResponse:
     """Validate a candidate within the transaction owned by the caller.
 
@@ -888,22 +663,10 @@ def validate_candidate(
         user_id=user_id,
         authenticated_groups=active_groups,
     )
-    if runtime_context is not None:
-        runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request)
-    if request.replace_curator_override:
-        _require_revalidation_context(runtime_context, candidate, user_id)
-        assert runtime_context is not None  # Established by the authority guard.
-        runtime_context = replace(runtime_context, curator_revalidation={
-            "actor_id": user_id, "object_id": candidate.object_id,
-            "field_paths": _curator_revalidation_field_paths([
-                CurationDraftFieldSchema.model_validate(field) for field in candidate.draft.fields
-                if not request.field_keys or field.get("field_key") in request.field_keys]),
-            "guidance": request.guidance,
-        })
     validation_snapshot, changed = _apply_candidate_validation(
         db,
         candidate,
-        force=request.force or request.replace_curator_override,
+        force=request.force,
         validated_at=validated_at,
         runtime_context=runtime_context,
         field_keys=request.field_keys,
@@ -933,7 +696,6 @@ def validate_session(
     *,
     user_id: str | None = None,
     active_groups: Sequence[str] | None = None,
-    explicit_request: bool = False,
 ) -> CurationSessionValidationResponse:
     """Validate a review session within the transaction owned by the caller.
 
@@ -969,39 +731,12 @@ def validate_session(
     candidate_validations: list[CurationValidationSnapshotSchema] = []
     changed = False
 
-    contexts = {}
-    groups = {}
     for target_candidate_id in target_candidate_ids:
         candidate = candidate_map[target_candidate_id]
-        context = _validator_runtime_context_for_candidate(candidate, user_id=user_id, authenticated_groups=active_groups)
-        if request.replace_curator_override:
-            _require_revalidation_context(context, candidate, user_id)
-        contexts[target_candidate_id] = context
-        key = str(candidate.envelope_id) if candidate.envelope_id else target_candidate_id
-        groups.setdefault(key, []).append(candidate)
-    dispatched = set()
-    for target_candidate_id in target_candidate_ids:
-        candidate = candidate_map[target_candidate_id]
-        key = str(candidate.envelope_id) if candidate.envelope_id else target_candidate_id
-        first = key not in dispatched
-        runtime_context = contexts[target_candidate_id]
-        dispatch_receipt = {}
-        if runtime_context is not None:
-            runtime_context = replace(runtime_context, explicit_validation_requested=explicit_request and first,
-                dispatch_receipt=dispatch_receipt,
-                refresh_scopes=[(item.object_id, _candidate_validation_field_paths([
-                    CurationDraftFieldSchema.model_validate(field) for field in (item.draft.fields or [])])) for item in groups[key]])
-            if request.replace_curator_override and first:
-                runtime_context = replace(runtime_context, curator_revalidation=[{
-                    "actor_id": user_id, "object_id": item.object_id,
-                    "field_paths": [], "guidance": request.guidance,
-                } for item in groups[key]])
+        runtime_context = _validator_runtime_context_for_candidate(
+            candidate, user_id=user_id, authenticated_groups=active_groups)
         validation_snapshot, candidate_changed = _apply_candidate_validation(
-            db, candidate, force=(request.force or request.replace_curator_override) and first,
-            validated_at=validated_at, runtime_context=runtime_context,
-        )
-        if dispatch_receipt.get("executed"):
-            dispatched.add(key)
+            db, candidate, force=request.force, validated_at=validated_at, runtime_context=runtime_context)
         candidate_validations.append(validation_snapshot)
         changed |= candidate_changed
 

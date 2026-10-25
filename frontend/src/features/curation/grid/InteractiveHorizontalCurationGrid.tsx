@@ -77,7 +77,7 @@ const EMPTY_VALIDATION_PREVIEW_OVERRIDES = new Map<string, FieldStateKind>()
 export type InteractiveHorizontalCurationGridProps = Omit<
   HorizontalCurationGridProps,
   'renderCellActions' | 'renderContextCell' | 'renderFieldCell' | 'renderRowActions'
->
+> & { onReviewChanged?: () => void | Promise<void> }
 
 function candidateForRow(
   candidates: readonly CurationCandidate[],
@@ -122,6 +122,7 @@ function canonicalFieldForCell(
 
 export default function InteractiveHorizontalCurationGrid({
   model,
+  onReviewChanged,
   ...gridProps
 }: InteractiveHorizontalCurationGridProps) {
   const {
@@ -279,6 +280,8 @@ export default function InteractiveHorizontalCurationGrid({
             )
           }
           setEvidenceTarget({
+            candidateId: candidate.candidate_id,
+            sessionId: candidate.session_id,
             anchorEl,
             canonicalFieldValue: field
               && args.cell.extractorComparison?.outcome !== 'unresolved'
@@ -439,6 +442,8 @@ export default function InteractiveHorizontalCurationGrid({
         validationPreviewNotice={validationPreviewNotice}
       />
       <HorizontalGridEvidencePopover
+        onReviewChanged={onReviewChanged}
+        beforeReviewChange={async () => { if (!await autosave.flush()) throw new Error("Save your current edits before requesting validation.") }}
         onClose={() => setEvidenceTarget(null)}
         target={evidenceTarget}
       />

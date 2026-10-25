@@ -924,34 +924,6 @@ export interface CurationEvidenceRecomputeResponse {
   action_log_entry: CurationActionLogEntry
 }
 
-export interface CurationCandidateValidationRequest {
-  session_id: string
-  candidate_id: string
-  field_keys?: string[]
-  replace_curator_override?: boolean
-  guidance?: string | null
-  force?: boolean
-}
-
-export interface CurationCandidateValidationResponse {
-  candidate: CurationCandidate
-  validation_snapshot: CurationValidationSnapshot
-}
-
-export interface CurationSessionValidationRequest {
-  session_id: string
-  candidate_ids?: string[]
-  replace_curator_override?: boolean
-  guidance?: string | null
-  force?: boolean
-}
-
-export interface CurationSessionValidationResponse {
-  session: CurationReviewSession
-  session_validation: CurationValidationSnapshot
-  candidate_validations: CurationValidationSnapshot[]
-}
-
 export interface CurationSubmissionPreviewRequest {
   session_id: string
   mode: SubmissionMode

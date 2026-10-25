@@ -54,6 +54,12 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
     if contribution.body_sha != contribution_ref["sha256"]:
         raise store.HistoryConflict("Contribution reference changed")
     store._require_active_target(db, artifact_id, contribution.target_id)
+    from .record_scope import allowed_units
+    from .specialist_context import entry_coverage
+    episode_body = selections.effective_episode(db, store._fact(db, artifact_id, ep.id))
+    _, descendants = entry_coverage(db, artifact_id, [contribution.target_id])
+    if not descendants.intersection(allowed_units(episode_body)):
+        raise store.HistoryAccessError("Source contribution is outside the requested record scope")
     body = store._content(db, contribution)
     proposal = FollowupEntryResult.model_validate(body["proposal"])
     offered = {item.field_path: item for item in proposal.proposed_values}

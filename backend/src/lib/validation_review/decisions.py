@@ -10,6 +10,7 @@ from src.lib.validation_history.projection import publish_decisions_in_transacti
 from src.models.sql.validation_history import ValidationFact
 from .admission import lock_episode
 from .policy import ReviewLimits
+from .record_scope import review_ready
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ def bounded_text(value, limit, name):
 
 
 def record_decisions(context, *, checkpoint_request, operation_id, entries):
+    operation_id = context.episode_id + ":" + operation_id
     with store.SessionLocal.begin() as db:
         episode, _ = lock_episode(
             db, context.history_scope, context.episode_id, require_open=False
@@ -65,7 +67,19 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
             if saved["identity"] != store.canonical(identity)[1]:
                 raise store.HistoryConflict("Review operation identity conflict")
             return saved["response"]
-        lock_episode(db, context.history_scope, context.episode_id)
+        if context.actor_type == "curator":
+            if context.actor_id != context.history_scope.owner_id:
+                raise store.HistoryAccessError("Curator decisions require the authenticated owner")
+            latest = db.scalar(select(ValidationFact.id).where(
+                ValidationFact.artifact_id == episode.artifact_id,
+                ValidationFact.kind == "review_episode",
+            ).order_by(ValidationFact.sequence.desc()).limit(1))
+            if latest != episode.id:
+                raise store.HistoryConflict("A new review round has started; refresh before deciding")
+            # Human judgment is not gated by a machine deadline or allowance.
+            # Publication still enforces live targets, ownership and exact versions.
+        else:
+            lock_episode(db, context.history_scope, context.episode_id)
         limits = ReviewLimits(**episode.policy)
         if not entries or len(entries) > limits.decision_entries:
             raise ValueError("Review entries exceed configured bounds")
@@ -167,7 +181,7 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
             actor={"type": context.actor_type, "id": context.actor_id},
             entries=resolved,
         )
-        if manifest["ready"]:
+        if review_ready(manifest):
             episode.state = "complete"
         decision = db.scalar(
             select(ValidationFact).where(
@@ -178,7 +192,7 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
         response = {
             "episode_id": episode.id,
             "decision_id": decision.id,
-            "ready": manifest["ready"],
+            "ready": review_ready(manifest),
             "publication": result.metadata["selected_projection"],
             "envelope_revision": checkpoint.revision,
             "applied": [

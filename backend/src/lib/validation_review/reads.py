@@ -42,7 +42,7 @@ def snapshot(scope, episode_id, *, operation_id):
         from .decisions import bounded_text
 
         bounded_text(operation_id, ep.policy["instruction_chars"], "Operation ID")
-        key = "review-packet:" + operation_id
+        key = "review-packet:" + ep.id + ":" + operation_id
         existing = db.scalar(
             select(ValidationFact).where(
                 ValidationFact.artifact_id == ep.artifact_id,

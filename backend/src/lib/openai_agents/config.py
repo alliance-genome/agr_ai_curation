@@ -3851,3 +3851,11 @@ def get_validation_review_limits() -> dict[str, int]:
     if not limits["warning_percent"] < limits["critical_percent"] <= 100:
         raise ValueError("Review warning percentages must be ordered and at most 100")
     return limits
+
+
+def get_workspace_review_concurrency() -> int:
+    """Concurrent durable curator operations per backend process."""
+    value = _get_env_int_with_fallback("WORKSPACE_REVIEW_CONCURRENCY", 1)
+    if value <= 0:
+        raise ValueError("WORKSPACE_REVIEW_CONCURRENCY must be positive")
+    return value

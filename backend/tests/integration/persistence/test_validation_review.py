@@ -1405,3 +1405,85 @@ def test_discovered_coverage_preserves_shared_extra_cap_and_frozen_policy(scope,
     assert remaining["extra_attempts"] == 0
     assert remaining["initial_tokens"] == 17 * 150000
     assert remaining["reviewer_tokens"] == 17 * 1000000
+
+
+def test_curator_can_grant_new_bounded_round_without_erasing_usage(scope):
+    from src.models.sql.validation_review import ValidationReviewScope, ValidationReviewEpisode
+    aid, old, old_scope = admitted(scope)
+    with h.SessionLocal.begin() as db:
+        prior = db.get(ValidationReviewEpisode, old)
+        prior.charged = dict(prior.allowances)
+        prior.started_at = a.now() - timedelta(days=1)
+        old_charges = dict(prior.charged)
+    with h.SessionLocal() as db:
+        old_fact = h._fact(db, aid, old)
+        target = h._content(db, old_fact)['obligations'][0]['target_id']
+    new = episode(scope, aid, target)
+    parent = a.create_scope(scope, operation_id='explicit-curator-action',
+                            kind='workspace_operation', targets=1, episodes=1)
+    child = a.create_scope(scope, operation_id='explicit-curator-action:document',
+                           kind='document_run', targets=1, episodes=1, parent_id=parent)
+    args = dict(artifact_id=aid, episode_id=new, scope_id=child, predecessor_id=old,
+                renewal_actor_id=scope.owner_id, renewal_reason='Curator requested another round',
+                curator_round=True)
+    assert a.attach_episode(scope, **args) == new
+    a.reserve(scope, new, operation_id='new-call', charges={'reviewer_tokens': 100}, request={})
+    assert a.attach_episode(scope, **args) == new
+    with h.SessionLocal() as db:
+        assert db.get(ValidationReviewEpisode, old).charged == old_charges
+        assert db.get(ValidationReviewEpisode, new).charged == {'reviewer_tokens': 100}
+        assert db.get(ValidationReviewScope, child).charged == {'reviewer_tokens': 100}
+    with pytest.raises(a.ReviewStopped, match='superseded'):
+        a.reserve(scope, old, operation_id='late-call', charges={'reviewer_tokens': 1}, request={})
+
+
+def test_fresh_round_requires_explicit_curator_and_workspace_parent(scope):
+    aid, old, old_scope = admitted(scope)
+    with h.SessionLocal() as db:
+        target = h._content(db, h._fact(db, aid, old))['obligations'][0]['target_id']
+    new = episode(scope, aid, target)
+    child = a.create_scope(scope, operation_id=uuid4().hex,
+                           kind='document_run', targets=1, episodes=1)
+    with pytest.raises(h.HistoryConflict, match='workspace operation'):
+        a.attach_episode(scope, artifact_id=aid, episode_id=new, scope_id=child,
+                         predecessor_id=old, renewal_actor_id=scope.owner_id,
+                         renewal_reason='Explicit', curator_round=True)
+    parent = a.create_scope(scope, operation_id=uuid4().hex,
+                            kind='workspace_operation', targets=1, episodes=1)
+    child = a.create_scope(scope, operation_id=uuid4().hex,
+                           kind='document_run', targets=1, episodes=1, parent_id=parent)
+    with pytest.raises(h.HistoryAccessError, match='authenticated owner'):
+        a.attach_episode(scope, artifact_id=aid, episode_id=new, scope_id=child,
+                         predecessor_id=old, renewal_actor_id='not-owner',
+                         renewal_reason='Explicit', curator_round=True)
+
+
+@pytest.mark.parametrize('state', ['cancelled', 'expired', 'exhausted'])
+def test_curator_decision_is_independent_of_machine_allowance(scope, scenario, state):
+    from src.lib.validation_review.decisions import ReviewContext, record_decisions
+    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+    from src.models.sql.validation_review import ValidationReviewEpisode
+    x = scenario
+    x.episode_fn()
+    sid = a.create_scope(scope, operation_id=uuid4().hex, kind='document_run', targets=1, episodes=1)
+    a.attach_episode(scope, artifact_id=x.aid, episode_id=x.episode, scope_id=sid)
+    answer = h.read_fact(scope, x.aid, x.propose('ECO:HUMAN_ACCEPTED'))
+    with h.SessionLocal.begin() as db:
+        ep = db.get(ValidationReviewEpisode, x.episode)
+        if state == 'cancelled':
+            ep.state = 'cancelled'
+        elif state == 'expired':
+            ep.started_at = a.now() - timedelta(days=1)
+        else:
+            ep.charged = dict(ep.allowances)
+        charged = dict(ep.charged)
+        version = h._current(db, x.aid, x.target)['version']
+    result = record_decisions(ReviewContext(scope, x.episode, scope.owner_id, actor_type='curator'),
+        checkpoint_request=DomainEnvelopeCheckpointRequest(project_key='fixture', envelope=x.env,
+            expected_revision=x.revision, document_id=scope.document_id, adapter_key='fixture',
+            source_extraction_result_id=x.source), operation_id=uuid4().hex,
+        entries=[{'target_id': x.target, 'decision_unit_id': x.target, 'logical_attempt_id': answer['parent_id'],
+                  'expected_version': version, 'action': 'accept', 'reason': 'Curator reviewed the saved answer'}])
+    assert result['ready']
+    with h.SessionLocal() as db:
+        assert db.get(ValidationReviewEpisode, x.episode).charged == charged

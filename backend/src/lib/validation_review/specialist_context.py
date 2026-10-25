@@ -58,6 +58,9 @@ def assemble_in_transaction(
         parent_body = {"actor": parent_body["identity"]["actor"],
             "entries": [{"target_id": parent.target_id, "action": "select_extraction_contribution",
                          "reason": parent_body["identity"]["reason"]}]}
+    elif parent.kind == "workspace_revalidation_request":
+        if parent.parent_id != episode.id or parent_body["actor"] != {"type": "curator", "id": scope.owner_id}:
+            raise store.HistoryAccessError("Revalidation request is outside this curator round")
     elif parent.kind != "decision":
         raise store.HistoryAccessError("Specialist request requires an exact review/source decision")
     decisions = [entry for entry in parent_body["entries"] if entry["target_id"] in covered]

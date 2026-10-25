@@ -63,8 +63,6 @@ from src.lib.curation_workspace.session_service import (
     submission_preview,
     update_candidate_draft,
     update_session,
-    validate_candidate,
-    validate_session,
     waive_validation_finding,
 )
 from src.models.sql.database import get_db
@@ -73,14 +71,13 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunRequest,
     CurationPrepChatRunResponse,
 )
+from src.schemas.workspace_review import WorkspaceReviewRequest, WorkspaceReviewDecisionRequest
 from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
     CurationCandidateDeleteResponse,
     CurationCandidateDraftUpdateRequest,
     CurationCandidateDraftUpdateResponse,
-    CurationCandidateValidationRequest,
-    CurationCandidateValidationResponse,
     CurationBenchmarkErrorResponse,
     CurationBenchmarkDestinationListResponse,
     CurationBenchmarkHandoffRequest,
@@ -131,8 +128,6 @@ from src.schemas.curation_workspace import (
     CurationSubmissionPreviewResponse,
     CurationSubmissionRetryRequest,
     CurationSubmissionRetryResponse,
-    CurationSessionValidationRequest,
-    CurationSessionValidationResponse,
     CurationSessionUpdateRequest,
     CurationSessionUpdateResponse,
     CurationSortDirection,
@@ -1012,52 +1007,8 @@ async def post_candidate_decision(
     )
 
 
-@router.post(
-    "/candidates/{candidate_id}/validate",
-    response_model=CurationCandidateValidationResponse,
-)
-async def post_candidate_validation(
-    candidate_id: UUID,
-    request: CurationCandidateValidationRequest,
-    user: dict = get_auth_dependency(),
-    db: Session = Depends(get_db),
-) -> CurationCandidateValidationResponse:
-    await provision_user_async(principal_from_claims(user))
-    return _run_curation_mutation(
-        db,
-        lambda: validate_candidate(
-            db,
-            candidate_id,
-            request,
-            user_id=_current_user_id(user),
-            active_groups=_authenticated_active_groups(user),
-            explicit_request=True,
-        ),
-    )
 
 
-@router.post(
-    "/sessions/{session_id}/validate-all",
-    response_model=CurationSessionValidationResponse,
-)
-async def post_session_validation(
-    session_id: UUID,
-    request: CurationSessionValidationRequest,
-    user: dict = get_auth_dependency(),
-    db: Session = Depends(get_db),
-) -> CurationSessionValidationResponse:
-    await provision_user_async(principal_from_claims(user))
-    return _run_curation_mutation(
-        db,
-        lambda: validate_session(
-            db,
-            session_id,
-            request,
-            user_id=_current_user_id(user),
-            active_groups=_authenticated_active_groups(user),
-            explicit_request=True,
-        ),
-    )
 
 
 @router.post(
@@ -1140,3 +1091,144 @@ async def get_submission_history(
 
 
 __all__ = ["router"]
+
+
+@router.get("/candidates/{candidate_id}/validation-history")
+async def get_candidate_validation_history(
+    candidate_id: UUID,
+    after: Annotated[int, Query(ge=0)] = 0,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict:
+    from src.lib.curation_workspace.review_history_service import history_page
+    from src.lib.validation_history.store import HistoryAccessError
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return history_page(db, candidate_id, owner_id=_require_current_user_id(user), after=after)
+    except HistoryAccessError as exc:
+        raise HTTPException(403, "Validation history unavailable") from exc
+
+
+@router.get("/candidates/{candidate_id}/validation-history/{fact_id}")
+async def get_candidate_validation_history_detail(
+    candidate_id: UUID,
+    fact_id: str,
+    sha256: Annotated[str, Query(pattern=r"^[0-9a-f]{64}$")],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> dict:
+    from src.lib.curation_workspace.review_history_service import history_detail
+    from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return history_detail(db, candidate_id, owner_id=_require_current_user_id(user),
+                              fact_id=fact_id, sha256=sha256, offset=offset)
+    except HistoryAccessError as exc:
+        raise HTTPException(403, "Validation history unavailable") from exc
+    except (HistoryConflict, ValueError) as exc:
+        raise HTTPException(409, "Historical reference is unavailable; refresh the history") from exc
+
+
+
+
+def _workspace_review_error(error):
+    from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
+    if isinstance(error, HistoryAccessError):
+        raise HTTPException(403, 'Workspace review unavailable') from error
+    if isinstance(error, HistoryConflict):
+        raise HTTPException(409, str(error)) from error
+    if isinstance(error, ValueError):
+        raise HTTPException(422, str(error)) from error
+    raise error
+
+
+@router.post('/sessions/{session_id}/review-operations', status_code=202)
+async def post_workspace_review_operation(
+    session_id: UUID, request: WorkspaceReviewRequest,
+    user: dict = get_auth_dependency(), db: Session = Depends(get_db),
+) -> dict:
+    from src.lib.curation_workspace import review_operations
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return _run_curation_mutation(db, lambda: review_operations.submit(db,
+            owner_id=_require_current_user_id(user), session_id=str(session_id),
+            request_id=str(request.request_id), candidate_ids=[str(value) for value in request.candidate_ids],
+            guidance=request.guidance, groups=_authenticated_active_groups(user)))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.get('/sessions/{session_id}/review-operation')
+async def get_session_review_operation(
+    session_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
+) -> dict | None:
+    from src.lib.curation_workspace import review_operations
+    try:
+        return review_operations.latest_for_session(db, str(session_id), owner_id=_require_current_user_id(user))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.get('/candidates/{candidate_id}/review-operation')
+async def get_candidate_review_operation(
+    candidate_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
+) -> dict | None:
+    from src.lib.curation_workspace import review_operations
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return review_operations.latest_for_candidate(db, str(candidate_id), owner_id=_require_current_user_id(user))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.get('/review-operations/{operation_id}')
+async def get_workspace_review_operation(
+    operation_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
+) -> dict:
+    from src.lib.curation_workspace import review_operations
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return review_operations.response(review_operations.get(db, str(operation_id), owner_id=_require_current_user_id(user)))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.post('/review-operations/{operation_id}/cancel')
+async def cancel_workspace_review_operation(operation_id: UUID, user: dict = get_auth_dependency()) -> dict:
+    from src.lib.curation_workspace import review_operations
+    import asyncio
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return await asyncio.to_thread(review_operations.cancel, str(operation_id), owner_id=_require_current_user_id(user))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.post('/review-operations/{operation_id}/resume')
+async def resume_workspace_review_operation(
+    operation_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
+) -> dict:
+    from src.lib.curation_workspace import review_operations
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return _run_curation_mutation(db, lambda: review_operations.resume(db, str(operation_id),
+            owner_id=_require_current_user_id(user), groups=_authenticated_active_groups(user)))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.post('/candidates/{candidate_id}/validation-decisions')
+async def post_workspace_validation_decision(
+    candidate_id: UUID, request: WorkspaceReviewDecisionRequest,
+    user: dict = get_auth_dependency(),
+) -> dict:
+    import asyncio
+    from src.lib.curation_workspace.review_history_service import decide
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return await asyncio.to_thread(decide, candidate_id,
+            owner_id=_require_current_user_id(user), request=request,
+            groups=_authenticated_active_groups(user))
+    except ValueError as error:
+        _workspace_review_error(error)

@@ -10,10 +10,13 @@ from src.schemas.domain_envelope import parse_field_path
 from . import store
 
 
-def _facts(db, artifact_id, kind):
-    return db.scalars(select(ValidationFact).where(
+def _facts(db, artifact_id, kind, through_sequence=None):
+    query = select(ValidationFact).where(
         ValidationFact.artifact_id == artifact_id, ValidationFact.kind == kind,
-    ).order_by(ValidationFact.sequence))
+    )
+    if through_sequence is not None:
+        query = query.where(ValidationFact.sequence <= through_sequence)
+    return db.scalars(query.order_by(ValidationFact.sequence))
 
 
 
@@ -72,11 +75,11 @@ def bind_patch_anchors(envelope, body):
         change["anchor"] = anchor_for_path(refs[change["target_id"]], change["path"])
     return body
 
-def active_overlays(db, artifact_id):
+def active_overlays(db, artifact_id, *, through_sequence=None):
     heads = {}
-    released = {item for fact in _facts(db, artifact_id, "curator_revalidation_release")
+    released = {item for fact in _facts(db, artifact_id, "curator_revalidation_release", through_sequence)
                 for item in store._content(db, fact)["overlay_ids"]}
-    for fact in _facts(db, artifact_id, "curator_value"):
+    for fact in _facts(db, artifact_id, "curator_value", through_sequence):
         body = store._content(db, fact)
         heads[(body["anchor"]["target_id"], tuple(body["anchor"]["suffix"]))] = (fact, body)
     active = []
@@ -154,7 +157,7 @@ def revalidation_intents(value):
     return [] if value is None else [value] if isinstance(value, dict) else list(value)
 
 
-def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_id, object_id, field_paths, actor_id, guidance=None):
+def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_id, object_id, field_paths, actor_id, guidance=None, through_sequence=None):
     from .selections import _lock_artifact
     _lock_artifact(db, binding.scope, binding.artifact_id, write=True)
     if actor_id != binding.scope.owner_id:
@@ -182,7 +185,7 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
         destinations = {**frozen["request"]["expected_result_fields"], **(frozen["request"].get("optional_result_fields") or {})}
         return not field_paths or any(isinstance(destination, str) and _overlap(destination, path)
             for destination in destinations.values() for path in field_paths)
-    active = active_overlays(db, binding.artifact_id)
+    active = active_overlays(db, binding.artifact_id, through_sequence=through_sequence)
     for _, body in active:
         if body["object_id"] != object_id or body.get("atomic"):
             continue
