@@ -28,8 +28,11 @@ import {
   horizontalGridValidationDetails,
 } from './horizontalGridFormatting'
 import type { HorizontalGridExtractorComparison } from './horizontalGridModel'
+import ValidationHistoryPanel from './ValidationHistoryPanel'
 
 export interface HorizontalGridEvidencePopoverTarget {
+  sessionId?: string
+  candidateId?: string
   anchorEl: HTMLElement
   canonicalFieldValue: string | null
   extractorComparison: HorizontalGridExtractorComparison | null
@@ -78,6 +81,8 @@ function comparisonPresentation(
 
 export interface HorizontalGridEvidencePopoverProps {
   onClose: () => void
+  onReviewChanged?: () => void | Promise<void>
+  beforeReviewChange?: () => Promise<void>
   target: HorizontalGridEvidencePopoverTarget | null
 }
 
@@ -125,10 +130,13 @@ function statePresentation(state: FieldStateKind | null) {
 }
 
 export default function HorizontalGridEvidencePopover({
+  onReviewChanged, beforeReviewChange,
   onClose,
   target,
 }: HorizontalGridEvidencePopoverProps) {
   const titleId = useId()
+  const [showHistory, setShowHistory] = useState(false)
+  useEffect(() => setShowHistory(false), [target])
   const [arrowElement, setArrowElement] = useState<HTMLSpanElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const popperModifiers = useMemo(() => [
@@ -377,6 +385,10 @@ export default function HorizontalGridEvidencePopover({
               </Box>
               )}
 
+              {target.candidateId && <Box sx={{ my: 1 }}>
+                <Button onClick={() => setShowHistory(value => !value)}>{showHistory ? 'Hide validation history' : 'View validation history'}</Button>
+                {showHistory && <ValidationHistoryPanel key={target.candidateId} candidateId={target.candidateId} sessionId={target.sessionId} onChanged={onReviewChanged} beforeChange={beforeReviewChange} />}
+              </Box>}
               {target.extractorComparison ? (() => {
                 const comparison = comparisonPresentation(target.extractorComparison.outcome)
                 const extractorValue = formatHorizontalGridValue(target.extractorComparison.value) ?? 'Not available'

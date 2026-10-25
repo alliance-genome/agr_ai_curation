@@ -24,7 +24,6 @@ from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
 from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGET_KEY
 from src.lib.curation_workspace import session_queries as query_module
 from src.lib.curation_workspace import session_serializers as serializer_module
-from src.lib.curation_workspace import session_mutation_service as mutation_module
 from src.lib.curation_workspace.submission_adapters import (
     NoOpSubmissionAdapter,
     SubmissionTransportError,
@@ -64,8 +63,6 @@ from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateSource,
     CurationCandidateStatus,
-    CurationEnvelopeFieldPatchOperation,
-    CurationEnvelopeFieldPatchRequest,
     CurationEvidenceSource,
     CurationExtractionSourceKind,
     CurationFlowRunListRequest,
@@ -76,7 +73,6 @@ from src.schemas.curation_workspace import (
     CurationSessionListRequest,
     CurationSessionSortField,
     CurationSessionStatus,
-    CurationSessionValidationRequest,
     CurationSortDirection,
     CurationSubmissionExecuteRequest,
     CurationSubmissionPreviewRequest,
@@ -109,14 +105,6 @@ from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
-@pytest.fixture(autouse=True)
-def _isolated_workspace_history_lock(monkeypatch):
-    # This SQLite suite uses synthetic history references. Real artifact/draft
-    # locking and concurrent-edit refusal run in test_profile_validator_workspace.
-    monkeypatch.setattr(
-        "src.lib.curation_workspace.session_validation_service._lock_unchanged_validation_draft",
-        lambda *args: None,
-    )
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -2295,23 +2283,6 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
         "resolve_curation_domain_pack_by_id",
         lambda pack_id: loaded_pack if pack_id == "fixture.pack" else None,
     )
-    monkeypatch.setattr(
-        validation_module,
-        "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            registry=SimpleNamespace(domain_pack=loaded_pack),
-            appended_findings=(),
-        ),
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "dispatch_active_validator_bindings",
-        lambda envelope, *_args, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            appended_findings=(),
-        ),
-    )
 
     response = module.validate_candidate(
         db_session,
@@ -2341,558 +2312,22 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
     assert response.validation_snapshot.summary.counts.skipped == 1
 
 
-def _workspace_validation_finding(
-    *,
-    status: ValidationFindingStatus,
-    severity: ValidationFindingSeverity,
-    code: str,
-    message: str,
-    field_path: str = "artifact.title",
-    failure_classification: str | None = None,
-) -> ValidationFinding:
-    details: dict[str, object] = {
-        "validation_metadata": {
-            "binding_id": "museum.title_catalog_check",
-            "binding_state": "active",
-            "required": True,
-            "blocking": True,
-            "field_policy": {
-                "required": True,
-                "blocking": True,
-            },
-        }
-    }
-    if failure_classification is not None:
-        details["failure_classification"] = failure_classification
-    return ValidationFinding(
-        severity=severity,
-        status=status,
-        code=code,
-        message=message,
-        field_ref=FieldRef(
-            object_ref=ObjectRef(object_id="artifact-1", object_type="MuseumArtifact"),
-            field_path=field_path,
-        ),
-        details=details,
-    )
 
 
-def _patch_workspace_validation_dispatch(
-    monkeypatch,
-    loaded_pack: LoadedDomainPack,
-    *,
-    expected_title: str | None,
-    finding: ValidationFinding | None,
-    expected_source_revision: int = 1,
-) -> None:
-    monkeypatch.setattr(
-        validation_module,
-        "resolve_curation_domain_pack_by_id",
-        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
-    )
-
-    def _dispatch(envelope, domain_pack, **kwargs):
-        assert domain_pack is loaded_pack
-        assert kwargs["source_envelope_revision"] == expected_source_revision
-        if expected_title is not None:
-            assert envelope.extracted_objects[0].payload["artifact"]["title"] == expected_title
-        if finding is None:
-            return SimpleNamespace(envelope=envelope, appended_findings=())
-        updated_envelope, appended_findings = append_validation_findings_to_envelope(
-            envelope,
-            [finding],
-            actor_id="test_workspace_validation_dispatch",
-        )
-        return SimpleNamespace(
-            envelope=updated_envelope,
-            appended_findings=appended_findings,
-        )
-
-    monkeypatch.setattr(validation_module, "dispatch_active_validator_bindings", _dispatch)
 
 
-def test_workspace_validation_dispatches_domain_pack_and_records_envelope_revision(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    loaded_pack = _loaded_museum_pack(
-        tmp_path,
-        allow_title_override=True,
-        title_binding_allows_opt_out=True,
-    )
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
-        title_binding_allows_opt_out=True,
-    )
-    finding = _workspace_validation_finding(
-        status=ValidationFindingStatus.RESOLVED,
-        severity=ValidationFindingSeverity.INFO,
-        code="domain_pack.validator_resolved",
-        message="Title validated.",
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title="Bronze astrolabe",
-        finding=finding,
-    )
-
-    response = module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=True,
-        ),
-    )
-
-    field_result = response.validation_snapshot.field_results["artifact.title"]
-    assert field_result.status is FieldValidationStatus.VALIDATED
-    assert response.validation_snapshot.envelope_id == seeded["envelope_id"]
-    assert response.validation_snapshot.envelope_revision == 2
-    assert response.candidate.projection_ref is not None
-    assert response.candidate.projection_ref.envelope_revision == 2
 
 
-def test_workspace_validation_passes_document_user_runtime_context(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        reviewed=False,
-        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
-        title_binding_allows_opt_out=True,
-    )
-    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
-    assert session_row is not None
-    session_row.created_by_id = str(uuid4())
-    candidate_row = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
-    assert candidate_row is not None
-    assert (
-        validation_module._validator_runtime_context_for_candidate(
-            candidate_row,
-            user_id=None,
-            authenticated_groups=["ZFIN"],
-        )
-        is None
-    )
-    captured_contexts = []
-
-    monkeypatch.setattr(
-        validation_module,
-        "resolve_curation_domain_pack_by_id",
-        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
-    )
-
-    def _dispatch(envelope, domain_pack, *, runtime_context=None, **kwargs):
-        assert domain_pack is loaded_pack
-        assert kwargs["source_envelope_revision"] >= 1
-        captured_contexts.append(runtime_context)
-        binding_audit = (
-            {"group_scope": {"required_any_active_group": ["ZFIN"]}},
-        )
-        metadata = dict(envelope.metadata)
-        metadata["validator_binding_audit"] = list(binding_audit)
-        return SimpleNamespace(
-            envelope=envelope.model_copy(update={"metadata": metadata}),
-            appended_findings=(),
-            binding_audit=binding_audit,
-        )
-
-    monkeypatch.setattr(
-        validation_module,
-        "dispatch_active_validator_bindings",
-        _dispatch,
-    )
-
-    module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=True,
-        ),
-        user_id="curator-42",
-        active_groups=["ZFIN"],
-    )
-
-    assert len(captured_contexts) == 1
-    assert captured_contexts[0].document_id == str(session_row.document_id)
-    assert captured_contexts[0].user_id == "curator-42"
-    assert captured_contexts[0].authenticated_groups == ("ZFIN",)
-
-    # The caller completes the candidate-validation transaction before starting
-    # the next unit of work.
-    db_session.commit()
-    captured_contexts.clear()
-    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
-    persisted_envelope = dict(envelope_row.envelope_json)
-    assert persisted_envelope["authenticated_context"] == {
-        "active_groups": ["ZFIN"]
-    }
-    persisted_metadata = dict(persisted_envelope.get("metadata", {}))
-    persisted_metadata["authenticated_group_snapshot"] = ["RGD"]
-    persisted_envelope["metadata"] = persisted_metadata
-    from src.lib.domain_envelopes.persistence import (
-        DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint,
-    )
-    write_domain_envelope_checkpoint(db_session, DomainEnvelopeCheckpointRequest(
-        project_key=envelope_row.project_key,
-        envelope=DomainEnvelope.model_validate(persisted_envelope),
-        expected_revision=envelope_row.revision,
-        document_id=envelope_row.document_id, session_id=envelope_row.session_id,
-    ))
-    db_session.flush()
-    commit_calls = 0
-
-    def _commit_spy():
-        nonlocal commit_calls
-        commit_calls += 1
-
-    monkeypatch.setattr(db_session, "commit", _commit_spy)
-    module.validate_session(
-        db_session,
-        seeded["session_id"],
-        CurationSessionValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_ids=[seeded["candidate_id"]],
-            force=True,
-        ),
-        user_id="curator-43",
-    )
-
-    assert len(captured_contexts) == 1
-    assert captured_contexts[0].document_id == str(session_row.document_id)
-    assert captured_contexts[0].user_id == "curator-43"
-    assert captured_contexts[0].authenticated_groups == ("ZFIN",)
-    assert commit_calls == 0
-
-    captured_contexts.clear()
-    module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=False,
-        ),
-        user_id="curator-44",
-        active_groups=["RGD"],
-        explicit_request=True,
-    )
-
-    assert len(captured_contexts) == 1
-    assert captured_contexts[0].authenticated_groups == ("RGD",)
 
 
-def test_workspace_validation_runs_package_domain_envelope_validator_before_bindings(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
-        title_binding_allows_opt_out=True,
-    )
-    package_finding = _workspace_validation_finding(
-        status=ValidationFindingStatus.OPEN,
-        severity=ValidationFindingSeverity.BLOCKER,
-        code="fixture.package_validator_missing_selector",
-        message="Package validator requires a curated selector.",
-        failure_classification="blocking_missing_required",
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "resolve_curation_domain_pack_by_id",
-        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "resolve_curation_domain_envelope_validator_by_id",
-        lambda pack_id: (
-            (lambda _envelope: [package_finding])
-            if pack_id == loaded_pack.pack_id
-            else None
-        ),
-    )
-
-    def _dispatch(envelope, domain_pack, **kwargs):
-        assert domain_pack is loaded_pack
-        assert kwargs["source_envelope_revision"] == 1
-        assert kwargs["registry"].domain_pack.pack_id == loaded_pack.pack_id
-        assert [finding.code for finding in envelope.validation_findings] == [
-            "fixture.package_validator_missing_selector"
-        ]
-        return SimpleNamespace(envelope=envelope, appended_findings=())
-
-    monkeypatch.setattr(
-        validation_module,
-        "dispatch_active_validator_bindings",
-        _dispatch,
-    )
-
-    response = module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=True,
-        ),
-    )
-
-    field_result = response.validation_snapshot.field_results["artifact.title"]
-    assert field_result.status is FieldValidationStatus.CONFLICT
-    assert field_result.warnings == ["Package validator requires a curated selector."]
-    assert response.validation_snapshot.envelope_revision == 2
-    assert response.candidate.projection_ref is not None
-    assert response.candidate.projection_ref.envelope_revision == 2
 
 
-def test_workspace_validation_blocker_prevents_export_readiness(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        reviewed=False,
-        payload={"artifact": {"accession_id": "A-1"}},
-        title_binding_allows_opt_out=True,
-    )
-    finding = _workspace_validation_finding(
-        status=ValidationFindingStatus.OPEN,
-        severity=ValidationFindingSeverity.BLOCKER,
-        code="fixture.required_field_missing",
-        message="Required title is missing.",
-        failure_classification="blocking_missing_required",
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title=None,
-        finding=finding,
-    )
-
-    response = module.submission_preview(
-        db_session,
-        seeded["session_id"],
-        CurationSubmissionPreviewRequest(
-            session_id=seeded["session_id"],
-            mode=SubmissionMode.EXPORT,
-            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
-        ),
-    )
-
-    readiness = response.submission.readiness[0]
-    assert readiness.ready is False
-    assert "Required blocking field is missing: artifact.title." in readiness.blocking_reasons
-    assert [(blocker.field_path, blocker.code) for blocker in readiness.blockers] == [
-        ("artifact.title", "domain_envelope.required_field_missing"),
-        (None, "domain_envelope.machine_review_pending"),
-    ]
 
 
-def test_workspace_validation_surfaces_invalid_controlled_value(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        payload={"artifact": {"accession_id": "A-1", "title": "Unknown status"}},
-        title_binding_allows_opt_out=True,
-    )
-    finding = _workspace_validation_finding(
-        status=ValidationFindingStatus.OPEN,
-        severity=ValidationFindingSeverity.ERROR,
-        code="fixture.invalid_controlled_value",
-        message="Controlled value is not allowed.",
-        failure_classification="conflict",
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title="Unknown status",
-        finding=finding,
-    )
-
-    response = module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=True,
-        ),
-    )
-
-    field_result = response.validation_snapshot.field_results["artifact.title"]
-    assert field_result.status is FieldValidationStatus.CONFLICT
-    assert field_result.warnings == ["Controlled value is not allowed."]
 
 
-def test_curator_corrected_workspace_candidate_validates_against_current_envelope(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    loaded_pack = _loaded_museum_pack(
-        tmp_path,
-        allow_title_override=True,
-        title_binding_allows_opt_out=True,
-    )
-    monkeypatch.setattr(
-        mutation_module,
-        "resolve_curation_domain_pack_by_id",
-        lambda pack_id: loaded_pack if pack_id == loaded_pack.pack_id else None,
-    )
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        payload={"artifact": {"accession_id": "A-1", "title": "Unknown status"}},
-        allow_title_override=True,
-        title_binding_allows_opt_out=True,
-    )
-    invalid_finding = _workspace_validation_finding(
-        status=ValidationFindingStatus.OPEN,
-        severity=ValidationFindingSeverity.ERROR,
-        code="fixture.invalid_controlled_value",
-        message="Controlled value is not allowed.",
-        failure_classification="conflict",
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title="Unknown status",
-        finding=invalid_finding,
-    )
-
-    invalid_response = module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=True,
-        ),
-    )
-
-    assert invalid_response.validation_snapshot.field_results[
-        "artifact.title"
-    ].status is FieldValidationStatus.CONFLICT
-
-    patch_response = module.patch_envelope_field(
-        db_session,
-        seeded["session_id"],
-        CurationEnvelopeFieldPatchRequest(
-            session_id=seeded["session_id"],
-            envelope_id=seeded["envelope_id"],
-            expected_revision=2,
-            object_id="artifact-1",
-            field_path="artifact.title",
-            operation=CurationEnvelopeFieldPatchOperation.REPLACE,
-            before="Unknown status",
-            value="Corrected title",
-            reason="Curator selected a controlled title.",
-        ),
-        {"sub": "curator-42", "email": "curator@example.org"},
-    )
-
-    corrected_finding = _workspace_validation_finding(
-        status=ValidationFindingStatus.RESOLVED,
-        severity=ValidationFindingSeverity.INFO,
-        code="domain_pack.validator_resolved",
-        message="Corrected title validated.",
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title="Corrected title",
-        finding=corrected_finding,
-        expected_source_revision=patch_response.envelope_revision,
-    )
-
-    response = module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=True,
-        ),
-    )
-
-    assert response.validation_snapshot.field_results[
-        "artifact.title"
-    ].status is FieldValidationStatus.VALIDATED
-    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
-    stored_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
-    assert [
-        (finding.code, finding.status)
-        for finding in stored_envelope.validation_findings
-        if finding.code
-        in {"fixture.invalid_controlled_value", "domain_pack.validator_resolved"}
-    ] == [
-        ("domain_pack.validator_resolved", ValidationFindingStatus.RESOLVED),
-        ("fixture.invalid_controlled_value", ValidationFindingStatus.RESOLVED),
-    ]
 
 
-def test_workspace_validation_fails_when_domain_pack_is_unavailable(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "resolve_curation_domain_pack_by_id",
-        lambda _pack_id: None,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        module.validate_candidate(
-            db_session,
-            seeded["candidate_id"],
-            CurationCandidateValidationRequest(
-                session_id=seeded["session_id"],
-                candidate_id=seeded["candidate_id"],
-                force=True,
-            ),
-        )
-
-    assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == (
-        "Domain pack museum.catalog is not available for workspace candidate validation."
-    )
 
 
 def test_workspace_validation_skips_envelope_dispatch_for_non_envelope_candidates(
@@ -2957,7 +2392,6 @@ def test_workspace_validation_skips_envelope_dispatch_for_non_envelope_candidate
     def _unexpected_dispatch(*_args, **_kwargs):
         raise AssertionError("domain-pack dispatch should not run for generic candidates")
 
-    monkeypatch.setattr(validation_module, "dispatch_active_validator_bindings", _unexpected_dispatch)
 
     response = module.validate_candidate(
         db_session,
@@ -3949,7 +3383,6 @@ def test_submission_export_allows_binding_policy_curator_override(
     tmp_path,
     monkeypatch,
 ):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,
@@ -3964,23 +3397,6 @@ def test_submission_export_allows_binding_policy_curator_override(
                 }
             ]
         },
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            registry=SimpleNamespace(domain_pack=loaded_pack),
-            appended_findings=(),
-        ),
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "dispatch_active_validator_bindings",
-        lambda envelope, *_args, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            appended_findings=(),
-        ),
     )
 
     response = module.submission_preview(
@@ -4006,7 +3422,6 @@ def test_submission_export_allows_binding_policy_curator_override_without_reason
     tmp_path,
     monkeypatch,
 ):
-    loaded_pack = _loaded_museum_pack(tmp_path, title_binding_allows_opt_out=True)
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,
@@ -4020,23 +3435,6 @@ def test_submission_export_allows_binding_policy_curator_override_without_reason
                 }
             ]
         },
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            registry=SimpleNamespace(domain_pack=loaded_pack),
-            appended_findings=(),
-        ),
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "dispatch_active_validator_bindings",
-        lambda envelope, *_args, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            appended_findings=(),
-        ),
     )
 
     response = module.submission_preview(
@@ -4062,7 +3460,6 @@ def test_submission_export_blocks_open_blocking_validation_findings(
     tmp_path,
     monkeypatch,
 ):
-    loaded_pack = _loaded_museum_pack(tmp_path)
     blocking_finding = ValidationFinding(
         severity=ValidationFindingSeverity.BLOCKER,
         message="Title requires external catalog verification.",
@@ -4097,21 +3494,6 @@ def test_submission_export_blocks_open_blocking_validation_findings(
             },
         },
         validation_findings=[blocking_finding],
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            registry=SimpleNamespace(domain_pack=loaded_pack),
-            appended_findings=(),
-        ),
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title="Bronze astrolabe",
-        finding=blocking_finding,
     )
 
     response = module.submission_preview(
@@ -4160,7 +3542,6 @@ def test_submission_export_blocks_envelope_scoped_finding_with_null_targets(
     tmp_path,
     monkeypatch,
 ):
-    loaded_pack = _loaded_museum_pack(tmp_path)
     blocking_finding = ValidationFinding(
         finding_id="finding-envelope-provider",
         severity=ValidationFindingSeverity.BLOCKER,
@@ -4186,21 +3567,6 @@ def test_submission_export_blocks_envelope_scoped_finding_with_null_targets(
             },
         },
         validation_findings=[blocking_finding],
-    )
-    monkeypatch.setattr(
-        validation_module,
-        "run_domain_envelope_structural_checks",
-        lambda envelope, _domain_pack, **_kwargs: SimpleNamespace(
-            envelope=envelope,
-            registry=SimpleNamespace(domain_pack=loaded_pack),
-            appended_findings=(),
-        ),
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title="Bronze astrolabe",
-        finding=blocking_finding,
     )
 
     response = module.submission_preview(
@@ -4820,143 +4186,6 @@ def test_waive_validation_finding_records_audit_action(
     )
 
 
-def test_validate_candidate_reruns_after_waiver_advances_envelope_revision(
-    db_session,
-    tmp_path,
-    monkeypatch,
-):
-    loaded_pack = _loaded_museum_pack(
-        tmp_path,
-        allow_title_override=True,
-        title_binding_allows_opt_out=True,
-    )
-    seeded = _create_domain_envelope_submission_session(
-        db_session,
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        reviewed=False,
-        payload={
-            "artifact": {
-                "accession_id": "A-1",
-                "title": "Bronze astrolabe",
-            }
-        },
-        validation_findings=[
-            ValidationFinding(
-                finding_id="finding-title",
-                severity=ValidationFindingSeverity.BLOCKER,
-                message="Title requires external catalog verification.",
-                code="museum.catalog.title_unverified",
-                field_ref=FieldRef(
-                    object_ref=ObjectRef(
-                        object_id="artifact-1",
-                        object_type="MuseumArtifact",
-                    ),
-                    field_path="artifact.title",
-                ),
-                details={
-                    "validation_metadata": {
-                        "validator_binding_id": "museum.title_catalog_check",
-                        "binding_state": "active",
-                        "validator_agent": {
-                            "package_id": "museum.catalog",
-                            "agent_id": "title_catalog_validator",
-                        },
-                        "curator_override": {"allowed": True},
-                    },
-                    "validation_request": {
-                        "request_id": "validation-run-1",
-                        "validator_binding_id": "museum.title_catalog_check",
-                        "selected_inputs": {"title": "Bronze astrolabe"},
-                    },
-                },
-            )
-        ],
-        allow_title_override=True,
-        title_binding_allows_opt_out=True,
-    )
-    now = _now()
-    stale_result = FieldValidationResult(
-        status=FieldValidationStatus.CONFLICT,
-        resolver="domain_envelope_validation_findings",
-        warnings=["Title requires external catalog verification."],
-    )
-    db_session.add(
-        ValidationSnapshotModel(
-            id=uuid4(),
-            scope=CurationValidationScope.CANDIDATE,
-            session_id=UUID(seeded["session_id"]),
-            candidate_id=UUID(seeded["candidate_id"]),
-            adapter_key=REFERENCE_ADAPTER_KEY,
-            envelope_id=seeded["envelope_id"],
-            envelope_revision=1,
-            state=CurationValidationSnapshotState.COMPLETED,
-            field_results={
-                "artifact.title": stale_result.model_dump(mode="json"),
-            },
-            summary={
-                "state": "completed",
-                "counts": {
-                    "validated": 0,
-                    "ambiguous": 0,
-                    "not_found": 0,
-                    "invalid_format": 0,
-                    "conflict": 1,
-                    "skipped": 0,
-                    "overridden": 0,
-                },
-                "warnings": ["Title requires external catalog verification."],
-                "stale_field_keys": [],
-                "last_validated_at": now.isoformat(),
-            },
-            warnings=["Title requires external catalog verification."],
-            requested_at=now,
-            completed_at=now,
-        )
-    )
-    db_session.commit()
-
-    waiver_response = module.waive_validation_finding(
-        db_session,
-        seeded["session_id"],
-        CurationValidationFindingWaiveRequest(
-            session_id=seeded["session_id"],
-            envelope_id=seeded["envelope_id"],
-            expected_revision=1,
-            finding_id="finding-title",
-        ),
-        {"sub": "curator-42", "email": "curator@example.org"},
-    )
-    corrected_finding = _workspace_validation_finding(
-        status=ValidationFindingStatus.RESOLVED,
-        severity=ValidationFindingSeverity.INFO,
-        code="domain_pack.validator_resolved",
-        message="Title validated after waiver.",
-    )
-    _patch_workspace_validation_dispatch(
-        monkeypatch,
-        loaded_pack,
-        expected_title="Bronze astrolabe",
-        finding=corrected_finding,
-        expected_source_revision=waiver_response.envelope_revision,
-    )
-
-    response = module.validate_candidate(
-        db_session,
-        seeded["candidate_id"],
-        CurationCandidateValidationRequest(
-            session_id=seeded["session_id"],
-            candidate_id=seeded["candidate_id"],
-            force=True,
-        ),
-    )
-
-    assert response.validation_snapshot.envelope_revision == 3
-    assert response.candidate.projection_ref is not None
-    assert response.candidate.projection_ref.envelope_revision == 3
-    assert response.validation_snapshot.field_results[
-        "artifact.title"
-    ].status is FieldValidationStatus.OVERRIDDEN
 
 
 def test_waive_validation_finding_accepts_projected_id_for_idless_finding(

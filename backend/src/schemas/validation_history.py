@@ -127,6 +127,8 @@ class ReviewEpisode(HistoryContract):
     unavailable_bindings: list[StrictStr] = Field(default_factory=list)
     excluded_bindings: list[ReviewExclusion] = Field(default_factory=list)
     reason: StrictStr = Field(min_length=1)
+    review_target_ids: list[StrictStr] | None = None
+    retained_episode_ids: dict[StrictStr, StrictStr] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def unique_targets(self):

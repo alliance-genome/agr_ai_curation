@@ -30,7 +30,6 @@ const serviceMocks = vi.hoisted(() => ({
   fetchCurationWorkspace: vi.fn(),
   fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
   patchCurationEnvelopeField: vi.fn(),
-  validateCurationCandidate: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', async (importOriginal) => ({
@@ -39,7 +38,6 @@ vi.mock('@/features/curation/services/curationWorkspaceService', async (importOr
   fetchCurationWorkspaceEnvelopeReviewRows:
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
   patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
-  validateCurationCandidate: serviceMocks.validateCurationCandidate,
 }))
 
 const emptyValidation: HorizontalGridValidationProjection = {
@@ -766,7 +764,6 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Authors marked curator validated for this preview only. No validation was run or saved.',
     )
-    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
     expect(autosave.queueFieldChange).not.toHaveBeenCalled()
     expect(autosave.flush).not.toHaveBeenCalled()
 
@@ -818,7 +815,6 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(screen.getByLabelText(
       '1 of 2 fields curator validated for Reference one',
     )).toHaveTextContent('1/2')
-    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
     expect(autosave.queueFieldChange).not.toHaveBeenCalled()
     expect(autosave.flush).not.toHaveBeenCalled()
   })
@@ -854,7 +850,6 @@ describe('InteractiveHorizontalCurationGrid', () => {
     expect(within(details).getByText('Validator context')).toBeInTheDocument()
     expect(within(details).getByText('Current status')).toBeInTheDocument()
     expect(within(details).getByText('Curator validated')).toBeInTheDocument()
-    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
   })
 
   it('distinguishes a field-specific taxon result from shared gene-validator context', async () => {
@@ -1562,6 +1557,5 @@ describe('InteractiveHorizontalCurationGrid', () => {
     await user.keyboard('{Escape}')
     expect(summary).toHaveAttribute('aria-hidden', 'true')
     expect(summaryTrigger).toHaveFocus()
-    expect(serviceMocks.validateCurationCandidate).not.toHaveBeenCalled()
   })
 })

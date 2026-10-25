@@ -64,7 +64,6 @@ from src.lib.domain_packs.structural_checks import run_domain_envelope_structura
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorRuntimeContext,
-    dispatch_active_validator_bindings,
 )
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
@@ -373,7 +372,36 @@ def _execute_pipeline_steps(
         adapter_key=adapter_key,
         review_session_id=persistence_result.session_id,
     )
+    _enqueue_workspace_bootstrap(db, request, persistence_result)
     return persistence_result, str(prep_extraction_result.id)
+
+
+def _enqueue_workspace_bootstrap(db, request, persistence_result):
+    """Only new captured, unreviewed sources admit automatic model work."""
+    if persistence_result.created and request.user_id:
+        from src.lib.curation_workspace.review_operations import submit
+        from src.lib.curation_workspace.models import CurationCandidate
+        from uuid import uuid5, NAMESPACE_URL
+        candidates = list(db.scalars(select(CurationCandidate).where(
+            CurationCandidate.session_id == UUID(persistence_result.session_id))))
+        pending = []
+        for candidate in candidates:
+            envelope_row = db.get(DomainEnvelopeModel, candidate.envelope_id) if candidate.envelope_id else None
+            if envelope_row is None:
+                continue
+            metadata = envelope_row.envelope_json.get("metadata", {})
+            # Historical/unknown imports do not invent originals or paid work.
+            if metadata.get("validation_history") and not metadata.get("review_episode_id") and not metadata.get("selected_projection"):
+                from src.models.sql.validation_history import ValidationArtifact
+                artifact = db.get(ValidationArtifact, metadata['validation_history']['artifact_id'])
+                if artifact is None or artifact.owner_id != request.user_id:
+                    raise ValueError('Workspace source history is unavailable to this owner')
+                if artifact.subject_kind != 'historical':
+                    pending.append(str(candidate.id))
+        if pending:
+            submit(db, owner_id=request.user_id, session_id=persistence_result.session_id,
+                request_id=str(uuid5(NAMESPACE_URL, "workspace-bootstrap:" + persistence_result.session_id)),
+                candidate_ids=pending, guidance=None, groups=request.active_groups or (), origin="bootstrap")
 
 
 def _bind_envelopes_to_review_session(
@@ -554,46 +582,28 @@ def _refresh_domain_envelope_validation_for_ref(
         profile_context=profile_context,
     )
     validator_envelope = structural_result.envelope
-    if envelope.metadata.get("validation_review_runtime") == "chat":
+    # Preparation materializes saved state only. Paid work is admitted after
+    # the workspace exists, through its durable operation coordinator.
+    if envelope.metadata.get("selected_projection") is not None:
         from src.lib.validation_history.projection import read_published_projection_in_transaction
         from src.lib.validation_history.store import HistoryScope, SelectionNotReady
         if runtime_context is None:
-            raise SelectionNotReady("Chat review requires authenticated context")
-        selected = envelope.metadata.get("selected_projection")
-        if selected is None:
-            raise SelectionNotReady("Chat review must finish before curation preparation")
+            raise SelectionNotReady("Reviewed preparation requires authenticated context")
         scope = HistoryScope(runtime_context.user_id, runtime_context.document_id,
             envelope.metadata["validation_history"]["session_id"])
-        read_published_projection_in_transaction(db, scope, selected, finalized=True)
-    if (envelope.metadata.get("inline_validator_dispatch_complete")
-            or envelope.metadata.get("validation_review_runtime") == "chat"):
-        # A1: the chat turn already dispatched the active validators and the findings are saved
-        # on this envelope. Reuse them; run only the cheap structural checks here, do NOT re-run
-        # the validator agents. (Curator edits re-validate via the session validation service.)
-        dispatch_appended_findings: tuple = ()
-        result_envelope = validator_envelope
-        if profile_context is not None:
-            # Reusing semantic results is not reusing authorization: capability
-            # activation, caller groups and provider scope are checked now.
-            _, eligibility_findings, binding_audit = profile_dispatch_matches(
-                validator_envelope, profile_context, authenticated_groups=profile_groups,
-            )
-            result_envelope, dispatch_appended_findings = append_validation_findings_to_envelope(
-                validator_envelope, eligibility_findings, actor_id="profile_validation_reauthorization",
-            )
-            result_envelope = result_envelope.model_copy(deep=True)
-            result_envelope.metadata["validator_binding_audit"] = list(binding_audit)
-    else:
-        dispatch_result = dispatch_active_validator_bindings(
-            validator_envelope,
-            domain_pack,
-            registry=structural_result.registry,
-            profile_context=profile_context,
-            source_envelope_revision=envelope_row.revision,
-            runtime_context=runtime_context,
+        read_published_projection_in_transaction(db, scope, envelope.metadata["selected_projection"], current=True)
+    dispatch_appended_findings: tuple = ()
+    result_envelope = validator_envelope
+    if profile_context is not None:
+        # Current permissions still apply when reusing historical machine work.
+        _, eligibility_findings, binding_audit = profile_dispatch_matches(
+            validator_envelope, profile_context, authenticated_groups=profile_groups,
         )
-        dispatch_appended_findings = dispatch_result.appended_findings
-        result_envelope = dispatch_result.envelope
+        result_envelope, dispatch_appended_findings = append_validation_findings_to_envelope(
+            validator_envelope, eligibility_findings, actor_id="profile_validation_reauthorization",
+        )
+        result_envelope = result_envelope.model_copy(deep=True)
+        result_envelope.metadata["validator_binding_audit"] = list(binding_audit)
     dispatch_metadata_changed = result_envelope.metadata != validator_envelope.metadata
     binding_audit = result_envelope.metadata.get("validator_binding_audit")
     group_sensitive = isinstance(binding_audit, list) and any(

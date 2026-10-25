@@ -1028,16 +1028,6 @@ def test_submission_workflow_e2e_with_retry_and_history(
     decision_payload = decision_response.json()
     assert decision_payload["candidate"]["status"] == "accepted"
 
-    validation_response = client.post(
-        f"/api/curation-workspace/sessions/{session_id}/validate-all",
-        json={"session_id": session_id},
-    )
-    assert validation_response.status_code == 200, validation_response.text
-    validation_payload = validation_response.json()
-    assert validation_payload["session"]["session_id"] == session_id
-    assert len(validation_payload["candidate_validations"]) == 1
-    assert validation_payload["candidate_validations"][0]["candidate_id"] == candidate_id
-
     preview_response = client.post(
         f"/api/curation-workspace/sessions/{session_id}/submission-preview",
         json={

@@ -18,6 +18,7 @@ from src.models.sql.validation_review import (
     ValidationReviewReservation as Reservation,
 )
 from .policy import ReviewLimits
+from .record_scope import review_ready, review_blockers
 
 
 class ReviewStopped(store.HistoryConflict):
@@ -160,6 +161,7 @@ def attach_episode(
     predecessor_id=None,
     renewal_actor_id=None,
     renewal_reason=None,
+    curator_round=False,
 ):
     """Bind declared obligations before initial work, freezing inherited policy."""
     with store.SessionLocal.begin() as db:
@@ -174,6 +176,9 @@ def attach_episode(
 
         _lock_artifact(db, history_scope, artifact_id, write=True)
         fact = store._fact(db, artifact_id, episode_id, kind="review_episode")
+        from src.lib.validation_history.episodes import is_abandoned
+        if is_abandoned(db, artifact_id, episode_id):
+            raise ReviewStopped("preparation_abandoned")
         if predecessor_id:
             if (
                 renewal_actor_id != history_scope.owner_id
@@ -185,6 +190,9 @@ def attach_episode(
                 )
             if len(renewal_reason) > run.contract["policy"]["instruction_chars"]:
                 raise ValueError("Renewal reason exceeds configured character limit")
+        if curator_round and (not predecessor_id or len(chain) != 2
+                              or chain[0].kind != "workspace_operation"):
+            raise store.HistoryConflict("A new curator round requires a workspace operation and predecessor")
         existing = db.get(Episode, episode_id)
         if existing:
             if (existing.artifact_id, existing.scope_id, existing.predecessor_id) != (
@@ -208,22 +216,15 @@ def attach_episode(
             previous = db.get(Episode, predecessor_id)
             if (
                 previous is None
-                or previous.scope_id != scope_id
+                or (previous.scope_id != scope_id and not curator_round)
+                or (previous.scope_id == scope_id and curator_round)
                 or previous.artifact_id != artifact_id
             ):
                 raise store.HistoryConflict(
-                    "Human renewal must retain its parent scope"
+                    "Renewal must retain its scope unless explicitly granted a new curator round"
                 )
-        targets = set()
-        for obligation in store._content(db, fact)["obligations"]:
-            if obligation["mode"] != "validation":
-                continue
-            target = store._fact(
-                db, artifact_id, obligation["target_id"], kind="target"
-            )
-            content = store._content(db, target)
-            # Component targets are partitions of one binding invocation.
-            targets.add(target.parent_id if "decision_unit" in content else target.id)
+        from .record_scope import validation_targets
+        targets = validation_targets(db, artifact_id, store._content(db, fact))
         policy = ReviewLimits(**run.contract["policy"])
         discovered = run.kind == "discovered_document_run"
         if discovered and predecessor_id is None:
@@ -300,6 +301,7 @@ def attach_episode(
             body={
                 "scope_id": scope_id,
                 "predecessor_id": predecessor_id,
+                "curator_round": curator_round,
                 "targets": sorted(targets),
                 "policy": policy.snapshot(),
                 "renewal": (
@@ -329,16 +331,9 @@ def lock_episode(db, history_scope, episode_id, *, require_open=True):
     if require_open:
         if store._document_retirement(db, row.artifact_id) is not None:
             raise ReviewStopped("retired")
-        latest = db.scalar(
-            select(ValidationFact.id)
-            .where(
-                ValidationFact.artifact_id == row.artifact_id,
-                ValidationFact.kind == "review_episode",
-            )
-            .order_by(ValidationFact.sequence.desc())
-            .limit(1)
-        )
-        if latest != row.id:
+        from src.lib.validation_history.episodes import latest_effective_episode
+        latest = latest_effective_episode(db, row.artifact_id)
+        if latest is None or latest.id != row.id:
             raise ReviewStopped("superseded")
         if row.state == "complete":
             from src.lib.validation_history.selections import manifest_in_transaction
@@ -347,7 +342,7 @@ def lock_episode(db, history_scope, episode_id, *, require_open=True):
                 db, history_scope, row.artifact_id, episode_id=row.id
             )
             if any(
-                item["code"] == "answer_review_pending" for item in manifest["blockers"]
+                item["code"] == "answer_review_pending" for item in review_blockers(manifest)
             ):
                 # A late original answer is a new review obligation, not a new
                 # episode or a grant of more time/tokens/attempts. Preserve prior
@@ -423,7 +418,7 @@ def reserve_in_transaction(
                     append_fact(
                         db,
                         episode.artifact_id,
-                        operation_id=f"review-warning:{operation_id}:{row.id}:{key}:{threshold}",
+                        operation_id=f"review-warning:{episode.id}:{operation_id}:{row.id}:{key}:{threshold}",
                         kind="review_budget_warning",
                         parent_id=episode.id,
                         body={
@@ -454,7 +449,7 @@ def reserve_in_transaction(
     append_fact(
         db,
         episode.artifact_id,
-        operation_id="review-reservation:" + operation_id,
+        operation_id="review-reservation:" + episode.id + ":" + operation_id,
         kind="review_reservation",
         parent_id=episode.id,
         body={"reservation_id": reservation.id, "charges": charges, "request": request},
@@ -553,14 +548,15 @@ def status(history_scope, episode_id):
                             ),
                         }
                     )
-        state = reason or ("complete" if manifest["ready"] else "pending")
-        if reason == "complete" and not manifest["ready"]:
+        state = reason or ("complete" if review_ready(manifest) else "pending")
+        if reason == "complete" and not review_ready(manifest):
             state = "stale"
         return {
             "episode_id": episode.id,
             "state": state,
-            "ready": manifest["ready"] and reason in {None, "complete"},
-            "uncovered": manifest["blockers"],
+            "ready": review_ready(manifest) and reason in {None, "complete"},
+            "uncovered": review_blockers(manifest),
+            "artifact_ready": manifest["ready"],
             "budgets": budgets,
             "warnings": warnings,
         }

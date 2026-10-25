@@ -41,7 +41,12 @@ def effective_episode(db, episode):
         ValidationFact.parent_id == episode.id,
         ValidationFact.kind == "review_coverage_revision").order_by(ValidationFact.sequence.desc()).limit(1))
     if extension is not None:
-        body["obligations"] = store._content(db, extension)["obligations"]
+        revised = store._content(db, extension)["obligations"]
+        if body.get("review_target_ids") is not None:
+            old = {item["target_id"] for item in body["obligations"]}
+            current = {item["target_id"] for item in revised}
+            body["review_target_ids"] = sorted((set(body["review_target_ids"]) & current) | (current - old))
+        body["obligations"] = revised
     return body
 
 
@@ -86,6 +91,13 @@ def start_episode_in_transaction(db, scope, artifact_id, *, episode):
         if obligation["mode"] == "validation":
             if original.get("binding_id") != obligation["binding_id"]:
                 raise store.HistoryConflict("Obligation does not match its binding")
+    covered = {item["target_id"] for item in body["obligations"]}
+    if body["review_target_ids"] is not None and not set(body["review_target_ids"]).issubset(covered):
+        raise store.HistoryConflict("Record review scope exceeds declared coverage")
+    for tid, origin_id in body["retained_episode_ids"].items():
+        origin = store._fact(db, artifact_id, origin_id, kind="review_episode")
+        if tid not in covered or tid not in {item["target_id"] for item in effective_episode(db, origin)["obligations"]}:
+            raise store.HistoryConflict("Retained review has no matching historical coverage")
     return store._append(
         db, artifact_id, operation_id="review-episode:" + body["episode_id"],
         kind="review_episode", body=body,
@@ -128,6 +140,9 @@ def decide_episode_in_transaction(
             raise store.HistoryConflict("Curator source cannot satisfy required validator review")
         if obligation["mode"] == "curator" and actor["type"] != "curator":
             raise store.HistoryAccessError("Agent review cannot stand in for a curator")
+    if actor["type"] != "curator":
+        from src.lib.validation_review.record_scope import require_units
+        require_units(effective_episode(db, episode), [entry["target_id"] for entry in entries])
     versions = store.apply_decisions_in_transaction(
         db, scope, artifact_id, operation_id=operation_id, actor=actor, entries=entries,
     )
@@ -242,36 +257,36 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
     episode = store._fact(db, artifact_id, episode_id, kind="review_episode")
     episode_body = effective_episode(db, episode)
     obligations = episode_body["obligations"]
-    disposition_ids = set()
+    retained = episode_body.get("retained_episode_ids", {})
+    origins = {episode.id, *retained.values()}
+    disposition_ids = {origin: set() for origin in origins}
     for fact in db.scalars(select(ValidationFact).where(
         ValidationFact.artifact_id == artifact_id,
         ValidationFact.kind == "episode_disposition",
-        ValidationFact.parent_id == episode.id,
+        ValidationFact.parent_id.in_(origins),
     )):
-        disposition_ids.update(store._content(db, fact)["selection_ids"])
+        disposition_ids[fact.parent_id].update(store._content(db, fact)["selection_ids"])
     attempts_by_target = {}
     for attempt in db.scalars(select(ValidationFact).where(
         ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "attempt",
-        ValidationFact.sequence > episode.sequence,
     )):
         attempt_body = store._content(db, attempt)
         recorded_episode = attempt_body["input"].get("review_episode_id")
-        if recorded_episode is not None and recorded_episode != episode.id:
-            continue
         for target_id in attempt_body["coverage"]:
-            attempts_by_target.setdefault(target_id, []).append(attempt.id)
+            if recorded_episode in {episode.id, retained.get(target_id)} and recorded_episode is not None:
+                attempts_by_target.setdefault(target_id, []).append(attempt.id)
+            elif recorded_episode is None and attempt.sequence > episode.sequence:
+                attempts_by_target.setdefault(target_id, []).append(attempt.id)
     completions = {fact.parent_id: fact.id for fact in db.scalars(select(ValidationFact).where(
         ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "completion",
-        ValidationFact.sequence > episode.sequence,
     ))}
-    reviewed_answers = set()
-    decision_ids = set()
-    for sid in disposition_ids:
-        selection = store._fact(db, artifact_id, sid, kind="selection")
-        decision_ids.add(selection.parent_id)
-    for did in decision_ids:
-        decision = store._content(db, store._fact(db, artifact_id, did, kind="decision"))
-        reviewed_answers.update((entry["target_id"], entry.get("subject")) for entry in decision["entries"])
+    reviewed_answers = {}
+    for origin, ids in disposition_ids.items():
+        reviewed_answers[origin] = set()
+        decisions = {store._fact(db, artifact_id, sid, kind="selection").parent_id for sid in ids}
+        for did in decisions:
+            decision = store._content(db, store._fact(db, artifact_id, did, kind="decision"))
+            reviewed_answers[origin].update((entry["target_id"], entry.get("subject")) for entry in decision["entries"])
     units = []
     blockers = [{"target_id": None, "code": "required_validator_unavailable", "binding_id": binding_id}
                 for binding_id in episode_body["unavailable_bindings"]]
@@ -282,9 +297,14 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
     for obligation in obligations:
         unit = _selected_unit(db, scope, artifact_id, obligation["target_id"])
         units.append(unit)
+        origin = retained.get(unit["target_id"], episode.id)
+        unit_dispositions = disposition_ids[episode.id] | disposition_ids[origin]
+        unit_reviewed_answers = reviewed_answers[episode.id] | reviewed_answers[origin]
+        if origin != episode.id:
+            unit["retained_review_episode_id"] = origin
         if not unit["eligible"]:
             blockers.append({"target_id": unit["target_id"], "code": unit["reason"]})
-        elif unit["review"] != "accept" or unit["selection_id"] not in disposition_ids:
+        elif unit["review"] != "accept" or unit["selection_id"] not in unit_dispositions:
             blockers.append({"target_id": unit["target_id"], "code": "episode_review_pending"})
         else:
             selection = store._content(
@@ -297,10 +317,13 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         # later human renewal creates a linked episode without resetting parent quotas.
         for attempt_id in attempts_by_target.get(unit["target_id"], ()):
             completion_id = completions.get(attempt_id)
-            if completion_id is None and (unit["target_id"], attempt_id) not in reviewed_answers:
+            if completion_id is None and (unit["target_id"], attempt_id) not in unit_reviewed_answers:
                 blockers.append({"target_id": unit["target_id"], "code": "execution_pending"})
-            elif completion_id is not None and (unit["target_id"], completion_id) not in reviewed_answers:
+            elif completion_id is not None and (unit["target_id"], completion_id) not in unit_reviewed_answers:
                 blockers.append({"target_id": unit["target_id"], "code": "answer_review_pending"})
+    from src.lib.validation_review.record_scope import allowed_units
+    review_targets = allowed_units(episode_body)
+    review_blockers = [item for item in blockers if item["target_id"] is None or item["target_id"] in review_targets]
     manifest = {
         "schema_version": 1,
         "artifact_id": artifact_id,
@@ -313,6 +336,9 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         "blockers": blockers,
         "ready": not blockers,
     }
+    if episode_body.get("review_target_ids") is not None:
+        manifest.update(review_target_ids=sorted(review_targets), review_ready=not review_blockers,
+                        review_blockers=review_blockers)
     digest, manifest = store.canonical(manifest)
     return {**manifest, "sha256": digest}
 
@@ -343,7 +369,7 @@ def selected_prerequisites(manifest, target_ids):
     return pins
 
 
-def declare_envelope_episode(binding, envelope, matches, *, unavailable_bindings=(), curator_revalidation=None, authenticated_groups=None, flow_selections=None):
+def declare_envelope_episode(binding, envelope, matches, *, episode_key=None, review_object_ids=None, unavailable_bindings=(), curator_revalidation=None, authenticated_groups=None, flow_selections=None):
     """Declare all matching obligations before selectors/preflight can skip work."""
     from uuid import uuid4
     from .runtime import binding_target
@@ -404,9 +430,19 @@ def declare_envelope_episode(binding, envelope, matches, *, unavailable_bindings
     obligations = list({item["target_id"]: item for item in obligations}.values())
     from .curator_authority import record_revalidation_intent_in_transaction, revalidation_intents
     with store.SessionLocal.begin() as db:
+        scoped = {}
+        if review_object_ids is not None:
+            from src.lib.validation_review.record_scope import compile_matches, retained_coverage
+            requested, allowed = compile_matches(binding, matches, set(review_object_ids))
+            roots = {obj.metadata["validation_history"]["target_id"] for obj in source.extracted_objects
+                     if obj.object_id in review_object_ids or obj.pending_ref_id in review_object_ids}
+            ids, retained = retained_coverage(db, binding.artifact_id, envelope.metadata.get("review_episode_id"),
+                obligations, requested, allowed, roots)
+            scoped = {"review_target_ids": ids, "retained_episode_ids": retained}
         episode_id = start_episode_in_transaction(db, binding.scope, binding.artifact_id, episode={
-            "episode_id": str(uuid4()), "reason": "Explicit review of this validation run",
+            "episode_id": episode_key or str(uuid4()), "reason": "Explicit review of this validation run",
             "obligations": obligations, "unavailable_bindings": list(unavailable_bindings), "excluded_bindings": exclusions,
+            **scoped,
         })
         intent_ids = [record_revalidation_intent_in_transaction(db, binding, envelope=envelope,
             episode_id=episode_id, **intent) for intent in revalidation_intents(curator_revalidation)]

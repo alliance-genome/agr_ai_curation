@@ -71,7 +71,7 @@ def _recoverable_tool(function):
     return invoke
 
 
-def create_tools(context, *, checkpoint_provider, refresh_inputs=None,
+def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_receipt=None,
                  execute_work=None, advance_work=None, prepare_inputs=None,
                  request_extraction=None, select_source=None, assess_source=None):
     """Context and checkpoint loader come from authenticated runtime, never JSON."""
@@ -160,7 +160,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None,
             target_ids=target_ids,
             instructions=instructions,
             evidence_refs=[ref.model_dump(mode="json") for ref in evidence_refs],
-            refresh_inputs=refresh_inputs,
+            refresh_inputs=refresh_inputs, rebind_receipt=rebind_receipt,
         )
         if execute_work is not None:
             return {**await execute_work(work_id), "coverage": target_ids,

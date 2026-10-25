@@ -41,15 +41,21 @@ def entry_coverage(db, artifact_id, entry_ids):
 
 def assemble_in_transaction(
     db, scope, episode, *, operation_id, entry_ids, parent_decision_id,
-    instructions, current_entries, attempt, purpose, contributions=(),
+    instructions, current_entries, attempt, purpose, contributions=(), additional_target_ids=(),
 ):
     """Trusted caller provides current selected entries, not model-authored values."""
     artifact = store._artifact(db, episode.artifact_id, scope)
     targets, covered = entry_coverage(db, artifact.id, entry_ids)
     if set(current_entries) != set(entry_ids):
         raise store.HistoryConflict("Current input coverage differs from authorized entries")
-    if len(entry_ids) > episode.policy["decision_entries"]:
-        raise ValueError("Specialist context exceeds configured entry coverage")
+    # Decision-command limits do not truncate the context of an already
+    # admitted batch. Exact content is independently paged by packet_bytes.
+    for target_id in additional_target_ids:
+        target = store._fact(db, artifact.id, target_id, kind="target")
+        if not store._content(db, target).get("binding_id"):
+            raise store.HistoryAccessError("Additional context target is not a validator binding")
+        store._require_active_target(db, artifact.id, target_id)
+        covered.add(target_id)
     from .decisions import bounded_text
     bounded_text(instructions, episode.policy["instruction_chars"], "Follow-up instructions")
     parent = store._fact(db, artifact.id, parent_decision_id)
@@ -58,6 +64,9 @@ def assemble_in_transaction(
         parent_body = {"actor": parent_body["identity"]["actor"],
             "entries": [{"target_id": parent.target_id, "action": "select_extraction_contribution",
                          "reason": parent_body["identity"]["reason"]}]}
+    elif parent.kind == "workspace_revalidation_request":
+        if parent.parent_id != episode.id or parent_body["actor"] != {"type": "curator", "id": scope.owner_id}:
+            raise store.HistoryAccessError("Revalidation request is outside this curator round")
     elif parent.kind != "decision":
         raise store.HistoryAccessError("Specialist request requires an exact review/source decision")
     decisions = [entry for entry in parent_body["entries"] if entry["target_id"] in covered]

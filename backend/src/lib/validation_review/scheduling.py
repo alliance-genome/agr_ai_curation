@@ -49,6 +49,7 @@ def _enqueue(
         return prior.id
     from src.lib.validation_history.selections import effective_episode
     declared = effective_episode(db, store._fact(db, ep.artifact_id, ep.id))["obligations"]
+    episode_body = effective_episode(db, store._fact(db, ep.artifact_id, ep.id))
     obligations = {}
     for item in declared:
         if item["mode"] == "validation":
@@ -58,7 +59,9 @@ def _enqueue(
                 if "decision_unit" in store._content(db, unit)
                 else unit.id
             )
-            obligations[root] = item["binding_id"]
+            from .record_scope import allowed_units
+            if item["target_id"] in allowed_units(episode_body):
+                obligations[root] = item["binding_id"]
     for request in requests:
         tid = request["target_id"]
         if (
@@ -78,7 +81,7 @@ def _enqueue(
         db,
         scope,
         ep.artifact_id,
-        operation_id="review:" + operation_id,
+        operation_id="review:" + ep.id + ":" + operation_id,
         receipt=receipt,
         requests=requests,
     )
@@ -131,6 +134,7 @@ def reconsider(
     instructions,
     evidence_refs,
     refresh_inputs=None,
+    rebind_receipt=None,
 ):
     with store.SessionLocal.begin() as db:
         ep, _ = lock_episode(
@@ -191,6 +195,7 @@ def reconsider(
             evidence.append({"reference": ref, "content": body})
         entries = store._content(db, parent)["entries"]
         requests, receipts, previous_answers = [], [], []
+        renewed = []
         for tid in target_ids:
             candidates = []
             for entry in entries:
@@ -217,8 +222,16 @@ def reconsider(
             attempt = candidates[0]
             frozen = store._content(db, attempt)
             previous_episode = db.get(Episode, frozen["input"]["review_episode_id"])
-            if previous_episode is None or (previous_episode.scope_id, previous_episode.artifact_id) != (ep.scope_id, ep.artifact_id):
-                raise store.HistoryConflict("Reconsidered answer belongs to another document operation")
+            if previous_episode is None or previous_episode.artifact_id != ep.artifact_id:
+                raise store.HistoryConflict("Reconsidered answer belongs to another artifact")
+            fresh_scope = previous_episode.scope_id != ep.scope_id
+            if fresh_scope:
+                from src.lib.validation_history.selections import effective_episode
+                from .record_scope import allowed_units
+                body = effective_episode(db, store._fact(db, ep.artifact_id, ep.id))
+                if rebind_receipt is None or body.get('review_target_ids') is None or not set(frozen['coverage']).issubset(allowed_units(body)):
+                    raise store.HistoryConflict("Reconsidered answer belongs to another document operation")
+            renewed.append(fresh_scope)
             if not store._attempt_is_current(
                 db, context.history_scope, ep.artifact_id, frozen
             ):
@@ -272,6 +285,12 @@ def reconsider(
             raise store.HistoryConflict(
                 "Different saved validator receipts require separate operations"
             )
+        from .attempt_lineage import counts
+        initial_in_round = all(value == 0 for value in counts(db, ep, target_ids).values())
+        if any(renewed):
+            if not all(renewed) or not initial_in_round:
+                raise store.HistoryConflict("Reconsider the current round's answer separately")
+            receipts = [rebind_receipt(requests, receipts[0])]
         return _enqueue(
             db,
             context.history_scope,
@@ -280,7 +299,7 @@ def reconsider(
             requests=requests,
             receipt=receipts[0],
             identity=identity,
-            reconsideration=True,
+            reconsideration=not (any(renewed) and initial_in_round),
             followup={
                 "instructions": instructions,
                 "parent_decision_id": parent_decision_id,

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping
 
 from src.schemas.domain_envelope import (
     CuratableObjectStatus,
@@ -18,23 +17,6 @@ from src.schemas.domain_envelope import (
     ValidationFindingStatus,
     field_path_exists,
 )
-
-
-@dataclass(frozen=True)
-class ScopedValidationFindingRefresh:
-    """Envelope state prepared for one scoped validation refresh."""
-
-    envelope: DomainEnvelope
-    removed_findings: tuple[ValidationFinding, ...]
-
-
-@dataclass(frozen=True)
-class StaleValidationFindingResolution:
-    """Envelope state after stale scoped findings were restored or resolved."""
-
-    envelope: DomainEnvelope
-    resolved_findings: tuple[ValidationFinding, ...]
-    changed: bool
 
 
 def _history_ref_payload(value: Any) -> Any:
@@ -126,121 +108,6 @@ def append_validation_findings_to_envelope(
             }
         ),
         tuple(appended_findings),
-    )
-
-
-def remove_open_validation_findings_for_scope(
-    envelope: DomainEnvelope,
-    *,
-    object_id: str,
-    field_paths: Iterable[str] = (),
-) -> ScopedValidationFindingRefresh:
-    """Remove open findings in a validation scope before rerunning validators.
-
-    The removed findings are restored unchanged when the validator re-emits the same
-    finding identity, or restored as resolved when the current payload no longer
-    produces that finding.
-    """
-
-    scoped_field_paths = frozenset(field_paths)
-    retained_findings: list[ValidationFinding] = []
-    removed_findings: list[ValidationFinding] = []
-    for finding in envelope.validation_findings:
-        stable_finding = _with_stable_finding_id(envelope.envelope_id, finding)
-        if (
-            stable_finding.status is ValidationFindingStatus.OPEN
-            and _finding_matches_scope(
-                envelope=envelope,
-                finding=stable_finding,
-                object_id=object_id,
-                field_paths=scoped_field_paths,
-            )
-        ):
-            removed_findings.append(stable_finding)
-            continue
-        retained_findings.append(stable_finding)
-
-    if not removed_findings:
-        return ScopedValidationFindingRefresh(envelope=envelope, removed_findings=())
-
-    return ScopedValidationFindingRefresh(
-        envelope=envelope.model_copy(update={"validation_findings": retained_findings}),
-        removed_findings=tuple(removed_findings),
-    )
-
-
-def resolve_stale_validation_findings_after_refresh(
-    *,
-    original_envelope: DomainEnvelope,
-    refreshed_envelope: DomainEnvelope,
-    removed_findings: Sequence[ValidationFinding],
-    actor_id: str = "domain_validation_finding_refresher",
-) -> StaleValidationFindingResolution:
-    """Restore re-emitted scoped findings and resolve scoped findings that disappeared."""
-
-    if not removed_findings:
-        return StaleValidationFindingResolution(
-            envelope=refreshed_envelope,
-            resolved_findings=(),
-            changed=_envelope_changed(original_envelope, refreshed_envelope),
-        )
-
-    stale_findings_by_id = {
-        finding.finding_id: finding
-        for finding in (
-            _with_stable_finding_id(original_envelope.envelope_id, finding)
-            for finding in removed_findings
-        )
-        if finding.finding_id is not None
-    }
-    reemitted_finding_ids: set[str] = set()
-    merged_findings: list[ValidationFinding] = []
-    for finding in refreshed_envelope.validation_findings:
-        stable_finding = _with_stable_finding_id(
-            refreshed_envelope.envelope_id,
-            finding,
-        )
-        stable_finding_id = stable_finding.finding_id
-        if stable_finding_id is None:
-            merged_findings.append(stable_finding)
-            continue
-        stale_finding = stale_findings_by_id.get(stable_finding_id)
-        if stale_finding is None:
-            merged_findings.append(stable_finding)
-            continue
-        reemitted_finding_ids.add(stable_finding_id)
-        merged_findings.append(stale_finding)
-
-    resolved_findings = tuple(
-        finding.model_copy(update={"status": ValidationFindingStatus.RESOLVED})
-        for finding_id, finding in stale_findings_by_id.items()
-        if finding_id not in reemitted_finding_ids
-    )
-    merged_findings.extend(resolved_findings)
-
-    history_events = _dedupe_history_events(
-        (
-            *refreshed_envelope.history,
-            *(
-                _history_event_for_resolved_finding(
-                    envelope=refreshed_envelope,
-                    finding=finding,
-                    actor_id=actor_id,
-                )
-                for finding in resolved_findings
-            ),
-        )
-    )
-    envelope = refreshed_envelope.model_copy(
-        update={
-            "validation_findings": merged_findings,
-            "history": history_events,
-        }
-    )
-    return StaleValidationFindingResolution(
-        envelope=envelope,
-        resolved_findings=resolved_findings,
-        changed=_envelope_changed(original_envelope, envelope),
     )
 
 
@@ -458,19 +325,6 @@ def _finding_field_ref_exists(
     return False
 
 
-def _finding_matches_scope(
-    *,
-    envelope: DomainEnvelope,
-    finding: ValidationFinding,
-    object_id: str,
-    field_paths: frozenset[str],
-) -> bool:
-    target_object_id, field_path = _finding_target(envelope, finding)
-    if target_object_id != object_id:
-        return False
-    return field_path is None or not field_paths or field_path in field_paths
-
-
 def _finding_target(
     envelope: DomainEnvelope,
     finding: ValidationFinding,
@@ -519,31 +373,6 @@ def _finding_target_payload(finding: ValidationFinding) -> dict[str, Any]:
     return target
 
 
-def _dedupe_history_events(events: Iterable[HistoryEvent]) -> list[HistoryEvent]:
-    deduped_events: list[HistoryEvent] = []
-    seen_event_ids: set[str] = set()
-    for event in events:
-        if event.event_id is None:
-            deduped_events.append(event)
-            continue
-        if event.event_id in seen_event_ids:
-            continue
-        seen_event_ids.add(event.event_id)
-        deduped_events.append(event)
-    return deduped_events
-
-
-def _envelope_changed(
-    original_envelope: DomainEnvelope,
-    updated_envelope: DomainEnvelope,
-) -> bool:
-    return original_envelope != updated_envelope
-
-
 __all__ = [
-    "ScopedValidationFindingRefresh",
-    "StaleValidationFindingResolution",
     "append_validation_findings_to_envelope",
-    "remove_open_validation_findings_for_scope",
-    "resolve_stale_validation_findings_after_refresh",
 ]

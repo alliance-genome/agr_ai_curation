@@ -68,7 +68,10 @@ def request(context, *, operation_id, parent_decision_id, entry_ids, instruction
             if not named.intersection(descendants):
                 raise store.HistoryConflict("Parent decision must concern every requested entry")
         from src.lib.validation_history.selections import effective_episode
-        declared = effective_episode(db, store._fact(db, ep.artifact_id, ep.id))["obligations"]
+        from .record_scope import allowed_units
+        episode_body = effective_episode(db, store._fact(db, ep.artifact_id, ep.id))
+        permitted = allowed_units(episode_body)
+        declared = [item for item in episode_body["obligations"] if item["target_id"] in permitted]
         if not all(any(item["target_id"] in descendants for item in declared)
                    for descendants in coverage.values()):
             raise store.HistoryAccessError("Follow-up entry is outside this episode")

@@ -1108,3 +1108,18 @@ def test_validation_review_deployment_contract_covers_every_getter():
     assert {key for key, _, _ in REVIEW_LIMIT_CONTRACT} == {
         "VALIDATION_REVIEW_" + field.upper() for field in ReviewLimits.configured().snapshot()
     }
+
+
+def test_workspace_review_concurrency_deployment_parity(monkeypatch):
+    from src.lib.openai_agents.config import get_workspace_review_concurrency
+    key = "WORKSPACE_REVIEW_CONCURRENCY"
+    monkeypatch.delenv(key, raising=False)
+    assert get_workspace_review_concurrency() == 1
+    for path in (DEV_COMPOSE_PATH, COMPOSE_PATH):
+        env = yaml.safe_load(path.read_text())["services"]["backend"]["environment"]
+        if isinstance(env, list):
+            env = _list_environment(env)
+        assert env[key] == "${WORKSPACE_REVIEW_CONCURRENCY:-1}"
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "1"
+    monkeypatch.setenv(key, "3")
+    assert get_workspace_review_concurrency() == 3

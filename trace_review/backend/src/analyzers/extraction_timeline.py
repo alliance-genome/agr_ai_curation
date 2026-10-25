@@ -1030,6 +1030,12 @@ class ExtractionTimelineAnalyzer:
                 "events": [item for item in timeline if str(item.get("event_type", "")).startswith("validation_review.")],
                 "note": "Committed review operations only. Exact bodies are pinned by artifact/fact ID and SHA; scientific decisions are not inferred from execution completion.",
             },
+            "workspace_validation_review": {
+                "events": [item for item in timeline if str(item.get("event_type", "")) in {
+                    "validation_review.workspace_operation", "validation_review.workspace_revalidation_request",
+                    "validation_review.review_episode_abandoned"}],
+                "note": "Explicit curator rounds; reopening a workspace does not start another round.",
+            },
             "size_summary": _payload_size_summary(timeline),
             "reasoning_summary": {
                 "status": reasoning_status,

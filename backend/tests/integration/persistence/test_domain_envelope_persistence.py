@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.curation_workspace.models import (
@@ -22,7 +22,6 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeModel,
     DomainEnvelopeObject,
     DomainEnvelopeProjectionIndex,
-    DomainValidationFinding,
 )
 from src.lib.domain_envelopes.persistence import (
     DEFAULT_OBJECT_PROJECTION_TYPE,
@@ -100,21 +99,15 @@ def db_session():
 
 
 def _clean_domain_tables(session):
-    for model in (
-        DomainEnvelopeProjectionIndex,
-        DomainEnvelopeHistory,
-        DomainValidationFinding,
-        DomainEnvelopeObject,
-        CurationActionLogEntry,
-        DomainEnvelopeModel,
-        CurationReviewSession,
-    ):
-        session.execute(delete(model))
-    from src.lib.curation_workspace.models import CurationExtractionResultRecord
-    session.execute(delete(CurationExtractionResultRecord).where(CurationExtractionResultRecord.document_id == OWNER_DOCUMENT_ID))
-    session.execute(
-        delete(PDFDocument).where(PDFDocument.filename.like("field_patch_constraint_%"))
-    )
+    # This module owns only its fixture documents, not every session created by
+    # earlier persistence tests. Preserve immutable audit facts through retirement.
+    from src.lib.document_cleanup import cleanup_document_curation_dependencies
+    documents = list(session.scalars(select(PDFDocument).where(
+        PDFDocument.filename.like("field_patch_constraint_%")
+    )))
+    for document in documents:
+        cleanup_document_curation_dependencies(session, document.id)
+        session.delete(document)
     session.commit()
 
 
@@ -335,7 +328,7 @@ def test_migrated_constraints_accept_curator_field_patch_history_and_action_log(
     assert checkpoint.inserted_history_event_count == 4
     history_event_types = {
         row.event_type
-        for row in db_session.scalars(select(DomainEnvelopeHistory)).all()
+        for row in db_session.scalars(select(DomainEnvelopeHistory).where(DomainEnvelopeHistory.envelope_id == TEST_ENVELOPE_ID)).all()
     }
     assert HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED in history_event_types
     assert HistoryEventKind.CURATOR_FIELD_PATCH_REJECTED in history_event_types
@@ -356,7 +349,7 @@ def test_migrated_constraints_accept_curator_field_patch_history_and_action_log(
     db_session.add(action)
     db_session.commit()
 
-    persisted_action = db_session.scalars(select(CurationActionLogEntry)).one()
+    persisted_action = db_session.scalars(select(CurationActionLogEntry).where(CurationActionLogEntry.id == action.id)).one()
     assert persisted_action.action_type == CurationActionType.ENVELOPE_FIELD_PATCHED
 
 
@@ -430,14 +423,14 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
 
     object_rows = db_session.scalars(
-        select(DomainEnvelopeObject).order_by(DomainEnvelopeObject.object_id)
+        select(DomainEnvelopeObject).where(DomainEnvelopeObject.envelope_id == TEST_ENVELOPE_ID).order_by(DomainEnvelopeObject.object_id)
     ).all()
     assert [row.object_id for row in object_rows] == ["gene-1", "reference-1"]
     assert object_rows[0].validation_state == "warning"
 
     projection_keys = {
         (row.object_id, row.projection_type, row.projection_key)
-        for row in db_session.scalars(select(DomainEnvelopeProjectionIndex)).all()
+        for row in db_session.scalars(select(DomainEnvelopeProjectionIndex).where(DomainEnvelopeProjectionIndex.envelope_id == TEST_ENVELOPE_ID)).all()
     }
     assert (
         "gene-1",
@@ -489,16 +482,16 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     ).extracted_objects[0].payload["gene"]["symbol"] == "XYZ-2"
 
     assert db_session.scalar(
-        select(DomainEnvelopeObject).where(DomainEnvelopeObject.object_id == "reference-1")
+        select(DomainEnvelopeObject).where(DomainEnvelopeObject.envelope_id == TEST_ENVELOPE_ID).where(DomainEnvelopeObject.object_id == "reference-1")
     ) is None
     assert db_session.scalar(
-        select(DomainEnvelopeProjectionIndex).where(
+        select(DomainEnvelopeProjectionIndex).where(DomainEnvelopeProjectionIndex.envelope_id == TEST_ENVELOPE_ID).where(
             DomainEnvelopeProjectionIndex.object_id == "reference-1"
         )
     ) is None
 
     history_rows = db_session.scalars(
-        select(DomainEnvelopeHistory).order_by(DomainEnvelopeHistory.event_id)
+        select(DomainEnvelopeHistory).where(DomainEnvelopeHistory.envelope_id == TEST_ENVELOPE_ID).order_by(DomainEnvelopeHistory.event_id)
     ).all()
     assert [(row.event_id, row.envelope_revision) for row in history_rows] == [
         ("evt-created", 1),
