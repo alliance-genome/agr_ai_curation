@@ -539,8 +539,11 @@ async def _canonical_producer_scenario(
 def batch_catalog_agents(migrated):
     """Persist the catalog identities checked by the real batch access gate."""
     from src.models.sql.agent import Agent as SavedAgent
+    from src.models.sql.batch import Batch
+    from src.models.sql.curation_flow import CurationFlow
     created = []
     groups = set()
+    resources = SimpleNamespace(groups=[], flow_id=None, batch_id=None)
     with store.SessionLocal.begin() as db:
         for key in ("gene", "csv_formatter"):
             agent = db.scalar(select(SavedAgent).where(SavedAgent.agent_key == key))
@@ -553,11 +556,20 @@ def batch_catalog_agents(migrated):
             assert agent.visibility == "system" and agent.is_active
             groups.update(agent.allowed_group_ids)
     try:
-        yield sorted(groups)
+        resources.groups = sorted(groups)
+        yield resources
     finally:
-        # Only fixture-owned catalog rows are removed. Retained scientific
-        # history and any pre-existing catalog definitions remain untouched.
+        # Remove the fixture's operational rows before its temporary catalog
+        # entries. Otherwise a later whole-database migration sees a saved flow
+        # referring to the now-unavailable gene agent. Immutable scientific
+        # history and all pre-existing rows remain untouched.
         with store.SessionLocal.begin() as db:
+            for model, identity in ((Batch, resources.batch_id), (CurationFlow, resources.flow_id)):
+                if identity is not None:
+                    row = db.get(model, identity)
+                    if row is not None:
+                        db.delete(row)
+            db.flush()
             for identity in created:
                 db.delete(db.get(SavedAgent, identity))
 
@@ -636,11 +648,13 @@ async def test_canonical_batch_processes_two_documents_serially_without_replay(
             flow_definition=scenarios[document_ids[0]].flow.flow_definition)
         db.add(flow)
         db.flush()
+        batch_catalog_agents.flow_id = flow.id
         batch = Batch(user_id=owner_id, flow_id=flow.id, total_documents=2,
-            status=BatchStatus.PENDING, active_group_ids=batch_catalog_agents)
+            status=BatchStatus.PENDING, active_group_ids=batch_catalog_agents.groups)
         db.add(batch)
         db.flush()
         batch_id = batch.id
+        batch_catalog_agents.batch_id = batch_id
         for position, document_id in enumerate(document_ids):
             db.add(BatchDocument(batch_id=batch_id, document_id=UUID(document_id),
                 position=position, status=BatchDocumentStatus.PENDING))
