@@ -170,7 +170,7 @@ async def test_real_adapter_retains_candidates_and_replay_never_calls_provider_a
         if specialized:
             from src.lib.config.schema_discovery import resolve_output_schema
             from src.lib.domain_packs.validator_dispatch import _ValidatorAgentRunOutput
-            payload["gene_candidates"] = [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}]
+            payload["gene_candidates"] = [{"gene_id": "GENE:example-1", "symbol": "geneA"}]
             result = resolve_output_schema("GeneResultEnvelope").model_validate(payload)
             return _ValidatorAgentRunOutput(raw_output=payload, accepted_result=result)
         return payload
@@ -209,7 +209,7 @@ async def test_real_adapter_retains_candidates_and_replay_never_calls_provider_a
         schema_key = "GeneResultEnvelope" if specialized else "DomainValidatorResultBase"
         assert all(store._content(db, row)["result_schema"]["key"] == schema_key for row in candidates)
         if specialized:
-            assert all(store._content(db, row)["result"]["gene_candidates"][0]["symbol"] == "crb"
+            assert all(store._content(db, row)["result"]["gene_candidates"][0]["symbol"] == "geneA"
                        for row in candidates)
     assert not admission.status(item.scope, item.ep)["ready"]
     assert item.plan.envelope.extracted_objects[0].payload["evidence_code_curies"] == [

@@ -15,7 +15,7 @@ def gene_result():
     schema = resolve_output_schema("GeneResultEnvelope")
     result = schema.model_validate({
         **_result_payload(request),
-        "gene_candidates": [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}],
+        "gene_candidates": [{"gene_id": "GENE:example-1", "symbol": "geneA"}],
     })
     return request, result
 
@@ -27,7 +27,7 @@ def test_registered_gene_round_trip_preserves_concrete_nested_fields():
     )
     assert type(restored) is type(result)
     assert restored == result
-    assert restored.gene_candidates[0].gene_id == "FB:FBgn0259685"
+    assert restored.gene_candidates[0].gene_id == "GENE:example-1"
 
 
 def test_explicit_platform_base_contract_is_not_an_unknown_schema_fallback():

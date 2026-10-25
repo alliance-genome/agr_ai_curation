@@ -233,7 +233,7 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
 
     result_schema = resolve_output_schema("GeneResultEnvelope") if specialized else DomainValidatorResultBase
     assert result_schema is not None
-    candidate_details = [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}]
+    candidate_details = [{"gene_id": "GENE:example-1", "symbol": "geneA"}]
     # The generic materialization fixture tests selected slots independently of
     # these concrete lookup details, which must survive replay without downcast.
     from src.lib.domain_packs import materialization
@@ -297,8 +297,8 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
     assert replayed_results
     assert all(type(result) is result_schema for result in replayed_results)
     if specialized:
-        assert replayed_results[0].gene_candidates[0].gene_id == "FB:FBgn0259685"
-        assert replayed_results[0].gene_candidates[0].symbol == "crb"
+        assert replayed_results[0].gene_candidates[0].gene_id == "GENE:example-1"
+        assert replayed_results[0].gene_candidates[0].symbol == "geneA"
     assert replayed_results[0]._history_ref["fact_id"] == accepted
     from src.lib.validation_history.projection import read_dispatch_source
     reconsideration = read_dispatch_source(captured, projected)

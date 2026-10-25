@@ -337,7 +337,7 @@ def test_profile_curator_revalidation_and_group_authorized_withdrawal(scope, mon
             from src.lib.config.schema_discovery import resolve_output_schema
             result = resolve_output_schema("GeneResultEnvelope").model_validate({
                 **result.model_dump(mode="json"),
-                "gene_candidates": [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}],
+                "gene_candidates": [{"gene_id": "GENE:example-1", "symbol": "geneA"}],
             })
         runtime.complete_jobs(bound, invocation, [result])
         retain_candidates(source, [ValidatorResultMaterializationInput(match, request, result)], scope=scope)

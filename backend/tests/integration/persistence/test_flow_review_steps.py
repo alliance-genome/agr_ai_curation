@@ -93,7 +93,7 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
         if selection != "automatic":
             from src.lib.config.schema_discovery import resolve_output_schema
             from src.lib.domain_packs.validator_dispatch import _ValidatorAgentRunOutput
-            payload["gene_candidates"] = [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}]
+            payload["gene_candidates"] = [{"gene_id": "GENE:example-1", "symbol": "geneA"}]
             return _ValidatorAgentRunOutput(raw_output=payload,
                 accepted_result=resolve_output_schema("GeneResultEnvelope").model_validate(payload))
         return payload
