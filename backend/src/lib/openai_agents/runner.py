@@ -2199,6 +2199,8 @@ async def _run_agent_with_owned_resources(
                 tool_name=canonical_agent_key,
                 adapter_key=_agent_runtime_curation_adapter_key(agent),
                 source_agent_key=canonical_agent_key,
+                source_agent=agent,
+                source_max_turns=max_turns,
                 is_builder_envelope=True,
                 execution_receipt=builder_workspace.execution_receipt,
                 builder_finalization=finalization,

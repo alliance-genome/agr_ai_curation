@@ -1576,45 +1576,6 @@ def _remap_validator_result_for_request(
     return _finalize_validator_result(remapped, request=request)
 
 
-def validator_result_from_agent_output(
-    raw_output: Any,
-    *,
-    request: DomainValidationRequest,
-) -> DomainValidatorResultBase:
-    """Validate and normalize one validator agent output for materialization."""
-
-    validator_result = _validated_result_from_agent_output(
-        raw_output,
-        request=request,
-    )
-    validator_result = _enforce_expected_result_fields(
-        validator_result,
-        request=request,
-    )
-    return _ensure_classifiable_validator_result(
-        validator_result,
-        request=request,
-    )
-
-
-def unresolved_validator_result_for_dispatch_problem(
-    request: DomainValidationRequest,
-    *,
-    reason: str,
-    explanation: str,
-) -> DomainValidatorResultBase:
-    """Build a controlled unresolved validator result for dispatch failures."""
-
-    return _ensure_classifiable_validator_result(
-        _unresolved_result_for_dispatch_problem(
-            request,
-            reason=reason,
-            explanation=explanation,
-        ),
-        request=request,
-    )
-
-
 def run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
@@ -1649,7 +1610,11 @@ def run_package_scoped_validator_agent(
 
     benchmark_slot = f"validator:{request.validator_binding_id}"
     custom_pin = binding.raw.get("custom_validator")
-    if custom_pin:
+    flow_pin = binding.raw.get("flow_validator")
+    if flow_pin:
+        from src.lib.validation_review.flow_plan import build_validator
+        agent = build_validator(flow_pin, runtime_context)
+    elif custom_pin:
         from src.lib.agent_studio.custom_profile_validators import build_custom_validator_agent
         agent = build_custom_validator_agent(custom_pin, runtime_context, benchmark_slot=benchmark_slot)
     else:
@@ -1708,11 +1673,8 @@ def run_package_scoped_validator_agent(
     )
 
     provider_payload = validator_request_payload_for_agent(request)
-    from src.lib.validation_review.validator_adapter import RECONSIDERATION_INPUT
-    reconsideration = RECONSIDERATION_INPUT.get()
-    if reconsideration is not None:
-        agent.instructions = (agent.instructions or "") + "\n\n" + reconsideration["protocol"]
-        provider_payload = {**provider_payload, "validation_reconsideration": reconsideration["context"]}
+    from src.lib.validation_review.validator_adapter import attach_reconsideration_context
+    provider_payload = attach_reconsideration_context(agent, provider_payload)
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
@@ -1779,6 +1741,8 @@ def run_package_scoped_validator_agent(
     try:
         from src.lib.validation_history.runtime import record_runner_receipt
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
+        from src.lib.validation_review.phase_observability import emit_phase
+        emit_phase(agent)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
         from src.lib.validation_review.provider import ACTIVE_BUDGET
@@ -1973,11 +1937,8 @@ def run_package_scoped_validator_agent_batch(
             "using the tool's declared bulk/list input. Do not loop one lookup per request "
             "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
         )
-    from src.lib.validation_review.validator_adapter import RECONSIDERATION_INPUT
-    reconsideration = RECONSIDERATION_INPUT.get()
-    if reconsideration is not None:
-        agent.instructions = (agent.instructions or "") + "\n\n" + reconsideration["protocol"]
-        provider_payload = {**provider_payload, "validation_reconsideration": reconsideration["context"]}
+    from src.lib.validation_review.validator_adapter import attach_reconsideration_context
+    provider_payload = attach_reconsideration_context(agent, provider_payload)
     validator_model = str(getattr(agent, "model", "") or "")
     provider_context_preflight(
         surface="validator",
@@ -2059,6 +2020,8 @@ def run_package_scoped_validator_agent_batch(
     try:
         from src.lib.validation_history.runtime import record_runner_receipt
         record_runner_receipt(agent, model=validator_model, input_payload=provider_payload)
+        from src.lib.validation_review.phase_observability import emit_phase
+        emit_phase(agent)
         result = run_agent_sync_with_owned_openai_resources(agent, **run_kwargs)
     except Exception as exc:
         from src.lib.validation_review.provider import ACTIVE_BUDGET
@@ -3481,7 +3444,5 @@ __all__ = [
     "run_package_scoped_validator_agent_batch_in_worker_thread",
     "run_package_scoped_validator_agent_in_worker_thread",
     "run_package_scoped_validator_agent",
-    "unresolved_validator_result_for_dispatch_problem",
     "validator_request_payload_for_agent",
-    "validator_result_from_agent_output",
 ]

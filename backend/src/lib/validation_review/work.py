@@ -16,7 +16,9 @@ from src.models.sql.validation_review import ValidationReviewWork as Work
 from .admission import ReviewStopped, lock_episode, now, reserve_in_transaction
 
 
-def enqueue_in_transaction(db, scope, episode_id, *, operation_id, payload, charges):
+def enqueue_in_transaction(db, scope, episode_id, *, operation_id, payload, charges, kind="validator"):
+    if kind not in {"validator", "extraction_followup"}:
+        raise ValueError("Unknown admitted work kind")
     episode, _ = lock_episode(db, scope, episode_id)
     payload = store.canonical(payload)[1]
     existing = db.scalar(
@@ -25,7 +27,7 @@ def enqueue_in_transaction(db, scope, episode_id, *, operation_id, payload, char
         )
     )
     if existing is not None:
-        if existing.payload != payload:
+        if existing.payload != payload or existing.kind != kind:
             raise store.HistoryConflict("Work operation identity conflict")
         return existing.id
     reservation = reserve_in_transaction(
@@ -43,6 +45,7 @@ def enqueue_in_transaction(db, scope, episode_id, *, operation_id, payload, char
         operation_id=operation_id,
         payload=payload,
         state="queued",
+        kind=kind,
     )
     db.add(row)
     append_fact(
@@ -180,6 +183,11 @@ def finish(scope, work_id, lease_token, *, outcome):
 
 
 def _uncertainty(db, episode, row, reason):
+    if row.kind == "extraction_followup":
+        append_fact(db, episode.artifact_id, operation_id="followup-uncertain:" + row.id,
+            kind="extraction_followup_uncertainty", parent_id=row.payload["request_ref"]["fact_id"],
+            body={"work_id": row.id, "reason": reason, "lease_token": row.lease_token})
+        return
     for attempt_id in row.payload["invocation"]["attempt_ids"]:
         append_fact(
             db,

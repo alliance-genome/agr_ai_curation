@@ -77,6 +77,8 @@ class FrozenValidationInput(HistoryContract):
     dispatch_wave: StrictInt | None = Field(default=None, ge=0)
     review_episode_id: StrictStr | None = None
     available_prior_completions: list[StrictStr] = Field(default_factory=list)
+    source_input_ref: dict[StrictStr, StrictStr] | None = None
+    source_provenance: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def complete_partition(self):

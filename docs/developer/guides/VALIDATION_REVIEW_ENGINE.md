@@ -1,9 +1,9 @@
 # Shared validation review engine
 
-ALL-1442 supplies the shared engine on the unreleased validation-review integration
-branch. It does not activate review in chat, flows, batch execution or the curator
-UI. ALL-1443/1444/1445 own those adapters. Production activation requires the
-representative calibration and cost-policy approval in ALL-1446.
+The unreleased validation-review integration branch contains the shared engine
+(ALL-1442), chat adapter (ALL-1443), and configured flow/batch adapter with targeted
+extractor follow-up (ALL-1444). ALL-1445 owns the curator UI integration. Production
+activation requires representative calibration and cost-policy approval in ALL-1446.
 
 ## Runtime contract
 
@@ -178,12 +178,13 @@ curation bootstrap.
 After initial answers, the actual supervisor enters a bounded continuation with
 its existing model, settings and policy. Direct/preferred/custom extraction resolves
 the requested supervisor settings for this phase. The runtime replaces its tool
-surface with review/history operations and document-scoped read-only tools, and
-removes handoffs. No generic agent dispatch, extraction, workflow edits or
-model-selected validator replacement is available. A reconsideration uses the
+surface with review/history operations and removes handoffs and direct paper
+readers. No generic agent dispatch, full extraction restart, workflow edits or
+model-selected validator replacement is available. The bound follow-up tool may
+invoke only the original configured extractor for an existing entry. A reconsideration uses the
 saved binding and rechecks authorization/configuration before provider submission.
 Validators retain supplied-context-only tools; they never inherit paper readers.
-The supervisor reports a need for new extraction or workflow changes to the curator.
+The supervisor delegates paper investigation to that extractor; workflow changes still require curator action.
 
 Dependent initial validation can advance only after its configured prerequisites
 have explicit current selections. Selector callbacks run without provider calls
@@ -243,7 +244,7 @@ The D provider boundary still applies: hard review admission currently supports
 OpenAI Responses with SDK HTTP retries disabled. Unsupported providers are not
 silently switched and cannot receive unmetered review calls; their results remain
 pending with an operational refusal in the review history. This is a release
-constraint, not authorization to weaken admission or activate flows/benchmarks.
+constraint, not authorization to weaken admission or deploy the integration branch.
 
 The review supervisor's explanation and expected stop reason are append-only
 history facts, keyed by result, episode, actor and durable chat turn. Direct
@@ -260,3 +261,85 @@ saved-review presentation can show the latest notes alongside saved selections.
 Browser-cache restoration also labels readiness as historical. A request-local
 Stop flag survives SDK tool-task cancellation even when the SDK consumes the
 cancellation exception; the outer chat wrapper still reports interruption.
+
+
+## Targeted extractor follow-up (ALL-1444)
+
+The supervisor owns scientific decisions and the large-scale review. It cannot
+read/search the paper itself. It can ask the original configured extractor to
+investigate existing entries with specialized instructions. The default
+`VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY=2` means the original extraction
+plus one targeted follow-up, not two retries. Multi-entry calls charge each named
+entry. Reconnects, episodes and provider recovery do not replenish that entitlement.
+Validation remains two total scientific attempts per target/binding lineage,
+subject to the same shared 16 document/64 batch extra-attempt pools.
+
+The actual specialist input includes original values/evidence, current selected
+values, exact prior requests and answers, caveats, supervisor decisions/reasons,
+new instructions and attempt state. A scoped history reader supplies exact paged
+bodies when needed. Validators retain supplied-context-only tools. Follow-up
+extractors retain only their configured paper tools and that history reader;
+full builders, finalizers and arbitrary agent dispatch are unavailable. Follow-up
+uses the existing reviewer token pool, while its child budget does not consume
+reviewer-turn counts. Existing deadlines and saved extractor max-turn settings apply.
+Original evidence stays read-only in supplied history. The follow-up workspace
+contains only newly recorded evidence, collected from verified paper-tool outputs
+before immutable contributions are retained. Both specialist phases log their actual
+prompt/tool configuration and bind an application-owned prompt manifest for TraceReview.
+
+Contributions are immutable proposals. The supervisor explicitly selects fields
+and evidence before they affect current values. Collections require explicit
+retain/revise/merge/split/add/retire relationships from the extractor. The runtime
+checks identity coverage and ancestry, never infers scientific identity from text
+or array positions. Nested split collections retain predecessor ancestry. A retained
+or revised child moving under a new immutable parent receives a successor identity;
+its original identity and consumed validation attempts remain in that ancestry. Original
+items and earlier validator answers remain auditable; retired items are not deleted.
+Affected validator inputs receive new version pins; unchanged siblings remain current.
+Curator edits have authority and cannot be silently overwritten by source selection.
+
+Selected-source assessment uses the same saved binding and attempt ledger.
+Merge/split successors inherit predecessor attempt depth. Episode retry pools can
+use the existing document allowance, but every charge also reaches the unchanged
+parent pool. A source revision never grants a fresh document/batch quota.
+A no-new-information result may remain unresolved without a redundant validator
+call. Assessment completion and submission readiness remain separate facts.
+
+## Configured flows, batch and frozen benchmarks (ALL-1444)
+
+A flow extraction step claims a durable owner/document/session/run/node fence
+before invoking its extractor. Inline capture saves one FLOW result and starts the
+shared validator pipeline once. Automatic, opted-out, replacement, supplemental
+and profile choices compile from the saved flow into a binding allowlist. Custom
+validators keep their saved revision/receipt. The review supervisor cannot dispatch
+agents outside that configured set. Profile mappings must remain exactly pinned.
+
+The step stays open until recorded selections make the current episode ready.
+The next configured step, formatter and curation handoff cannot advance on prose.
+Repeated calls and recovery do not rerun initial extraction or validation. An
+interrupted/pending step keeps its source/episode references available for inspection.
+The flow emits distinct review_pending, review_exhausted or interrupted terminal
+outcomes without claiming completed output. Batch stores these per document and
+counts them separately from successful and failed documents. Shared batch admission
+credits each newly discovered immutable artifact once; shared retry pools stay fixed.
+
+Frozen supervisors pin review protocols, actual tool schemas, limits and scientific
+policy layers as `supervisor-review/v2`. Old or incompatible snapshots require an
+explicit repin; they cannot silently adopt live review settings. No paid provider
+replay is part of the focused regression suite.
+
+### Cutover and diagnostic evidence
+
+Apply migrations through `c1d5e6f7a8b9` with review workers drained: targeted work
+kind/policy, immutable flow-step fence, batch outcome columns/enums, and the
+lineage-aware episode pool. Existing charges, originals and parent limits remain
+intact. These migrations are forward-only; do not delete review history to recover.
+This integration branch is not a deployment or production release.
+
+TraceReview's committed `validation_review.*` facts retain specialist context,
+request/contribution/source-selection references, decisions and work outcomes.
+Use their artifact/fact IDs and SHA to retrieve exact history instead of interpreting
+a truncated preview. Unexpected operational failures have one sanitized Sentry
+owner; scientific uncertainty, no-new-information, and expected budget stops do
+not create failure alerts. Source text and raw provider exceptions must not be
+added to Sentry messages.

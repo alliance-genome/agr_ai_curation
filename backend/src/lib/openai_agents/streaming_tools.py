@@ -3775,6 +3775,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
     execution_receipt: Optional[Mapping[str, Any]] = None,
     source_metadata: Optional[Mapping[str, Any]] = None,
     builder_finalization: Any = None,
+    source_agent: Any = None,
+    source_max_turns: int | None = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
 
@@ -3974,12 +3976,17 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 # capture/planning/persistence; readers use the envelope field.
                 envelope.specialist_explanation = explanation
                 source_payload["specialist_explanation"] = explanation
+        extractor_contract = None
+        if source_agent is not None and source_max_turns is not None:
+            from src.lib.validation_review.extractor_phase import contract as extractor_contract_for
+            extractor_contract = extractor_contract_for(source_agent, max_turns=source_max_turns)
         envelope = await asyncio.to_thread(
             capture_extraction,
             scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, history_scope_id),
             producer_id=producer_id,
             typed=source_payload, envelope=envelope,
-            provenance={"agent_key": agent_key, "execution_receipt": execution_receipt},
+            provenance={"agent_key": agent_key, "execution_receipt": execution_receipt,
+                        "extractor_contract": extractor_contract},
         )
 
         if chat_review is not None:
@@ -3991,7 +3998,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     trace_id=get_current_trace_id(), builder_finalization=builder_finalization,
                     source_metadata={**dict(source_metadata or {}), "specialist_name": specialist_name,
                                      "domain_pack_id": envelope.domain_pack_id},
-                    event_emitter=_emit_validator_dispatch_event)
+                    event_emitter=_emit_validator_dispatch_event, source_agent=source_agent)
             finally:
                 add_specialist_event({"type": "TOOL_COMPLETE",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -6389,6 +6396,8 @@ async def run_specialist_with_events(
                 final_output,
                 history_scope_id=builder_workspace.run_id,
                 producer_id=builder_workspace.builder_invocation_id,
+                source_agent=agent,
+                source_max_turns=max_turns,
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
@@ -6455,6 +6464,8 @@ async def run_specialist_with_events(
                 json.dumps(builder_finalization.payload),
                 history_scope_id=builder_workspace.run_id,
                 producer_id=builder_workspace.builder_invocation_id,
+                source_agent=agent,
+                source_max_turns=max_turns,
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,

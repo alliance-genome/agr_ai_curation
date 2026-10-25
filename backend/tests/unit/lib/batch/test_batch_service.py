@@ -171,6 +171,7 @@ class TestBatchServiceMocked:
         mock_batch.status = BatchStatus.RUNNING
         batch_id = uuid4()
         mock_db.execute.return_value.scalar_one_or_none.return_value = batch_id
+        mock_db.execute.return_value.all.return_value = []
         mock_db.scalars.return_value.first.return_value = mock_batch
 
         result = service.cancel_batch(batch_id, user_id=1)
@@ -183,11 +184,17 @@ class TestBatchServiceMocked:
         mock_db = Mock()
         service = BatchService(mock_db)
         mock_batch = Mock()
-        mock_db.execute.return_value.one.return_value = (6, 3, 2)
+        mock_db.execute.return_value.all.return_value = [
+            (BatchDocumentStatus.COMPLETED, 3), (BatchDocumentStatus.FAILED, 2),
+            (BatchDocumentStatus.REVIEW_PENDING, 1), (BatchDocumentStatus.REVIEW_EXHAUSTED, 1),
+            (BatchDocumentStatus.INTERRUPTED, 1)]
 
         service.recompute_batch_counters(mock_batch)
 
-        assert mock_batch.total_documents == 6
+        assert mock_batch.total_documents == 8
+        assert mock_batch.review_pending_documents == 1
+        assert mock_batch.review_exhausted_documents == 1
+        assert mock_batch.interrupted_documents == 1
         assert mock_batch.completed_documents == 3
         assert mock_batch.failed_documents == 2
         mock_db.flush.assert_called_once()
@@ -229,6 +236,7 @@ class TestBatchServiceMocked:
         mock_batch.status = BatchStatus.PENDING
         batch_id = uuid4()
         mock_db.execute.return_value.scalar_one_or_none.return_value = batch_id
+        mock_db.execute.return_value.all.return_value = []
         mock_db.scalars.return_value.first.return_value = mock_batch
 
         result = service.cancel_batch(batch_id, user_id=1)
@@ -418,6 +426,9 @@ class TestBatchToResponseMocked:
         mock_batch.total_documents = 2
         mock_batch.completed_documents = 2
         mock_batch.failed_documents = 0
+        mock_batch.review_pending_documents = 0
+        mock_batch.review_exhausted_documents = 0
+        mock_batch.interrupted_documents = 0
         mock_batch.created_at = datetime.now(timezone.utc)
         mock_batch.started_at = datetime.now(timezone.utc)
         mock_batch.completed_at = datetime.now(timezone.utc)
@@ -430,6 +441,7 @@ class TestBatchToResponseMocked:
         mock_doc1.status = BatchDocumentStatus.COMPLETED
         mock_doc1.result_files = []
         mock_doc1.error_message = None
+        mock_doc1.review_details = None
         mock_doc1.processing_time_ms = 1000
         mock_doc1.processed_at = datetime.now(timezone.utc)
         mock_doc1.review_session_ids = ["session-gene"]
@@ -479,6 +491,9 @@ class TestBatchToResponseMocked:
         mock_batch.total_documents = 1
         mock_batch.completed_documents = 0
         mock_batch.failed_documents = 0
+        mock_batch.review_pending_documents = 0
+        mock_batch.review_exhausted_documents = 0
+        mock_batch.interrupted_documents = 0
         mock_batch.created_at = datetime.now(timezone.utc)
         mock_batch.started_at = None
         mock_batch.completed_at = None
@@ -525,6 +540,9 @@ class TestBatchToResponseMocked:
         mock_batch.total_documents = 1
         mock_batch.completed_documents = 1
         mock_batch.failed_documents = 0
+        mock_batch.review_pending_documents = 0
+        mock_batch.review_exhausted_documents = 0
+        mock_batch.interrupted_documents = 0
         mock_batch.created_at = datetime.now(timezone.utc)
         mock_batch.started_at = datetime.now(timezone.utc)
         mock_batch.completed_at = datetime.now(timezone.utc)
@@ -536,6 +554,7 @@ class TestBatchToResponseMocked:
         mock_doc.status = BatchDocumentStatus.COMPLETED
         mock_doc.result_files = []
         mock_doc.error_message = None
+        mock_doc.review_details = None
         mock_doc.processing_time_ms = 500
         mock_doc.processed_at = datetime.now(timezone.utc)
         mock_doc.review_session_ids = None

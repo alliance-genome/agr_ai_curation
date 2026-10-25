@@ -47,7 +47,7 @@ MODE_EAGER_PROVIDER_UNSUPPORTED = "eager_provider_unsupported"
 TERMINAL_TOOL_PREFIX = "finalize_"
 # Validators and supervisors keep every tool visible (ALL-1280 decision);
 # startup validation rejects a deferred policy for them.
-NEVER_DEFERRED_RUNTIMES = frozenset({"validator", "chat_supervisor", "flow_supervisor"})
+NEVER_DEFERRED_RUNTIMES = frozenset({"validator", "chat_supervisor", "flow_supervisor", "extractor_followup"})
 NEVER_DEFERRED_AGENT_CATEGORIES = frozenset({"Validation", "Routing"})
 
 NamespaceResolver = Callable[[str], "tuple[str, str] | None"]

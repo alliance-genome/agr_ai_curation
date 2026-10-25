@@ -32,7 +32,8 @@ from src.lib.domain_packs.validator_dispatch import (
     run_package_scoped_validator_agent_batch,
     run_package_scoped_validator_agent,
     validator_request_payload_for_agent,
-    validator_result_from_agent_output,
+    _validated_result_from_agent_output,
+    _finalize_validator_result,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.domain_validator import (
@@ -910,55 +911,6 @@ def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, stat
     calls.clear()
     dispatch_active_validator_bindings(_envelope(), pack, runner=runner)
     assert set(calls) == {"fixture.identifier_lookup", "fixture.symbol_lookup"}
-
-
-@pytest.mark.parametrize("custom_fails", [False, True])
-def test_extractor_to_flow_runs_custom_once_without_standard_fallback(tmp_path, monkeypatch, custom_fails):
-    from src.lib.flows import executor
-    from src.lib.domain_packs.flow_validator_selection import (
-        set_flow_validator_selections, reset_flow_validator_selections,
-    )
-    from src.lib.domain_packs.materialization import materialize_validator_results_into_envelope
-    pack = _loaded_pack(tmp_path)
-    groups = [{"group_id": "custom", "binding_id": "fixture.identifier_lookup",
-               "state": "replaced", "validator_node_id": "custom-node"}]
-    calls = []
-
-    def standard(*args, **kwargs):
-        calls.append("standard")
-        raise AssertionError("standard must not run")
-
-    async def custom(request, **kwargs):
-        calls.append("custom")
-        assert request.validator_agent.agent_id == "custom-agent"
-        if custom_fails:
-            raise RuntimeError("custom source failed")
-        return DomainValidatorResultBase.model_validate(_result_payload(request))
-
-    monkeypatch.setattr(executor, "_run_custom_flow_validator_agent", custom)
-    token = set_flow_validator_selections(groups)
-    try:
-        upstream = dispatch_active_validator_bindings(_envelope(), pack, runner=standard)
-    finally:
-        reset_flow_validator_selections(token)
-    assert upstream.validator_agent_run_count == 0
-    flow = SimpleNamespace(flow_definition={"nodes": [{"id": "custom-node", "data": {"agent_id": "custom-agent"}}]})
-    units, findings, audit = asyncio.run(executor._collect_flow_validator_materialization_inputs(
-        source_envelope=upstream.envelope, source_envelope_revision=1,
-        registry=upstream.registry, groups=groups, flow=flow, agent_context={},
-    ))
-    assert calls == ["custom"]
-    assert not findings
-    assert len(units) == 1
-    assert audit[-1]["validator_agent"]["agent_id"] == "custom-agent"
-    assert audit[-1]["status"] == ("unresolved" if custom_fails else "resolved")
-    materialized = materialize_validator_results_into_envelope(
-        upstream.envelope, pack.metadata, units, actor_id="flow", source_envelope_revision=1,
-    )
-    results = [f.details["validation_result"] for f in materialized.envelope.validation_findings
-               if "validation_result" in f.details]
-    assert results
-    assert all(r["validator_agent"]["agent_id"] == "custom-agent" for r in results)
 
 
 def test_group_scope_normalizes_and_matching_authenticated_group_dispatches(
@@ -2048,10 +2000,10 @@ def test_active_package_validator_envelopes_project_across_dispatch_and_finaliza
     ]
 
     for concrete_result, package_field in package_results:
-        result = validator_result_from_agent_output(
+        result = _finalize_validator_result(_validated_result_from_agent_output(
             SimpleNamespace(final_output=concrete_result),
             request=request,
-        )
+        ), request=request)
         feedback = _validator_result_finalization_feedback(
             concrete_result,
             request=request,
@@ -2076,7 +2028,7 @@ def test_embedded_validator_result_is_rejected_by_dispatch():
         result=DomainValidatorResultBase.model_validate(_result_payload(request))
     )
 
-    result = validator_result_from_agent_output(wrapped_result, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(wrapped_result, request=request), request=request)
 
     assert result.status == "unresolved"
     assert result.lookup_attempts[0].method == "invalid_schema"
@@ -2101,7 +2053,7 @@ def test_validator_result_identity_mismatch_becomes_invalid_schema_result():
         }
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "unresolved"
     assert result.request_id == request.request_id
@@ -2139,7 +2091,7 @@ def test_validator_result_allows_target_input_value_context_drift():
         "Molar abundance was 1.54 \u0000b1 0.34 fmole/eye."
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.target == request.target
@@ -2341,7 +2293,7 @@ def test_resolved_array_validator_result_requires_per_item_values():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.resolved_values["terms"] == [
@@ -2368,7 +2320,7 @@ def test_resolved_array_validator_result_rejects_invalid_item_projection(
         resolved_values={"terms": resolved_terms},
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert not result.is_complete
@@ -2398,7 +2350,7 @@ def test_resolved_array_validator_result_accepts_allowed_term_curies():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.missing_expected_fields == []
@@ -2453,7 +2405,7 @@ def test_resolved_array_validator_result_preserves_out_of_allowlist_judgment():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.missing_expected_fields == []
@@ -2480,7 +2432,7 @@ def test_resolved_array_validator_result_preserves_label_judgment():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.missing_expected_fields == []
@@ -2510,7 +2462,7 @@ def test_unresolved_array_validator_outcomes_remain_field_addressed(outcome: str
         "outcome": outcome,
     }
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "unresolved"
     assert result.target.field_path == (
@@ -2923,7 +2875,7 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
             max_tool_calls=4,
         )),
     )
-    result = validator_result_from_agent_output(raw_output, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(raw_output, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.resolved_values["identifier"] == "AGR:0001"
@@ -3258,8 +3210,6 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     assert payload["requests"][0]["evidence"] == request.evidence
     assert captured["kwargs"]["max_turns"] == 6
     assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
-
-
 
 
 def test_package_scoped_validator_batch_agent_never_offers_paper_tools(
@@ -3928,8 +3878,6 @@ def test_profile_finalization_instructions_scope_package_override_to_requests(ba
     assert "must remain unresolved" in agent.instructions
 
 
-
-
 @pytest.mark.parametrize("curie", ["UBERON:0000068", "UBERON:0000092"])
 def test_allowed_term_guidance_does_not_override_per_element_judgment(curie):
     base_request = _array_terms_validation_request()
@@ -3938,7 +3886,7 @@ def test_allowed_term_guidance_does_not_override_per_element_judgment(curie):
         "expected_result_fields": {"curie": "stage_uberon_slim_terms[1].curie", "name": "stage_uberon_slim_terms[1].name"},
     })
     payload = _result_payload(request, resolved_values={"curie": curie, "name": "embryo stage"})
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
     assert result.status == "resolved"
     assert result.resolved_values == payload["resolved_values"]
     assert result.explanation == payload["explanation"]
@@ -4121,7 +4069,7 @@ def test_validator_correction_preserves_judgment_until_complete(monkeypatch, bat
             [result] = _validated_results_from_agent_batch_output(raw, jobs=[job])
         else:
             raw = run_package_scoped_validator_agent(request, binding=binding)
-            result = validator_result_from_agent_output(raw, request=request)
+            result = _finalize_validator_result(_validated_result_from_agent_output(raw, request=request), request=request)
     _assert_recovery_reporting(
         recovery_reports, stages, ending=ending, request=request,
         phase="batch" if batch else "single", request_count=1,

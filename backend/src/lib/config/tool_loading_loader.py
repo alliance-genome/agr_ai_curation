@@ -38,6 +38,7 @@ TOOL_LOADING_RUNTIMES = (
     "flow_supervisor",
     "validation_reviewer",
     "extractor",
+    "extractor_followup",
     "validator",
     "formatter",
     "specialist",

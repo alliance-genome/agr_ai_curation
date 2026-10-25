@@ -54,7 +54,7 @@ def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_t
     apply_tool_surface(supervisor, runtime="chat_supervisor")
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.resolve_tools",
-        lambda *args: [read_section],
+        lambda *args: pytest.fail("Review supervisor must not resolve paper readers"),
     )
     configurations = []
     monkeypatch.setattr(
@@ -94,7 +94,8 @@ def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_t
         and REVIEW_PROTOCOL.strip() in phase.instructions
     )
     names = {tool.name for tool in phase.tools}
-    assert "read_section" in names and "record_validation_review" in names
+    assert "record_validation_review" in names
+    assert not names & {"search_document", "read_section", "read_subsection", "read_chunk"}
     assert "ask_unconfigured_agent" not in names
     assert {tool.name for tool in supervisor.tools} == {"ask_unconfigured_agent"}
 

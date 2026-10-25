@@ -28,6 +28,9 @@ class BatchDocumentStatus(str, enum.Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    REVIEW_PENDING = "review_pending"
+    REVIEW_EXHAUSTED = "review_exhausted"
+    INTERRUPTED = "interrupted"
 
 
 class Batch(Base):
@@ -56,6 +59,9 @@ class Batch(Base):
     total_documents: Mapped[int] = mapped_column(Integer, nullable=False)
     completed_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    review_pending_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    review_exhausted_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    interrupted_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     active_group_ids: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,
@@ -119,6 +125,7 @@ class BatchDocument(Base):
     # Durable formatter-branch outcomes, including missing branches and reasons.
     output_branches: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     review_session_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    review_details: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     processing_time_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

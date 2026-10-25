@@ -7,6 +7,9 @@ export interface BatchSummary {
   total_documents: number;
   completed_documents: number;
   failed_documents: number;
+  review_pending_documents: number;
+  review_exhausted_documents: number;
+  interrupted_documents: number;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;

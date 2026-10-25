@@ -13,12 +13,20 @@ from .tools import create_tools
 install_model_request_measurement()
 
 
+def _require_review_tools(agent):
+    """Check the authorized source tools before any deferred-surface compilation."""
+    from src.lib.packages.tool_roles import require_supervisor_review_tool_boundary
+
+    surface = getattr(agent, "tool_surface", None)
+    tools = surface.source_tools if surface is not None and agent.tools is surface.tools else agent.tools
+    require_supervisor_review_tool_boundary(tool.name for tool in tools)
+
+
 def create_reviewer(
     context,
     *,
     checkpoint_provider,
     authenticated_groups,
-    reading_tools=(),
     refresh_inputs=None,
 ):
     from src.lib.agent_studio.catalog_service import get_agent_by_id
@@ -36,10 +44,11 @@ def create_reviewer(
     )
     agent.tools = create_tools(
         context, checkpoint_provider=checkpoint_provider, refresh_inputs=refresh_inputs
-    ) + list(reading_tools)
+    )
     agent.tool_surface_runtime = "validation_reviewer"
     identity = get_agent_cost_identity(agent)
     attach_agent_cost_identity(agent, {**identity, "agent_role": "supervisor"})
+    _require_review_tools(agent)
     apply_tool_surface(agent, runtime="validation_reviewer")
     return agent
 
@@ -48,7 +57,6 @@ def create_supervisor_phase(
     context, *, supervisor, checkpoint_provider, authenticated_groups, **callbacks
 ):
     """Same resolved supervisor identity/model/policy; a strictly smaller capability set."""
-    from src.lib.agent_studio.catalog_service import resolve_tools, ToolExecutionContext
     from src.lib.observability.cost_context import (
         get_agent_cost_identity,
         attach_agent_cost_identity,
@@ -75,9 +83,10 @@ def create_supervisor_phase(
             title="Supervisor validation review",
             content=REVIEW_PROTOCOL
             + "\n"
-            + "This phase only reviews the bound saved extraction. Use the listed review and document-reading tools. "
-            "Never extract, dispatch another agent, change a workflow, or create evidence. "
-            "Report extraction defects to the curator. Reconsideration uses only saved authorized validators.",
+            + "Review the bound saved extraction using saved evidence and history. "
+            "Delegate paper investigation through the authorized targeted-follow-up tool when available. "
+            "Never read the paper directly, dispatch arbitrary agents, change the workflow, or author evidence. "
+            "Only saved configured extractors and validators may perform the explicitly requested follow-up.",
             provenance="backend:validation_review",
             editable=False,
             locked=True,
@@ -85,20 +94,12 @@ def create_supervisor_phase(
         )
     )
     bundle = _bundle("supervisor", layers)
-    readers = resolve_tools(
-        ["search_document", "read_section", "read_subsection", "read_chunk"],
-        ToolExecutionContext(
-            document_id=context.history_scope.document_id,
-            user_id=context.history_scope.owner_id,
-        ),
-    )
     agent = supervisor.clone(
         name=supervisor.name + " Validation Review",
         instructions=bundle.render(),
         tools=create_tools(
             context, checkpoint_provider=checkpoint_provider, **callbacks
-        )
-        + readers,
+        ),
         handoffs=[],
         output_type=None,
     )
@@ -115,6 +116,7 @@ def create_supervisor_phase(
         layer_manifest=bundle.to_manifest(),
     )
     bind_prompt_run(agent, prompt_id)
+    _require_review_tools(agent)
     apply_tool_surface(agent, runtime="validation_reviewer")
     log_agent_config(
         agent_name=agent.name,
@@ -160,6 +162,7 @@ async def run(context, agent, *, input, run_config=None):
         with budget_scope(budget):
             from src.lib.openai_agents.tool_surface import apply_tool_surface
 
+            _require_review_tools(agent)
             apply_tool_surface(agent, runtime="validation_reviewer")
             from src.lib.openai_agents.runner import (
                 run_agent_with_owned_openai_resources,
@@ -199,26 +202,14 @@ async def run(context, agent, *, input, run_config=None):
 
 
 async def _stopped_response(context, exc):
-    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+    from .stops import stop_reason
 
     status = await asyncio.to_thread(
         admission.status, context.history_scope, context.episode_id
     )
     return {
         "state": "complete" if status["ready"] else "needs_curator_review",
-        "reason": (
-            exc.reason
-            if isinstance(exc, admission.ReviewStopped)
-            else (
-                "expired"
-                if isinstance(exc, asyncio.TimeoutError)
-                else "unsupported_exact_context_admission"
-                if isinstance(exc, ContextRecoveryError)
-                else "cancelled"
-                if isinstance(exc, asyncio.CancelledError)
-                else "reviewer_turns_exhausted"
-            )
-        ),
+        "reason": stop_reason(exc),
         "resource": (
             exc.resource if isinstance(exc, admission.ReviewStopped) else None
         ),

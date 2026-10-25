@@ -2345,6 +2345,10 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
 
         attach_benchmark_route(runtime_agent, benchmark_route_slot)
     runtime_agent.agent_key = str(db_agent.agent_key)
+    # Retain only reconstructible, non-credential constructor inputs. A later
+    # targeted review reauthorizes the saved agent and compares its full contract.
+    from src.lib.validation_review.extractor_phase import reconstruction_context
+    runtime_agent.review_reconstruction_context = reconstruction_context(runtime_kwargs)
     from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
     cost_identity = agent_identity(
         str(db_agent.agent_key), str(db_agent.name), getattr(db_agent, "category", None),

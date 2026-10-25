@@ -15,6 +15,7 @@ from src.lib.openai_agents.provider_usage import ProviderUsageRecord, emit_provi
 from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
 
 def test_flow_supervisor_applies_route_to_supervisor_and_specialists(monkeypatch):
+    monkeypatch.setattr("src.lib.prompts.assembly.build_agent_prompt_layers", lambda *a, **kw: SimpleNamespace(layers=[]))
     captured = {}
     flow = SimpleNamespace(id="flow-canary", name="Canary", flow_definition={"nodes": []})
 

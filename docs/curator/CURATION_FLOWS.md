@@ -26,10 +26,10 @@ your group, resolve that access issue before running the flow.
 
 ### Reading validation results
 
-An `already_checked` entry means the check ran earlier; it does not mean it
-passed. Objects with open validation findings are reported as `needs_review`,
-even when other fields resolved successfully. Review missing fields, unresolved
-references, and skipped checks before submission. Exporting a CSV does not make
+The supervisor reviews saved validation answers before the flow advances. A
+resolved field does not mean the entire extraction is ready: pending or exhausted
+review retains the saved results for inspection and stops downstream output.
+Review missing fields, unresolved references, and skipped checks before submission. Exporting a CSV does not make
 the results submission-ready.
 
 Choose **Help build a flow**, or describe your task:

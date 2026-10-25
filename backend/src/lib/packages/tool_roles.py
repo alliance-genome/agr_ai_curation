@@ -162,6 +162,16 @@ def require_validator_tool_boundary(tool_ids: Iterable[str], *, output_schema_ke
         raise ValidatorToolPolicyError(validator_tool_message(agent_label, forbidden))
 
 
+def require_supervisor_review_tool_boundary(tool_ids: Iterable[str]) -> None:
+    """Reviewers inspect saved evidence; paper investigation belongs to extractors."""
+    forbidden = set(tool_ids) & validator_forbidden_tool_names()
+    if forbidden:
+        raise ValueError(
+            "Supervisor review cannot directly read papers, stage extraction or manage evidence: "
+            + ", ".join(sorted(forbidden))
+        )
+
+
 def reset_cache() -> None:
     """Clear the registry-derived role caches (tests and package reloads)."""
 
@@ -186,6 +196,7 @@ __all__ = [
     "validator_tool_message",
     "ValidatorToolPolicyError",
     "require_validator_tool_boundary",
+    "require_supervisor_review_tool_boundary",
     "reset_cache",
     "tool_metadata_by_name",
 ]

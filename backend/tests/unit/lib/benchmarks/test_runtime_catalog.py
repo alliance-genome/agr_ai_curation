@@ -311,6 +311,8 @@ def test_preparation_freezes_only_selected_installed_targets(configured, monkeyp
     monkeypatch.setattr(flow_capture, "capture_recipe_flow", freeze)
     supervisor = supervisor_snapshot.FrozenFlowSupervisor(
         model="model-a", temperature=0.2, reasoning="high", parallel_tool_calls=False,
+        review_runtime_version="supervisor-review/v2",
+        review_runtime_contract=supervisor_snapshot.review_runtime_contract(), review_policy_layers=(),
         requires_document=True, available_tools=(), instructions="Original", instructions_with_document="Original doc",
     )
     monkeypatch.setattr(supervisor_snapshot, "capture_flow_supervisor", lambda *a: supervisor)

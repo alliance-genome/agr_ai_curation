@@ -50,6 +50,8 @@ def _build_batch_context() -> tuple[Any, Any, Any]:
 @pytest.fixture(autouse=True)
 def mocked_batch_persistence(monkeypatch):
     """Keep processor unit doubles focused on orchestration, not SQL shapes."""
+    monkeypatch.setattr("src.lib.validation_review.admission.create_scope", lambda *args, **kwargs: "shared-batch-review")
+
     def recompute(_service, batch):
         batch.completed_documents = sum(
             document.status == BatchDocumentStatus.COMPLETED for document in batch.documents
@@ -57,6 +59,11 @@ def mocked_batch_persistence(monkeypatch):
         batch.failed_documents = sum(
             document.status == BatchDocumentStatus.FAILED for document in batch.documents
         )
+
+        for status, name in ((BatchDocumentStatus.REVIEW_PENDING, "review_pending_documents"),
+                             (BatchDocumentStatus.REVIEW_EXHAUSTED, "review_exhausted_documents"),
+                             (BatchDocumentStatus.INTERRUPTED, "interrupted_documents")):
+            setattr(batch, name, sum(document.status == status for document in batch.documents))
 
     def claim(service, _batch_id, owner, _seconds):
         batch = service.db.batch
@@ -1244,3 +1251,25 @@ def test_batch_pdf_read_failure_marks_document_failed_and_publishes_safe_error(m
     assert errors
     assert errors[0]["details"]["error"] == processor._batch_failure_message(error)
     assert "PRIVATE" not in str(errors)
+
+
+@pytest.mark.parametrize('status', ['review_pending', 'review_exhausted', 'interrupted'])
+def test_review_stop_retains_source_without_success_or_error_alert(monkeypatch, status):
+    db = Mock()
+    batch, document, flow = _build_batch_context()
+    published = []
+    async def execute(**kwargs):
+        assert kwargs['review_parent_scope_id'] == 'shared-batch-review'
+        yield {'type': 'FLOW_FINISHED', 'data': {'status': status, 'review_reason': 'saved_review_stop',
+            'review_details': {'episode_id': 'episode', 'result_ref': 'saved-source'}}}
+    monkeypatch.setattr('src.lib.flows.executor.execute_flow', execute)
+    monkeypatch.setattr(processor, 'get_batch_broadcaster', lambda: SimpleNamespace(
+        publish_sync=lambda _, event: published.append(event)))
+    processor._process_single_document(db, batch, document, flow, 'auth-sub')
+    assert document.status.value == status
+    assert document.review_details['episode_id'] == 'episode'
+    assert document.review_details['result_ref'] == 'saved-source'
+    assert batch.completed_documents == 0 and batch.failed_documents == 0
+    assert getattr(batch, status + '_documents') == 1
+    assert document.output_status == 'none' and not document.result_files
+    assert not any(event['type'] in {'BATCH_DOCUMENT_ERROR', 'FLOW_ERROR', 'RUN_ERROR', 'FILE_READY'} for event in published)

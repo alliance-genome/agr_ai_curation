@@ -38,6 +38,9 @@ def _recoverable_tool(function):
                     "prerequisite_review_pending",
                     "non_validator_prerequisite",
                     "required_inputs_unavailable",
+                    "source_input_changed",
+                    "extraction_attempts_exhausted",
+                    "saved_extractor_contract_unavailable",
                 }
                 or (
                     exc.reason == "budget_exhausted"
@@ -69,7 +72,8 @@ def _recoverable_tool(function):
 
 
 def create_tools(context, *, checkpoint_provider, refresh_inputs=None,
-                 execute_work=None, advance_work=None, prepare_inputs=None):
+                 execute_work=None, advance_work=None, prepare_inputs=None,
+                 request_extraction=None, select_source=None, assess_source=None):
     """Context and checkpoint loader come from authenticated runtime, never JSON."""
 
     @function_tool(failure_error_function=None)
@@ -175,10 +179,82 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None,
             reads.status_reference, context.history_scope, context.episode_id
         )
 
-    return [
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def request_targeted_extraction(operation_id: str, parent_decision_id: str,
+                                           entry_ids: list[str], instructions: str) -> dict:
+        """Ask the saved extractor to investigate named existing entries in this paper.
+
+        First record the review decision motivating the investigation. Explain
+        what is missing or ambiguous and useful search guidance. Runtime supplies
+        originals, exact prior validator inputs/answers/caveats, your decision and
+        current attempt state automatically. The extractor can use only its saved
+        paper tools. Initial extraction plus one follow-up is the default ceiling;
+        changing operation IDs cannot reset it. A proposal is not an accepted
+        source or validation. Read it and separately select supported fields and
+        item relationships, or retain a truthful no-new-information assessment.
+        """
+        assert request_extraction is not None  # Tool is exposed only with its bound callback.
+        return await request_extraction(operation_id=operation_id, parent_decision_id=parent_decision_id,
+            entry_ids=entry_ids, instructions=instructions)
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def select_extraction_contribution(operation_id: str, contribution: EvidenceReference,
+            field_paths: list[str], evidence_ids: list[str], expected_source_sha: str, reason: str) -> dict:
+        """Approve exact proposed source fields/evidence and their item relationships.
+
+        Read the full contribution first. Decide whether each proposed correction,
+        merge, split, reorder, addition or retirement is scientifically justified.
+        field_paths select complete proposals including their explicit predecessor
+        mappings; the runtime never guesses identity from matching text or indices.
+        Include the evidence required by selected fields. expected_source_sha is
+        the current packet manifest's source_state_sha256. Originals stay in history;
+        only affected validator inputs become stale. This does not accept validation
+        or establish submission readiness. Curators do not manage item IDs.
+        """
+        assert select_source is not None  # Tool is exposed only with its bound callback.
+        return await select_source(operation_id=operation_id,
+            contribution_ref=contribution.model_dump(mode="json"), field_paths=field_paths,
+            evidence_ids=evidence_ids, expected_source_sha=expected_source_sha, reason=reason)
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def validate_selected_extraction_source(operation_id: str, selection_id: str,
+            target_ids: list[str], instructions: str) -> dict:
+        """Validate changed inputs from an explicitly approved extraction contribution.
+
+        Use the exact selection_id and affected binding target IDs returned by
+        select_extraction_contribution. Explain what the new source clarifies and
+        what the saved validator must reassess. Runtime automatically supplies the
+        original extraction, previous requests/answers, selected source and your
+        selection reason. Existing attempt limits still apply; selecting source
+        never resets them. Read the returned answer before separately accepting it.
+        Do not call this when the extractor found no new information or when no
+        binding input changed. Uncertainty alone does not require another attempt.
+        """
+        assert assess_source is not None  # Tool is exposed only with its bound callback.
+        return await assess_source(operation_id=operation_id, selection_id=selection_id,
+            target_ids=target_ids, instructions=instructions)
+
+    result = [
         get_validation_review_packet,
         read_validation_history,
         record_validation_review,
         request_validation_reconsideration,
         get_validation_review_status,
     ]
+    if all(callback is not None for callback in (request_extraction, select_source, assess_source)):
+        result.extend([request_targeted_extraction, select_extraction_contribution, validate_selected_extraction_source])
+    elif any(callback is not None for callback in (request_extraction, select_source, assess_source)):
+        raise ValueError("Targeted extraction, source selection and assessment must be wired together")
+    return result
+
+
+def runtime_tool_contract():
+    """Freeze the real reviewer tool schemas without invoking any tool or model."""
+    async def unavailable(**arguments):
+        raise RuntimeError("Contract inspection cannot execute work")
+    return [{"name": tool.name, "description": tool.description, "parameters": tool.params_json_schema}
+            for tool in create_tools(None, checkpoint_provider=lambda: None,
+                request_extraction=unavailable, select_source=unavailable, assess_source=unavailable)]

@@ -33,6 +33,46 @@ def start_episode(scope, artifact_id: str, *, episode: dict) -> str:
         return start_episode_in_transaction(db, scope, artifact_id, episode=episode)
 
 
+def effective_episode(db, episode):
+    """Approved source revisions may change coverage, never the episode/budget ID."""
+    body = deepcopy(store._content(db, episode))
+    extension = db.scalar(select(ValidationFact).where(
+        ValidationFact.artifact_id == episode.artifact_id,
+        ValidationFact.parent_id == episode.id,
+        ValidationFact.kind == "review_coverage_revision").order_by(ValidationFact.sequence.desc()).limit(1))
+    if extension is not None:
+        body["obligations"] = store._content(db, extension)["obligations"]
+    return body
+
+
+def revise_coverage_in_transaction(db, scope, artifact_id, *, episode_id, source_selection_id, obligations):
+    """Trusted binding resolver calls this inside source-selection publication."""
+    from src.schemas.validation_history import ReviewObligation
+    _lock_artifact(db, scope, artifact_id, write=True)
+    episode = store._fact(db, artifact_id, episode_id, kind="review_episode")
+    selection = store._fact(db, artifact_id, source_selection_id, kind="extraction_source_selection")
+    current = effective_episode(db, episode)["obligations"]
+    proposed = [ReviewObligation.model_validate(item).model_dump(mode="json") for item in obligations]
+    if len({item["target_id"] for item in proposed}) != len(proposed):
+        raise store.HistoryConflict("Revised coverage repeats a target")
+    new_ids = {item["target_id"] for item in proposed}
+    for item in current:
+        if item["target_id"] not in new_ids:
+            try:
+                store._require_active_target(db, artifact_id, item["target_id"])
+            except store.HistoryConflict:
+                continue
+            raise store.HistoryConflict("Source revision cannot drop a live review obligation")
+    for item in proposed:
+        target = store._fact(db, artifact_id, item["target_id"], kind="target")
+        store._require_active_target(db, artifact_id, target.id)
+        if item["mode"] == "validation" and store._content(db, target).get("binding_id") != item["binding_id"]:
+            raise store.HistoryConflict("Revised obligation differs from its saved binding")
+    return store._append(db, artifact_id, operation_id="review-coverage:" + selection.id,
+        kind="review_coverage_revision", parent_id=episode.id,
+        body={"source_selection_id": selection.id, "obligations": proposed}).id
+
+
 def start_episode_in_transaction(db, scope, artifact_id, *, episode):
     body = ReviewEpisode.model_validate(episode).model_dump(mode="json")
     _lock_artifact(db, scope, artifact_id, write=True)
@@ -75,7 +115,7 @@ def decide_episode_in_transaction(
     _lock_artifact(db, scope, artifact_id, write=True)
     episode = store._fact(db, artifact_id, episode_id, kind="review_episode")
     obligations = {
-        item["target_id"]: item for item in store._content(db, episode)["obligations"]
+        item["target_id"]: item for item in effective_episode(db, episode)["obligations"]
     }
     for entry in entries:
         obligation = obligations.get(entry["target_id"])
@@ -190,14 +230,17 @@ def source_state_digest(db, artifact_id):
         states.append((tid, fact.body_sha, state["active"], state["lifecycle_generation"]))
     from .curator_authority import active_overlays
     overlays = sorted((fact.id, fact.body_sha) for fact, _ in active_overlays(db, artifact_id))
-    return store.canonical({"targets": sorted(states), "curator_values": overlays})[0]
+    from src.lib.validation_review.source_selection import selected_entries
+    contributions = sorted((fact.id, fact.body_sha) for fact, _ in selected_entries(db, artifact_id).values())
+    return store.canonical({"targets": sorted(states), "curator_values": overlays,
+                            "extractor_contributions": contributions})[0]
 
 
 def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
     """Resolve a consistent snapshot; no inference from caveats or confidence."""
     artifact = _lock_artifact(db, scope, artifact_id)
     episode = store._fact(db, artifact_id, episode_id, kind="review_episode")
-    episode_body = store._content(db, episode)
+    episode_body = effective_episode(db, episode)
     obligations = episode_body["obligations"]
     disposition_ids = set()
     for fact in db.scalars(select(ValidationFact).where(

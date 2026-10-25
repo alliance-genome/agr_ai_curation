@@ -7,6 +7,7 @@ from src.lib.openai_agents.config import get_validation_review_limits
 @dataclass(frozen=True)
 class ReviewLimits:
     attempts_per_target: int
+    extraction_attempts_per_entry: int
     extra_per_run: int
     extra_per_batch: int
     reviewer_turns: int
