@@ -27,6 +27,7 @@ from src.schemas.curation_workspace import CurationCandidateSource, CurationDraf
 from tests.unit.lib.domain_packs.test_profile_validation import example as example
 from .test_domain_envelope_persistence import (
     migrated_database as migrated_database, _create_review_session_for_action_log,
+    RETAINED_DOMAIN_OWNER,
 )
 
 
@@ -54,7 +55,7 @@ def manual_profile_record(migrated_database, example, monkeypatch, request):
         try:
             review = _create_review_session_for_action_log(db)
             document_id = review.document_id
-            review.created_by_id = "test_pdf_owner_domain_envelope"
+            review.created_by_id = RETAINED_DOMAIN_OWNER
             review.adapter_key = "generic"
             owner = db.get(PDFDocument, review.document_id).user_id
             db.commit()  # Source document/owner must be visible to independent capture transactions.
@@ -152,7 +153,7 @@ def _submit(db, candidate, *, request_id=None):
 
 def _history_context(candidate):
     return ValidatorRuntimeContext(document_id=str(candidate.session.document_id),
-        user_id="test_pdf_owner_domain_envelope", authenticated_groups=())
+        user_id=RETAINED_DOMAIN_OWNER, authenticated_groups=())
 
 
 def test_manual_capture_retry_after_checkpoint_rollback_and_draft_edit(manual_profile_record):
