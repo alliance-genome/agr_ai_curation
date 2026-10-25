@@ -126,6 +126,9 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # ALL-1446 verifies the installed GO pack's RGD policy, Alliance lookup
+    # requests, and group audit through real review/publication persistence.
+    Path("backend/tests/integration/persistence/test_go_reviewed_policy.py"),
     # Selected-value authority exercises installed group-aware profile receipts.
     Path("backend/tests/integration/persistence/test_curator_selected_authority.py"),
     # ALL-1367 reproduces saved-flow authorization with the shipped restricted

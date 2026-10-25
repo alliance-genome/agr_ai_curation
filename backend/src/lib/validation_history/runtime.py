@@ -870,6 +870,7 @@ def _check_collection_materialization(before, after):
     for key, path_key in (
         ("validator_resolved_value_materialization", "materialized_field_paths"),
         ("profile_validator_materialization", "field_paths"),
+        ("validator_unresolved_value_materialization", "field_paths"),
     ):
         prior_count = len(before.metadata.get(key, []))
         for event in after.metadata.get(key, [])[prior_count:]:

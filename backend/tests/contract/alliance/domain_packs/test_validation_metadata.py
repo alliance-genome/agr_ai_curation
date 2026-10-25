@@ -386,9 +386,11 @@ def test_source_mentions_prompt_and_tool_language_is_consistent():
             # The Sep 22 hotfix ontology prompt states the boundary once, with
             # the other request inputs, instead of the legacy paragraph.
             expected_context = (
-                "`source_mentions`, `evidence_quotes` and `evidence_summary`: paper context for "
+                "`source_mentions`, `evidence_quotes` and supplied `evidence`: paper context for "
                 "choosing variant searches and judging candidates, never a substitute for a lookup."
             )
+            assert "Each quote record keeps its evidence ID and location" in prompt_text
+            assert "conflicting quotes do not justify a forced resolution" in prompt_text
         assert expected_context in prompt_text
         assert "had access to the paper; you do not" not in prompt_text
         assert "paper; you do not" not in prompt_text

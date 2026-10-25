@@ -165,6 +165,7 @@ def seeded_review_sessions(client: TestClient, test_db):
     )
 
     now = datetime.now(timezone.utc)
+    inventory_tag = "inventory-fixture-" + uuid4().hex
     creator_auth_sub = "test_cw_creator"
     current_user_auth_sub = client.current_user_auth_sub
     other_user_auth_sub = client.other_user_auth_sub
@@ -312,7 +313,7 @@ def seeded_review_sessions(client: TestClient, test_db):
             created_by_id=creator_auth_sub,
             session_version=1,
             notes="Alpha notes",
-            tags=["priority"],
+            tags=["priority", inventory_tag],
             total_candidates=1,
             reviewed_candidates=0,
             pending_candidates=1,
@@ -335,7 +336,7 @@ def seeded_review_sessions(client: TestClient, test_db):
             created_by_id=creator_auth_sub,
             session_version=3,
             notes="Beta notes",
-            tags=["triage"],
+            tags=["triage", inventory_tag],
             total_candidates=1,
             reviewed_candidates=1,
             pending_candidates=0,
@@ -358,7 +359,7 @@ def seeded_review_sessions(client: TestClient, test_db):
             created_by_id=creator_auth_sub,
             session_version=2,
             notes="Gamma notes",
-            tags=["complete"],
+            tags=["complete", inventory_tag],
             total_candidates=1,
             reviewed_candidates=1,
             pending_candidates=0,
@@ -688,6 +689,7 @@ def seeded_review_sessions(client: TestClient, test_db):
     test_db.commit()
 
     yield {
+        "inventory_tag": inventory_tag,
         "session_alpha_id": str(session_alpha_id),
         "session_beta_id": str(session_beta_id),
         "session_gamma_id": str(session_gamma_id),
@@ -788,9 +790,11 @@ def test_list_review_sessions_defaults_to_my_inventory_and_show_all_expands(
     client: TestClient,
     seeded_review_sessions,
 ):
+    # Scope the exact inventory while retaining other tests' immutable history.
     default_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "tag": seeded_review_sessions["inventory_tag"],
             "sort_by": "prepared_at",
             "sort_direction": "asc",
         },
@@ -808,6 +812,7 @@ def test_list_review_sessions_defaults_to_my_inventory_and_show_all_expands(
     show_all_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "tag": seeded_review_sessions["inventory_tag"],
             "inventory_scope": "show_all",
             "sort_by": "prepared_at",
             "sort_direction": "asc",
@@ -983,6 +988,7 @@ def test_list_review_sessions_supports_adapter_sorting(
     ascending_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "tag": seeded_review_sessions["inventory_tag"],
             "inventory_scope": "show_all",
             "sort_by": "adapter",
             "sort_direction": "asc",
@@ -998,6 +1004,7 @@ def test_list_review_sessions_supports_adapter_sorting(
     descending_response = client.get(
         "/api/curation-workspace/sessions",
         params={
+            "tag": seeded_review_sessions["inventory_tag"],
             "inventory_scope": "show_all",
             "sort_by": "adapter",
             "sort_direction": "desc",
@@ -1343,7 +1350,8 @@ def test_get_review_session_stats_returns_aggregate_counts(
     client: TestClient,
     seeded_review_sessions,
 ):
-    response = client.get("/api/curation-workspace/sessions/stats")
+    response = client.get("/api/curation-workspace/sessions/stats",
+        params={"tag": seeded_review_sessions["inventory_tag"]})
     assert response.status_code == 200, response.text
     payload = response.json()
     stats = payload["stats"]
@@ -1363,7 +1371,7 @@ def test_get_review_session_stats_returns_aggregate_counts(
 
     show_all_response = client.get(
         "/api/curation-workspace/sessions/stats",
-        params={"inventory_scope": "show_all"},
+        params={"inventory_scope": "show_all", "tag": seeded_review_sessions["inventory_tag"]},
     )
     assert show_all_response.status_code == 200, show_all_response.text
     assert show_all_response.json()["stats"]["total_sessions"] == 3

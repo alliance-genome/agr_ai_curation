@@ -86,6 +86,7 @@ from src.lib.domain_packs.resolvable_values import (
     VALIDATOR_CURATOR_MESSAGE_KEY,
     VALIDATOR_EXPLANATION_KEY,
     VALIDATOR_MATERIALIZATION_METADATA_KEY,
+    VALIDATOR_UNRESOLVED_MATERIALIZATION_METADATA_KEY,
     copy_resolution,
     declared_resolvable_fields,
     declared_spec_for,
@@ -959,6 +960,7 @@ def _patch_target_object_from_resolved_values(
         return (
             _with_unresolved_values(
                 envelope, item, target, declared_fields, outcome,
+                source_envelope_revision=source_envelope_revision,
                 resolvable_fields=resolvable_fields,
             ),
             None,
@@ -973,6 +975,7 @@ def _patch_target_object_from_resolved_values(
                 target,
                 declared_fields,
                 OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                source_envelope_revision=source_envelope_revision,
                 resolvable_fields=resolvable_fields,
             ),
             None,
@@ -1046,6 +1049,11 @@ def _patch_target_object_from_resolved_values(
             )
             if container == before:
                 continue
+            target = _with_unresolved_write_event(
+                target, item, [path for path, _ in writes],
+                OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+                source_envelope_revision=source_envelope_revision,
+            )
             for materialized_field_path, _ in writes:
                 _propagate_materialized_resolution_state(
                     payload, materialized_field_path, declared_fields=declared_fields,
@@ -1222,6 +1230,12 @@ def _patch_target_object_from_field_resolutions(
         )
         if container == before:
             continue
+        target = _with_unresolved_write_event(
+            target, item, [path for _, path in fields],
+            resolution.lookup_outcome if resolution.status == "unresolved"
+            else OUTCOME_MISSING_EXPECTED_RESULT_FIELD,
+            source_envelope_revision=source_envelope_revision,
+        )
         for _result_field, materialized_field_path in fields:
             _propagate_materialized_resolution_state(
                 payload, materialized_field_path, declared_fields=declared_fields,
@@ -1834,6 +1848,7 @@ def _with_unresolved_values(
     declared_fields: Mapping[str, DomainPackFieldDefinition],
     outcome: str,
     *,
+    source_envelope_revision: int | None,
     resolvable_fields: Mapping[str, ResolvableSpec] | None = None,
 ) -> DomainEnvelope:
     """Record why the resolvable values a binding writes stay unresolved.
@@ -1888,7 +1903,41 @@ def _with_unresolved_values(
             )
     if payload == target.payload:
         return envelope
+    target = _with_unresolved_write_event(
+        target, item,
+        [path for container_path, path in written if changed[container_path]],
+        outcome, source_envelope_revision=source_envelope_revision,
+    )
     return _with_object_payload(envelope, target, payload)
+
+
+def _with_unresolved_write_event(
+    target: CuratableObjectEnvelope,
+    item: ValidatorResultMaterializationInput,
+    field_paths: Sequence[str],
+    outcome: str,
+    *,
+    source_envelope_revision: int | None,
+) -> CuratableObjectEnvelope:
+    """Declare unresolved descendant writes without certifying their values.
+
+    Callers supply paths from the binding's declared resolvable destinations,
+    and only call after a value actually changes. Resolved-value audit readers
+    deliberately do not consume this separate event stream.
+    """
+    metadata = dict(target.metadata)
+    metadata[VALIDATOR_UNRESOLVED_MATERIALIZATION_METADATA_KEY] = [
+        *metadata.get(VALIDATOR_UNRESOLVED_MATERIALIZATION_METADATA_KEY, []),
+        {
+            "request_id": item.result.request_id,
+            "validator_binding_id": item.result.validator_binding_id,
+            "lookup_outcome": outcome,
+            "field_paths": list(dict.fromkeys(field_paths)),
+            **({"source_envelope_revision": source_envelope_revision}
+               if source_envelope_revision is not None else {}),
+        },
+    ]
+    return target.model_copy(update={"metadata": metadata})
 
 
 def _with_object_payload(

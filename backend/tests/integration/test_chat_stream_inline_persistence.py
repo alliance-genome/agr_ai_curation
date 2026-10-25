@@ -103,8 +103,8 @@ def _configure_stream_mocks(
 
 
 def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
-    # Canonical persisted envelopes expose post-validation objects here; staged
-    # extractor drafts live in curatable_objects before validation.
+    # This fixture supplies a canonical source, not an accepted review result.
+    # Source capture below must preserve these values without inventing review.
     extracted_objects = [
         {
             "object_type": "gene_mention_evidence",
@@ -138,8 +138,20 @@ def _canonical_gene_envelope(*, object_count: int = 1) -> dict:
 def _persist_inline_row(*, document_id: str, session_id: str, trace_id: str, user_id: str):
     """Simulate the specialist runtime's inline durable write for this turn."""
 
+    from src.lib.validation_history import runtime, store
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    source = DomainEnvelope.model_validate(_canonical_gene_envelope(object_count=2))
+    source.envelope_id = uuid4().hex
+    source = runtime.capture_extraction(
+        scope=store.HistoryScope(user_id, document_id, session_id),
+        producer_id=trace_id,
+        typed=source.model_dump(mode="json"),
+        envelope=source,
+        provenance={},
+    )
     return persist_inline_validated_extraction_result(
-        payload_json=_canonical_gene_envelope(object_count=2),
+        payload_json=source.model_dump(mode="json"),
         document_id=document_id,
         agent_key="gene",
         adapter_key="gene",

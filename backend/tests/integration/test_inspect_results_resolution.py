@@ -52,7 +52,7 @@ from tests.pdf_document_test_support import ensure_test_pdf_owner
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
-_USER_ID = "inspect-user-1"
+_USER_ID = "validation-history-inspect-user-1"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -79,7 +79,7 @@ def document_id(persistence_db):
     hex_value = doc_id.hex
     owner_id = ensure_test_pdf_owner(
         persistence_db,
-        auth_sub="test_pdf_owner_inspect_results",
+        auth_sub=_USER_ID,
     )
     persistence_db.add(
         PDFDocument(
@@ -179,8 +179,17 @@ def _persist(
     source_kind=CurationExtractionSourceKind.CHAT,
     flow_run_id=None,
 ):
+    from src.lib.validation_history import runtime, store
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    source = DomainEnvelope.model_validate(payload)
+    source = runtime.capture_extraction(
+        scope=store.HistoryScope(_USER_ID, document_id, session_id),
+        producer_id=f"{trace_id}:{builder_invocation_id}",
+        typed=source.model_dump(mode="json"), envelope=source, provenance={},
+    )
     return persist_inline_validated_extraction_result(
-        payload_json=payload,
+        payload_json=source.model_dump(mode="json"),
         document_id=document_id,
         agent_key="gene",
         adapter_key="gene",

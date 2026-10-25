@@ -838,6 +838,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     client: TestClient,
     test_db,
     monkeypatch,
+    request,
     tmp_path: Path,
 ):
     from src.lib.context import set_current_trace_id
@@ -888,6 +889,22 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     )
 
     document_id = uuid4()
+    envelope_id = "sample-export-" + uuid4().hex
+
+    def cleanup_review_projection():
+        from src.lib.curation_workspace.models import (
+            DomainEnvelopeModel, DomainEnvelopeHistory, DomainEnvelopeObject,
+            DomainEnvelopeProjectionIndex, DomainValidationFinding,
+        )
+        # Delete only this fixture's live projection before shared PDF cleanup.
+        # Immutable validation facts and checkpoints remain in the disposable DB.
+        test_db.rollback()
+        for model in (DomainValidationFinding, DomainEnvelopeProjectionIndex,
+                      DomainEnvelopeObject, DomainEnvelopeHistory, DomainEnvelopeModel):
+            test_db.query(model).filter_by(envelope_id=envelope_id).delete(synchronize_session=False)
+        test_db.commit()
+
+    request.addfinalizer(cleanup_review_projection)
     owner = User(
         auth_sub="test_valid_user_00u1abc2def4",
         is_active=True,
@@ -921,6 +938,76 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
 
     trace_id = "a" * 32
 
+    async def _review_sample_source(payload):
+        """Seed explicit review through the real required gene validation path.
+
+        This test covers SSE/file plumbing with a deterministic external answer;
+        the canonical runtime tests exercise the supervisor's model/tool loop.
+        """
+        from src.lib.domain_packs.validator_dispatch import prepare_validator_dispatch, ValidatorRuntimeContext
+        from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+        from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+        from src.lib.validation_history import runtime, store
+        from src.lib.validation_history.projection import read_published_projection
+        from src.lib.validation_review import admission, decisions
+        from src.lib.validation_review.validator_adapter import ValidatorAdapter, save_plan
+        from src.schemas.domain_envelope import DomainEnvelope
+        from tests.integration.persistence.test_chat_review_adapter import entries_for
+
+        scope = store.HistoryScope(owner.auth_sub, str(document_id), execute_payload["session_id"])
+        payload["envelope_id"] = envelope_id
+        obj = payload["extracted_objects"][0]
+        payload["metadata"] = {"evidence_records": obj.pop("evidence_records")}
+        obj["status"] = "pending"
+        obj["payload"].update({
+            "gene_symbol": None, "primary_external_id": None, "taxon": None,
+            "proposed_gene_symbol": "crumb", "proposed_primary_external_id": "FlyBase:FBgn0259211",
+            "proposed_taxon": "NCBITaxon:7227", "resolution_state": "unresolved",
+            "lookup_outcome": "not_validated", "identity_resolution_notes": ["Check the supplied crumb mention."],
+        })
+        source = DomainEnvelope.model_validate(payload)
+        source = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
+            typed=source.model_dump(mode="json"), envelope=source, provenance={})
+        context = ValidatorRuntimeContext(user_id=scope.owner_id, document_id=scope.document_id,
+                                          authenticated_groups=())
+        plan = prepare_validator_dispatch(source, resolve_curation_domain_pack_by_id("gene"), runtime_context=context)
+        assert {job.match.binding.binding_id for job in plan.initial_jobs} == {"alliance_gene_reference_lookup"}
+        plan_ref = save_plan(plan, context=context)
+        aid, episode = plan.history_binding.artifact_id, plan.envelope.metadata["review_episode_id"]
+        operation = admission.create_scope(scope, operation_id=uuid4().hex,
+            kind="discovered_document_run", targets=0, episodes=0)
+        admission.attach_episode(scope, artifact_id=aid, episode_id=episode, scope_id=operation)
+        adapter = ValidatorAdapter(scope, aid, episode, plan_ref, authenticated_groups=())
+        calls = []
+        def answer(request, *, binding, **kwargs):
+            calls.append(request)
+            return {
+                "status": "resolved", "request_id": request.request_id,
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": request.validator_agent.model_dump(mode="json"),
+                "target": request.target.model_dump(mode="json"),
+                "resolved_values": {"curie": "FlyBase:FBgn0259211", "symbol": "crumb", "taxon": "NCBITaxon:7227"},
+                "resolved_objects": [], "missing_expected_fields": [], "candidates": [],
+                "lookup_attempts": [{"provider": "fixture", "method": "gene_lookup",
+                    "query": dict(request.selected_inputs), "result_count": 1, "outcome": "success"}],
+                "explanation": "Deterministic external lookup fixture.", "curator_message": None,
+            }
+        with monkeypatch.context() as provider:
+            provider.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: answer)
+            await adapter.initial()
+        assert len(calls) == 1
+        checkpoint = DomainEnvelopeCheckpointRequest(project_key="alliance", envelope=plan.envelope,
+            expected_revision=0, document_id=document_id, adapter_key="gene", source_extraction_result_id=uuid4())
+        decisions.record_decisions(decisions.ReviewContext(scope, episode, "supervisor.validation_review"),
+            checkpoint_request=checkpoint, operation_id="sample-review",
+            entries=entries_for(SimpleNamespace(scope=scope, aid=aid), "accept"))
+        from src.lib.validation_history.projection import latest_publication_reference
+        selected, manifest = read_published_projection(scope, latest_publication_reference(scope, aid), finalized=True)
+        assert manifest["ready"]
+        assert selected.extracted_objects[0].payload["primary_external_id"] == "FlyBase:FBgn0259211"
+        assert source.extracted_objects[0].payload["primary_external_id"] is None
+        return source.model_dump(mode="json")
+
     async def _fake_run_agent_streamed(**kwargs):
         agent = kwargs["agent"]
         execution_state = agent._flow_execution_state
@@ -934,6 +1021,8 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
         yield {"type": "RUN_STARTED", "data": {"trace_id": trace_id}}
 
         payload = _sample_pdf_gene_envelope()
+        evidence_records = payload["extracted_objects"][0]["evidence_records"]
+        payload = await _review_sample_source(payload)
         candidate = ExtractionEnvelopeCandidate(
             agent_key="gene_extractor",
             payload_json=payload,
@@ -948,7 +1037,6 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
                 "agent_name": "Gene Extractor",
             },
         )
-        evidence_records = payload["extracted_objects"][0]["evidence_records"]
         execution_state["evidence_registry"].add_many(evidence_records)
         execution_state["completed_steps"].append(
             {
@@ -972,6 +1060,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
             projection_flow_definition["nodes"][2]["data"]["projection_plan"]
         )
         bundle = _build_terminal_flow_artifact_bundle(
+            user_id=owner.auth_sub,
             agent_id="json_formatter",
             output_format="json",
             completed_steps=execution_state["completed_steps"],

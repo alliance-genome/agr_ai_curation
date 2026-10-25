@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Barrier, Event
 from types import SimpleNamespace
 from uuid import uuid4
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, select, text
@@ -23,12 +24,16 @@ def engine(monkeypatch):
     isolated = create_engine(app_engine.url, connect_args={'options': f'-csearch_path={schema}'})
     for table in (User.__table__, Project.__table__, ProjectMember.__table__):
         table.create(isolated)
-    monkeypatch.setattr(user_service, 'provision_weaviate_tenants', lambda _: False)
     monkeypatch.delenv('DEFAULT_PROJECT_ID', raising=False)
-    yield isolated
-    isolated.dispose()
-    with app_engine.begin() as connection:
-        connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    try:
+        # Unwind inside the integration auth patch's lifetime. The shared
+        # monkeypatch fixture tears down later and would restore its MagicMock.
+        with patch.object(user_service, 'provision_weaviate_tenants', lambda _: False):
+            yield isolated
+    finally:
+        isolated.dispose()
+        with app_engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
 
 
 def principal(email: str | None = 'user@example.org', display_name: str | None = 'User'):

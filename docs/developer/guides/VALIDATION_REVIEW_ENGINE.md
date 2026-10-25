@@ -175,6 +175,21 @@ selected checkpoint. Curation preparation checks that checkpoint against the sam
 source hash and refuses pending results. Initial validation is not repeated by
 curation bootstrap.
 
+Candidate recipes retain the authenticated group context used for that exact
+validator execution, separately from the scientific request and original plan.
+Group-scoped bindings record normalized groups; unscoped bindings record explicit
+null. Selected findings replay this immutable audit context, never current user
+memberships or provider-supplied values. Live execution still checks current
+permission independently. A historical recipe without this field cannot be newly
+published: it requires a fresh authenticated validation/review round. Its source,
+completion, decisions and previously stored checkpoints remain historical records;
+replay does not backfill or rewrite them.
+
+An accepted unresolved answer remains unresolved. Its declared descendant writes
+have a separate `validator_unresolved_value_materialization` audit event so a
+list element can retain the validator's outcome without permitting whole-list
+replacement or falsely recording a validated identity.
+
 After initial answers, the actual supervisor enters a bounded continuation with
 its existing model, settings and policy. Direct/preferred/custom extraction resolves
 the requested supervisor settings for this phase. The runtime replaces its tool
