@@ -63,7 +63,12 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
 
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
     await adapter.initial()
-    assert "rgd_go_evidence_policy_validation" not in {request.validator_binding_id for request in requests}
+    by_binding = {request.validator_binding_id: request for request in requests}
+    assert by_binding["go_gene_product_validation"].selected_inputs["gene_symbol"] == "Lta"
+    assert by_binding["go_term_validation"].selected_inputs["go_aspect"] == original["go_term"]["aspect"]
+    assert by_binding["go_reference_validation"].selected_inputs["curie"] == "PMID:12345678"
+    assert by_binding["go_reference_validation"].target.optional_fields == ["pmid", "doi"]
+    assert "rgd_go_evidence_policy_validation" not in by_binding
     initial_count = len(requests)
     await adapter.advance(checkpoint)
     assert len(requests) == initial_count
