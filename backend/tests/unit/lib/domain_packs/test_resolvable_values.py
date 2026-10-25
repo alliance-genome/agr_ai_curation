@@ -507,6 +507,10 @@ def test_unresolved_state_agrees_with_the_finding_classification(outcome, missin
                   or finding.field_ref.field_path == "site")
     assert lookup_outcome_for_failure(parent.details["failure_classification"]) == site["lookup_outcome"]
     assert result.envelope.extracted_objects[0].status is CuratableObjectStatus.PENDING
+    event = result.envelope.extracted_objects[0].metadata["validator_unresolved_value_materialization"][-1]
+    assert event["field_paths"] == ["site.curie", "site.name"]
+    assert event["lookup_outcome"] == reason
+    assert "validator_resolved_value_materialization" not in result.envelope.extracted_objects[0].metadata
 
 
 def test_partial_resolved_result_leaves_the_value_unresolved():
@@ -521,6 +525,10 @@ def test_partial_resolved_result_leaves_the_value_unresolved():
     assert site["curie"] is None
     assert (site["resolution_state"], site["lookup_outcome"]) == (
         UNRESOLVED, "missing_expected_result_field")
+    event = result.envelope.extracted_objects[0].metadata["validator_unresolved_value_materialization"][-1]
+    assert event["field_paths"] == ["site.curie", "site.name"]
+    assert event["lookup_outcome"] == "missing_expected_result_field"
+    assert "validator_resolved_value_materialization" not in result.envelope.extracted_objects[0].metadata
     missing = [finding for finding in result.appended_findings
                if finding.code == "domain_pack.validator_expected_field_missing"]
     assert [finding.details["failure_classification"] for finding in missing] == [

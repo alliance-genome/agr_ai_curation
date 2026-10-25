@@ -206,6 +206,8 @@ LEGACY_UNVERIFIED_SUFFIX = "(legacy, unverified)"
 INVALID_RECORD_SUFFIX = "(invalid record, unverified)"
 
 VALIDATOR_MATERIALIZATION_METADATA_KEY = "validator_resolved_value_materialization"
+# Structural write audit only; this never establishes a validated identity.
+VALIDATOR_UNRESOLVED_MATERIALIZATION_METADATA_KEY = "validator_unresolved_value_materialization"
 
 _log = logging.getLogger(__name__)
 

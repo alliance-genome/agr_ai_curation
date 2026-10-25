@@ -196,6 +196,7 @@ async def test_real_adapter_retains_candidates_and_replay_never_calls_provider_a
             )
         )
         assert len(completed) == len(candidates) == 2
+        assert all(store._content(db, row)["dispatch_context"] is None for row in candidates)
         assert all(store._content(db, row)["state"] == "completed" for row in completed)
     assert not admission.status(item.scope, item.ep)["ready"]
     assert item.plan.envelope.extracted_objects[0].payload["evidence_code_curies"] == [
@@ -211,6 +212,29 @@ def test_saved_match_round_trip_and_agent_substitution_refused(planned):
     frozen["request"]["validator_binding_id"] = "unconfigured"
     with pytest.raises(store.HistoryAccessError):
         planned.adapter.job(frozen)
+
+
+@pytest.mark.parametrize("planned", [None, "authorized"], indirect=True)
+def test_job_audits_actual_execution_groups_without_changing_frozen_request(planned):
+    from copy import deepcopy
+    from src.lib.domain_packs.validator_dispatch import group_dispatch_context
+
+    item = planned
+    frozen = runtime.frozen_job_requests(item.plan.history_binding, [item.plan.initial_jobs[0]])[0]
+    original = deepcopy(frozen)
+    original_groups = tuple(item.adapter.context.authenticated_groups)
+    execution_groups = tuple(sorted((*original_groups, "another-authorized-group")))
+    resumed = ValidatorAdapter(
+        item.scope, item.aid, item.ep, item.adapter.plan_ref,
+        authenticated_groups=execution_groups,
+    )
+    job = resumed.job(frozen)
+    if job.match.binding.required_any_active_group:
+        assert job.dispatch_context == group_dispatch_context(execution_groups)
+        assert job.dispatch_context != group_dispatch_context(original_groups)
+    else:
+        assert job.dispatch_context is None
+    assert frozen == original
 
 
 def test_dispatch_survives_resume_and_unknown_submission_is_not_replayed(scope):

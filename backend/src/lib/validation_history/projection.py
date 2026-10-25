@@ -300,6 +300,13 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         if recipe is None:
             raise store.HistoryConflict("Selected completion lacks its normalized projection recipe")
         body = store._content(db, recipe)
+        if "dispatch_context" not in body:
+            # Historical facts are immutable. Never guess execution authority
+            # from current memberships or the original plan's groups.
+            raise store.HistoryConflict(
+                "Selected recipe did not record execution group context; "
+                "a new authenticated validation and review round is required"
+            )
         request = DomainValidationRequest.model_validate(body["request"])
         result = DomainValidatorResultBase.model_validate(body["result"])
         result._history_ref = deepcopy(body["history_ref"])
@@ -355,6 +362,7 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         items.append(ValidatorResultMaterializationInput(
             match=match, request=request, result=result, selected_result_slots=slots,
             original_result=original_result, original_source_revision=body["source_envelope_revision"],
+            dispatch_context=deepcopy(body["dispatch_context"]),
         ))
     # Profile materialization must compose all selected units as one record transaction.
     if profile_context is not None:
