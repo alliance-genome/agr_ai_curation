@@ -52,8 +52,16 @@ class ChatReview:
         """Stop interrupts non-streaming phases; submitted late answers stay durable."""
         from src.lib.redis_client import check_cancel_signal
 
+        shutdown = asyncio.Event()
+
         async def watch():
-            while not await check_cancel_signal(self.session_id):
+            while not shutdown.is_set():
+                if await check_cancel_signal(self.session_id):
+                    return
+                # A dependency may consume task cancellation while returning a
+                # poll result. The owner still needs this watcher to finish.
+                if shutdown.is_set():
+                    return
                 await asyncio.sleep(
                     0.2
                 )  # Internal cancellation polling, not an operational limit.
@@ -74,6 +82,7 @@ class ChatReview:
                 raise ReviewInterrupted("Curator stopped validation review")
             return await task
         finally:
+            shutdown.set()
             watcher.cancel()
             if not task.done():
                 task.cancel()
