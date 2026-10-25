@@ -712,6 +712,7 @@ def claim():
             .where(Operation.state == "preparing", Operation.lease_until < now)
             .values(state="queued", lease_until=None)
         )
+        db.flush()  # SessionLocal disables autoflush; publish expired running states before overlap checks.
         active_artifacts = {
             item["artifact_id"]
             for artifacts in db.scalars(

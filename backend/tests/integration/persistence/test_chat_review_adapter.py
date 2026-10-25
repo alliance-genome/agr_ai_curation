@@ -937,6 +937,9 @@ async def test_workspace_b_round_calls_only_b_and_retains_a_c(planned, monkeypat
                            candidate_ids=[str(candidate.id)], guidance='Please reconsider B', groups=[])
         row = db.get(WorkspaceReviewOperation, saved['operation_id'])
         row.state, row.lease_token = 'preparing', 'test-lease'
+    from auth_runtime.base import AuthPrincipal
+    monkeypatch.setattr("src.lib.curation_workspace.review_authorization.get_current_subject_resolver",
+        lambda: lambda subject: AuthPrincipal(subject=subject, provider="fixture", groups=[]))
     owner, groups, artifacts = ops.prepare(saved['operation_id'], 'test-lease')
     current = artifacts[0]
     adapter = ValidatorAdapter(item.scope, item.aid, current['episode_id'], current['plan_ref'], authenticated_groups=groups)
