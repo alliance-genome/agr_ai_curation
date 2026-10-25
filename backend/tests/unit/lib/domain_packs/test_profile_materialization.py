@@ -299,7 +299,8 @@ def test_explicit_typed_slots_preserve_json_kinds_and_whole_array(example, schem
     assert output.materialized_objects == ()
 
 
-def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(example):
+@pytest.mark.parametrize("reference_input", ["title", "reference_mention"])
+def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(example, reference_input):
     from src.lib.agent_studio.profile_mapping_service import capability_catalog
     from .test_profile_validation import profile_envelope
     from src.lib.domain_packs.profile_validation import profile_dispatch_matches
@@ -318,7 +319,7 @@ def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(exa
          "policy": {"unresolved": "requires_curator_review", "blocks_readiness": False}}
         for name, cap, input_slot, source, output_slot, destination in [
             ("gene", gene, "gene_symbol", "attributes.gene_mention", "primary_external_id", "attributes.gene_id"),
-            ("reference", reference, "title", "attributes.paper_title", "curie", "attributes.reference_id")]
+            ("reference", reference, reference_input, "attributes.paper_title", "curie", "attributes.reference_id")]
     ]}
     receipt, profile = resolve(raw)
     context = compile_profile_validation(receipt, profile, pack, capabilities=[gene, reference], active_group_ids=["FB"])
@@ -328,6 +329,9 @@ def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(exa
     source = profile_envelope(attrs, receipt, profile)
     matches, findings, _ = profile_dispatch_matches(source, context, authenticated_groups=["FB"])
     assert len(matches) == 2 and not findings
+    reference_request = build_domain_validation_request(matches[1]).request
+    assert reference_request.selected_inputs[reference_input] == "Fixture paper"
+    assert "curie" not in reference_request.selected_inputs
     values = [{slot: "FB:FBgn0004009" if slot == "primary_external_id" else "PMID:12345"
                for slot in match.binding.expected_result_fields} for match in matches]
     output = materialize_profile_validator_results(source, context, results(source, context, values))

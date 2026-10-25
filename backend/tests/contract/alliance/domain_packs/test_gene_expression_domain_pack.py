@@ -3949,7 +3949,7 @@ def test_bindings_read_paper_wording_and_reference_contract_is_pinned():
 
     assert hashlib.sha256(
         canonical_json(bindings["source_reference_validation"]).encode()
-    ).hexdigest() == "55ae2815cf2387e5c24770fef36d4a28d1d5360b2ce1dcb8174cbd02c63775d4"
+    ).hexdigest() == "bb33edbb5cec6deca39ee5b9777aa0e98c9d43f4a9f2bfb2591aa491cd1ad594"
     # No flat top-level scalar is a validator write target.
     expected_paths = [
         path

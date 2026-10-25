@@ -2693,6 +2693,7 @@ metadata:
         custom_profile_reuse:
           enabled: true
           inputs:
+            reference_mention: {value_schema: {kind: string}, nullable: true}
             reference_id: {value_schema: {kind: string}, nullable: true}
             curie: {value_schema: {kind: string}, nullable: true}
             pmid: {value_schema: {kind: string}, nullable: true}
@@ -2703,7 +2704,7 @@ metadata:
               nullable: true
               allow_field: false
               context_selector: {source: envelope_metadata, path: document_id, required: false, context_only: true}
-          required_any_inputs: [[reference_id, curie, pmid, doi, title, source_document_id]]
+          required_any_inputs: [[reference_mention, reference_id, curie, pmid, doi, title, source_document_id]]
           outputs:
             curie: {value_schema: {kind: string}, result_path: curie}
             title: {value_schema: {kind: string}, result_path: title}
