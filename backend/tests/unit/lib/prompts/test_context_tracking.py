@@ -230,3 +230,45 @@ def test_prompt_override_set_get_and_clear():
 
     clear_prompt_override()
     assert get_prompt_override() is None
+
+
+def test_agent_copies_keep_exact_prompt_identity_and_independent_runtime_layers():
+    from copy import copy
+    from src.lib.prompts.context import fork_prompt_run
+
+    clear_prompt_context()
+    first = SimpleNamespace(name="Shared name")
+    second = SimpleNamespace(name="Shared name")
+    for agent, content in ((first, "first saved prompt"), (second, "second saved prompt")):
+        identity = set_pending_prompts(agent.name, [_prompt(content)],
+            effective_prompt_hash=content, layer_manifest=_manifest("fixture", content, content))
+        bind_prompt_run(agent, identity)
+    run = fork_prompt_run(first, copy(first))
+    sibling = fork_prompt_run(first, copy(first))
+    append_pending_prompt_runtime_context(run, layer_id_suffix="only_this_run",
+        title="Runtime note", content="one run only", source_ref="fixture", target_agent=run)
+    commit_pending_prompts(run)
+    commit_pending_prompts(sibling)
+    commit_pending_prompts(second)
+    commit_pending_prompts(first)
+    used = get_used_prompt_runs()
+    assert [item.prompts[0].content for item in used] == [
+        "first saved prompt", "first saved prompt", "second saved prompt", "first saved prompt"]
+    assert "one run only" in str(used[0].assembly.layer_manifest)
+    assert all("one run only" not in str(item.assembly.layer_manifest) for item in used[1:])
+    clear_prompt_context()
+
+
+def test_repeated_copies_bind_unique_name_source_before_it_becomes_ambiguous():
+    from copy import copy
+    from src.lib.prompts.context import fork_prompt_run
+
+    clear_prompt_context()
+    source = SimpleNamespace(name="Originally name-only")
+    set_pending_prompts(source.name, [_prompt("original")])
+    first = fork_prompt_run(source, copy(source))
+    second = fork_prompt_run(source, copy(source))
+    commit_pending_prompts(first)
+    commit_pending_prompts(second)
+    assert [run.prompts[0].content for run in get_used_prompt_runs()] == ["original", "original"]
+    clear_prompt_context()

@@ -637,6 +637,9 @@ def reasoning_summary_request_settings(
     }
 
 
+_DEFAULT_RETRY_HTTP_STATUSES = (408, 409, 429, 500, 502, 503, 504)
+
+
 def build_default_model_retry():
     """Opt-in runner-managed retry for transient model-call failures.
 
@@ -691,6 +694,32 @@ def build_default_model_retry():
         max_retries = 3
     if max_retries <= 0:
         return None
+    from importlib.metadata import version
+    from .model_settings_contract import register_retry_policy
+
+    # Bump this declaration's revision for policy behavior changes not already
+    # represented below. Keep the original SDK callable and replay capabilities.
+    policy = register_retry_policy(
+        retry_policies.any(
+            retry_policies.provider_suggested(),
+            retry_responses_websocket_overload,
+            retry_policies.retry_after(),
+            retry_policies.network_error(),
+            retry_policies.http_status(list(_DEFAULT_RETRY_HTTP_STATUSES)),
+        ),
+        {
+            "id": "agr.default_model_retry", "revision": 1,
+            "sdk_version": version("openai-agents"),
+            "any": [
+                "provider_suggested",
+                {"id": "responses_websocket_overload", "revision": 1,
+                 "event_type": "error", "error_type": "service_unavailable_error",
+                 "code": "server_is_overloaded", "approves_replay": True},
+                "retry_after", "network_error",
+                {"http_status": list(_DEFAULT_RETRY_HTTP_STATUSES)},
+            ],
+        },
+    )
     return ModelRetrySettings(
         max_retries=max_retries,
         backoff=ModelRetryBackoffSettings(
@@ -699,13 +728,7 @@ def build_default_model_retry():
             multiplier=_get_env_float("OPENAI_MODEL_RETRY_MULTIPLIER", 2.0),
             jitter=True,
         ),
-        policy=retry_policies.any(
-            retry_policies.provider_suggested(),
-            retry_responses_websocket_overload,
-            retry_policies.retry_after(),
-            retry_policies.network_error(),
-            retry_policies.http_status([408, 409, 429, 500, 502, 503, 504]),
-        ),
+        policy=policy,
     )
 
 

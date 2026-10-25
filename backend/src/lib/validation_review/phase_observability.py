@@ -1,4 +1,5 @@
 """Record the actual application-owned phase prompt and tools at execution setup."""
+from src.lib.openai_agents.model_settings_contract import model_settings_contract
 from src.lib.prompts.assembly import _bundle, _make_layer, prompt_templates_for_bundle
 from src.lib.prompts.context import bind_prompt_run, set_pending_prompts, commit_pending_prompts
 from src.lib.openai_agents.langfuse_client import log_agent_config
@@ -27,7 +28,7 @@ def emit_phase(agent):
         effective_prompt_hash=bundle.hash, layer_manifest=bundle.to_manifest())
     bind_prompt_run(agent, prompt_id)
     log_agent_config(agent_name=agent.name, instructions=agent.instructions, model=str(agent.model),
-        tools=[tool.name for tool in agent.tools], model_settings=agent.model_settings.to_json_dict(),
+        tools=[tool.name for tool in agent.tools], model_settings=model_settings_contract(agent.model_settings),
         metadata={**metadata, 'review_phase': phase, 'effective_prompt_hash': bundle.hash,
                   'layer_manifest': bundle.to_manifest()})
 

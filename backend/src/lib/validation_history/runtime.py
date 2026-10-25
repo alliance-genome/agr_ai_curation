@@ -936,7 +936,8 @@ def record_runner_receipt(agent, *, model: str, input_payload: dict) -> None:
     active = ACTIVE_VALIDATION_EXECUTION.get()
     if active is None:
         return
-    from dataclasses import asdict, is_dataclass
+    from dataclasses import asdict
+    from src.lib.openai_agents.model_settings_contract import model_settings_contract
     from pydantic_core import to_jsonable_python
     from src.lib.context import get_current_trace_id
     from src.lib.openai_agents.run_history import ACTIVE_HISTORY
@@ -952,7 +953,7 @@ def record_runner_receipt(agent, *, model: str, input_payload: dict) -> None:
         "input": input_payload,
         "instructions": instructions if isinstance(instructions, str) else None,
         "instructions_available": isinstance(instructions, str),
-        "model_settings": asdict(settings) if is_dataclass(settings) else None,
+        "model_settings": model_settings_contract(settings),
         "tools": [
             {
                 "name": tool.name,

@@ -2,6 +2,7 @@
 
 import asyncio
 
+from src.lib.openai_agents.model_settings_contract import model_settings_contract
 from src.lib.openai_agents.model_request_measurement import (
     install_model_request_measurement,
 )
@@ -123,7 +124,7 @@ def create_supervisor_phase(
         instructions=agent.instructions,
         model=str(agent.model),
         tools=[tool.name for tool in agent.tools],
-        model_settings=agent.model_settings.to_json_dict()
+        model_settings=model_settings_contract(agent.model_settings)
         if agent.model_settings
         else {},
         metadata={

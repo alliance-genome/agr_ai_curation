@@ -933,12 +933,18 @@ def pin_validator_agent(agent, binding_id):
 
     if not isinstance(agent.instructions, str):
         raise ReviewStopped("unresolved_validator_instructions")
+    from src.lib.openai_agents.model_settings_contract import ModelSettingsContractError, model_settings_contract
+
+    try:
+        settings = model_settings_contract(agent.model_settings)
+    except ModelSettingsContractError as exc:
+        raise ReviewStopped("unidentified_validator_settings") from exc
     contract = to_jsonable_python(
         {
             "model": agent.model
             if isinstance(agent.model, str)
             else getattr(agent.model, "model", None),
-            "settings": asdict(agent.model_settings),
+            "settings": settings,
             "instructions": agent.instructions,
             "identity": get_agent_cost_identity(agent),
             "execution_receipt": getattr(agent, "execution_receipt", None),

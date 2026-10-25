@@ -1,10 +1,10 @@
 """A narrow phase of the saved extractor, separate from full extraction capture."""
 import json
-from dataclasses import asdict
 from copy import copy
 
 from pydantic_core import to_jsonable_python
 
+from src.lib.openai_agents.model_settings_contract import ModelSettingsContractError, model_settings_contract
 from src.lib.validation_history import store
 from src.schemas.validation_followup import TargetedFollowupResult
 from .protocol import TARGETED_EXTRACTION_PROTOCOL
@@ -35,11 +35,15 @@ def contract(agent, *, max_turns):
     from src.lib.observability.cost_context import get_agent_cost_identity
     if not isinstance(agent.instructions, str):
         raise store.HistoryConflict("Extractor instructions must be resolved before admission")
+    try:
+        settings = model_settings_contract(agent.model_settings)
+    except ModelSettingsContractError as exc:
+        raise store.HistoryConflict("Extractor settings have an unidentified retry policy") from exc
     return to_jsonable_python({
         "identity": get_agent_cost_identity(agent),
         "execution_receipt": getattr(agent, "execution_receipt", None),
         "model": agent.model if isinstance(agent.model, str) else getattr(agent.model, "model", None),
-        "settings": asdict(agent.model_settings), "instructions": agent.instructions,
+        "settings": settings, "instructions": agent.instructions,
         "max_turns": max_turns,
         "reconstruction_context": getattr(agent, "review_reconstruction_context", {}),
         "tools": [{"name": tool.name, "description": tool.description,

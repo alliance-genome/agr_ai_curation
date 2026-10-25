@@ -120,6 +120,7 @@ from .tool_call_policy import (
 from src.lib.prompts.context import (
     append_pending_prompt_runtime_context,
     commit_pending_prompts,
+    fork_prompt_run,
 )
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.openai_agents.provider_errors import provider_policy_error
@@ -468,7 +469,7 @@ def _apply_relaxed_output_schema_if_needed(agent: Agent, output_type: Any) -> Ag
     if not _is_domain_envelope_extraction_output_type(output_type):
         return agent
 
-    runtime_agent = copy.copy(agent)
+    runtime_agent = fork_prompt_run(agent, copy.copy(agent))
     runtime_agent.output_type = AgentOutputSchema(
         output_type,
         strict_json_schema=False,
@@ -735,7 +736,7 @@ def _append_agent_runtime_instruction(
     """Append runtime-only prompt content and keep pending assembly metadata aligned."""
 
     if runtime_agent is source_agent:
-        runtime_agent = copy.copy(source_agent)
+        runtime_agent = fork_prompt_run(source_agent, copy.copy(source_agent))
     runtime_agent.instructions = (
         f"{getattr(runtime_agent, 'instructions', '') or ''}\n\n"
         f"{instruction}"
@@ -2794,7 +2795,7 @@ def _configure_structured_specialist_finalization(
     from agents import function_tool
 
     if runtime_agent is source_agent:
-        runtime_agent = copy.copy(source_agent)
+        runtime_agent = fork_prompt_run(source_agent, copy.copy(source_agent))
     runtime_agent.tools = [
         *list(getattr(runtime_agent, "tools", []) or []),
         _build_structured_specialist_finalization_tool(
@@ -4741,7 +4742,7 @@ async def run_specialist_with_events(
     if _should_use_groq_tool_json_compat(agent):
         groq_tool_json_compat_mode = True
         json_only_instruction = _build_json_only_instruction(expected_output_type)
-        runtime_agent = copy.copy(agent)
+        runtime_agent = fork_prompt_run(agent, copy.copy(agent))
         runtime_agent.output_type = None
         runtime_agent.tools = _adapt_tools_for_groq_schema_constraints(
             list(getattr(agent, "tools", []) or [])
@@ -4902,7 +4903,7 @@ async def run_specialist_with_events(
     # surface below are per run, so they go on a per-run copy (ALL-1280).
     try:
         if runtime_agent is agent:
-            runtime_agent = copy.copy(agent)
+            runtime_agent = fork_prompt_run(agent, copy.copy(agent))
         runtime_agent = _bind_run_state_into_tools(
             runtime_agent,
             evidence_records=live_evidence_records,
