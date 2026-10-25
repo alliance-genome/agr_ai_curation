@@ -246,7 +246,8 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         ValidatorResultMaterializationInput, materialize_validator_results_into_envelope,
     )
     from src.lib.domain_packs.profile_materialization import materialize_profile_validator_results
-    from src.schemas.domain_validator import DomainValidationRequest, DomainValidatorResultBase
+    from src.schemas.domain_validator import DomainValidationRequest
+    from .result_schema import restore_result_schema
 
     working = source_envelope_in_transaction(db, scope, artifact_id, envelope)
     working = working.model_copy(update={"validation_findings": [
@@ -289,9 +290,10 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
     items = []
     for completion_id, units in grouped.items():
         completion = store._fact(db, artifact_id, completion_id, kind="completion")
-        attempt = store._content(db, store._fact(
+        attempt_fact = store._fact(
             db, artifact_id, completion.parent_id, kind="attempt",
-        ))
+        )
+        attempt = store._content(db, attempt_fact)
         recipe = db.scalar(select(ValidationFact).where(
             ValidationFact.artifact_id == artifact_id,
             ValidationFact.operation_id == "candidate:" + completion_id,
@@ -308,9 +310,9 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
                 "a new authenticated validation and review round is required"
             )
         request = DomainValidationRequest.model_validate(body["request"])
-        result = DomainValidatorResultBase.model_validate(body["result"])
-        result._history_ref = deepcopy(body["history_ref"])
         match = match_for(attempt)
+        from .replay_binding import restore_execution_binding
+        match = restore_execution_binding(db, artifact_id, attempt_fact, attempt, match)
         fingerprint = store.canonical({
             "binding": match.binding.raw,
             "object_definition": match.object_definition.model_dump(mode="json")
@@ -318,6 +320,10 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         })[0]
         if fingerprint != body["binding_fingerprint"]:
             raise store.HistoryConflict("Selected projection binding contract changed")
+        result = restore_result_schema(
+            body["result"], body.get("result_schema"), request=request,
+        )
+        result._history_ref = deepcopy(body["history_ref"])
         original_result = result
         # Stable identity survives reorder; only the derived view's address moves.
         if request.target.field_path != match.field_path:

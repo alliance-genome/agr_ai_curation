@@ -257,3 +257,31 @@ workers must be drained, and these readers and role restrictions ship together.
 The integration series is still not independently deployable. C owns accepted
 annotation values; D owns supervisor review and redispatch, not paper access for
 validators.
+
+## Concrete validator result replay
+
+Immutable candidate recipes retain the actual registered validator result class
+and a SHA-256 digest of its complete JSON schema. Replay reconstructs that class
+with the retained validation request as context. It does not downcast specialized
+results, discard their fields, or call a provider again. A configured flow can
+execute a different validator from the original binding; replay recovers that
+exact route from the scoped execution and review plan while retaining current
+source objects and checking the underlying binding/object contract.
+
+The schema digest intentionally includes descriptions and Pydantic-generated
+schema structure. The snapshot in
+`backend/tests/unit/lib/validation_history/validator_schema_digests.json` makes
+changes to any registered validator contract visible in CI. Do not refresh it
+blindly: review the impact on retained recipes and establish an explicit recovery
+or migration plan first. Description-only edits or dependency upgrades can change
+the digest too. Python validator logic is not hashed; replay still validates the
+payload against that logic and its saved request context.
+
+Missing, unavailable, changed, or no-longer-valid result contracts fail with a
+history conflict requiring a new authenticated validation and review round.
+This also applies when curator edits or override withdrawal rebuild selected
+values. Failed publication rolls back its decisions and checkpoint; previously
+published exact snapshots remain readable. Do not mutate immutable recipes or
+guess the schema of historical results to make them replay. Before the initial
+coordinated rollout, inventory candidate facts in each environment and account
+for pre-descriptor development workspaces separately.

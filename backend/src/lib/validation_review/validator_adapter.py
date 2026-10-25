@@ -672,6 +672,7 @@ class ValidatorAdapter:
                 else "completed"
             )
             normalized = answer.model_dump(mode="json")
+            from src.lib.validation_history.result_schema import capture_result_schema
             from src.lib.domain_packs.validator_dispatch import (
                 _with_returned_optional_fields,
             )
@@ -700,6 +701,7 @@ class ValidatorAdapter:
                     )[0],
                     "request": item.request.model_dump(mode="json"),
                     "result": normalized,
+                    "result_schema": capture_result_schema(answer),
                     "source_envelope_revision": 1,
                     "dispatch_context": item.dispatch_context,
                 }
