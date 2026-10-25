@@ -101,7 +101,9 @@ def _cleanup_handoff_rows(db) -> None:
             else []
         )
 
-        if session_ids or candidate_ids:
+        # A failed handoff can retain a committed source checkpoint without
+        # creating a review session. Clean this test's unreviewed checkpoint too.
+        if session_ids or candidate_ids or envelope_ids:
             db.execute(
                 delete(CurationActionLogEntry).where(
                     (CurationActionLogEntry.session_id.in_(session_ids or [uuid4()]))
@@ -401,6 +403,18 @@ def _extraction_record(
     )
 
 
+def _assert_sources_committed(records):
+    """Independent prep/history sessions must see both source and checkpoint."""
+    from src.models.sql.database import SessionLocal
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord, DomainEnvelopeModel
+
+    with SessionLocal() as observer:
+        for record in records:
+            assert observer.get(CurationExtractionResultRecord, UUID(record.extraction_result_id)) is not None
+            assert observer.scalar(select(DomainEnvelopeModel).where(
+                DomainEnvelopeModel.source_extraction_result_id == record.extraction_result_id)) is not None
+
+
 @contextmanager
 def _patched_handoff_execute_flow(
     adapter_keys: list[str],
@@ -482,8 +496,10 @@ def _patched_handoff_execute_flow(
                 session_id=session_id,
                 trace_id=f"trace-{adapter_keys[0]}",
                 flow_run_id=flow_run_id,
-                db=handoff_db,
+                # Match the actual handoff tool: source/checkpoint persistence
+                # commits before prep/history readers use independent sessions.
             )
+            _assert_sources_committed(extraction_results)
             handoff = await bootstrap_service.run_flow_curation_handoff(
                 extraction_results=extraction_results,
                 document_id=document_id,
@@ -760,8 +776,8 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
             session_id=origin_session_id,
             trace_id="trace-retry",
             flow_run_id=flow_run_id,
-            db=handoff_db,
         )
+        _assert_sources_committed(source_records)
         return await run_flow_curation_handoff(
             extraction_results=source_records,
             document_id=str(document.id),
@@ -813,7 +829,7 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
         "final_commit",
     ],
 )
-def test_handoff_failure_rolls_back_all_ready_state(handoff_db, failure_boundary):
+def test_handoff_failure_retains_committed_sources_but_rolls_back_ready_state(handoff_db, failure_boundary):
     from src.models.sql.batch import BatchDocumentStatus
 
     suffix = uuid4().hex[:10]
@@ -833,7 +849,16 @@ def test_handoff_failure_rolls_back_all_ready_state(handoff_db, failure_boundary
     batch_doc = _batch_document(handoff_db, batch.id)
     assert batch_doc.status == BatchDocumentStatus.FAILED
     assert batch_doc.review_session_ids is None
-    assert _handoff_state_counts(handoff_db, document.id) == (0, 0, 0, 0)
+    # Source extraction commits before the handoff transaction. A failed prep
+    # must retain that inspectable source, while publishing no ready session.
+    expected_envelopes = 0 if failure_boundary == "canonical_insert" else 1
+    assert _handoff_state_counts(handoff_db, document.id) == (1, expected_envelopes, 0, 0)
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord
+    source = handoff_db.scalar(select(CurationExtractionResultRecord).where(
+        CurationExtractionResultRecord.document_id == document.id))
+    assert source.agent_key == "gene_extractor"
+    assert source.payload_json == build_domain_envelope_extraction_payload(
+        load_evidence_fixture("tool_verified_gene_paper"))
 
 
 def test_completed_handoff_batch_is_not_rerun(handoff_db):

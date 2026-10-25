@@ -60,6 +60,10 @@ from src.schemas.domain_envelope import (
 from tests.pdf_document_test_support import ensure_test_pdf_owner
 
 
+# Profile tests retain immutable agent revisions owned by this fixture. Keep
+# its principal outside the legacy integration tests' disposable test_% scope.
+RETAINED_DOMAIN_OWNER = "retained_pdf_owner_domain_envelope"
+
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 TEST_ENVELOPE_ID = "unused-before-test"
 
@@ -144,7 +148,7 @@ def _create_review_session_for_action_log(
 ) -> CurationReviewSession:
     owner_id = ensure_test_pdf_owner(
         session,
-        auth_sub="test_pdf_owner_domain_envelope",
+        auth_sub=RETAINED_DOMAIN_OWNER,
     )
     document = PDFDocument(
         id=document_id or uuid4(),
@@ -699,7 +703,7 @@ def test_missing_stable_object_id_fails_loudly():
 def test_flow_inspection_rechecks_current_document_ownership(db_session):
     from src.lib.openai_agents.result_inspection_views import readable_document_ids
     record = {"document_id": str(OWNER_DOCUMENT_ID)}
-    owner = "test_pdf_owner_domain_envelope"
+    owner = RETAINED_DOMAIN_OWNER
     document = db_session.get(PDFDocument, OWNER_DOCUMENT_ID)
     original_owner = document.user_id
     other = "test_inspection_new_document_owner"
