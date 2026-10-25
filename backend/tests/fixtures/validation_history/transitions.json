@@ -1,0 +1,9 @@
+{
+  "protocol": "validation-history/v1",
+  "cases": [
+    {"name": "defer_then_accept", "steps": [{"action": "defer"}, {"action": "accept", "subject": "answer"}]},
+    {"name": "reject_alternative", "steps": [{"action": "reject", "subject": "other"}, {"action": "accept", "subject": "answer"}]},
+    {"name": "revoke_then_reaccept", "steps": [{"action": "accept", "subject": "answer"}, {"action": "revoke"}, {"action": "accept", "subject": "answer"}]},
+    {"name": "retire_restore_requires_fresh_input", "steps": [{"action": "retire"}, {"action": "restore"}, {"action": "accept", "subject": "answer", "conflict": true}]}
+  ]
+}

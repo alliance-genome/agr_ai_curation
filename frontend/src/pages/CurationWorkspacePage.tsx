@@ -1,3 +1,5 @@
+import { useWorkspaceReviewCompletion } from '@/features/curation/workspace/useWorkspaceReviewCompletion'
+import RevalidationControls from '@/features/curation/grid/RevalidationControls'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -208,6 +210,7 @@ function CurationWorkspacePageContent({
     ownerToken: viewerOwnerToken,
     setActiveCandidate,
   })
+  const [revalidationDialogOpen, setRevalidationDialogOpen] = useState(false)
   const [manualObjectDialogOpen, setManualObjectDialogOpen] = useState(false)
   const [manualObjectCreating, setManualObjectCreating] = useState(false)
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
@@ -390,6 +393,12 @@ function CurationWorkspacePageContent({
 
     await refreshCurationWorkspaceEnvelopeReviewRows(queryClient, nextWorkspace)
   }, [queryClient, setWorkspace, workspace.session.session_id])
+
+  const refreshAfterReview = useCallback(async () => {
+    if (!await autosave.flush()) throw new Error('Save your current edits before refreshing the completed validation.')
+    await refreshWorkspace(activeCandidateId)
+  }, [autosave, activeCandidateId, refreshWorkspace])
+  const backgroundReviewError = useWorkspaceReviewCompletion(workspace.session.session_id, refreshAfterReview)
 
   const setCandidateBusy = useCallback((
     setter: typeof setDecidingCandidateIds,
@@ -576,6 +585,7 @@ function CurationWorkspacePageContent({
         </Alert>
       ) : null}
 
+      {backgroundReviewError && <Alert severity="error">{backgroundReviewError}</Alert>}
       {tableError ? (
         <Alert severity="error">
           {tableError}
@@ -588,6 +598,13 @@ function CurationWorkspacePageContent({
         </Alert>
       ) : null}
 
+      <Dialog open={revalidationDialogOpen} onClose={() => setRevalidationDialogOpen(false)}>
+        <DialogTitle>Revalidate all records</DialogTitle>
+        <DialogContent><RevalidationControls sessionId={workspace.session.session_id}
+          beforeChange={async () => { if (!await autosave.flush()) throw new Error('Save your current edits before requesting validation.') }}
+          onChanged={refreshAfterReview} /></DialogContent>
+        <DialogActions><Button onClick={() => setRevalidationDialogOpen(false)}>Close</Button></DialogActions>
+      </Dialog>
       <WorkspaceShell
         headerSlot={(
           <WorkspaceHeader
@@ -624,6 +641,7 @@ function CurationWorkspacePageContent({
                     flexWrap: "wrap",
                     justifyContent: "flex-end"
                   }}>
+                  <Button onClick={() => setRevalidationDialogOpen(true)}>Revalidate all records</Button>
                   <WorkspaceSessionNavigation
                     currentSessionId={workspace.session.session_id}
                     queueContext={queueNavigationState?.queueContext}
@@ -706,7 +724,7 @@ function CurationWorkspacePageContent({
                 </Alert>
               ))}
             {horizontalGridModel ? (
-              <InteractiveHorizontalCurationGrid model={horizontalGridModel} />
+              <InteractiveHorizontalCurationGrid model={horizontalGridModel} onReviewChanged={refreshAfterReview} />
             ) : envelopeRowsQuery.isPending ? (
               <Typography role="status">Loading review fields…</Typography>
             ) : !envelopeReviewRowsError ? (

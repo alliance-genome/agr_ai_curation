@@ -126,6 +126,8 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Selected-value authority exercises installed group-aware profile receipts.
+    Path("backend/tests/integration/persistence/test_curator_selected_authority.py"),
     # ALL-1367 reproduces saved-flow authorization with the shipped restricted
     # RGD agent and provider-group mapping; generic lifecycle tests stay separate.
     Path("backend/tests/integration/test_alliance_flow_group_context.py"),
@@ -502,6 +504,7 @@ async def test_core_plus_org_custom_runtime_loads_without_alliance_package(monke
         "curation_prep",
         "demo_agent_validation",
         "supervisor",
+        "validation_reviewer",
     }
     assert agents["demo_agent_validation"].folder_name == "demo_agent"
     assert agents["demo_agent_validation"].tools == ["demo_search_tool"]

@@ -4,12 +4,17 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.lib.benchmarks.supervisor_snapshot import FrozenFlowSupervisor, capture_flow_supervisor
+from src.lib.benchmarks.supervisor_snapshot import FrozenFlowSupervisor, capture_flow_supervisor, review_runtime_contract, require_current_review_runtime
 from src.lib.benchmarks.source_revisions import benchmark_source_revisions
 from src.lib.benchmarks.models import BenchmarkSuiteRoute
 from src.lib.flows import executor
 from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
 from tests.unit.lib.benchmarks.test_frozen_flow import snapshot
+
+
+@pytest.fixture(autouse=True)
+def policy_layers(monkeypatch):
+    monkeypatch.setattr("src.lib.prompts.assembly.build_agent_prompt_layers", lambda *a, **kw: NS(layers=[]))
 
 
 def test_capture_uses_normal_prompt_generator_without_constructing_agents(monkeypatch):
@@ -39,6 +44,8 @@ def test_capture_uses_normal_prompt_generator_without_constructing_agents(monkey
 def test_runtime_uses_frozen_supervisor_and_fails_if_a_step_disappears(monkeypatch):
     frozen = FrozenFlowSupervisor(
         model="original", temperature=0.2, reasoning="low", parallel_tool_calls=False,
+        review_runtime_version="supervisor-review/v2", review_runtime_contract=review_runtime_contract(),
+        review_policy_layers=(),
         requires_document=True, available_tools=("ask_extractor_specialist",),
         instructions="Saved instructions", instructions_with_document="Saved document instructions",
     )
@@ -83,3 +90,29 @@ def test_benchmark_without_supervisor_snapshot_still_excludes_inspection(monkeyp
     assert built.tools == tools.return_value[0]
     assert built.instructions == "Benchmark instructions"
     assert tools.call_args.kwargs["enable_result_inspection"] is False
+
+
+def test_old_snapshot_requires_explicit_repin():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="review_runtime_version"):
+        FrozenFlowSupervisor.model_validate({
+            "model": "original", "temperature": None, "reasoning": None,
+            "parallel_tool_calls": False, "requires_document": True,
+            "available_tools": (), "instructions": "saved", "instructions_with_document": "saved",
+        })
+
+
+def test_changed_review_limits_require_repin_and_snapshot_is_immutable(monkeypatch):
+    monkeypatch.setattr("src.lib.openai_agents.config.get_agent_config", lambda _: NS(model="original", temperature=0.2, reasoning="low"))
+    monkeypatch.setattr(executor, "flow_requires_document", lambda *a, **kw: True)
+    frozen = capture_flow_supervisor(snapshot(), NS(db_user_id=7, active_groups=()))
+    require_current_review_runtime(frozen)
+    with pytest.raises(TypeError):
+        frozen.review_runtime_contract["limits"]["attempts_per_target"] = 99
+    monkeypatch.setenv("VALIDATION_REVIEW_ATTEMPTS_PER_TARGET", "3")
+    # Change the actual captured contract, independent of environment helper caching.
+    changed = review_runtime_contract()
+    changed["limits"]["attempts_per_target"] += 1
+    monkeypatch.setattr("src.lib.benchmarks.supervisor_snapshot.review_runtime_contract", lambda: changed)
+    with pytest.raises(ValueError, match="explicitly repin"):
+        require_current_review_runtime(frozen)

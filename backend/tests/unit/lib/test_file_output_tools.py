@@ -61,9 +61,10 @@ class _ProjectedFileOutputStore:
         descriptor: str,
         file_path: str,
         branch_identity: str | None,
+        export_version: str,
     ) -> Any | None:
         for row in self.rows:
-            if str(row.file_path) == str(file_path):
+            if str(row.file_path) == str(file_path) and (row.file_metadata or {}).get("export_version") == export_version:
                 metadata = row.file_metadata or {}
                 if branch_identity is None or (
                     isinstance(metadata, dict)
@@ -79,6 +80,7 @@ class _ProjectedFileOutputStore:
                 row.session_id == session_id
                 and row.curator_id == curator_id
                 and row.file_type == file_type
+                and metadata.get("export_version") == export_version
                 and metadata.get("structured_projection") is True
                 and str(metadata.get("descriptor") or "") == descriptor
                 and (
@@ -219,7 +221,7 @@ class TestSaveProjectedFileOutput:
         clear_context()
 
     @pytest.mark.asyncio
-    async def test_upserts_same_run_descriptor_and_format(self, tmp_path, monkeypatch):
+    async def test_new_content_preserves_prior_export_and_exact_repeat_is_idempotent(self, tmp_path, monkeypatch):
         """A repeated structured finalize should update one downloadable file row."""
         from src.lib.file_outputs import FileOutputStorageService
         from src.lib.flows.output_projection import (
@@ -287,16 +289,19 @@ class TestSaveProjectedFileOutput:
             "tsv_formatter",
         )
 
-        assert first["file_id"] == second["file_id"]
-        assert first["filename"] == second["filename"]
-        assert first["filename"] == f"gene_results_{trace_id}.csv"
+        assert first["file_id"] != second["file_id"]
+        assert first["filename"] != second["filename"]
+        assert first["filename"].startswith("gene_results_")
+        assert first["filename"].endswith(f"_{trace_id}.csv")
         assert third["file_id"] != first["file_id"]
-        assert third["filename"] == f"other_gene_results_{trace_id}.csv"
+        assert third["filename"].startswith("other_gene_results_")
+        assert third["filename"].endswith(f"_{trace_id}.csv")
         assert fourth["file_id"] != first["file_id"]
-        assert fourth["filename"] == f"gene_results_{trace_id}.tsv"
+        assert fourth["filename"].startswith("gene_results_")
+        assert fourth["filename"].endswith(f"_{trace_id}.tsv")
 
         rows = sorted(store.rows, key=lambda row: row.filename)
-        assert len(rows) == 3
+        assert len(rows) == 4
         saved = next(row for row in rows if row.filename == first["filename"])
         saved_tsv = next(row for row in rows if row.filename == fourth["filename"])
         assert saved.agent_name == "csv_formatter"
@@ -306,11 +311,14 @@ class TestSaveProjectedFileOutput:
         assert saved.file_metadata["descriptor"] == "gene_results"
         assert saved.file_metadata["projection_summary"]["export_accounting"]["status"] == "unavailable"
         assert json.loads(saved.file_metadata["export_diagnostics"])["accounting"] is None
-        assert saved.file_size == second["size_bytes"]
-        assert saved.file_hash == second["hash_sha256"]
+        assert saved.file_size == first["size_bytes"]
+        assert saved.file_hash == first["hash_sha256"]
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
-            "Symbol\nDeltaGene\n"
+            "Symbol\nNotch\n"
         )
+        repeated = await save_projected_file_output("csv", projection("Notch"), "gene_results", "csv_formatter")
+        assert repeated["file_id"] == first["file_id"]
+        assert len(store.rows) == 4
         assert saved_tsv.agent_name == "tsv_formatter"
         assert saved_tsv.file_type == "tsv"
         assert Path(saved_tsv.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
@@ -412,7 +420,7 @@ class TestSaveProjectedFileOutput:
         ]
 
     @pytest.mark.asyncio
-    async def test_projected_save_reuses_structured_row_by_trace_descriptor_and_format(
+    async def test_projected_save_preserves_unversioned_historical_file(
         self, tmp_path, monkeypatch
     ):
         """Run/descriptor/format identity should survive a previous dated file path."""
@@ -481,11 +489,13 @@ class TestSaveProjectedFileOutput:
             "csv_formatter",
         )
 
-        assert result["file_id"] == stale_id
-        assert result["filename"] == f"gene_results_{trace_id}.csv"
-        assert len(store.rows) == 1
-        saved = store.rows[0]
-        assert str(saved.id) == stale_id
+        assert result["file_id"] != stale_id
+        assert stale_path.read_text() == "symbol\nOld\n"
+        assert result["filename"].startswith("gene_results_")
+        assert result["filename"].endswith(f"_{trace_id}.csv")
+        assert len(store.rows) == 2
+        saved = next(row for row in store.rows if str(row.id) == result["file_id"])
+        assert str(saved.id) != stale_id
         assert Path(saved.file_path).parent == tmp_path / "outputs" / "structured" / trace_id
         assert saved.file_hash == result["hash_sha256"]
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
@@ -493,7 +503,7 @@ class TestSaveProjectedFileOutput:
         )
 
     @pytest.mark.asyncio
-    async def test_projected_save_reuses_session_descriptor_across_traces(
+    async def test_changed_export_preserves_history_across_traces(
         self, tmp_path, monkeypatch
     ):
         """A repeat export in the same chat session should update one file row."""
@@ -552,16 +562,17 @@ class TestSaveProjectedFileOutput:
             "csv_formatter",
         )
 
-        assert first["file_id"] == second["file_id"]
+        assert first["file_id"] != second["file_id"]
         assert second["trace_id"] == second_trace_id
-        assert second["filename"] == f"gene_results_{second_trace_id}.csv"
-        assert len(store.rows) == 1
-        saved = store.rows[0]
+        assert second["filename"].startswith("gene_results_")
+        assert second["filename"].endswith(f"_{second_trace_id}.csv")
+        assert len(store.rows) == 2
+        saved = next(row for row in store.rows if str(row.id) == second["file_id"])
         assert saved.trace_id == second_trace_id
         assert saved.session_id == session_id
         assert saved.curator_id == curator_id
         assert saved.file_metadata["descriptor"] == "gene_results"
-        assert not first_path.exists()
+        assert first_path.read_text().splitlines() == ["Symbol", "Notch"]
         assert Path(saved.file_path).read_text(encoding="utf-8").replace("\r\n", "\n") == (
             "Symbol\nDeltaGene\n"
         )
@@ -640,7 +651,8 @@ class TestSaveProjectedFileOutput:
             "grouped_gene_results",
             "json_formatter",
         )
-        assert result["filename"] == f"grouped_gene_results_{trace_id}.json"
+        assert result["filename"].startswith("grouped_gene_results_")
+        assert result["filename"].endswith(f"_{trace_id}.json")
         assert result["format"] == "json"
 
         assert len(store.rows) == 1
@@ -692,8 +704,8 @@ async def test_measured_projection_persists_written_count_and_complete_diagnosti
         assert saved.file_metadata['projection_summary']['total_count'] == 5
         assert json.loads(saved.file_metadata['export_diagnostics']) == export_diagnostics(projection)
         assert Path(saved.file_path).read_text().splitlines() == ['name','0','1']
-        # Real saver replacement retains file identity; the former receipt must
-        # never read the replacement's diagnostics as though they were its own.
+        # A changed projection gets another file. The former receipt and its
+        # diagnostics remain readable without being reinterpreted.
         from src.lib.export_accounting import diagnostics_sha256
         from src.lib.openai_agents import export_details_tool
         from unittest.mock import MagicMock
@@ -705,14 +717,36 @@ async def test_measured_projection_persists_written_count_and_complete_diagnosti
         plan.max_rows = 1
         replacement = finalize_output_projection(source, plan)
         await file_output_tools.save_projected_file_output('csv', replacement, 'counts', 'csv_formatter')
-        assert len(store.rows) == 1
+        assert len(store.rows) == 2
         db = MagicMock()
         db.__enter__.return_value = db
         db.query.return_value.filter.return_value.one_or_none.return_value = saved
         monkeypatch.setattr(export_details_tool, 'SessionLocal', lambda: db)
-        assert export_details_tool.read_export_details_payload(str(saved.id), old_digest)['status'] == 'stale'
+        assert export_details_tool.read_export_details_payload(str(saved.id), old_digest)['status'] == 'ok'
         digest = diagnostics_sha256(json.loads(saved.file_metadata['export_diagnostics']))
         assert export_details_tool.read_export_details_payload(str(saved.id), digest)['status'] == 'ok'
 
     finally:
         clear_context()
+
+
+@pytest.mark.asyncio
+async def test_long_descriptor_does_not_overwrite_historical_export(tmp_path, monkeypatch):
+    from src.lib.file_outputs import FileOutputStorageService
+    from src.lib.flows.output_projection import FlowOutputProjectionResult, FlowOutputColumnSpec
+    from src.lib.openai_agents.tools import file_output_tools
+    set_current_trace_id(uuid4().hex)
+    set_current_session_id("long-descriptor-session")
+    set_current_user_id("curator")
+    monkeypatch.setattr(file_output_tools, "FileOutputStorageService", lambda: FileOutputStorageService(base_path=tmp_path))
+    store = _install_projected_file_output_store(monkeypatch, file_output_tools)
+    projection = FlowOutputProjectionResult(format="csv", row_source="object",
+        columns=[FlowOutputColumnSpec(key="name", field_ref="object.name")], rows=[{"name": "first"}], total_count=1)
+    first = await file_output_tools.save_projected_file_output("csv", projection, "x" * 100, "csv_formatter")
+    original = Path(store.rows[0].file_path)
+    original_bytes = original.read_bytes()
+    projection.rows = [{"name": "second"}]
+    second = await file_output_tools.save_projected_file_output("csv", projection, "x" * 100, "csv_formatter")
+    assert first["file_id"] != second["file_id"]
+    assert original.read_bytes() == original_bytes
+    assert store.rows[0].file_path != store.rows[1].file_path

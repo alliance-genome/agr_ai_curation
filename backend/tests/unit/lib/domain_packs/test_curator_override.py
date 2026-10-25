@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from tests.validation_history_unit_support import result_with_history_receipt
 
 from src.lib.domain_envelopes.patches import (
     EnvelopeFieldPatch,
@@ -187,14 +188,15 @@ def test_a_first_override_names_every_identity_key_validated_ones_included():
                                actor_id="curator-7", actor_display_name="curator-7", at=AT)
 
 
-def test_entering_the_previous_identity_restores_the_previous_state():
+def test_entering_the_previous_identity_remains_an_explicit_curator_override():
     value = resolved_value("skin", {"curie": "ONT:1", "name": "epidermis"}, explanation="Matched.")
-    original = dict(value)
     _override(value, curie="ONT:2", name="other")
     audit = _override(value, curie="ONT:1", name="epidermis")
 
-    assert value == original
-    assert audit["action"] == "restored"
+    assert value["curie"] == "ONT:1"
+    assert value["lookup_outcome"] == "curator_override"
+    assert value["curator_override"]["actor_id"] == "curator-7"
+    assert audit["action"] != "restored"
 
 
 def test_only_identity_keys_take_an_override():
@@ -283,6 +285,7 @@ def _validate(envelope, *, status, values=None, outcome="success"):
         "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1, "outcome": outcome}],
         "curator_message": None, "explanation": "Validator words.",
     })
+    result_with_history_receipt(result)
     return materialize_validator_results_into_envelope(
         envelope, metadata, [ValidatorResultMaterializationInput(match=match, request=request, result=result)],
     )
@@ -741,6 +744,7 @@ def test_a_curator_removes_one_list_element_and_its_findings_follow():
     first, second = unresolved_value("a", identity_keys=KEYS), unresolved_value("b", identity_keys=KEYS)
     envelope = _envelope_with({"sites": [first, second]},
                               findings=[_finding("sites[0].curie"), _finding("sites[1].curie")])
+    envelope.extracted_objects[0].metadata["validation_history"] = {"fields": {}, "elements": {"sites": ["first", "second"]}}
     remove = EnvelopeFieldPatchOperation.REMOVE
 
     result = _patch(envelope, "sites[0]", None, before=first, operation=remove, pack=_list_pack())
@@ -879,6 +883,7 @@ def test_removing_the_last_or_only_element_validates_and_keeps_its_history(store
 
     elements = [unresolved_value(f"code {n}", identity_keys=KEYS) for n in range(stored)]
     envelope = _envelope_with({"sites": elements}, findings=[_finding(f"sites[{index}].curie")])
+    envelope.extracted_objects[0].metadata["validation_history"] = {"target_id": "object-root", "fields": {}, "elements": {"sites": [f"item-{n}" for n in range(stored)]}}
     pack = _list_pack()
     overridden = _patch(envelope, f"sites[{index}].curie", {"curie": "ONT:1", "name": "one"},
                         before={"curie": None, "name": None}, operation=IDENTITY, pack=pack)

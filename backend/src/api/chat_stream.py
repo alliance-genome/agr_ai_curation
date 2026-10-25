@@ -2,6 +2,7 @@
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+from src.lib.validation_review.stops import ReviewInterrupted
 from typing import Annotated
 from fastapi import Header
 from src.lib.executable_runs import (
@@ -228,7 +229,9 @@ async def chat_endpoint(
                 extra={"session_id": session_id, "user_id": user_id, "turn_id": requested_turn_id},
             )
             await _release_non_stream_turn_claim()
-            return ChatResponse(response=assistant_turn.content, session_id=session_id)
+            review_status = _refresh_turn_review(assistant_turn, user_id, session_id)
+            return ChatResponse(response=_refresh_turn_response(assistant_turn, user_id, session_id, review_status),
+                                session_id=session_id, validation_review=review_status)
 
         logger.info(
             "Retrying incomplete non-stream chat turn %s after prior request ended",
@@ -293,6 +296,7 @@ async def chat_endpoint(
         sentry_error_event_count = 0
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
+        validation_review = None
         flow_terminal_events: List[Dict[str, Any]] = []
 
         with gen_ai_workflow_transaction(
@@ -391,6 +395,7 @@ async def chat_endpoint(
                         full_response = delta if event_data.get("observer_reconcile") else full_response + delta
 
                 if event_type == "RUN_FINISHED":
+                    validation_review = event_data.get("validation_review")
                     full_response = event_data.get("response", "")
                     run_finished = True
                     continue
@@ -465,9 +470,9 @@ async def chat_endpoint(
                         turn_id=turn_id,
                         trace_id=trace_id,
                         payload_json=(
-                            {_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: flow_terminal_events}
-                            if flow_terminal_events
-                            else None
+                            {**({_FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: flow_terminal_events} if flow_terminal_events else {}),
+                             **({"validation_review": validation_review} if validation_review else {})}
+                            if flow_terminal_events or validation_review else None
                         ),
                     )
                     if requested_turn_id and not assistant_turn.created:
@@ -495,7 +500,10 @@ async def chat_endpoint(
                                 assistant_message=assistant_turn.message.content,
                             ),
                         )
-                        return ChatResponse(response=assistant_turn.message.content, session_id=session_id)
+                        winning_status = _refresh_turn_review(assistant_turn.message, user_id, session_id)
+                        return ChatResponse(
+                            response=_refresh_turn_response(assistant_turn.message, user_id, session_id, winning_status),
+                            session_id=session_id, validation_review=winning_status)
                     _link_persisted_extraction_results_to_chat_turn(
                         refs=persisted_extraction_refs,
                         session_id=session_id,
@@ -550,10 +558,18 @@ async def chat_endpoint(
                 )
                 raise HTTPException(status_code=500, detail=error_message)
 
-        return ChatResponse(response=full_response, session_id=session_id)
+        return ChatResponse(response=full_response, session_id=session_id, validation_review=validation_review)
 
     except HTTPException:
         raise
+    except ReviewInterrupted:
+        _, notice = _persist_failure_notice(
+            session_id=session_id, user_id=user_id, turn_id=turn_id,
+            user_message=effective_user_message,
+            message="Validation review was stopped. Saved results and history remain available for continued review.",
+            partial_response=full_response, trace_id=trace_id, document_id=document_id,
+            persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted")
+        return ChatResponse(response=notice, session_id=session_id)
     except Exception as e:
         _, error_message = _persist_failure_notice(
             session_id=session_id, user_id=user_id, turn_id=turn_id,
@@ -721,6 +737,8 @@ async def chat_stream_endpoint(
         await stream_lifecycle.finalize(generated_title_candidate)
 
         async def replay_stream():
+            review_status = _refresh_turn_review(prepared_turn.replay_assistant_turn, user_id, session_id)
+            review_response = _refresh_turn_response(prepared_turn.replay_assistant_turn, user_id, session_id, review_status)
             replay_events = _preferred_flow_replay_events(
                 prepared_turn.replay_assistant_turn
             )
@@ -743,9 +761,13 @@ async def chat_stream_endpoint(
                         session_id=session_id,
                         turn_id=prepared_turn.turn_id,
                         trace_id=prepared_turn.replay_assistant_turn.trace_id,
-                        content=prepared_turn.replay_assistant_turn.content,
+                        content=review_response,
                     )
                 )
+            if review_status is not None:
+                yield _stream_event_sse(_stream_event_payload(
+                    "VALIDATION_REVIEW_STATUS", session_id=session_id, turn_id=prepared_turn.turn_id,
+                    validation_review=review_status))
             saved_payload = prepared_turn.replay_assistant_turn.payload_json
             saved_terminal = saved_payload.get("terminal_state") if isinstance(saved_payload, dict) else None
             failed_summary = saved_terminal in {"turn_failed", "turn_interrupted"}
@@ -823,6 +845,7 @@ async def chat_stream_endpoint(
         interrupted_message: Optional[str] = None
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
+        validation_review = None
         flow_terminal_events: List[Dict[str, Any]] = []
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
@@ -1005,6 +1028,12 @@ async def chat_stream_endpoint(
                         full_response = delta if event_data.get("observer_reconcile") else full_response + delta
 
                 if event_type == "RUN_FINISHED":
+                    validation_review = event_data.get("validation_review")
+                    if validation_review is not None:
+                        yield _stream_event_sse(_stream_event_payload(
+                            "VALIDATION_REVIEW_STATUS", session_id=current_session_id,
+                            turn_id=current_turn_id, trace_id=trace_id,
+                            validation_review=validation_review))
                     full_response = event_data.get("response", "")
                     run_finished = True
                     continue
@@ -1120,6 +1149,7 @@ async def chat_stream_endpoint(
                         persisted_extraction_refs=persisted_extraction_refs,
                         document_id=document_id,
                         flow_terminal_events=flow_terminal_events,
+                        validation_review=validation_review,
                     )
                 except ChatHistorySessionNotFoundError:
                     sentry_terminal_status = "session_gone"
@@ -1287,6 +1317,18 @@ async def chat_stream_endpoint(
                     error_type="IncompleteRun",
                 )
             )
+        except ReviewInterrupted:
+            sentry_terminal_status = "cancelled"
+            set_sentry_span_status(sentry_transaction, "cancelled")
+            terminal_type, notice = _persist_failure_notice(
+                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                user_message=prepared_turn.effective_user_message,
+                message="Validation review was stopped. Saved results and history remain available for continued review.",
+                partial_response=full_response, trace_id=trace_id, document_id=document_id,
+                persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted")
+            yield _stream_event_sse(_build_terminal_turn_event(
+                terminal_type, assistant_rescue_allowed=False, session_id=current_session_id,
+                turn_id=current_turn_id, trace_id=trace_id, message=notice))
         except asyncio.CancelledError:
             sentry_terminal_status = "cancelled"
             set_sentry_span_status(sentry_transaction, "cancelled")
@@ -1625,3 +1667,15 @@ async def assistant_rescue(
         created=assistant_turn.created,
         trace_id=assistant_turn.message.trace_id,
     )
+
+
+def _refresh_turn_review(turn, owner_id, session_id):
+    from src.lib.validation_review.chat import refresh_saved_status
+    payload = getattr(turn, "payload_json", None)
+    return refresh_saved_status(owner_id=owner_id, session_id=session_id,
+                                saved_status=payload.get("validation_review") if isinstance(payload, dict) else None)
+
+
+def _refresh_turn_response(turn, owner_id, session_id, status):
+    from src.lib.validation_review.chat import refresh_saved_response
+    return refresh_saved_response(owner_id=owner_id, session_id=session_id, status=status, original=turn.content)

@@ -347,6 +347,9 @@ def _resolve_system_agent(agent_id: str) -> AgentDefinition:
 
 def _build_core_generated_content(agent: AgentDefinition) -> str:
     fragments: list[str] = []
+    if agent.agent_id == "validation_reviewer":
+        from src.lib.validation_review.protocol import REVIEW_PROTOCOL
+        fragments.append(REVIEW_PROTOCOL)
     runtime_contract = _build_compact_runtime_contract(agent)
     if runtime_contract:
         fragments.append(runtime_contract)

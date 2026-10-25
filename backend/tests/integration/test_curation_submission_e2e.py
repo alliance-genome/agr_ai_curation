@@ -78,7 +78,7 @@ def _retag_envelope(envelope, *, envelope_id: str):
     metadata = dict(envelope.metadata or {})
     metadata["semantic_source"] = "domain_envelope.extracted_objects"
     return envelope.model_copy(
-        update={"envelope_id": envelope_id, "metadata": metadata}
+        update={"envelope_id": envelope_id + "-" + uuid4().hex, "metadata": metadata}
     )
 
 
@@ -253,7 +253,7 @@ def _tmem67_gene_expression_envelope(*, envelope_id: str):
         produced_by=context["produced_by"],
         produced_at=context["produced_at"],
     )
-    return _with_tmem67_validator_results(envelope)
+    return envelope
 
 
 def _with_tmem67_validator_results(envelope):
@@ -282,7 +282,8 @@ def _with_tmem67_validator_results(envelope):
         ),
         (payload["expression_annotation_subject"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
         (experiment["entity_assayed"], {"primary_external_id": "MGI:1923928", "gene_symbol": "Tmem67"}),
-        (payload["single_reference"], {"reference_id": 203506}),
+        (payload["single_reference"], {"reference_id": 203506, "curie": "AGRKB:101000000232912",
+                                         "title": "Synthetic reference title for submission testing"}),
         (experiment["single_reference"], {"reference_id": 203506}),
         (
             payload["expression_pattern"]["where_expressed"]["anatomical_structure_uberon_terms"][0],
@@ -356,6 +357,104 @@ def _domain_envelope_extraction_record(
     )
 
 
+def _review_expression_fixture(envelope, context, case_key, *, expected_revision=0, source_payload_hash=None, review_session_id=None):
+    """Exercise capture, candidate retention and explicit publication before prep.
+
+    Only validator answers and the reviewer's acceptance are scripted. This is
+    submission coverage, not proof of the supervisor model/tool execution path.
+    """
+    from sqlalchemy import select
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_envelopes.persistence import (
+        DomainEnvelopeCheckpointRequest, domain_envelope_payload_hash,
+    )
+    from src.lib.domain_packs.validator_dispatch import (
+        ValidatorRuntimeContext, dispatch_active_validator_bindings,
+    )
+    from src.lib.validation_history import runtime, store, selections
+    from src.lib.validation_history.projection import publish_decisions
+    from src.models.sql.validation_history import ValidationFact
+    from src.schemas.domain_envelope import parse_field_path
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+
+    scope = store.HistoryScope(context["current_user_auth_sub"], context["document_id"],
+                               f"chat-session-{case_key}")
+    expected = _with_tmem67_validator_results(envelope).extracted_objects[0].payload
+    if "validation_history" in envelope.metadata:
+        captured = envelope
+        original = store.read_baseline(scope, envelope.metadata["validation_history"]["artifact_id"])["normalized"]
+    else:
+        original = envelope.model_dump(mode="json")
+        captured = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
+            typed=original, envelope=envelope, provenance={"test": "submission"})
+
+    def answer(request, *, binding, **kwargs):
+        values = {}
+        for output, path in request.expected_result_fields.items():
+            value = expected
+            for part in parse_field_path(path):
+                value = value[part]
+            values[output] = value
+        return {**_result_payload(request, resolved_values=values), "resolved_objects": []}
+
+    # This submission fixture explicitly opts out of an inapplicable optional
+    # lookup. Missing input itself never satisfies a required review obligation.
+    from src.lib.domain_packs.flow_validator_selection import (
+        set_flow_validator_selections, reset_flow_validator_selections,
+    )
+    choice = set_flow_validator_selections([{
+        "binding_id": "expression_cellular_component_validation", "state": "skipped",
+    }])
+    try:
+        result = dispatch_active_validator_bindings(captured,
+            resolve_curation_domain_pack_by_id(envelope.domain_pack_id), runner=answer,
+            runtime_context=ValidatorRuntimeContext(user_id=scope.owner_id,
+                document_id=scope.document_id, authenticated_groups=()))
+    finally:
+        reset_flow_validator_selections(choice)
+    aid = captured.metadata["validation_history"]["artifact_id"]
+    ep = result.envelope.metadata["review_episode_id"]
+    before = selections.read_manifest(scope, aid, episode_id=ep)
+    assert not before["ready"]
+    assert any(item["binding_id"] == "expression_cellular_component_validation"
+               and item["reason"] == "configured_opt_out"
+               for item in before["excluded_bindings"])
+    with store.SessionLocal() as db:
+        completions = {}
+        for fact in db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == aid, ValidationFact.kind == "completion").order_by(ValidationFact.sequence)):
+            assert store._content(db, fact)["state"] == "completed", store._content(db, fact)
+            attempt = store._fact(db, aid, fact.parent_id, kind="attempt")
+            for target in store._content(db, attempt)["coverage"]:
+                completions[target] = fact.id
+        entries = []
+        for unit in before["units"]:
+            tid = unit["target_id"]
+            assert tid in completions, unit
+            subject = completions[tid]
+            reason = "Scripted reviewer accepts this fixture answer."
+            entries.append({"target_id": tid,
+                "expected_version": store._current(db, aid, tid)["version"],
+                "action": "accept", "subject": subject, "reason": reason})
+    from src.lib.curation_workspace.domain_envelope_normalization import domain_envelope_from_extraction_result
+    normalized_source = domain_envelope_from_extraction_result(
+        _domain_envelope_extraction_record(context, envelope=result.envelope,
+            adapter_key="gene_expression", case_key=case_key), stored=True)
+    published, manifest, _ = publish_decisions(scope,
+        checkpoint_request=DomainEnvelopeCheckpointRequest(project_key="agr",
+            envelope=result.envelope, expected_revision=expected_revision, document_id=scope.document_id,
+            adapter_key="gene_expression", source_extraction_result_id=f"extract-{case_key}",
+            flow_run_id=f"flow-{case_key}", session_id=review_session_id,
+            source_payload_hash=source_payload_hash or domain_envelope_payload_hash(normalized_source)),
+        episode_id=ep, operation_id=uuid4().hex,
+        actor={"type": "agent", "id": "fixture-supervisor"}, entries=entries)
+    assert manifest["ready"]
+    assert store.read_baseline(scope, aid)["normalized"] == original
+    # The extraction record retains its source payload. Prep reads the selected
+    # checkpoint for review rows instead of rewriting that source record.
+    return result.envelope
+
+
 def _run_prep_and_bootstrap_domain_envelope(
     client: TestClient,
     submission_e2e_context,
@@ -371,6 +470,9 @@ def _run_prep_and_bootstrap_domain_envelope(
     )
     from src.schemas.curation_prep import CurationPrepScopeConfirmation
     from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+    if adapter_key == "gene_expression":
+        envelope = _review_expression_fixture(envelope, submission_e2e_context, case_key)
 
     extraction_result = _domain_envelope_extraction_record(
         submission_e2e_context,
@@ -477,6 +579,15 @@ def _seed_system_agents_for_integration(test_db) -> None:
     )
     sync_system_agents(test_db, force_reload=True)
     test_db.commit()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def submission_schema():
+    """This module can run alone against a fresh, disposable PostgreSQL database."""
+    from alembic import command
+    from alembic.config import Config
+
+    command.upgrade(Config(str(REPO_ROOT / "backend" / "alembic.ini")), "head")
 
 
 @pytest.fixture
@@ -659,34 +770,6 @@ def submission_e2e_context(client: TestClient, test_db):
     test_db.commit()
 
 
-def _fake_gene_validator(monkeypatch, resolved_values: dict[str, str]) -> None:
-    """Stand in for the gene validator agent: every gene request resolves to ``resolved_values``."""
-
-    from src.lib.domain_packs import validator_dispatch
-
-    def runner(request, *, binding, runtime_context=None):
-        return {
-            "status": "resolved",
-            "request_id": request.request_id,
-            "validator_binding_id": request.validator_binding_id,
-            "validator_agent": request.validator_agent.model_dump(mode="json"),
-            "target": request.target.model_dump(mode="json"),
-            "resolved_values": dict(resolved_values),
-            "resolved_objects": [],
-            "missing_expected_fields": [],
-            "candidates": [],
-            "lookup_attempts": [{
-                "provider": "agr_curation_query", "method": "search_genes",
-                "query": {"gene_symbol": request.selected_inputs.get("mention")},
-                "result_count": 1, "outcome": "success",
-            }],
-            "curator_message": None,
-            "explanation": "Fixture gene validator result.",
-        }
-
-    monkeypatch.setattr(validator_dispatch, "_default_package_scoped_validator_runner", lambda: runner)
-
-
 def _gene_envelope_extraction_payload(
     submission_e2e_context,
     *,
@@ -794,7 +877,6 @@ def _gene_envelope_extraction_payload(
 async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_rows(
     submission_e2e_context,
     test_db,
-    monkeypatch,
 ):
     from src.lib.curation_workspace.bootstrap_service import bootstrap_document_session
     from src.lib.curation_workspace.curation_prep_service import (
@@ -809,6 +891,7 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
         CurationExtractionSourceKind,
     )
 
+    envelope_id = "gene-fixture-review-envelope-" + uuid4().hex
     extraction_result = CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "extract-observation-1",
@@ -909,15 +992,10 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
                 "run_summary": {"candidate_count": 1, "kept_count": 1},
             },
             "created_at": "2026-03-28T12:00:00Z",
-            "metadata": {"envelope_id": "gene-fixture-review-envelope"},
+            "metadata": {"envelope_id": envelope_id},
         }
     )
 
-    # The gene validator confirms the identity when the session bootstraps.
-    _fake_gene_validator(
-        monkeypatch,
-        {"curie": "FB:FBgn0000008", "symbol": "alpha-1", "taxon": "NCBITaxon:7227"},
-    )
 
     prep_output = await run_curation_prep(
         [extraction_result],
@@ -952,7 +1030,7 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
     workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
     candidate = workspace.workspace.candidates[0]
     assert candidate.adapter_key == "gene"
-    assert candidate.projection_ref.envelope_id == "gene-fixture-review-envelope"
+    assert candidate.projection_ref.envelope_id == envelope_id
     assert candidate.projection_ref.envelope_revision >= (
         prep_output.envelope_refs[0].envelope_revision
     )
@@ -963,7 +1041,8 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
     label_field = next(
         field for field in candidate.draft.fields if field.field_key == "gene_symbol"
     )
-    assert label_field.value == "alpha-1"
+    # Bootstrap preserves extraction; validation requires an explicit review run.
+    assert label_field.value is None
     assert [field.field_key for field in candidate.draft.fields] == [
         "gene_symbol",
         "entity_type",
@@ -988,8 +1067,8 @@ def test_submission_workflow_e2e_with_retry_and_history(
         CurationSubmissionStatus,
     )
 
-    # No builder emits a submittable (stable) envelope today, so the submission
-    # machinery runs on the pre-built, fully validated tmem67 fixture envelope.
+    # Scripted validator answers are explicitly selected before submission.
+    # The original extracted fixture remains immutable.
     gate_case = _alliance_gate_case("gene_expression")
     _prep_output, bootstrap_payload, workspace_payload = (
         _run_prep_and_bootstrap_domain_envelope(
@@ -1027,16 +1106,6 @@ def test_submission_workflow_e2e_with_retry_and_history(
     assert decision_response.status_code == 200, decision_response.text
     decision_payload = decision_response.json()
     assert decision_payload["candidate"]["status"] == "accepted"
-
-    validation_response = client.post(
-        f"/api/curation-workspace/sessions/{session_id}/validate-all",
-        json={"session_id": session_id},
-    )
-    assert validation_response.status_code == 200, validation_response.text
-    validation_payload = validation_response.json()
-    assert validation_payload["session"]["session_id"] == session_id
-    assert len(validation_payload["candidate_validations"]) == 1
-    assert validation_payload["candidate_validations"][0]["candidate_id"] == candidate_id
 
     preview_response = client.post(
         f"/api/curation-workspace/sessions/{session_id}/submission-preview",
@@ -1302,7 +1371,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     )
     from src.schemas.curation_workspace import CurationSessionStatus
 
-    envelope_id = "gene-expression-tmem67-repair-e2e-envelope"
+    envelope_id = "gene-expression-tmem67-repair-e2e-envelope-" + uuid4().hex
     envelope = _tmem67_missing_where_statement_envelope(envelope_id=envelope_id)
     _prep_output, bootstrap_payload, workspace_payload = (
         _run_prep_and_bootstrap_domain_envelope(
@@ -1376,6 +1445,24 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     )
     assert patch_payload["candidate"]["normalized_payload"] == {}
     assert patch_payload["history_event_ids"]
+
+    # A source edit invalidates affected ancestry; it does not silently rerun
+    # validators or approve old answers. Exercise an explicit new review round.
+    pending = client.post(
+        f"/api/curation-workspace/sessions/{session_id}/submission-preview",
+        json={"session_id": session_id, "candidate_ids": [candidate_id],
+              "mode": "direct_submit", "target_key": GENE_EXPRESSION_TARGET_KEY,
+              "include_payload": True})
+    assert pending.status_code == 200, pending.text
+    assert any(blocker["code"] == "domain_envelope.machine_review_pending"
+               for row in pending.json()["submission"]["readiness"] for blocker in row["blockers"])
+    test_db.expire_all()
+    envelope_row = test_db.get(DomainEnvelopeModel, envelope_id)
+    from src.schemas.domain_envelope import DomainEnvelope
+    _review_expression_fixture(DomainEnvelope.model_validate(envelope_row.envelope_json),
+        submission_e2e_context, "tmem67-repair", expected_revision=envelope_row.revision,
+        source_payload_hash=envelope_row.source_payload_hash, review_session_id=envelope_row.session_id)
+    test_db.expire_all()
 
     poisoned_normalized_payload = {
         "source_payload": {

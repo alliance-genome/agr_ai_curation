@@ -63,3 +63,6 @@ outcome, coverage, and meaningful errors
 `curator_message`
 Complete the finalization tool required by the active runtime contract
 acceptance checks the result contract and does not itself prove biological identity
+
+# ALL-1440 validator role boundary
+Do not search/read the paper or change evidence.

@@ -34,6 +34,8 @@ def _scalar_list(result) -> list[Any]:
 
 def cleanup_document_curation_dependencies(session: Session, document_id: UUID) -> dict[str, int]:
     """Detach and remove curation records that block pdf_documents deletion."""
+    from src.lib.validation_history.store import retire_document_history
+    retire_document_history(session, document_id)
     session_ids = _scalar_list(
         session.execute(
             select(CurationReviewSession.id).where(CurationReviewSession.document_id == document_id)

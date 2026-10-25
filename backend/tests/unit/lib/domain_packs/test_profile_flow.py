@@ -3,9 +3,11 @@
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
+
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.domain_packs.profile_validation import compile_profile_validation, profile_validation_attachment_options
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
@@ -13,6 +15,9 @@ from src.lib.flows import executor, validation_attachments
 from .test_profile_validation import example as example, profile_envelope, resolve
 from .test_profile_materialization import prepared, results
 from ..flows.test_validation_attachments import _flow_definition, _validator_node
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
 @pytest.mark.asyncio
@@ -60,13 +65,12 @@ async def test_same_label_profile_mappings_survive_flow_default_hydration(exampl
         return results_by_request[request.request_id].model_dump(mode="json")
 
     monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent", run_validator)
-    inputs, findings, _ = await executor._collect_flow_validator_materialization_inputs(
-        source_envelope=source, source_envelope_revision=1, registry=context.registry,
-        groups=[group.model_dump(mode="json") for group in hydrated.nodes[1].data.validation_groups],
-        flow=SimpleNamespace(flow_definition={"nodes": []}), agent_context={}, profile_context=context,
-    )
-    assert not findings
-    assert len(inputs) == 2
+    plan = prepare_saved_profile(source, context, example[2],
+        [group.model_dump(mode="json") for group in hydrated.nodes[1].data.validation_groups], monkeypatch)
+    from src.lib.domain_packs.validator_dispatch import dispatch_validator_jobs
+    dispatched = dispatch_validator_jobs(list(plan.initial_jobs), history_binding=plan.history_binding)
+    assert not plan.findings
+    assert len(dispatched.materialization_inputs) == 2
     assert sorted(invoked) == sorted(results_by_request)
 
     # The execute path must hydrate too: merely fixing the editor would leave
@@ -132,52 +136,6 @@ def test_flow_defaults_resolve_node_receipt_not_global_generic_bindings(example,
     assert groups == [("TEAM_A",)]
 
 
-@pytest.mark.asyncio
-async def test_flow_dispatches_compiled_mapping_through_existing_jobs(example, monkeypatch):
-    source, context = prepared(example)
-    item, = results(source, context, [{"identifier": "EX:1"}])
-    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-                        lambda request, **kwargs: item.result.model_dump(mode="json"))
-    inputs, findings, metadata = await executor._collect_flow_validator_materialization_inputs(
-        source_envelope=source, source_envelope_revision=1, registry=context.registry,
-        groups=[{"group_id": "profile", "state": "automatic", "binding_id": item.match.binding.binding_id}],
-        flow=SimpleNamespace(flow_definition={"nodes": []}), agent_context={}, profile_context=context,
-    )
-    assert not findings
-    assert len(inputs) == 1
-    assert inputs[0].request == item.request
-    assert inputs[0].result.resolved_values == {"identifier": "EX:1"}
-    assert metadata[-1]["request_id"] == item.request.request_id
-
-
-@pytest.mark.asyncio
-async def test_flow_rechecks_revoked_mapping_before_result_reuse(example, monkeypatch):
-    source, context = prepared(example)
-    binding_id = context.registry.bindings[0].binding_id
-    revoked = compile_profile_validation(context.receipt, context.profile, example[2],
-        capabilities=[replace(example[1], available=False, unavailable_reason="Revoked")])
-    monkeypatch.setattr(executor, "dispatch_validator_jobs", lambda *a, **kw: pytest.fail("Revoked validator ran"))
-    inputs, findings, _ = await executor._collect_flow_validator_materialization_inputs(
-        source_envelope=source, source_envelope_revision=1, registry=revoked.registry,
-        groups=[{"state": "automatic", "binding_id": binding_id}],
-        flow=SimpleNamespace(flow_definition={"nodes": []}), agent_context={}, profile_context=revoked,
-    )
-    assert not inputs
-    assert findings[0].code == "generic_profile.validator_unavailable"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("state,binding_id", [("skipped", None), ("replaced", None), ("supplemental", None), ("automatic", "other")])
-async def test_flow_cannot_change_pinned_mapping_contract(example, state, binding_id):
-    source, context = prepared(example)
-    with pytest.raises(ValueError, match="exact profile"):
-        await executor._collect_flow_validator_materialization_inputs(
-            source_envelope=source, source_envelope_revision=1, registry=context.registry,
-            groups=[{"state": state, "binding_id": binding_id or context.registry.bindings[0].binding_id}],
-            flow=SimpleNamespace(flow_definition={"nodes": []}), agent_context={}, profile_context=context,
-        )
-
-
 def test_flow_authoring_rejects_profile_validator_sidecar(example, monkeypatch):
     source, context = prepared(example)
     option, = profile_validation_attachment_options(context)
@@ -194,94 +152,31 @@ def test_flow_authoring_rejects_profile_validator_sidecar(example, monkeypatch):
             entries_by_node={"extract_1": {}})
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("group_count", [0, 2])
-async def test_flow_requires_each_saved_mapping_exactly_once(example, group_count):
+def prepare_saved_profile(source, context, pack, groups, monkeypatch):
+    from src.lib.validation_review.flow_plan import prepare
+    from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
+    monkeypatch.setattr('src.lib.domain_packs.profile_validation.resolve_envelope_profile_validation',
+                        lambda *a, **kw: context)
+    return prepare(source, pack, groups=groups, nodes={}, runtime_context=ValidatorRuntimeContext(
+        user_id='unit-owner', document_id=None, authenticated_groups=()))
+
+
+@pytest.mark.parametrize('groups', [[], ['duplicate', 'duplicate'], ['wrong'], ['skipped'], ['replaced'], ['supplemental']])
+def test_shared_flow_plan_requires_exact_automatic_profile_mappings(example, monkeypatch, groups):
+    from src.lib.validation_history import store
     source, context = prepared(example)
-    group = {"state": "automatic", "binding_id": context.registry.bindings[0].binding_id}
-    with pytest.raises(ValueError, match="once each"):
-        await executor._collect_flow_validator_materialization_inputs(
-            source_envelope=source, source_envelope_revision=1, registry=context.registry,
-            groups=[group] * group_count, flow=SimpleNamespace(flow_definition={}),
-            agent_context={}, profile_context=context)
+    binding_id = context.registry.bindings[0].binding_id
+    selections = [{'binding_id': 'foreign' if state == 'wrong' else binding_id,
+                   'state': state if state in {'skipped', 'replaced', 'supplemental'} else 'automatic'} for state in groups]
+    with pytest.raises(store.HistoryConflict, match='exact saved profile'):
+        prepare_saved_profile(source, context, example[2], selections, monkeypatch)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("invalid_second,omit_groups,commit_fails", [(False, False, False), (True, False, False), (False, True, False), (False, False, True)])
-async def test_flow_step_commits_profile_record_atomically(example, monkeypatch, invalid_second, omit_groups, commit_fails):
-    source, context = prepared(example, per_element=True,
-        attributes={"records": [{"paper_name": "A"}, {"paper_name": "B"}]})
-    items = results(source, context, [{"identifier": "EX:1"}, {"identifier": 2 if invalid_second else "EX:2"}])
-    results_by_request = {item.request.request_id: item.result for item in items}
-    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-        lambda request, **kwargs: results_by_request[request.request_id].model_dump(mode="json"))
-    monkeypatch.setattr(executor, "materialize_validator_results_into_envelope",
-                        lambda *a, **kw: pytest.fail("Profile entered packaged writer"))
-    monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", lambda **kwargs: [SimpleNamespace(extraction_result_id="11111111-1111-1111-1111-111111111111")])
-    monkeypatch.setattr(executor, "ensure_domain_envelope_materialization",
-                        lambda *args, **kwargs: SimpleNamespace(envelope_id=source.envelope_id))
-    row = SimpleNamespace(envelope_id=source.envelope_id, extraction_metadata={}, envelope_json=source.model_dump(mode="json"), revision=1,
-        project_key="fixture", document_id=None, session_id=None, flow_run_id=None,
-        object_model_ref_json={}, model_field_ref_json={})
-    db = SimpleNamespace(get=lambda *args: row, commit=Mock(), rollback=Mock(), close=Mock())
-    if commit_fails:
-        db.commit.side_effect = RuntimeError("checkpoint commit failed")
-    monkeypatch.setattr(executor, "SessionLocal", lambda: db)
-    monkeypatch.setattr(executor, "resolve_curation_domain_pack_by_id", lambda key: example[2])
-    monkeypatch.setattr("src.lib.curation_workspace.execution_contracts.resolve_receipt_profile",
-                        lambda session, receipt: context.profile)
-    monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog", lambda **kwargs: [example[1]])
-    checkpoints = []
-    def write_checkpoint(session, request):
-        checkpoints.append(request)
-        row.envelope_json = request.envelope.model_dump(mode="json")
-        row.envelope_json["authenticated_context"] = {"active_groups": ["fixture-checkpoint-group"]}
-        return SimpleNamespace(revision=2)
-
-    monkeypatch.setattr(executor, "write_domain_envelope_checkpoint", write_checkpoint)
-    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
-    candidate = ExtractionEnvelopeCandidate(agent_key=context.receipt.agent_key,
-        payload_json=source.model_dump(mode="json"), execution_receipt=context.receipt)
-    if omit_groups:
-        with pytest.raises(ValueError, match="once each"):
-            await executor._execute_validation_groups_for_step(
-                flow=SimpleNamespace(id="flow", name="Profile", flow_definition={}),
-                candidate=ExtractionEnvelopeCandidate(agent_key=context.receipt.agent_key,
-                    payload_json=source.model_dump(mode="json"), execution_receipt=context.receipt),
-                node_data={"validation_groups": []}, document_id="document", user_id="curator",
-                session_id="session", flow_run_id="run", agent_context={}, flow_conversation_summary="")
-        assert not checkpoints
-        db.rollback.assert_called_once()
-        return
-    async def execute():
-        return await executor._execute_validation_groups_for_step(
-            flow=SimpleNamespace(id="flow", name="Profile", flow_definition={"nodes": []}), candidate=candidate,
-            node_data={"validation_groups": [{"group_id": "profile", "state": "automatic",
-                        "binding_id": context.registry.bindings[0].binding_id}]},
-            document_id="document", user_id="curator", session_id="session", flow_run_id="run",
-            agent_context={}, flow_conversation_summary="Profile fixture",
-        )
-    if commit_fails:
-        with pytest.raises(RuntimeError, match="checkpoint commit failed"):
-            await execute()
-        assert candidate.payload_json == source.model_dump(mode="json")
-        db.rollback.assert_called_once()
-        db.close.assert_called_once()
-        return
-    result = await execute()
-    assert result["validation_group_results"]["materialized_envelope_revision"] == 2
-    saved = checkpoints[0].envelope
-    assert result["validated_candidate"].payload_json == row.envelope_json
-    assert result["validated_candidate"].payload_json is not row.envelope_json
-    assert result["validated_candidate"].payload_json["authenticated_context"] == {"active_groups": ["fixture-checkpoint-group"]}
-    assert result["validated_candidate"].execution_receipt is candidate.execution_receipt
-    assert candidate.payload_json == source.model_dump(mode="json")
-    records = saved.extracted_objects[0].payload["attributes"]["records"]
-    if invalid_second:
-        assert saved.extracted_objects == source.extracted_objects
-    else:
-        assert [record["resolved_id"] for record in records] == ["EX:1", "EX:2"]
-    assert source.extracted_objects[0].payload["attributes"]["records"] == [{"paper_name": "A"}, {"paper_name": "B"}]
-    db.commit.assert_called_once()
-    db.rollback.assert_not_called()
-    db.close.assert_called_once()
+def test_shared_flow_plan_cannot_dispatch_revoked_profile_mapping(example, monkeypatch):
+    from src.lib.validation_history import store
+    source, context = prepared(example)
+    binding_id = context.registry.bindings[0].binding_id
+    revoked = compile_profile_validation(context.receipt, context.profile, example[2],
+        capabilities=[replace(example[1], available=False, unavailable_reason='Revoked')])
+    with pytest.raises(store.HistoryConflict, match='unavailable validator binding'):
+        prepare_saved_profile(source, revoked, example[2], [{'binding_id': binding_id, 'state': 'automatic'}], monkeypatch)

@@ -1061,3 +1061,65 @@ def test_pdfx_wait_settings_reach_backend(name, default):
     assert dev[name] == prod[name] == "${" + name + ":-" + str(default) + "}"
     for template in (ENV_TEMPLATE_PATH, ENV_EXAMPLE_PATH):
         assert f"{name}={default}" in template.read_text()
+
+
+def test_validation_history_pagination_has_deployment_parity():
+    key = "VALIDATION_HISTORY_PAGE_SIZE"
+    expected = "${VALIDATION_HISTORY_PAGE_SIZE:-5}"
+    assert _load_compose()["services"]["backend"]["environment"][key] == expected
+    assert _list_environment(_load_dev_compose()["services"]["backend"]["environment"])[key] == expected
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "5"
+
+
+REVIEW_LIMIT_CONTRACT = [
+    line.split("|") for line in (
+        WORKSPACE_ROOT / "scripts/testing/fixtures/validation_review_env.txt"
+    ).read_text().splitlines() if line and not line.startswith("#")
+]
+
+
+@pytest.mark.parametrize("key,default,override", REVIEW_LIMIT_CONTRACT)
+def test_validation_review_limits_have_deployment_parity(key, default, override, monkeypatch):
+    from src.lib.validation_review.policy import ReviewLimits
+
+    monkeypatch.delenv(key, raising=False)
+    field = key.removeprefix("VALIDATION_REVIEW_").lower()
+    assert str(ReviewLimits.configured().snapshot()[field]) == default
+    expected = "${" + key + ":-" + default + "}"
+    for path, names in (
+        (DEV_COMPOSE_PATH, ("backend", "benchmark_worker")),
+        (COMPOSE_PATH, ("backend", "benchmark_worker")),
+        (TEST_COMPOSE_PATH, ("backend-unit-tests", "backend-persistence-tests", "benchmark-worker-test")),
+    ):
+        services = yaml.safe_load(path.read_text())["services"]
+        for name in names:
+            env = services[name]["environment"]
+            if isinstance(env, list):
+                env = _list_environment(env)
+            assert env[key] == expected
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
+    monkeypatch.setenv(key, override)
+    assert str(ReviewLimits.configured().snapshot()[field]) == override
+
+
+def test_validation_review_deployment_contract_covers_every_getter():
+    from src.lib.validation_review.policy import ReviewLimits
+
+    assert {key for key, _, _ in REVIEW_LIMIT_CONTRACT} == {
+        "VALIDATION_REVIEW_" + field.upper() for field in ReviewLimits.configured().snapshot()
+    }
+
+
+def test_workspace_review_concurrency_deployment_parity(monkeypatch):
+    from src.lib.openai_agents.config import get_workspace_review_concurrency
+    key = "WORKSPACE_REVIEW_CONCURRENCY"
+    monkeypatch.delenv(key, raising=False)
+    assert get_workspace_review_concurrency() == 1
+    for path in (DEV_COMPOSE_PATH, COMPOSE_PATH):
+        env = yaml.safe_load(path.read_text())["services"]["backend"]["environment"]
+        if isinstance(env, list):
+            env = _list_environment(env)
+        assert env[key] == "${WORKSPACE_REVIEW_CONCURRENCY:-1}"
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "1"
+    monkeypatch.setenv(key, "3")
+    assert get_workspace_review_concurrency() == 3

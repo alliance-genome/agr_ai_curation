@@ -4,16 +4,21 @@ from agents import RunConfig as SDKRunConfig
 
 import asyncio
 from copy import deepcopy
-from dataclasses import replace
 import importlib
 import json
 import logging
 from types import SimpleNamespace
 from uuid import UUID
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agents import Agent, ModelSettings, function_tool
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 def _executor_module():
     """Load flow executor lazily so monkeypatches target the active module instance."""
@@ -38,6 +43,40 @@ def get_all_agent_tools(*args, **kwargs):
     # Fresh inspection integration tests call the production wrapper explicitly.
     kwargs.setdefault("enable_result_inspection", False)
     return _executor_module().get_all_agent_tools(*args, **kwargs)
+
+
+def get_non_extraction_step_tools(*args, **kwargs):
+    """Ordering-only fixtures model plain analysis tools, with no source capture.
+
+    Real extraction/review admission is exercised against PostgreSQL by
+    test_flow_review_steps, rather than mocked away in those tests.
+    """
+    with patch("src.lib.flows.executor._flow_step_candidate_expected_sources", return_value=[]):
+        return get_all_agent_tools(*args, **kwargs)
+
+
+def stub_completed_review(monkeypatch, payload):
+    """Isolate result formatting/inspection from the separately DB-tested review lifecycle."""
+    from src.lib.validation_review.flow import FlowReview
+    monkeypatch.setattr("src.lib.validation_review.flow_steps.claim", lambda *a, **kw: {"claimed": True, "step_id": "fixture-step"})
+    monkeypatch.setattr("src.lib.validation_review.flow_steps.stop", lambda *a, **kw: None)
+    async def completed(self):
+        self.record = SimpleNamespace(metadata={"flow_review": {"episode_id": "fixture-episode"}, "idempotency_key": "fixture", "flow_step_key": "fixture"}, extraction_result_id="fixture")
+        return SimpleNamespace(model_dump=lambda **kw: payload)
+    monkeypatch.setattr(FlowReview, "finish_review", completed)
+
+
+def get_stub_review_step_tools(*args, **kwargs):
+    """Provide runtime identities for tests using stub_completed_review explicitly."""
+    kwargs.setdefault("document_id", "11111111-1111-1111-1111-111111111111")
+    kwargs.setdefault("user_id", "fixture-owner")
+    kwargs.setdefault("session_id", "fixture-session")
+    kwargs.setdefault("flow_run_id", "fixture-run")
+    kwargs.setdefault("doc_context", DocumentContext(document_id=kwargs["document_id"], user_id=kwargs["user_id"]))
+    result = get_all_agent_tools(*args, **kwargs)
+    if len(result) == 4:
+        result[3]["supervisor"] = SimpleNamespace()
+    return result
 
 
 def build_supervisor_instructions(*args, **kwargs):
@@ -1591,6 +1630,8 @@ def _mock_executor_agent_metadata(monkeypatch):
         "src.lib.flows.executor.get_agent_metadata",
         lambda agent_id, **_kwargs: _metadata_from_registry(agent_id),
     )
+    monkeypatch.setattr("src.lib.prompts.assembly.build_agent_prompt_layers",
+        lambda *args, **kwargs: SimpleNamespace(layers=[]))
     # These runtime tests use synthetic document IDs and no SQL document store.
     monkeypatch.setattr("src.lib.flows.executor.capture_source_document", lambda *_: None)
 
@@ -2030,10 +2071,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "validator_node_id": "custom-node",
         }])])
         tools, _ = get_all_agent_tools(flow)
-        # This fixture stops at the structured-envelope guard after invocation.
-        with pytest.raises(RuntimeError, match="structured extraction envelope"):
+        # Extraction must refuse missing durable identity before invoking a model.
+        with pytest.raises(ValueError, match="durable run, document and owner"):
             await tools[0].on_invoke_tool(SimpleNamespace(tool_name="flow", run_config=None), json.dumps({"query": "run"}))
-        assert observed == [{"fixture.identifier": {"state": "replaced", "validator_node_id": "custom-node"}}]
+        assert observed == []
         assert current_flow_validator_selections() == {}
 
     @pytest.mark.asyncio
@@ -2060,7 +2101,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             _make_flow([_agent_node("n1", "gene")]),
             include_unavailable=True,
         )
@@ -2109,7 +2150,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             _make_flow([
                 _agent_node("n1", "gene"),
                 _agent_node("n2", "disease"),
@@ -2166,8 +2207,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         mock_streaming.side_effect = _make_streaming_tool
         flow = _make_flow([_agent_node("n1", "gene")])
-        first_tools, _ = get_all_agent_tools(flow)
-        second_tools, _ = get_all_agent_tools(flow)
+        first_tools, _ = get_non_extraction_step_tools(flow)
+        second_tools, _ = get_non_extraction_step_tools(flow)
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
         first = asyncio.create_task(
@@ -2208,7 +2249,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             _make_flow([_agent_node("n1", "gene")]),
             include_unavailable=True,
         )
@@ -2253,7 +2294,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n2", "disease"),
         ])
 
-        tools, _ = get_all_agent_tools(flow)
+        tools, _ = get_non_extraction_step_tools(flow)
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
 
         # Step 1 executes normally.
@@ -2312,7 +2353,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ])
 
-        tools, _ = get_all_agent_tools(
+        tools, _ = get_non_extraction_step_tools(
             flow,
             document_name="Smith et al. (2024).pdf",
             user_query="Focus on the validated findings.",
@@ -2387,19 +2428,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
             return {"validation_group_results": {"groups": []}}
 
         mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            executor,
-            "_execute_validation_groups_for_step",
-            _fake_validation_groups,
-        )
 
         flow = _make_flow([
             _agent_node("n1", "gene", output_key="gene_output"),
         ])
 
+        stub_completed_review(monkeypatch, payload)
         clear_collected_events()
         try:
-            tools, _, _, execution_state = get_all_agent_tools(
+            tools, _, _, execution_state = get_stub_review_step_tools(
                 flow,
                 include_unavailable=True,
             )
@@ -2412,9 +2449,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             clear_collected_events()
 
         assert result == "Validated domain envelope result for gene."
-        assert len(validation_candidates) == 1
-        assert validation_candidates[0] is not None
-        assert validation_candidates[0].payload_json["items"][0]["label"] == "TP53"
+        assert validation_candidates == []  # No second validation pipeline.
         completed_step = execution_state["completed_steps"][0]
         assert completed_step["candidate"].payload_json["items"][0]["label"] == "TP53"
         assert completed_step["evidence_count"] == 1
@@ -2463,194 +2498,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert audit_event["data"]["toolName"] == "ask_gene_specialist"
         assert audit_event["data"]["internalPayloadFound"] is True
 
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_expected_extraction_step_audits_missing_internal_payload(
-        self, mock_get_agent, mock_streaming, monkeypatch
-    ):
-        """Expected extraction steps should explain when no internal payload appears."""
-        executor = _executor_module()
-        from src.lib.openai_agents.streaming_tools import (
-            clear_collected_events,
-            get_collected_events,
-        )
+    def test_expected_extraction_missing_payload_diagnostic(self):
+        assert _executor_module()._flow_candidate_reject_reason(
+            candidate=None, candidate_expected=True, used_internal_extraction_payload=False,
+            adapter_key_resolved=True, evidence_count=0) == "internal_payload_missing"
 
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        validation_candidates = []
-
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str) -> str:
-                return "Finalized one extraction through builder tools."
-
-            return _tool
-
-        async def _fake_validation_groups(**kwargs):
-            validation_candidates.append(kwargs["candidate"])
-            return {"validation_group_results": {"groups": []}}
-
-        mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            executor,
-            "_execute_validation_groups_for_step",
-            _fake_validation_groups,
-        )
-
-        flow = _make_flow([
-            _agent_node("n1", "gene", output_key="gene_output"),
-        ])
-
-        clear_collected_events()
-        try:
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-            result = asyncio.run(
-                tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
-            )
-            collected_events = list(get_collected_events())
-        finally:
-            clear_collected_events()
-
-        assert result == "Finalized one extraction through builder tools."
-        assert validation_candidates == [None]
-        completed_step = execution_state["completed_steps"][0]
-        assert completed_step["candidate"] is None
-        assert completed_step["evidence_count"] == 0
-        handoff_audit = completed_step["extraction_handoff_audit"]
-        assert handoff_audit["candidateExpected"] is True
-        assert handoff_audit["candidateExpectedFrom"] == ["catalog_curation_metadata"]
-        assert handoff_audit["internalEventEmitted"] is False
-        assert handoff_audit["internalEventMatchedTool"] is False
-        assert handoff_audit["internalEventFoundByFlow"] is False
-        assert handoff_audit["internalPayloadFound"] is False
-        assert handoff_audit["internalPayloadSource"] is None
-        assert handoff_audit["internalEventSources"] == []
-        assert handoff_audit["internalEventToolNames"] == []
-        assert handoff_audit["candidateBuilt"] is False
-        assert handoff_audit["candidateRejectReason"] == "internal_payload_missing"
-        assert handoff_audit["adapterKeyResolved"] is True
-        assert handoff_audit["evidenceCount"] == 0
-        assert handoff_audit["persistenceAttempted"] is False
-        assert handoff_audit["persistedResultCount"] is None
-        timing_event = next(
-            event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
-        )
-        assert timing_event["details"]["candidateExpected"] is True
-        assert timing_event["details"]["usedInternalExtractionPayload"] is False
-        assert timing_event["details"]["internalPayloadFound"] is False
-        assert timing_event["details"]["candidateBuilt"] is False
-        assert timing_event["details"]["candidateRejectReason"] == "internal_payload_missing"
-        audit_event = next(
-            event
-            for event in collected_events
-            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
-        )
-        assert audit_event["data"]["toolName"] == "ask_gene_specialist"
-        assert audit_event["data"]["internalPayloadFound"] is False
-        assert audit_event["data"]["candidateRejectReason"] == "internal_payload_missing"
-
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_candidate_without_adapter_key_audits_missing_adapter(
-        self, mock_get_agent, mock_streaming, monkeypatch
-    ):
-        """Candidate adapter diagnostics should match the persistence gate."""
-        executor = _executor_module()
-        from src.lib.openai_agents.streaming_tools import (
-            clear_collected_events,
-            get_collected_events,
-        )
-
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        evidence_record = _make_evidence_record(
-            "TP53",
-            verified_quote="TP53 expression increased.",
-            chunk_id="chunk-tp53",
-        )
-        payload = _structured_step_output(
-            "TP53",
-            evidence_records=[evidence_record],
-        )
-
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str) -> str:
-                return json.dumps(payload)
-
-            return _tool
-
-        def _fake_candidate_builder(step_result, **kwargs):
-            _ = step_result, kwargs
-            return (
-                executor.ExtractionEnvelopeCandidate(
-                    agent_key="gene",
-                    adapter_key=None,
-                    candidate_count=1,
-                    conversation_summary="Extract findings",
-                    payload_json=payload,
-                    metadata={
-                        "flow_id": "11111111-1111-1111-1111-111111111111",
-                        "step": 1,
-                        "tool_name": "ask_gene_specialist",
-                    },
-                ),
-                {"evidence_records": [evidence_record]},
-            )
-
-        async def _fake_validation_groups(**kwargs):
-            return {"validation_group_results": {"groups": []}}
-
-        mock_streaming.side_effect = _make_streaming_tool
-        monkeypatch.setattr(
-            executor,
-            "build_extraction_envelope_candidate_with_evidence",
-            _fake_candidate_builder,
-        )
-        monkeypatch.setattr(
-            executor,
-            "_execute_validation_groups_for_step",
-            _fake_validation_groups,
-        )
-
-        flow = _make_flow([
-            _agent_node("n1", "gene", output_key="gene_output"),
-        ])
-
-        clear_collected_events()
-        try:
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-            asyncio.run(
-                tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
-            )
-            collected_events = list(get_collected_events())
-        finally:
-            clear_collected_events()
-
-        completed_step = execution_state["completed_steps"][0]
-        handoff_audit = completed_step["extraction_handoff_audit"]
-        assert completed_step["candidate"] is not None
-        assert handoff_audit["candidateBuilt"] is True
-        assert handoff_audit["adapterKeyResolved"] is False
-        assert handoff_audit["candidateRejectReason"] == "missing_adapter_key"
-        timing_event = next(
-            event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
-        )
-        assert timing_event["details"]["adapterKeyResolved"] is False
-        assert timing_event["details"]["candidateRejectReason"] == "missing_adapter_key"
-        audit_event = next(
-            event
-            for event in collected_events
-            if event.get("type") == executor.FLOW_EXTRACTION_HANDOFF_AUDIT_EVENT
-        )
-        assert audit_event["data"]["adapterKeyResolved"] is False
-        assert audit_event["data"]["candidateRejectReason"] == "missing_adapter_key"
+    def test_candidate_missing_adapter_diagnostic(self):
+        assert _executor_module()._flow_candidate_reject_reason(
+            candidate=SimpleNamespace(), candidate_expected=True, used_internal_extraction_payload=True,
+            adapter_key_resolved=False, evidence_count=1) == "missing_adapter_key"
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -2726,7 +2582,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         clear_collected_events()
         try:
             with benchmark_route_plan(benchmark_routes):
-                tools, _, _, execution_state = get_all_agent_tools(
+                tools, _, _, execution_state = get_non_extraction_step_tools(
                     flow,
                     include_unavailable=True,
                     flow_run_id="flow-run-123",
@@ -2809,18 +2665,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "reason": "literal-only files are not source-backed",
                         }
                     )
-                return json.dumps(
-                    {
-                        "domain_pack_id": "generic",
-                        "envelope_id": "env-generic-1",
-                        "extracted_objects": [
-                            {
-                                "object_type": "GenericFinding",
-                                "payload": {"label": "batch smoke finding"},
-                            }
-                        ],
-                    }
-                )
+                return json.dumps(_structured_step_output("batch smoke finding"))
 
             return _tool
 
@@ -2955,7 +2800,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ])
 
-        tools, _ = get_all_agent_tools(flow, user_query="Original flow input")
+        tools, _ = get_non_extraction_step_tools(flow, user_query="Original flow input")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "supervisor-query"})))
 
@@ -3007,11 +2852,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ])
 
-        tools, _, _, execution_state = get_all_agent_tools(flow, include_unavailable=True)
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
-
-        schedule = execution_state["completed_steps"][0]["validation_schedule"]
+        schedule = _executor_module().validation_schedule_from_node_data(flow.flow_definition["nodes"][1]["data"])
         assert [item["attachment_id"] for item in schedule["scheduled_validators"]] == [
             "active-lookup"
         ]
@@ -3022,1466 +2863,11 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "future-lookup"
         ]
 
-    def test_automatic_validation_group_runs_package_validator_off_event_loop(
-        self, monkeypatch
-    ):
-        """Automatic package validators should not call Runner.run_sync in the loop."""
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
-        from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-        envelope = DomainEnvelope(
-            envelope_id="env-automatic",
-            domain_pack_id="fixture.validation",
-            extracted_objects=[
-                CuratableObjectEnvelope(
-                    object_type="GeneAssertion",
-                    pending_ref_id="object-1",
-                    payload={"gene": {"identifier": "AGR:0001"}},
-                )
-            ],
-        )
-        binding = ValidatorBinding(
-            binding_id="fixture.identifier_lookup",
-            state=ValidationBindingState.ACTIVE,
-            source_scope="field",
-            source_object_type="GeneAssertion",
-            source_field_path="gene.identifier",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="fixture.validators",
-                agent_id="package_agent",
-            ),
-            object_types=("GeneAssertion",),
-            field_paths=("gene.identifier",),
-            input_fields={
-                "identifier": DomainPackInputSelector(
-                    source="payload",
-                    path="gene.identifier",
-                )
-            },
-            expected_result_fields={"identifier": "gene.identifier"},
-            required_any_active_group=("ZFIN",),
-        )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.extracted_objects[0],
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
-
-        calls = []
-
-        def _fake_package_validator(request, *, binding, runtime_context=None):
-            with pytest.raises(RuntimeError):
-                asyncio.get_running_loop()
-            calls.append({
-                "request": request,
-                "binding": binding,
-                "runtime_context": runtime_context,
-            })
-            return {
-                "status": "resolved",
-                "request_id": request.request_id,
-                "validator_binding_id": request.validator_binding_id,
-                "validator_agent": request.validator_agent.model_dump(mode="json"),
-                "target": request.target.model_dump(mode="json"),
-                "resolved_values": {"identifier": "AGR:0001"},
-                "resolved_objects": [],
-                "missing_expected_fields": [],
-                "candidates": [],
-                "lookup_attempts": [
-                    {
-                        "provider": "fixture",
-                        "method": "identifier_lookup",
-                        "query": dict(request.selected_inputs),
-                        "result_count": 1,
-                        "outcome": "success",
-                    }
-                ],
-                "curator_message": None,
-                "explanation": "Package validator passed.",
-            }
-
-        monkeypatch.setattr(
-            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-            _fake_package_validator,
-        )
-
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=7,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "automatic-lookup",
-                        "state": "automatic",
-                        "binding_id": "fixture.identifier_lookup",
-                    }
-                ],
-                flow=_make_flow([]),
-                agent_context={
-                    "user_id": "curator-1",
-                    "authenticated_groups": ["ZFIN"],
-                },
-                document_id="document-1",
-                user_id="curator-1",
-            )
-        )
-
-        assert selector_findings == []
-        assert len(calls) == 1
-        assert calls[0]["binding"] is binding
-        assert calls[0]["request"].validator_binding_id == "fixture.identifier_lookup"
-        assert calls[0]["runtime_context"].document_id == "document-1"
-        assert calls[0]["runtime_context"].user_id == "curator-1"
-        assert calls[0]["runtime_context"].authenticated_groups == ("ZFIN",)
-        assert len(materialization_inputs) == 1
-        assert materialization_inputs[0].match is match
-        assert materialization_inputs[0].dispatch_context["authenticated_groups"] == [
-            "ZFIN"
-        ]
-        metadata = [item for item in metadata if item.get("group_id")]
-        assert len(metadata) == 1
-        assert {
-            "group_id": metadata[0]["group_id"],
-            "state": metadata[0]["state"],
-            "validator_binding_id": metadata[0]["validator_binding_id"],
-            "status": metadata[0]["status"],
-            "request_id": metadata[0]["request_id"],
-            "missing_expected_fields": metadata[0]["missing_expected_fields"],
-        } == {
-            "group_id": "automatic-lookup",
-            "state": "automatic",
-            "validator_binding_id": "fixture.identifier_lookup",
-            "status": "resolved",
-            "request_id": calls[0]["request"].request_id,
-            "missing_expected_fields": [],
-        }
-        assert metadata[0]["selected_inputs"] == {"identifier": "AGR:0001"}
-        assert metadata[0]["lookup_attempts"] == [
-            {
-                "provider": "fixture",
-                "method": "identifier_lookup",
-                "query": {"identifier": "AGR:0001"},
-                "coverage": None,
-                "result_count": 1,
-                "outcome": "success",
-                "message": None,
-            }
-        ]
-        assert metadata[0]["dispatch_metadata"] == {
-            "validator_agent_run_count": 1,
-            "batch_validator_run_count": 0,
-            "validator_batch_groups": [],
-        }
-
-    def test_duplicate_automatic_groups_each_receive_result_metadata(self, monkeypatch):
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
-        from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-        envelope = DomainEnvelope(
-            envelope_id="env-duplicate-automatic-groups",
-            domain_pack_id="fixture.validation",
-            extracted_objects=[
-                CuratableObjectEnvelope(
-                    object_type="GeneAssertion",
-                    pending_ref_id="object-1",
-                    payload={"gene": {"identifier": "AGR:0001"}},
-                )
-            ],
-        )
-        binding = ValidatorBinding(
-            binding_id="fixture.identifier_lookup",
-            state=ValidationBindingState.ACTIVE,
-            source_scope="field",
-            source_object_type="GeneAssertion",
-            source_field_path="gene.identifier",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="fixture.validators",
-                agent_id="package_agent",
-            ),
-            object_types=("GeneAssertion",),
-            field_paths=("gene.identifier",),
-            input_fields={
-                "identifier": DomainPackInputSelector(
-                    source="payload",
-                    path="gene.identifier",
-                )
-            },
-            expected_result_fields={"identifier": "gene.identifier"},
-        )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.extracted_objects[0],
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
-
-        def _fake_package_validator(request, *, binding, runtime_context=None):
-            return {
-                "status": "resolved",
-                "request_id": request.request_id,
-                "validator_binding_id": request.validator_binding_id,
-                "validator_agent": request.validator_agent.model_dump(mode="json"),
-                "target": request.target.model_dump(mode="json"),
-                "resolved_values": {"identifier": "AGR:0001"},
-                "resolved_objects": [],
-                "missing_expected_fields": [],
-                "candidates": [],
-                "lookup_attempts": [
-                    {
-                        "provider": "fixture",
-                        "method": "identifier_lookup",
-                        "query": dict(request.selected_inputs),
-                        "result_count": 1,
-                        "outcome": "success",
-                    }
-                ],
-                "curator_message": None,
-                "explanation": "Package validator passed.",
-            }
-
-        monkeypatch.setattr(
-            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-            _fake_package_validator,
-        )
-        groups = [
-            {
-                "group_id": group_id,
-                "state": "automatic",
-                "binding_id": "fixture.identifier_lookup",
-            }
-            for group_id in ("automatic-lookup-1", "automatic-lookup-2")
-        ]
-
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=7,
-                registry=_Registry(),
-                groups=groups,
-                flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
-            )
-        )
-
-        assert selector_findings == []
-        assert len(materialization_inputs) == 2
-        assert [item["group_id"] for item in metadata] == [
-            "automatic-lookup-1",
-            "automatic-lookup-2",
-        ]
-        assert [item["status"] for item in metadata] == ["resolved", "resolved"]
-        assert all("dispatch_metadata" in item for item in metadata)
-
-    def test_automatic_validation_group_uses_shared_batch_dedupe_and_split(
-        self, monkeypatch
-    ):
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
-        from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-        identifiers = ["AGR:0001", "AGR:0001", "AGR:0002", "AGR:0003", "AGR:0004"]
-        objects = [
-            CuratableObjectEnvelope(
-                object_type="GeneAssertion",
-                pending_ref_id=f"object-{index}",
-                payload={"gene": {"identifier": identifier}},
-            )
-            for index, identifier in enumerate(identifiers, start=1)
-        ]
-        envelope = DomainEnvelope(
-            envelope_id="env-automatic-batch",
-            domain_pack_id="fixture.validation",
-            extracted_objects=objects,
-        )
-        binding = ValidatorBinding(
-            binding_id="fixture.identifier_lookup",
-            state=ValidationBindingState.ACTIVE,
-            source_scope="field",
-            source_object_type="GeneAssertion",
-            source_field_path="gene.identifier",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="fixture.validators",
-                agent_id="package_agent",
-            ),
-            object_types=("GeneAssertion",),
-            field_paths=("gene.identifier",),
-            input_fields={
-                "identifier": DomainPackInputSelector(
-                    source="payload",
-                    path="gene.identifier",
-                )
-            },
-            expected_result_fields={"identifier": "gene.identifier"},
-            batch_enabled=True,
-            batch_family="fixture.identifier",
-            batch_max_size=2,
-        )
-        matches = tuple(
-            ValidatorBindingMatch(
-                binding=binding,
-                envelope=envelope,
-                object_envelope=object_envelope,
-            )
-            for object_envelope in objects
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return matches
-
-        batch_calls = []
-
-        def _fake_batch_validator(jobs, *, binding, runtime_context=None):
-            batch_calls.append(
-                [job.request.selected_inputs["identifier"] for job in jobs]
-            )
-            return [
-                {
-                    "status": "resolved",
-                    "request_id": job.request.request_id,
-                    "validator_binding_id": job.request.validator_binding_id,
-                    "validator_agent": job.request.validator_agent.model_dump(
-                        mode="json"
-                    ),
-                    "target": job.request.target.model_dump(mode="json"),
-                    "resolved_values": {
-                        "identifier": job.request.selected_inputs["identifier"]
-                    },
-                    "resolved_objects": [],
-                    "missing_expected_fields": [],
-                    "candidates": [],
-                    "lookup_attempts": [
-                        {
-                            "provider": "fixture",
-                            "method": "identifier_lookup",
-                            "query": dict(job.request.selected_inputs),
-                            "result_count": 1,
-                            "outcome": "success",
-                        }
-                    ],
-                    "curator_message": None,
-                    "explanation": "Package validator passed.",
-                }
-                for job in jobs
-            ]
-
-        monkeypatch.setattr(
-            "src.lib.domain_packs.validator_dispatch."
-            "run_package_scoped_validator_agent_batch",
-            _fake_batch_validator,
-        )
-
-        from src.lib.openai_agents.streaming_tools import set_live_event_list
-
-        live_events = []
-        set_live_event_list(live_events)
-        try:
-            materialization_inputs, selector_findings, metadata = asyncio.run(
-                executor._collect_flow_validator_materialization_inputs(
-                    source_envelope=envelope,
-                    source_envelope_revision=3,
-                    registry=_Registry(),
-                    groups=[
-                        {
-                            "group_id": "automatic-lookup",
-                            "state": "automatic",
-                            "binding_id": "fixture.identifier_lookup",
-                        }
-                    ],
-                    flow=_make_flow([]),
-                    agent_context={"user_id": "curator-1"},
-                )
-            )
-        finally:
-            set_live_event_list(None)
-
-        assert selector_findings == []
-        assert batch_calls == [
-            ["AGR:0001", "AGR:0002"],
-            ["AGR:0003", "AGR:0004"],
-        ]
-        assert len(materialization_inputs) == 5
-        assert [item.result.status for item in materialization_inputs] == [
-            "resolved",
-            "resolved",
-            "resolved",
-            "resolved",
-            "resolved",
-        ]
-        assert all(
-            item["dispatch_metadata"]["validator_agent_run_count"] == 2
-            and item["dispatch_metadata"]["batch_validator_run_count"] == 2
-            and len(item["dispatch_metadata"]["validator_batch_groups"]) == 2
-            for item in metadata
-        )
-        assert sorted(event["event"] for event in live_events) == [
-            "validator_batch_complete",
-            "validator_batch_complete",
-            "validator_batch_start",
-            "validator_batch_start",
-        ]
-
-    def test_automatic_validation_group_preflight_blocks_unsupported_context(
-        self, monkeypatch
-    ):
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
-        from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-        envelope = DomainEnvelope(
-            envelope_id="env-unsupported-phenotype",
-            domain_pack_id="agr.alliance.phenotype",
-            extracted_objects=[
-                CuratableObjectEnvelope(
-                    object_type="PhenotypeTerm",
-                    pending_ref_id="phenotype-term-1",
-                    payload={
-                        "label": "boundary disruptions",
-                        "ontology_lookup_hint": {
-                            "taxon_id": "NCBITaxon:7955",
-                        },
-                    },
-                )
-            ],
-        )
-        binding = ValidatorBinding(
-            binding_id="phenotype_term_ontology_validator",
-            state=ValidationBindingState.ACTIVE,
-            preflight_policy="provider_taxon_mapping_required",
-            source_scope="object",
-            source_object_type="PhenotypeTerm",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="agr.alliance",
-                agent_id="ontology_term_validation",
-            ),
-            object_types=("PhenotypeTerm",),
-            input_fields={
-                "label": DomainPackInputSelector(
-                    source="payload",
-                    path="label",
-                    required=False,
-                ),
-                "data_provider": DomainPackInputSelector(
-                    source="payload",
-                    path="ontology_lookup_hint.data_provider",
-                    required=False,
-                ),
-                "taxon_id": DomainPackInputSelector(
-                    source="payload",
-                    path="ontology_lookup_hint.taxon_id",
-                    required=False,
-                ),
-                "ontology_family": DomainPackInputSelector(
-                    source="literal",
-                    value="phenotype",
-                ),
-                "accepted_prefixes": DomainPackInputSelector(
-                    source="literal",
-                    value=["MP", "WBPhenotype"],
-                ),
-                "provider_taxon_ontology_mappings": DomainPackInputSelector(
-                    source="literal",
-                    value=[
-                        {
-                            "data_provider": "WB",
-                            "taxon_id": "NCBITaxon:6239",
-                            "ontology_term_type": "WBPhenotypeTerm",
-                            "accepted_prefixes": ["WBPhenotype"],
-                        },
-                        {
-                            "data_provider": "MGI",
-                            "taxon_id": "NCBITaxon:10090",
-                            "ontology_term_type": "MPTerm",
-                            "accepted_prefixes": ["MP"],
-                        },
-                    ],
-                ),
-            },
-            expected_result_fields={"curie": "curie", "label": "label"},
-        )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.extracted_objects[0],
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
-
-        def _unexpected_package_validator(*_args, **_kwargs):  # pragma: no cover
-            raise AssertionError("unsupported phenotype context should preflight-block")
-
-        monkeypatch.setattr(
-            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-            _unexpected_package_validator,
-        )
-
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=2,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "automatic-phenotype-lookup",
-                        "state": "automatic",
-                        "binding_id": "phenotype_term_ontology_validator",
-                    }
-                ],
-                flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
-            )
-        )
-
-        assert selector_findings == []
-        assert len(materialization_inputs) == 1
-        validator_result = materialization_inputs[0].result
-        assert validator_result.status == "unresolved"
-        assert validator_result.lookup_attempts[0].outcome == "blocked"
-        assert (
-            validator_result.lookup_attempts[0].method
-            == "unsupported_provider_taxon_mapping"
-        )
-        assert len(metadata) == 1
-        assert {
-            "group_id": metadata[0]["group_id"],
-            "state": metadata[0]["state"],
-            "validator_binding_id": metadata[0]["validator_binding_id"],
-            "status": metadata[0]["status"],
-            "request_id": metadata[0]["request_id"],
-            "missing_expected_fields": metadata[0]["missing_expected_fields"],
-        } == {
-            "group_id": "automatic-phenotype-lookup",
-            "state": "automatic",
-            "validator_binding_id": "phenotype_term_ontology_validator",
-            "status": "unresolved",
-            "request_id": validator_result.request_id,
-            "missing_expected_fields": [],
-        }
-        assert metadata[0]["lookup_attempts"][0]["outcome"] == "blocked"
-        assert (
-            metadata[0]["lookup_attempts"][0]["method"]
-            == "unsupported_provider_taxon_mapping"
-        )
-
-    def test_automatic_validation_group_skips_non_dispatch_binding(
-        self, monkeypatch
-    ):
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
-
-        envelope = DomainEnvelope(
-            envelope_id="env-non-dispatch",
-            domain_pack_id="fixture.validation",
-            extracted_objects=[
-                CuratableObjectEnvelope(
-                    object_type="GeneAssertion",
-                    pending_ref_id="object-1",
-                    payload={"gene": {"identifier": "AGR:0001"}},
-                )
-            ],
-        )
-        binding = ValidatorBinding(
-            binding_id="fixture.pending_envelope_validator",
-            state=ValidationBindingState.ACTIVE,
-            source_scope="object",
-            source_object_type="GeneAssertion",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="fixture.validators",
-                agent_id="package_agent",
-            ),
-            object_types=("GeneAssertion",),
-            input_fields={},
-            expected_result_fields={},
-        )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.extracted_objects[0],
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
-
-        def _fake_package_validator(request, *, binding):  # pragma: no cover
-            raise AssertionError("non-dispatch automatic binding should not run")
-
-        monkeypatch.setattr(
-            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-            _fake_package_validator,
-        )
-
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=7,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "automatic-data-check",
-                        "state": "automatic",
-                        "binding_id": "fixture.pending_envelope_validator",
-                    }
-                ],
-                flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
-            )
-        )
-
-        assert materialization_inputs == []
-        assert selector_findings == []
-        assert metadata == [
-            {
-                "group_id": "automatic-data-check",
-                "state": "automatic",
-                "validator_binding_id": "fixture.pending_envelope_validator",
-                "status": "non_dispatch_binding",
-            }
-        ]
-
-    def test_automatic_validation_group_reuses_existing_resolved_finding(
-        self, monkeypatch
-    ):
-        """Flow validation should not duplicate chat-dispatched package findings."""
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import (
-            CuratableObjectEnvelope,
-            DomainEnvelope,
-            ValidationFinding,
-            ValidationFindingSeverity,
-            ValidationFindingStatus,
-        )
-        from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-        envelope = DomainEnvelope(
-            envelope_id="env-already-validated",
-            domain_pack_id="fixture.validation",
-            extracted_objects=[
-                CuratableObjectEnvelope(
-                    object_type="GeneAssertion",
-                    pending_ref_id="object-1",
-                    payload={"gene": {"identifier": "AGR:0001"}},
-                )
-            ],
-        )
-        binding = ValidatorBinding(
-            binding_id="fixture.identifier_lookup",
-            state=ValidationBindingState.ACTIVE,
-            source_scope="field",
-            source_object_type="GeneAssertion",
-            source_field_path="gene.identifier",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="fixture.validators",
-                agent_id="package_agent",
-            ),
-            object_types=("GeneAssertion",),
-            field_paths=("gene.identifier",),
-            input_fields={
-                "identifier": DomainPackInputSelector(
-                    source="payload",
-                    path="gene.identifier",
-                )
-            },
-            expected_result_fields={"identifier": "gene.identifier"},
-            required_any_active_group=("ZFIN",),
-        )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.extracted_objects[0],
-        )
-        envelope = envelope.model_copy(
-            update={
-                "validation_findings": [
-                    ValidationFinding(
-                        severity=ValidationFindingSeverity.INFO,
-                        status=ValidationFindingStatus.RESOLVED,
-                        code="domain_pack.validator_resolved",
-                        message="Already resolved.",
-                        details={
-                            "validation_metadata": {
-                                "validator_binding_id": binding.binding_id,
-                                "target": match.target_details(),
-                                "dispatch_context": {
-                                    "authenticated_groups": ["MGI", "ZFIN"],
-                                    "group_context_identity": '["MGI","ZFIN"]',
-                                },
-                            }
-                        },
-                    )
-                ]
-            }
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
-
-        def _unexpected_package_validator(*_args, **_kwargs):
-            raise AssertionError("package validator should not rerun")
-
-        monkeypatch.setattr(
-            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-            _unexpected_package_validator,
-        )
-
-        assert not executor._source_envelope_has_validator_finding(
-            envelope,
-            binding_id=binding.binding_id,
-            match=match,
-            group_context_identity='["RGD"]',
-        )
-
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=7,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "automatic-lookup",
-                        "state": "automatic",
-                        "binding_id": "fixture.identifier_lookup",
-                    }
-                ],
-                flow=_make_flow([]),
-                agent_context={
-                    "user_id": "curator-1",
-                    "authenticated_groups": ["ZFIN", " MGI ", "ZFIN"],
-                },
-            )
-        )
-
-        assert materialization_inputs == []
-        assert selector_findings == []
-        assert [entry["status"] for entry in metadata] == [
-            "group_scope_eligible",
-            "already_checked",
-        ]
-        assert metadata[0]["group_scope_audit"]["group_context_identity"] == (
-            '["MGI","ZFIN"]'
-        )
-
-    def test_automatic_validation_group_reuses_existing_unresolved_finding(
-        self, monkeypatch
-    ):
-        """Flow validation should not rerun failed active validator attempts."""
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import (
-            CuratableObjectEnvelope,
-            DomainEnvelope,
-            ValidationFinding,
-            ValidationFindingSeverity,
-            ValidationFindingStatus,
-        )
-        from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-        envelope = DomainEnvelope(
-            envelope_id="env-already-attempted",
-            domain_pack_id="fixture.validation",
-            extracted_objects=[
-                CuratableObjectEnvelope(
-                    object_type="GeneAssertion",
-                    pending_ref_id="object-1",
-                    payload={"gene": {"identifier": "AGR:missing"}},
-                )
-            ],
-        )
-        binding = ValidatorBinding(
-            binding_id="fixture.identifier_lookup",
-            state=ValidationBindingState.ACTIVE,
-            source_scope="field",
-            source_object_type="GeneAssertion",
-            source_field_path="gene.identifier",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="fixture.validators",
-                agent_id="package_agent",
-            ),
-            object_types=("GeneAssertion",),
-            field_paths=("gene.identifier",),
-            input_fields={
-                "identifier": DomainPackInputSelector(
-                    source="payload",
-                    path="gene.identifier",
-                )
-            },
-            expected_result_fields={"identifier": "gene.identifier"},
-        )
-        match = ValidatorBindingMatch(
-            binding=binding,
-            envelope=envelope,
-            object_envelope=envelope.extracted_objects[0],
-        )
-        envelope = envelope.model_copy(
-            update={
-                "validation_findings": [
-                    ValidationFinding(
-                        severity=ValidationFindingSeverity.WARNING,
-                        status=ValidationFindingStatus.OPEN,
-                        code="domain_pack.validator_unresolved",
-                        message="Already attempted and unresolved.",
-                        details={
-                            "validation_metadata": {
-                                "validator_binding_id": binding.binding_id,
-                                "target": match.target_details(),
-                            }
-                        },
-                    )
-                ]
-            }
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return (match,)
-
-        def _unexpected_package_validator(*_args, **_kwargs):
-            raise AssertionError("package validator should not rerun")
-
-        monkeypatch.setattr(
-            "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
-            _unexpected_package_validator,
-        )
-
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=7,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "automatic-lookup",
-                        "state": "automatic",
-                        "binding_id": "fixture.identifier_lookup",
-                    }
-                ],
-                flow=_make_flow([]),
-                agent_context={"user_id": "curator-1"},
-            )
-        )
-
-        assert materialization_inputs == []
-        assert selector_findings == []
-        assert metadata == [
-            {
-                "group_id": "automatic-lookup",
-                "state": "automatic",
-                "validator_binding_id": "fixture.identifier_lookup",
-                "status": "already_checked",
-            }
-        ]
-
-    @pytest.mark.parametrize("composite", [False, True])
-    def test_supplemental_validation_groups_run_every_custom_validator_node(
-        self, monkeypatch, composite
-    ):
-        """Distinct supplemental sidecars must all execute against the source revision."""
-        executor = _executor_module()
-        from src.lib.domain_packs.validation_registry import (
-            ValidationBindingState,
-            ValidatorAgentRef as RegistryValidatorAgentRef,
-            ValidatorBinding,
-            ValidatorBindingMatch,
-        )
-        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
-        from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-        envelope = DomainEnvelope(
-            envelope_id="env-supplemental",
-            domain_pack_id="fixture.validation",
-            extracted_objects=[
-                CuratableObjectEnvelope(
-                    object_type="GeneAssertion",
-                    pending_ref_id="object-1",
-                    payload={"gene": {"identifier": "AGR:0001"}},
-                )
-            ],
-        )
-        binding = ValidatorBinding(
-            binding_id="custom.supplemental",
-            state=ValidationBindingState.ACTIVE,
-            source_scope="field",
-            source_object_type="GeneAssertion",
-            source_field_path="gene.identifier",
-            validator_agent=RegistryValidatorAgentRef(
-                package_id="fixture.validators",
-                agent_id="package_agent",
-            ),
-            object_types=("GeneAssertion",),
-            field_paths=("gene.identifier",),
-            input_fields={
-                "identifier": DomainPackInputSelector(
-                    source="payload",
-                    path="gene.identifier",
-                )
-            },
-            expected_result_fields={"identifier": "gene.identifier"},
-        )
-        if composite:
-            binding = replace(binding, expected_result_fields={"identifier": "gene.identifier", "design_matches": "gene.design_matches"})
-        second_binding = replace(
-            binding,
-            binding_id="custom.supplemental.identifier",
-        )
-        matches = (
-            ValidatorBindingMatch(
-                binding=binding,
-                envelope=envelope,
-                object_envelope=envelope.extracted_objects[0],
-            ),
-            ValidatorBindingMatch(
-                binding=second_binding,
-                envelope=envelope,
-                object_envelope=envelope.extracted_objects[0],
-            ),
-        )
-
-        class _Registry:
-            def match_bindings(self, _envelope, *, states):
-                assert states == [ValidationBindingState.ACTIVE]
-                return matches
-
-        calls = []
-
-        async def _fake_custom_validator(
-            request,
-            *,
-            binding_match,
-            validator_node,
-            agent_context,
-            source_envelope_id,
-            source_envelope_revision,
-        ):
-            calls.append(
-                {
-                    "request": request,
-                    "binding_match": binding_match,
-                    "validator_node": validator_node,
-                    "agent_context": dict(agent_context),
-                    "source_envelope_id": source_envelope_id,
-                    "source_envelope_revision": source_envelope_revision,
-                }
-            )
-            return executor.DomainValidatorResultBase.model_validate({
-                "status": "resolved",
-                "field_resolutions": {"identifier": {"status": "resolved", "lookup_outcome": "matched", "resolved_values": {"identifier": "AGR:0001"}}} if composite else {},
-                "request_id": request.request_id,
-                "validator_binding_id": request.validator_binding_id,
-                "validator_agent": request.validator_agent.model_dump(mode="json"),
-                "target": request.target.model_dump(mode="json"),
-                "resolved_values": {"identifier": "AGR:0001"},
-                "resolved_objects": [],
-                "missing_expected_fields": [],
-                "candidates": [],
-                "lookup_attempts": [
-                    {
-                        "provider": "flow_validator",
-                        "method": "non_lookup_validation",
-                        "query": {"source_envelope_revision": source_envelope_revision},
-                        "result_count": 1,
-                        "outcome": "success",
-                    }
-                ],
-                "curator_message": None,
-                "explanation": "Supplemental validator passed.",
-            })
-
-        monkeypatch.setattr(
-            executor,
-            "_run_custom_flow_validator_agent",
-            _fake_custom_validator,
-        )
-        flow = _make_flow(
-            [
-                _agent_node("supplemental_validator", "custom_validator_symbol"),
-                _agent_node(
-                    "supplemental_identifier_validator",
-                    "custom_validator_identifier",
-                ),
-            ]
-        )
-
-        materialization_inputs, selector_findings, metadata = asyncio.run(
-            executor._collect_flow_validator_materialization_inputs(
-                source_envelope=envelope,
-                source_envelope_revision=7,
-                registry=_Registry(),
-                groups=[
-                    {
-                        "group_id": "edge:validation-1",
-                        "state": "supplemental",
-                        "binding_id": "custom.supplemental",
-                        "edge_id": "validation-1",
-                        "validator_node_id": "supplemental_validator",
-                    },
-                    {
-                        "group_id": "edge:validation-2",
-                        "state": "supplemental",
-                        "binding_id": "custom.supplemental.identifier",
-                        "edge_id": "validation-2",
-                        "validator_node_id": "supplemental_identifier_validator",
-                    },
-                ],
-                flow=flow,
-                agent_context={"user_id": "curator-1"},
-            )
-        )
-
-        assert all(item.result.is_complete for item in materialization_inputs)
-        assert selector_findings == []
-        assert len(calls) == 2
-        assert [call["binding_match"] for call in calls] == list(matches)
-        assert {call["source_envelope_id"] for call in calls} == {"env-supplemental"}
-        assert {call["source_envelope_revision"] for call in calls} == {7}
-        assert [call["request"].validator_binding_id for call in calls] == [
-            "custom.supplemental",
-            "custom.supplemental.identifier",
-        ]
-        assert [call["request"].validator_agent.agent_id for call in calls] == [
-            "custom_validator_symbol",
-            "custom_validator_identifier",
-        ]
-        assert all(call["request"].validator_agent.package_id == "flow" for call in calls)
-        assert len(materialization_inputs) == 2
-        assert [item.match for item in materialization_inputs] == list(matches)
-        assert [item.request for item in materialization_inputs] == [
-            call["request"] for call in calls
-        ]
-        assert [item["group_id"] for item in metadata] == [
-            "edge:validation-1",
-            "edge:validation-2",
-        ]
-        assert [item["validator_binding_id"] for item in metadata] == [
-            "custom.supplemental",
-            "custom.supplemental.identifier",
-        ]
-        assert {item["status"] for item in metadata} == {"resolved"}
-        assert all(item["missing_expected_fields"] == [] for item in metadata)
-        assert all(
-            item["selected_inputs"] == {"identifier": "AGR:0001"}
-            for item in metadata
-        )
-        assert all(
-            item["expected_result_fields"] == binding.expected_result_fields
-            for item in metadata
-        )
-        assert all(
-            item["lookup_attempts"]
-            == [
-                {
-                    "provider": "flow_validator",
-                    "method": "non_lookup_validation",
-                    "query": {"source_envelope_revision": 7},
-                    "coverage": None,
-                    "result_count": 1,
-                    "outcome": "success",
-                    "message": None,
-                }
-            ]
-            for item in metadata
-        )
-
-    @pytest.mark.parametrize("benchmark", [False, True])
-    @pytest.mark.parametrize("custom", [False, True])
-    @pytest.mark.parametrize("accepted_status", ["resolved", "unresolved", "incomplete", "wrong_identity", "composite", None])
-    def test_custom_flow_validator_agent_receives_compact_request_payload(self, monkeypatch, benchmark, custom, accepted_status):
-        executor = _executor_module()
-        from src.schemas.domain_validator import (
-            DomainValidationRequest,
-            ValidationTarget,
-            ValidatorAgentRef,
-        )
-
-        request = DomainValidationRequest(
-            request_id="env-1:object-1:custom.supplemental",
-            validator_binding_id="custom.supplemental",
-            validator_agent=ValidatorAgentRef(package_id="flow", agent_id="custom_validator"),
-            target=ValidationTarget(
-                domain_pack_id="fixture.validation",
-                object_type="GeneAssertion",
-                object_id="object-1",
-                field_path="gene.identifier",
-                expected_fields=["gene.identifier"],
-                input_values={"identifier": "AGR:0001", "evidence_quote": "paper quote"},
-            ),
-            selected_inputs={"identifier": "AGR:0001", "evidence_quote": "paper quote"},
-            input_selectors={
-                "identifier": {"source": "payload", "path": "gene.identifier"},
-                "evidence_quote": {"source": "evidence_record", "path": "quote"},
-            },
-            evidence=[
-                {
-                    "evidence_record_id": "evidence-1",
-                    "quote": "paper quote",
-                    "large_context": "x" * 1000,
-                }
-            ],
-            expected_result_fields={"identifier": "gene.identifier"},
-        )
-        if accepted_status == "composite":
-            request.expected_result_fields["design_matches"] = "gene.design_matches"
-        captured = {}
-        agent_key = "ca_pinned_validator" if custom else "custom_validator"
-
-        from contextlib import nullcontext
-        from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
-        from src.lib.benchmarks.models import BenchmarkSuiteRoute
-
-        def build_agent(agent_id, **kwargs):
-            captured["agent_kwargs"] = kwargs
-            return SimpleNamespace(agent_id=agent_id)
-        accepted_payload = {
-            "request_id": request.request_id,
-            "validator_binding_id": request.validator_binding_id,
-            "validator_agent": request.validator_agent.model_dump(mode="json"),
-            "target": request.target.model_dump(mode="json"),
-            "status": "resolved" if accepted_status in {"incomplete", "composite", "wrong_identity"} else accepted_status,
-            "output_issues": ["Unfinished structural correction."] if accepted_status == "incomplete" else [],
-            "resolved_values": {"identifier": "AGR:0001"} if accepted_status in {"resolved", "incomplete", "composite", "wrong_identity"} else {},
-            "resolved_objects": [],
-            "missing_expected_fields": [] if accepted_status in {"resolved", "incomplete", "composite", "wrong_identity"} else ["identifier"],
-            "candidates": [{"value": "AGR:0001", "details": {"evidence_record_ids": ["evidence-1"], "source_record": {"curie": "AGR:0001"}}}],
-            "lookup_attempts": [{"provider": "fixture", "method": "search", "query": {"identifier": "AGR:0001"}, "result_count": 1, "outcome": "success"}],
-            "curator_message": None,
-            "allele_candidates": [{"allele_id": "AGR:0001"}],
-            "explanation": "Accepted scientific decision",
-            "unresolved_questions": ["Optional source qualification for the extractor"],
-        }
-
-        if accepted_status == "wrong_identity":
-            accepted_payload["request_id"] = "different-request"
-        if accepted_status == "composite":
-            accepted_payload["field_resolutions"] = {"identifier": {
-                "status": "resolved", "lookup_outcome": "matched",
-                "resolved_values": {"identifier": "AGR:0001"},
-            }}
-            accepted_payload["target"]["input_values"] = {"normalized": "context"}
-
-        class _FakeTool:
-            async def on_invoke_tool(self, tool_ctx, args_json):
-                captured["tool_name"] = tool_ctx.tool_name
-                captured["args"] = json.loads(args_json)
-                if accepted_status == "incomplete":
-                    from src.lib.openai_agents.streaming_tools import SpecialistOutputError
-                    raise SpecialistOutputError("Validator", "GeneResultEnvelope", details=[{
-                        "incomplete_validator_result": accepted_payload,
-                    }])
-                callback = captured.get("validated_result_callback")
-                if callback is not None and accepted_status is not None:
-                    callback(accepted_payload)
-                return "AlleleResultEnvelope validated: one result; supervisor display only"
-
-        monkeypatch.setattr(
-            executor,
-            "get_agent_by_id",
-            build_agent,
-        )
-        monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_benchmark_agent_by_id", build_agent)
-        monkeypatch.setattr(
-            executor,
-            "_create_streaming_tool",
-            lambda **kwargs: captured.update(runtime_agent=kwargs["agent"], validated_result_callback=kwargs.get("validated_result_callback")) or _FakeTool(),
-        )
-        binding = SimpleNamespace(
-            identity_details=lambda: {"binding_id": "custom.supplemental"},
-            raw={"profile_validation": {"mapping": {}}},
-        )
-        binding_match = SimpleNamespace(binding=binding)
-
-        routes = {f"agent:{agent_key}": BenchmarkSuiteRoute(provider="openai", model="fixture-model", reasoning_effort="low")}
-        from src.lib.benchmarks.source_revisions import benchmark_source_revisions
-        from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
-
-        pinned_receipt = source_receipt().model_copy(update={"agent_key": agent_key})
-        pin_revision = str(pinned_receipt.agent_revision_id)
-        frozen_sources = {f"agent:{agent_key}": pinned_receipt} if (benchmark and custom) else {}
-        async def run():
-            return await executor._run_custom_flow_validator_agent(
-                request,
-                binding_match=binding_match,
-                validator_node={"data": {"agent_id": agent_key, "agent_revision_id": pin_revision, "execution_receipt": pinned_receipt.model_dump(mode="json")}},
-                agent_context={"user_id": "curator-1", "execution_revision_id": "extractor-revision", "execution_receipt": {"agent_revision_id": "extractor-revision"}},
-                source_envelope_id="env-1",
-                source_envelope_revision=3,
-            )
-
-        with benchmark_route_plan(routes) if benchmark else nullcontext(), benchmark_source_revisions(frozen_sources):
-            if accepted_status is None:
-                with pytest.raises(ValueError, match="accepted structured result"):
-                    asyncio.run(run())
-                return
-            if accepted_status == "wrong_identity":
-                with pytest.raises(ValueError, match="mismatched request identity"):
-                    asyncio.run(run())
-                return
-            result = asyncio.run(run())
-            if accepted_status == "composite":
-                assert result.status == "resolved" and result.is_complete
-                assert result.missing_expected_fields == []
-                assert result.target == request.target
-                return
-
-        assert result.candidates[0].details == accepted_payload["candidates"][0]["details"]
-        assert result.lookup_attempts[0].result_count == 1
-        materialized = executor.validator_result_from_agent_output(result, request=request)
-        assert materialized.status == ("resolved" if accepted_status in {"incomplete", "composite", "wrong_identity"} else accepted_status)
-        assert materialized.is_complete is (accepted_status != "incomplete")
-        assert materialized.resolved_values == accepted_payload["resolved_values"]
-        assert materialized.target == request.target
-        assert materialized.explanation == "Accepted scientific decision"
-        assert materialized.unresolved_questions == accepted_payload["unresolved_questions"]
-        runtime_context = "\n".join(captured["agent_kwargs"]["additional_runtime_context"])
-        assert "active runtime's declared submission schema" in runtime_context
-        assert "DomainValidatorResultBase contract" not in runtime_context
-        assert "validator_binding_id, validator_agent, and target fields exactly" not in runtime_context
-
-        if benchmark and custom:
-            assert captured["agent_kwargs"]["benchmark_slot"] == f"agent:{agent_key}"
-            assert "model_id_override" not in captured["agent_kwargs"]
-            # Benchmark identity comes solely from the frozen cell; the flow pin is only cross-checked.
-            assert "execution_receipt" not in captured["agent_kwargs"]
-            assert "execution_revision_id" not in captured["agent_kwargs"]
-        elif benchmark:
-            assert captured["agent_kwargs"]["benchmark_route_slot"] == "agent:custom_validator"
-            assert captured["agent_kwargs"]["model_id_override"] == "fixture-model"
-            assert captured["agent_kwargs"]["model_reasoning_override"] == "low"
-        else:
-            assert "benchmark_route_slot" not in captured["agent_kwargs"]
-
-        payload = json.loads(captured["args"]["query"])
-        validation_request = payload["validation_request"]
-        assert captured["runtime_agent"]._compact_validation_request is request
-        assert captured["runtime_agent"]._compact_profile_mapped is True
-        assert captured["tool_name"] == f"validate_{agent_key}_custom_supplemental"
-        if custom and not benchmark:
-            assert captured["agent_kwargs"]["execution_revision_id"] == pin_revision
-            assert captured["agent_kwargs"]["execution_receipt"] == pinned_receipt.model_dump(mode="json")
-        assert validation_request["selected_inputs"] == request.selected_inputs
-        assert "input_selectors" not in validation_request
-        assert "evidence" not in validation_request
-        assert "input_values" not in validation_request["target"]
-        assert validation_request["evidence_summary"] == {
-            "evidence_count": 1,
-            "evidence_record_ids": ["evidence-1"],
-        }
-        assert validation_request["runtime_compaction"]["input_values_source"] == (
-            "selected_inputs"
-        )
-
-    def test_custom_flow_validator_benchmark_pin_must_match_frozen_source(self, monkeypatch):
-        executor = _executor_module()
-        from src.schemas.domain_validator import DomainValidationRequest, ValidationTarget, ValidatorAgentRef
-        from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
-        from src.lib.benchmarks.models import BenchmarkSuiteRoute
-        from src.lib.benchmarks.source_revisions import benchmark_source_revisions
-        from tests.unit.lib.benchmarks.test_source_revisions import source_receipt
-
-        agent_key = "ca_pinned_validator"
-        frozen = source_receipt().model_copy(update={"agent_key": agent_key})
-        stale_pin = frozen.model_copy(update={"revision": frozen.revision + 1})
-        constructor = MagicMock()
-        monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_benchmark_agent_by_id", constructor)
-        monkeypatch.setattr(executor, "_create_streaming_tool", MagicMock())
-        request = DomainValidationRequest(
-            request_id="env-1:object-1:custom.supplemental",
-            validator_binding_id="custom.supplemental",
-            validator_agent=ValidatorAgentRef(package_id="flow", agent_id="custom_validator"),
-            target=ValidationTarget(domain_pack_id="fixture.validation", object_type="GeneAssertion", object_id="object-1",
-                                    field_path="gene.identifier", expected_fields=["gene.identifier"], input_values={"identifier": "AGR:0001"}),
-            selected_inputs={"identifier": "AGR:0001"},
-            input_selectors={"identifier": {"source": "payload", "path": "gene.identifier"}},
-            evidence=[], expected_result_fields={"identifier": "gene.identifier"},
-        )
-        binding_match = SimpleNamespace(binding=SimpleNamespace(identity_details=lambda: {"binding_id": "custom.supplemental"}))
-        routes = {f"agent:{agent_key}": BenchmarkSuiteRoute(provider="openai", model="fixture-model", reasoning_effort="low")}
-        with benchmark_route_plan(routes), benchmark_source_revisions({f"agent:{agent_key}": frozen}):
-            with pytest.raises(ValueError, match="differs from the frozen benchmark source"):
-                asyncio.run(executor._run_custom_flow_validator_agent(
-                    request, binding_match=binding_match,
-                    validator_node={"data": {"agent_id": agent_key, "agent_revision_id": str(stale_pin.agent_revision_id), "execution_receipt": stale_pin.model_dump(mode="json")}},
-                    agent_context={"user_id": "curator-1"}, source_envelope_id="env-1", source_envelope_revision=3,
-                ))
-        constructor.assert_not_called()
-
-
-
-    @patch("src.lib.flows.executor._create_streaming_tool")
-    @patch("src.lib.flows.executor.get_agent_by_id")
-    def test_validation_groups_join_before_next_flow_step(
-        self, mock_get_agent, mock_streaming
-    ):
-        """Validator group execution should finish before the next control-flow tool unlocks."""
-        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
-        events = []
-
-        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
-            @function_tool(name_override=tool_name, description_override=tool_description)
-            async def _tool(query: str):
-                events.append(f"tool:{tool_name}")
-                if tool_name == "ask_gene_specialist":
-                    return _structured_step_output("gene-a")
-                return "formatted"
-
-            return _tool
-
-        async def _fake_validation_groups(**kwargs):
-            if not kwargs["node_data"].get("validation_groups"):
-                return {}
-            events.append("validators:start:binding-1")
-            assert kwargs["candidate"].metadata["step"] == 1
-            groups = kwargs["node_data"]["validation_groups"]
-            assert [group["binding_id"] for group in groups] == [
-                "binding-1",
-                "binding-2",
-            ]
-            events.append("validators:materialized:binding-1")
-            events.append("validators:start:binding-2")
-            events.append("validators:materialized:binding-2")
-            return {
-                "validation_group_results": {
-                    "source_envelope_id": "env-1",
-                    "source_envelope_revision": 3,
-                    "materialized_envelope_revision": 4,
-                    "groups": [
-                        {
-                            "group_id": "active-lookup",
-                            "state": "automatic",
-                            "validator_binding_id": "binding-1",
-                            "status": "resolved",
-                        },
-                        {
-                            "group_id": "supplemental-validator",
-                            "state": "supplemental",
-                            "validator_binding_id": "binding-2",
-                            "status": "resolved",
-                        },
-                    ],
-                }
-            }
-
-        mock_streaming.side_effect = _make_streaming_tool
-        flow = _make_flow([
-            _task_input_node(),
-            _agent_node(
-                "n1",
-                "gene",
-                validation_attachments=[_validation_attachment("active-lookup")],
-                validation_groups=[
-                    {
-                        "group_id": "active-lookup",
-                        "state": "automatic",
-                        "binding_id": "binding-1",
-                        "attachment_id": "active-lookup",
-                        "required": True,
-                        "blocking": True,
-                    },
-                    {
-                        "group_id": "supplemental-validator",
-                        "state": "supplemental",
-                        "binding_id": "binding-2",
-                        "edge_id": "validation-2",
-                        "validator_node_id": "validator-2",
-                        "required": True,
-                        "blocking": True,
-                    },
-                ],
-            ),
-            _agent_node("n2", "disease"),
-        ])
-
-        with patch(
-            "src.lib.flows.executor._execute_validation_groups_for_step",
-            side_effect=_fake_validation_groups,
-        ):
-            tools, _, _, execution_state = get_all_agent_tools(
-                flow,
-                include_unavailable=True,
-            )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
-            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
-            asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"})))
-
-        assert events == [
-            "tool:ask_gene_specialist",
-            "validators:start:binding-1",
-            "validators:materialized:binding-1",
-            "validators:start:binding-2",
-            "validators:materialized:binding-2",
-            "tool:ask_disease_specialist",
-        ]
-        validation_results = execution_state["completed_steps"][0][
-            "validation_group_results"
-        ]
-        assert validation_results["source_envelope_revision"] == 3
-        assert [
-            group["validator_binding_id"] for group in validation_results["groups"]
-        ] == ["binding-1", "binding-2"]
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_output_filename_template_sets_step_scoped_formatter_override(
-        self, mock_get_agent, mock_streaming
+        self, mock_get_agent, mock_streaming, monkeypatch
     ):
         """Runtime formatter finalize/save honors filename templates during save."""
         observed = {}
@@ -4528,6 +2914,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
                             "created_at": "2026-04-26T00:00:00Z",
                         }
 
+                    # This test isolates filename scoping; source review is
+                    # covered by the formatter and persistence suites.
+                    for artifact in agent.runtime_kwargs["formatter_bundle"].artifacts:
+                        artifact.is_canonical_curation_data = False
                     formatter_tools = build_output_formatter_tools(
                         bundle=agent.runtime_kwargs["formatter_bundle"],
                         output_format=agent.runtime_kwargs["formatter_output_format"],
@@ -4571,7 +2961,9 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ),
         ], source_node_id="n1", output_node_id="n2")
 
-        tools, _ = get_all_agent_tools(flow, document_name="Smith et al. (2024).pdf")
+        stub_completed_review(monkeypatch, {"domain_pack_id": "gene", "envelope_id": "env-gene-1",
+            "extracted_objects": [{"object_type": "Gene", "payload": {"symbol": "BRCA1"}}]})
+        tools, _, _, _ = get_stub_review_step_tools(flow, include_unavailable=True, document_name="Smith et al. (2024).pdf")
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
         asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
@@ -4596,6 +2988,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
         persisted_requests = []
         fake_db = MagicMock()
         fake_db.in_transaction.return_value = True
+        record_sources = _recording_persist_idempotent_extraction_results(persisted_requests)
+
+        def persist_sources(requests, *, db=None):
+            assert db is None  # Source persistence owns its transaction.
+            return record_sources(requests)
+
+        def materialize_sources(records, *, db=None):
+            assert db is None  # A prep-owned lock must not leak into materialization.
+            captured["source_prepared"] = True
 
         def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
             @function_tool(name_override=tool_name, description_override=tool_description)
@@ -4626,6 +3027,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
             persistence_context=None,
             db=None,
         ):
+            assert captured["source_prepared"]
+            fake_db.commit.assert_not_called()
             captured["extraction_results"] = extraction_results
             captured["scope_confirmation"] = scope_confirmation
             captured["persistence_context"] = persistence_context
@@ -4689,10 +3092,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             lambda: fake_db,
         ), patch(
             "src.lib.flows.executor.persist_idempotent_extraction_results",
-            _recording_persist_idempotent_extraction_results(persisted_requests),
+            persist_sources,
         ), patch(
             "src.lib.flows.executor._materialize_flow_domain_envelope_records",
-            lambda *_args, **_kwargs: None,
+            materialize_sources,
         ):
             flow = _make_flow([
                 _task_input_node("Prepare the extracted gene-expression findings for review."),
@@ -4705,7 +3108,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ),
             ])
 
-            tools, created_names = get_all_agent_tools(
+            tools, created_names = get_non_extraction_step_tools(
                 flow,
                 document_id="doc-123",
                 user_id="user-123",
@@ -4844,7 +3247,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ),
             ])
 
-            tools, created_names = get_all_agent_tools(
+            tools, created_names = get_non_extraction_step_tools(
                 flow,
                 document_id="doc-123",
                 user_id="user-123",
@@ -4942,7 +3345,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 _agent_node("n1", "gene", step_goal="Extract genes"),
                 _agent_node("n2", "curation_handoff", step_goal="Create review sessions"),
             ])
-            tools, _, _, execution_state = get_all_agent_tools(
+            tools, _, _, execution_state = get_non_extraction_step_tools(
                 flow,
                 document_id="doc-123",
                 user_id="user-123",
@@ -4986,7 +3389,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n2", "curation_prep", step_goal="Prepare candidates for the workspace"),
         ])
 
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
@@ -5031,7 +3434,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _agent_node("n1", "gene", step_goal="Extract genes"),
         ])
 
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             flow,
             include_unavailable=True,
         )
@@ -5113,7 +3516,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             source_node_id="n1",
             output_node_id="n2",
         )
-        tools, _, _, execution_state = get_all_agent_tools(
+        tools, _, _, execution_state = get_non_extraction_step_tools(
             flow,
             document_id="doc-123",
             user_id="user-123",
@@ -5686,7 +4089,7 @@ class TestFlowEvidenceAccumulation:
 
         mock_streaming.side_effect = streaming
         flow = _make_flow([_task_input_node(), _agent_node("n1", "gene"), _agent_node("n2", "gene")])
-        tools, _ = get_all_agent_tools(flow)
+        tools, _ = get_non_extraction_step_tools(flow)
         definitions = {
             "supervisor": StageDefinition(stage_id="supervisor", role="supervisor"),
             **{node: StageDefinition(stage_id=node, node_id=node, role="extraction", agent_id="gene")
@@ -5760,7 +4163,7 @@ class TestFlowEvidenceAccumulation:
             _agent_node("n2", "gene", step_goal="Extract confirmation matches"),
         ])
 
-        tools, created_names, _, execution_state = get_all_agent_tools(
+        tools, created_names, _, execution_state = get_non_extraction_step_tools(
             flow,
             include_unavailable=True,
         )
@@ -8727,7 +7130,6 @@ class TestExecuteFlowTermination:
         }
 
 
-
     @pytest.mark.asyncio
     async def test_execute_flow_emits_validator_lookup_audit_events(self, monkeypatch):
         flow = _make_flow([
@@ -9419,7 +7821,7 @@ def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_resul
         _agent_node("gene", "gene"),
         _agent_node("chat", "chat_output_formatter"),
     ], source_node_id="gene", output_node_id="chat")
-    tools, _, _, execution_state = get_all_agent_tools(
+    tools, _, _, execution_state = get_non_extraction_step_tools(
         flow, document_id="doc-1", include_unavailable=True
     , doc_context=DocumentContext(document_id="doc-1", user_id="user"),)
     tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
@@ -9495,7 +7897,7 @@ class TestFlowStepProgressEvents:
             _agent_node("n1", "gene", display_name="Find genes in the paper"),
             _agent_node("n2", "disease", display_name="Find disease findings"),
         ])
-        tools, _ = get_all_agent_tools(flow, flow_run_id="flow-run-progress")
+        tools, _ = get_non_extraction_step_tools(flow, flow_run_id="flow-run-progress")
 
         _results, events = self._collect_step_started(tools, [0, 1])
 
@@ -9567,7 +7969,7 @@ class TestFlowStepProgressEvents:
             return _tool
 
         mock_streaming.side_effect = _make_streaming_tool
-        tools, _ = get_all_agent_tools(_make_flow([
+        tools, _ = get_non_extraction_step_tools(_make_flow([
             _agent_node("n1", "gene", display_name="Find genes"),
             _agent_node("n2", "disease", display_name="Find diseases"),
         ]))
@@ -9663,6 +8065,7 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id
     payload["extracted_objects"] = objects
     payload["validation_findings"] = []
     payload["extracted_objects"][0]["payload"]["symbol"] = "X" * 16000
+    stub_completed_review(monkeypatch, payload)
     calls = []
     records = []
     def streaming(agent, tool_name, tool_description, specialist_name, **kwargs):
@@ -9750,6 +8153,7 @@ async def test_inspection_manifest_eligibility_is_checked_before_persistence(mon
     from tests.unit.lib.openai_agents.test_inspect_results import _payload, DOCUMENT_ID
     executor = _executor_module()
     payload = _payload() if canonical else _structured_step_output("legacy result")
+    stub_completed_review(monkeypatch, payload)
     @function_tool(name_override="ask_gene_specialist")
     async def specialist(query: str) -> str:
         return json.dumps(payload)
@@ -9760,8 +8164,8 @@ async def test_inspection_manifest_eligibility_is_checked_before_persistence(mon
     monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", persist)
     reports = []
     monkeypatch.setattr(executor, "report_runtime_exception", lambda exc, **kw: reports.append(exc))
-    tools, _, _, state = executor.get_all_agent_tools(
-        _make_flow([_agent_node("first", "gene")]), include_unavailable=True,
+    tools, _, _, state = get_stub_review_step_tools(
+        _make_flow([_agent_node("first", "gene")]), include_unavailable=True, enable_result_inspection=True,
         user_id="owner", session_id="chat", document_id=DOCUMENT_ID,
         doc_context=DocumentContext(document_id=DOCUMENT_ID, user_id="owner"),
     )
@@ -9822,3 +8226,46 @@ def test_output_role_lookup_reports_unavailable_before_category(monkeypatch, una
     assert "unavailable to this user" in str(error.value)
     assert "not an extraction" not in str(error.value)
     assert "not an output formatter" not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind,reason,status,saved', [
+    ('review', 'budget_exhausted', 'review_exhausted', False),
+    ('review', 'unsupported_provider', 'review_pending', False),
+    ('context', 'unsupported_exact_context_admission', 'review_pending', True),
+    ('timeout', 'expired', 'review_exhausted', True),
+    ('turns', 'reviewer_turns_exhausted', 'review_exhausted', True),
+    ('timeout', None, None, False),
+    ('turns', None, None, False),
+])
+async def test_expected_review_stop_emits_typed_terminal_without_error_report(monkeypatch, kind, reason, status, saved):
+    from src.lib.validation_review.admission import ReviewStopped
+    flow = _make_flow([_task_input_node(), _agent_node('extract', 'gene')])
+    supervisor = MagicMock(name='Configured supervisor')
+    supervisor._flow_unavailable_steps = []
+    state = _make_flow_execution_state(ordered_tool_names=['ask_gene_specialist'])
+    state['pending_review'] = SimpleNamespace(record=SimpleNamespace(extraction_result_id='saved-record') if saved else None, step_id='saved-step',
+                                             reference=lambda record: {'episode_id': 'saved-episode'})
+    supervisor._flow_execution_state = state
+    monkeypatch.setattr('src.lib.flows.executor.create_flow_supervisor', lambda **kw: supervisor)
+    monkeypatch.setattr('src.lib.flows.executor.build_flow_prompt', lambda *a, **kw: 'Run saved flow')
+    reports = []
+    monkeypatch.setattr('src.lib.flows.executor.report_runtime_exception', lambda *a, **kw: reports.append(kw))
+    async def run(**kwargs):
+        yield {'type': 'RUN_STARTED', 'data': {'trace_id': 'review-stop'}}
+        from agents import MaxTurnsExceeded
+        from src.lib.openai_agents.model_context_view import ContextRecoveryError
+        raise {'review': ReviewStopped(reason), 'context': ContextRecoveryError('exact context'),
+               'timeout': TimeoutError('timed out'), 'turns': MaxTurnsExceeded('extractor turns')}[kind]
+    monkeypatch.setattr('src.lib.openai_agents.runner.run_agent_streamed', run)
+    if not saved and kind != 'review':
+        from agents import MaxTurnsExceeded
+        with pytest.raises(TimeoutError if kind == 'timeout' else MaxTurnsExceeded):
+            _ = [event async for event in execute_flow(flow, user_id='owner', session_id='session')]
+        return
+    events = [event async for event in execute_flow(flow, user_id='owner', session_id='session')]
+    finished, = [event for event in events if event['type'] == 'FLOW_FINISHED']
+    assert finished['data']['status'] == status
+    assert finished['data']['review_reason'] == reason
+    assert not reports
+    assert not {'FLOW_ERROR', 'RUN_ERROR', 'SPECIALIST_ERROR', 'RUN_FINISHED'} & {event['type'] for event in events}

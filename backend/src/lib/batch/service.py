@@ -151,20 +151,15 @@ class BatchService:
     def recompute_batch_counters(self, batch: Batch) -> None:
         """Derive progress counters from durable terminal document rows."""
         self.db.flush()
-        total, completed, failed = self.db.execute(
-            select(
-                func.count(BatchDocument.id),
-                func.count(BatchDocument.id).filter(
-                    BatchDocument.status == BatchDocumentStatus.COMPLETED
-                ),
-                func.count(BatchDocument.id).filter(
-                    BatchDocument.status == BatchDocumentStatus.FAILED
-                ),
-            ).where(BatchDocument.batch_id == batch.id)
-        ).one()
-        batch.total_documents = total
-        batch.completed_documents = completed
-        batch.failed_documents = failed
+        counts = dict(self.db.execute(select(BatchDocument.status, func.count(BatchDocument.id))
+            .where(BatchDocument.batch_id == batch.id).group_by(BatchDocument.status)).all())
+        batch.total_documents = sum(counts.values())
+        for status, name in ((BatchDocumentStatus.COMPLETED, "completed_documents"),
+                             (BatchDocumentStatus.FAILED, "failed_documents"),
+                             (BatchDocumentStatus.REVIEW_PENDING, "review_pending_documents"),
+                             (BatchDocumentStatus.REVIEW_EXHAUSTED, "review_exhausted_documents"),
+                             (BatchDocumentStatus.INTERRUPTED, "interrupted_documents")):
+            setattr(batch, name, counts.get(status, 0))
 
     def is_batch_cancelled(self, batch_id: UUID) -> bool:
         """Check if batch has been cancelled."""
@@ -226,7 +221,7 @@ class BatchService:
         interrupted_at = datetime.now(timezone.utc)
         for document in batch.documents:
             if document.status == BatchDocumentStatus.PROCESSING:
-                document.status = BatchDocumentStatus.FAILED
+                document.status = BatchDocumentStatus.INTERRUPTED
                 document.error_message = (
                     "Worker lease expired during processing; document was not re-run"
                 )
@@ -287,6 +282,16 @@ class BatchService:
             ).all()
         )
 
+    def _interrupt_processing_documents(self, batch_id):
+        """Cancellation atomically removes PROCESSING rows without erasing history."""
+        self.db.execute(update(BatchDocument).where(BatchDocument.batch_id == batch_id,
+            BatchDocument.status == BatchDocumentStatus.PROCESSING).values(
+                status=BatchDocumentStatus.INTERRUPTED,
+                error_message="Batch cancelled; saved extraction and review history are retained",
+                processed_at=datetime.now(timezone.utc)))
+        batch = self.db.get(Batch, batch_id)
+        self.recompute_batch_counters(batch)
+
     def cancel_running_batch_for_lease(
         self,
         batch_id: UUID,
@@ -312,6 +317,8 @@ class BatchService:
             .returning(Batch.id)
             .execution_options(synchronize_session=False)
         ).scalar_one_or_none()
+        if cancelled_id is not None:
+            self._interrupt_processing_documents(cancelled_id)
         self.db.commit()
         return cancelled_id is not None
 
@@ -332,7 +339,8 @@ class BatchService:
             self.db.rollback()
             return False
         self.recompute_batch_counters(batch)
-        if batch.completed_documents + batch.failed_documents != batch.total_documents:
+        if (batch.completed_documents + batch.failed_documents + batch.review_pending_documents
+                + batch.review_exhausted_documents + batch.interrupted_documents) != batch.total_documents:
             self.db.commit()
             return False
         completed_id = self.db.execute(
@@ -399,6 +407,7 @@ class BatchService:
                 "Only PENDING or RUNNING batches can be cancelled."
             )
 
+        self._interrupt_processing_documents(cancelled_id)
         self.db.commit()
         batch = self.get_batch(cancelled_id, user_id)
 
@@ -476,6 +485,7 @@ class BatchService:
                 ),
                 "review_session_ids": getattr(d, "review_session_ids", None),
                 **handoff_metadata,
+                "review_details": d.review_details,
                 "error_message": d.error_message,
                 "processing_time_ms": d.processing_time_ms,
                 "processed_at": d.processed_at,
@@ -490,6 +500,9 @@ class BatchService:
             total_documents=batch.total_documents,
             completed_documents=batch.completed_documents,
             failed_documents=batch.failed_documents,
+            review_pending_documents=batch.review_pending_documents,
+            review_exhausted_documents=batch.review_exhausted_documents,
+            interrupted_documents=batch.interrupted_documents,
             created_at=batch.created_at,
             started_at=batch.started_at,
             completed_at=batch.completed_at,

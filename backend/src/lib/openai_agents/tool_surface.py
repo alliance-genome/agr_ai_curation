@@ -47,7 +47,7 @@ MODE_EAGER_PROVIDER_UNSUPPORTED = "eager_provider_unsupported"
 TERMINAL_TOOL_PREFIX = "finalize_"
 # Validators and supervisors keep every tool visible (ALL-1280 decision);
 # startup validation rejects a deferred policy for them.
-NEVER_DEFERRED_RUNTIMES = frozenset({"validator", "chat_supervisor", "flow_supervisor"})
+NEVER_DEFERRED_RUNTIMES = frozenset({"validator", "chat_supervisor", "flow_supervisor", "extractor_followup"})
 NEVER_DEFERRED_AGENT_CATEGORIES = frozenset({"Validation", "Routing"})
 
 NamespaceResolver = Callable[[str], "tuple[str, str] | None"]
@@ -764,6 +764,8 @@ def apply_tool_surface(
     agent_key = _agent_key(agent)
     from .run_history import HISTORY_TOOL_NAMES, prepare_history_tools
     tools, history = prepare_history_tools(agent, tools, agent_key=agent_key, runtime=effective_runtime)
+    from src.lib.validation_review.provider import wrap_budget_tools
+    tools = wrap_budget_tools(tools)
     # A named tool_choice must target a visible tool (the SDK rejects a named
     # choice that only a deferred tool could satisfy).
     tool_choice = getattr(getattr(agent, "model_settings", None), "tool_choice", None)

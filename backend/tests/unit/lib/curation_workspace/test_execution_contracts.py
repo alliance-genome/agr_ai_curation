@@ -338,6 +338,7 @@ def test_manual_creation_checks_profile_before_any_insert(extraction, monkeypatc
 
 
 def test_manual_draft_edit_checks_profile_before_mutating_saved_values(extraction, monkeypatch):
+    from contextlib import nullcontext
     from src.lib.curation_workspace import session_mutation_service as mutations
     from src.schemas.curation_workspace import (
         CurationCandidateSource, CurationDraftField, CurationCandidateDraftUpdateRequest,
@@ -347,8 +348,12 @@ def test_manual_draft_edit_checks_profile_before_mutating_saved_values(extractio
     fields = [CurationDraftField(field_key="attributes.count", label="Count", value=1,
                                 seed_value=1).model_dump(mode="json")]
     draft = SimpleNamespace(id=draft_id, fields=fields, version=1, notes=None)
-    candidate = SimpleNamespace(draft=draft, source=CurationCandidateSource.MANUAL,
+    candidate = SimpleNamespace(id=candidate_id, envelope_id=None, draft=draft, source=CurationCandidateSource.MANUAL,
                                execution_receipt=receipt.model_dump(mode="json"))
+    # The unchanged candidate/draft passes the new locked reads. Conformance
+    # still rejects the proposed value before any saved fields are mutated.
+    db.no_autoflush = nullcontext()
+    db.execute.return_value.one.side_effect = [(None,), SimpleNamespace(version=1, fields=fields)]
     monkeypatch.setattr(mutations, "_load_candidate_for_write", lambda *args, **kwargs: candidate)
     request = CurationCandidateDraftUpdateRequest(
         session_id=str(session_id), candidate_id=str(candidate_id), draft_id=str(draft_id),
@@ -442,7 +447,7 @@ def test_checkpoint_validates_profile_before_any_row_mutation(extraction, existi
         assert row.revision == 3
 
 
-def test_inline_persistence_checks_profile_before_loading_existing_result(extraction):
+def test_inline_persistence_checks_profile_before_loading_existing_result(extraction, monkeypatch):
     from src.lib.curation_workspace.extraction_results import (
         persist_inline_validated_extraction_result,
     )
@@ -455,6 +460,8 @@ def test_inline_persistence_checks_profile_before_loading_existing_result(extrac
         "extracted_objects": payload["curatable_objects"],
         "metadata": {"extraction_metadata": payload["metadata"]},
     }
+    canonical["metadata"]["validation_history"] = {"artifact_id": str(uuid4())}
+    monkeypatch.setattr("src.lib.validation_history.runtime.require_captured_envelope", lambda *a, **k: None)
     with pytest.raises(ProfileConformanceError):
         persist_inline_validated_extraction_result(
             payload_json=canonical,

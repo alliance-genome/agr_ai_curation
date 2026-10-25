@@ -1,11 +1,10 @@
 """Resolve exact validation views from existing durable envelope checkpoints."""
-from copy import deepcopy
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
 
-from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.models.sql.validation_history import ValidationCheckpoint
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
@@ -45,15 +44,38 @@ def validation_view(record: Any, *, revision: int | None, user_id: str) -> dict[
     if str(_attr(record, "document_id")) not in readable_document_ids([record], user_id=user_id):
         raise InspectionViewUnavailable("This result is no longer accessible.")
     with SessionLocal() as db:
-        row = db.get(DomainEnvelopeModel, checkpoint["envelope_id"])
-        if (row is None or row.revision != pinned
+        row = db.get(ValidationCheckpoint, (checkpoint["envelope_id"], pinned))
+        if (row is None
                 or row.source_extraction_result_id != str(_attr(record, "extraction_result_id"))
                 or str(row.document_id) != str(_attr(record, "document_id"))):
-            raise InspectionViewUnavailable("The exact post-validation checkpoint is unavailable or superseded.")
-        payload = deepcopy(row.envelope_json)
+            raise InspectionViewUnavailable("The exact post-validation checkpoint is unavailable.")
+        from src.lib.validation_history.checkpoints import read_checkpoint_body
+        payload = read_checkpoint_body(db, row.body_sha)
     if isinstance(record, Mapping):
         result = dict(record)
     else:
         result = record.model_dump(mode="json")
     result.update(payload_json=payload, inspection_view="post_validation", inspection_revision=pinned)
+    return result
+
+
+def accepted_view(record: Any, *, user_id: str) -> dict[str, Any]:
+    """Current explicitly selected projection; original/checkpoint views stay exact."""
+    from src.lib.validation_history.projection import latest_publication_reference, read_published_projection
+    from src.lib.validation_history.store import HistoryScope, HistoryConflict
+    payload = _attr(record, "payload_json") or {}
+    history = (payload.get("metadata") or {}).get("validation_history")
+    if not isinstance(history, Mapping):
+        raise InspectionViewUnavailable("Historical result has no explicit selected publication.")
+    scope = HistoryScope(user_id, str(_attr(record, "document_id")), history["session_id"])
+    reference = latest_publication_reference(scope, history["artifact_id"])
+    if reference is None:
+        raise InspectionViewUnavailable("Result is awaiting explicit review and publication.")
+    try:
+        envelope, manifest = read_published_projection(scope, reference, current=True)
+    except HistoryConflict as exc:
+        raise InspectionViewUnavailable("The selected projection requires refresh after review changes.") from exc
+    result = dict(record) if isinstance(record, Mapping) else record.model_dump(mode="json")
+    result.update(payload_json=envelope.model_dump(mode="json"), inspection_view="accepted",
+                  selection_manifest=manifest, inspection_revision=None)
     return result

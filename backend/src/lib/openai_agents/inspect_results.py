@@ -311,14 +311,15 @@ def _inspect(
     detail_path: str | None,
     result_sha256: str | None,
 ) -> dict[str, Any]:
-    if result_view not in {"original", "post_validation"}:
-        raise _RequestError("invalid_request", "result_view must be original or post_validation.")
+    if result_view not in {"original", "post_validation", "accepted"}:
+        raise _RequestError("invalid_request", "result_view must be original, post_validation or accepted.")
     if envelope_revision is not None and (result_view != "post_validation" or envelope_revision < 1):
         raise _RequestError("invalid_request", "envelope_revision requires a positive post_validation revision.")
     if action == "help":
         return {**_help_response(), "result_views": {
             "original": "Immutable extractor output before flow-attached validation.",
-            "post_validation": "Exact saved validation checkpoint used downstream; unavailable if superseded.",
+            "post_validation": "Exact saved validation checkpoint; not evidence of supervisor acceptance.",
+            "accepted": "Current explicitly selected values with review readiness; originals and pending answers remain separate.",
         }}
     if action not in _ACTIONS:
         raise _RequestError(
@@ -499,15 +500,18 @@ def _inspect(
     if action not in {"list", "search"} or (action == "search" and normalized_target == "latest" and parsed_ref is None):
         records = records[:1]
     unavailable_views = []
-    if result_view == "post_validation":
-        from src.lib.openai_agents.result_inspection_views import validation_view, InspectionViewUnavailable
+    if result_view in {"post_validation", "accepted"}:
+        from src.lib.openai_agents.result_inspection_views import validation_view, accepted_view, InspectionViewUnavailable
         projected = []
         for record in records:
             try:
                 binding = authorized_refs.get(_record_result_ref(record), {}) if authorized_refs is not None else {}
                 if "post_validation_checkpoint" in binding and binding["post_validation_checkpoint"] != (_record_attr(record, "metadata") or {}).get("inspection_checkpoint"):
                     raise InspectionViewUnavailable("The completed step's pinned validation checkpoint changed.")
-                projected.append(validation_view(record, revision=envelope_revision, user_id=user_id))
+                projected.append(
+                    accepted_view(record, user_id=user_id) if result_view == "accepted"
+                    else validation_view(record, revision=envelope_revision, user_id=user_id)
+                )
             except InspectionViewUnavailable as exc:
                 # Explicit reads fail; discovery omits unavailable views without substituting originals.
                 if parsed_ref or action not in {"list", "search"}:
@@ -660,6 +664,7 @@ def _inspect(
         )
     return _validator_results_response(
         result,
+        user_id=user_id,
         object_ref=normalized_ref,
         field_path=normalized_path,
         object_type=_optional_text(object_type),
@@ -1910,6 +1915,17 @@ def _evidence_response(
         ]
         if not missing:
             return {}
+        conflicts = [row for row in missing if row.get("evidence_link_issue") == "ambiguous"]
+        if conflicts:
+            return {
+                "status": "error",
+                "error_code": "evidence_conflict",
+                "conflicting_evidence_count": len(conflicts),
+                "message": (
+                    "Saved source evidence has conflicting quotes or locations. Conflicting content "
+                    "is withheld; do not choose a version or treat reference IDs as quotes."
+                ),
+            }
         return {
             "status": "error",
             "error_code": "evidence_unavailable",
@@ -1935,6 +1951,15 @@ def _evidence_response(
         message="Evidence text is ready.",
         overrides=overrides,
     )
+    if response.get("error_code") == "evidence_conflict":
+        report_runtime_exception(
+            RuntimeError("Saved source evidence contains conflicting provenance"),
+            component="extraction_result_inspection",
+            operation="evidence_integrity_conflict",
+            tags={"tool_name": _TOOL_NAME},
+            context={"extraction_result_id": result.extraction_result_id,
+                     "conflicting_evidence_count": response["conflicting_evidence_count"]},
+        )
     if response.get("error_code") == "evidence_unavailable":
         report_runtime_exception(
             RuntimeError("Saved extraction evidence references could not be resolved to text"),
@@ -2173,6 +2198,7 @@ def _standalone_validator_response(
 def _validator_results_response(
     result: _Result,
     *,
+    user_id: str,
     object_ref: str | None,
     field_path: str | None,
     object_type: str | None,
@@ -2197,6 +2223,10 @@ def _validator_results_response(
             )
         full = {"validator_result_key": key, **entry}
         original = result.envelope.validator_results.get(entry.get("original_ref"))
+        if original is not None:
+            from src.lib.domain_packs.validator_result_records import read_validator_original
+            original = read_validator_original(original, user_id=user_id,
+                document_id=str(_record_attr(result.record, "document_id")))
         full["original"] = original
         if detail_path and detail_path.startswith("original") and original is None:
             raise _RequestError(
@@ -2465,6 +2495,9 @@ def _record_summary(record: Any) -> dict[str, Any]:
         "canonical_status": canonical_status,
         "result_view": _record_attr(record, "inspection_view") or "original",
         "envelope_revision": _record_attr(record, "inspection_revision"),
+        "selection_review_ready": (_record_attr(record, "selection_manifest") or {}).get("ready"),
+        "review_episode_id": (_record_attr(record, "selection_manifest") or {}).get("episode_id"),
+        "selection_manifest_sha256": (_record_attr(record, "selection_manifest") or {}).get("sha256"),
         "post_validation_checkpoint": (_record_attr(record, "metadata") or {}).get("inspection_checkpoint"),
         "object_count": object_count,
         "validation_warning_count": validation_warning_count,
@@ -2486,6 +2519,7 @@ def _search_matches_for_record(
 ) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     query_terms = _query_terms(query)
+    evidence_snapshot = _envelope_evidence_snapshot(envelope)
     for obj in envelope.extracted_objects:
         object_ref = _canonical_object_ref(obj)
         if not query_terms:
@@ -2514,6 +2548,7 @@ def _search_matches_for_record(
             _evidence_search_matches(
                 record,
                 envelope=envelope,
+                evidence_snapshot=evidence_snapshot,
                 obj=obj,
                 object_ref=object_ref,
                 query_terms=query_terms,
@@ -2571,9 +2606,10 @@ def _evidence_search_matches(
     object_ref: str,
     query_terms: Sequence[str],
     read_carry: Mapping[str, Any],
+    evidence_snapshot=None,
 ) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
-    for index, evidence_record in enumerate(_object_evidence_records(envelope, obj)):
+    for index, evidence_record in enumerate(_object_evidence_records(envelope, obj, evidence_snapshot=evidence_snapshot)):
         haystack = " ".join(
             str(value)
             for value in evidence_record.values()
@@ -2779,80 +2815,32 @@ def _is_evidence_path(field_path: str) -> bool:
     return False
 
 
+def _envelope_evidence_snapshot(envelope: DomainEnvelope):
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+    return EvidenceSnapshot.from_payload(
+        {"metadata": envelope.metadata},
+        [item.model_dump(mode="json") for item in envelope.extracted_objects],
+    )
+
+
 def _object_evidence_records(
     envelope: DomainEnvelope,
     obj: CuratableObjectEnvelope,
+    *,
+    evidence_snapshot=None,
 ) -> list[Mapping[str, Any]]:
-    records: list[Mapping[str, Any]] = []
-    metadata_records = _metadata_evidence_records(envelope.metadata)
-    metadata_by_id = {
-        str(item.get("evidence_record_id") or item.get("id") or ""): item
-        for item in metadata_records
-        if isinstance(item, Mapping)
-    }
-    for evidence_id in obj.evidence_record_ids:
-        metadata_record = metadata_by_id.get(str(evidence_id))
-        if metadata_record is not None:
-            records.append(metadata_record)
-        else:
-            records.append({"evidence_record_id": evidence_id})
-
-    direct_evidence = _payload_evidence_record(obj)
-    if direct_evidence:
-        if records and not any(_record_has_evidence_text(item) for item in records):
-            merged = dict(records[0])
-            merged.update(direct_evidence)
-            records[0] = merged
-        else:
-            records.append(direct_evidence)
-
-    return _dedupe_evidence_records(records)
-
-
-def _metadata_evidence_records(metadata: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    # Canonical conversion retains extractor metadata under extraction_metadata.
-    # Native domain envelopes can instead carry evidence directly in metadata.
-    nested = metadata.get("extraction_metadata")
-    sources = [metadata, nested] if isinstance(nested, Mapping) else [metadata]
+    snapshot = evidence_snapshot if evidence_snapshot is not None else _envelope_evidence_snapshot(envelope)
     records = []
-    for source in sources:
-        raw = source.get("evidence_records")
-        if isinstance(raw, list):
-            records.extend(item for item in raw if isinstance(item, Mapping))
+    for identity in dict.fromkeys(obj.evidence_record_ids):
+        record, problem = snapshot.resolve(identity)
+        records.append(record if problem is None else {
+            "evidence_record_id": identity, "evidence_link_issue": problem,
+        })
     return records
-
-
-def _payload_evidence_record(obj: CuratableObjectEnvelope) -> dict[str, Any]:
-    record: dict[str, Any] = {}
-    if obj.evidence_record_ids:
-        record["evidence_record_id"] = obj.evidence_record_ids[0]
-    for key in (*_EVIDENCE_TEXT_KEYS, *_EVIDENCE_CONTEXT_KEYS):
-        value = obj.payload.get(key)
-        if value is not None:
-            record[key] = value
-    return record
 
 
 def _record_has_evidence_text(record: Mapping[str, Any]) -> bool:
     return any(record.get(key) for key in _EVIDENCE_TEXT_KEYS)
-
-
-def _dedupe_evidence_records(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    deduped: list[Mapping[str, Any]] = []
-    seen: set[str] = set()
-    for record in records:
-        key = str(
-            record.get("evidence_record_id")
-            or record.get("id")
-            or record.get("verified_quote")
-            or record.get("quote")
-            or id(record)
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(record)
-    return deduped
 
 
 def _compact_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -2860,7 +2848,7 @@ def _compact_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
 
     return {
         key: record[key]
-        for key in ("evidence_record_id", "id", "field_path", *_EVIDENCE_CONTEXT_KEYS,
+        for key in ("evidence_record_id", "id", "field_path", "evidence_link_issue", *_EVIDENCE_CONTEXT_KEYS,
                     *_EVIDENCE_TEXT_KEYS)
         if record.get(key) is not None
     }

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import result_with_history_receipt
+
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -22,6 +27,10 @@ from src.schemas.domain_envelope import (
     DomainEnvelope,
     ValidationFindingSeverity,
 )
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 _ROUTES_YAML = """
@@ -242,8 +251,10 @@ def test_dispatch_runs_only_routed_targets_and_never_writes_the_routing_value(tm
     assert calls == [("widget_validator", "widget", 5)]
     routed, unrouted = result.envelope.extracted_objects
     assert routed.payload["subject"]["kind"] == "widget"
-    assert routed.payload["subject"]["identifier"] == "W:1"
-    assert routed.payload["subject"]["label"] == "Blue widget"
+    assert "identifier" not in routed.payload["subject"]
+    assert "label" not in routed.payload["subject"]
+    assert result.validator_results[0].resolved_values == {"widget_id": "W:1", "widget_name": "Blue widget"}
+    assert any(f.details.get("machine_review") == "pending" for f in result.appended_findings)
     assert unrouted.payload["subject"] == {"kind": "unknown", "wording": "thing"}
     assert [
         finding.code
@@ -507,14 +518,14 @@ def test_an_override_on_a_routed_value_sticks_when_a_later_run_takes_another_rou
     (match,) = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
     request = build_domain_validation_request(match).request
     assert request.validator_agent.agent_id == "gadget_validator"
-    result = DomainValidatorResultBase.model_validate({
+    result = result_with_history_receipt(DomainValidatorResultBase.model_validate({
         "status": status, "request_id": request.request_id,
         "validator_binding_id": request.validator_binding_id, "validator_agent": request.validator_agent,
         "target": request.target, "resolved_values": values, "resolved_objects": [],
         "missing_expected_fields": [], "candidates": [],
         "lookup_attempts": [{"provider": "f", "method": "m", "query": {}, "result_count": 1, "outcome": outcome}],
         "curator_message": None, "explanation": "Validator words.",
-    })
+    }))
 
     materialized = materialize_validator_results_into_envelope(
         envelope, pack.metadata,

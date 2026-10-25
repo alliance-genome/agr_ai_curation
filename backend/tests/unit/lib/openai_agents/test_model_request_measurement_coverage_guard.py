@@ -249,6 +249,7 @@ def test_importing_specialist_or_studio_runtime_alone_installs_measurement():
     for module in (
         "src.lib.openai_agents.streaming_tools",
         "src.lib.agent_studio.openai_runtime",
+        "src.lib.validation_review.reviewer",
         "src.lib.openai_agents.runner",
     ):
         script = (

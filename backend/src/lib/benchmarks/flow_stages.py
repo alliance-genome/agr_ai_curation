@@ -147,8 +147,8 @@ def flow_stages(
             execution_receipt=AgentExecutionReceipt.model_validate(receipt) if receipt else None,
         ))
         if sidecar is not None:
-            # The normal executor invokes sidecars as validator requests, not
-            # as control steps followed by _execute_validation_groups_for_step.
+            # The normal executor invokes sidecars as saved validator routes
+            # in the shared supervisor review plan, not ordinary control steps.
             # Their palette defaults therefore are not another scheduled layer.
             continue
         schedule = validation_schedule_from_node_data(node.data.model_dump())

@@ -2,7 +2,7 @@ name: Unit Tests
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, integration/validation-review]
     paths:
       - 'backend/**'
       - 'frontend/**'

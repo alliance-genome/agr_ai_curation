@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
@@ -16,6 +18,10 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 @pytest.fixture(autouse=True)
@@ -262,7 +268,7 @@ def test_binding_schema_rejects_empty_ordering_and_duplicated_optional_fields(tm
 # --- Dispatch ------------------------------------------------------------------
 
 
-def test_dependent_binding_reads_the_values_its_prerequisite_wrote(tmp_path):
+def test_dependent_binding_waits_for_explicit_prerequisite_review(tmp_path):
     pack = _pack(
         tmp_path,
         _binding("fixture.lookup", extra=_LOOKUP_FIELDS)
@@ -272,11 +278,10 @@ def test_dependent_binding_reads_the_values_its_prerequisite_wrote(tmp_path):
 
     result = dispatch_active_validator_bindings(_envelope(), pack, runner=_runner(seen))
 
-    assert [binding_id for binding_id, _inputs in seen] == ["fixture.lookup", "fixture.check"]
-    assert seen[1][1]["curie"] == "T:0001"
-    payload = result.envelope.extracted_objects[0].payload
-    assert payload["verdict"] == "checked T:0001"
-    assert len(result.validator_results) == 2
+    assert [binding_id for binding_id, _inputs in seen] == ["fixture.lookup"]
+    assert result.envelope.extracted_objects[0].payload == _envelope().extracted_objects[0].payload
+    assert len(result.validator_results) == 1
+    assert result.envelope.metadata["review_episode_id"]
 
 
 def test_without_runs_after_both_bindings_read_the_extracted_values(tmp_path):
@@ -292,7 +297,7 @@ def test_without_runs_after_both_bindings_read_the_extracted_values(tmp_path):
 
 
 @pytest.mark.parametrize("outcome", ["error", "blocked"])
-def test_a_prerequisite_that_fails_non_decisively_still_lets_the_dependent_run(tmp_path, outcome):
+def test_failed_prerequisite_does_not_dispatch_dependent_without_review(tmp_path, outcome):
     pack = _pack(
         tmp_path,
         _binding("fixture.lookup", extra=_LOOKUP_FIELDS)
@@ -304,9 +309,9 @@ def test_a_prerequisite_that_fails_non_decisively_still_lets_the_dependent_run(t
         _envelope(), pack, runner=_runner(seen, lookup_outcome=outcome),
     )
 
-    assert [binding_id for binding_id, _inputs in seen] == ["fixture.lookup", "fixture.check"]
-    assert seen[1][1].get("curie") is None
-    assert [item.status for item in result.validator_results] == ["unresolved", "resolved"]
+    assert [binding_id for binding_id, _inputs in seen] == ["fixture.lookup"]
+    assert [item.status for item in result.validator_results] == ["unresolved"]
+    assert result.envelope.extracted_objects[0].payload == _envelope().extracted_objects[0].payload
 
 
 # --- Optional result fields ------------------------------------------------------
@@ -324,7 +329,7 @@ _OPTIONAL_LOOKUP = _LOOKUP_FIELDS + """        optional_result_fields:
         ({"curie": "T:0001"}, None),
     ],
 )
-def test_optional_result_fields_are_written_when_returned_and_never_demote(
+def test_optional_result_fields_remain_in_pending_answer_without_writeback(
     tmp_path, resolved_values, expected_xref,
 ):
     pack = _pack(tmp_path, _binding("fixture.lookup", extra=_OPTIONAL_LOOKUP))
@@ -342,8 +347,8 @@ def test_optional_result_fields_are_written_when_returned_and_never_demote(
     assert request.expected_result_fields == {"curie": "term.curie"}
     assert result.validator_results[0].status == "resolved"
     term = result.envelope.extracted_objects[0].payload["term"]
-    assert term["curie"] == "T:0001"
-    assert term.get("xref") == expected_xref
+    assert term == _envelope().extracted_objects[0].payload["term"]
+    assert result.validator_results[0].resolved_values.get("xref") == expected_xref
 
 
 def test_a_binding_without_optional_fields_keeps_its_request_shape(tmp_path):

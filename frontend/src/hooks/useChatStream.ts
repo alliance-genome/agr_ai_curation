@@ -31,7 +31,7 @@ export interface ExecuteFlowOptions {
   turnId?: string
 }
 
-export type ChatRunTerminalStatus = 'completed' | 'error'
+export type ChatRunTerminalStatus = 'completed' | 'error' | 'review_pending' | 'review_exhausted' | 'interrupted'
 export type ChatRunKind = 'chat' | 'flow'
 
 const CHAT_TERMINAL_EVENT_TYPES = new Set([
@@ -192,6 +192,7 @@ function getRunTerminalStatus(
     const event = events[index]
 
     if (runKind === 'flow' && event.type === 'FLOW_FINISHED') {
+      if (event.status === 'review_pending' || event.status === 'review_exhausted' || event.status === 'interrupted') return event.status
       return event.status === 'completed' ? 'completed' : 'error'
     }
 

@@ -4,7 +4,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from tests.reviewed_output_unit_support import (
+    mark_reviewed_output_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
 from agents import function_tool
+
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
 
 
 def _executor_module():
@@ -254,6 +262,7 @@ async def test_chat_output_formatter_binds_bundle_tools_and_returns_receipt(monk
     }
 
     def fake_get_agent(agent_id, **kwargs):
+        mark_reviewed_output_bundle(kwargs["formatter_bundle"])
         captured["agent_id"] = agent_id
         captured["context"] = kwargs
         return SimpleNamespace(name="Chat Output")

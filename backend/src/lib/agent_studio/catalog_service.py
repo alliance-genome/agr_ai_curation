@@ -2159,7 +2159,7 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
     group_tool_audit = group_tool_resolution.audit_metadata()
     # An extraction agent never runs with identity-lookup tools (pinned and restored
     # revisions included); it is refused until re-saved without them.
-    from src.lib.packages.tool_roles import require_no_identity_lookup_on_extraction
+    from src.lib.packages.tool_roles import require_no_identity_lookup_on_extraction, require_validator_tool_boundary
 
     require_no_identity_lookup_on_extraction(
         requested_tool_ids,
@@ -2171,6 +2171,7 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         ),
         agent_label=f"Agent '{db_agent.agent_key}'",
     )
+    require_validator_tool_boundary(requested_tool_ids, output_schema_key=execution_snapshot.output_contract.output_schema_key if execution_snapshot is not None else getattr(db_agent, "output_schema_key", None), agent_label=f"Agent '{db_agent.agent_key}'")
     if raw_group_tool_policy.get("rules"):
         logger.info(
             "Resolved group-scoped tools for agent '%s': base=%s added=%s denied=%s",
@@ -2344,6 +2345,10 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
 
         attach_benchmark_route(runtime_agent, benchmark_route_slot)
     runtime_agent.agent_key = str(db_agent.agent_key)
+    # Retain only reconstructible, non-credential constructor inputs. A later
+    # targeted review reauthorizes the saved agent and compares its full contract.
+    from src.lib.validation_review.extractor_phase import reconstruction_context
+    runtime_agent.review_reconstruction_context = reconstruction_context(runtime_kwargs)
     from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
     cost_identity = agent_identity(
         str(db_agent.agent_key), str(db_agent.name), getattr(db_agent, "category", None),

@@ -68,6 +68,7 @@ def _make_batch_response(batch_id=None, flow_id=None, status=BatchStatus.PENDING
         total_documents=1,
         completed_documents=0 if status != BatchStatus.COMPLETED else 1,
         failed_documents=0,
+        review_pending_documents=0, review_exhausted_documents=0, interrupted_documents=0,
         created_at=now,
         started_at=now,
         completed_at=now if status in (BatchStatus.COMPLETED, BatchStatus.CANCELLED) else None,
@@ -678,6 +679,7 @@ async def test_stream_batch_progress_sanitizes_internal_errors(monkeypatch):
         total_documents=1,
         completed_documents=0,
         failed_documents=0,
+        review_pending_documents=0, review_exhausted_documents=0, interrupted_documents=0,
         documents=[],
     )
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
@@ -708,6 +710,7 @@ async def test_stream_batch_progress_strips_internal_event_fields(monkeypatch):
         total_documents=1,
         completed_documents=0,
         failed_documents=0,
+        review_pending_documents=0, review_exhausted_documents=0, interrupted_documents=0,
         documents=[],
     )
     service = SimpleNamespace(get_batch=lambda *_args, **_kwargs: batch)
@@ -774,6 +777,7 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
         total_documents=1,
         completed_documents=1,
         failed_documents=0,
+        review_pending_documents=0, review_exhausted_documents=0, interrupted_documents=0,
         documents=[completed_document],
         started_at=None,
         completed_at=None,
@@ -845,6 +849,7 @@ async def test_stream_batch_progress_replays_completed_document_snapshot_on_reco
             **handoff_metadata,
             "error_message": None,
             "processing_time_ms": 1200,
+            "review_details": None,
         }
 
 

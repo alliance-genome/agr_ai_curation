@@ -422,20 +422,21 @@ def test_supported_disease_and_chemical_slots_copy_actual_provider_fields(schema
     assert result.candidates[0].details["source_record"] == raw
 
 
-def test_standalone_preserves_structured_inputs_and_new_runtime_evidence(schemas):
+def test_standalone_preserves_supplied_evidence_without_runtime_replacement(schemas):
     import json
     from src.lib.domain_packs.compact_runtime import runtime_for_schema
-    evidence = []
+    supplied = {"evidence_record_id": "source-1", "quote": "Original extracted context."}
+    evidence = [supplied]
     runtime = runtime_for_schema(None, result_schema=schemas["GeneResultEnvelope"],
         input_text=json.dumps({"selected_inputs": {"symbol": "Abc"}}), evidence=evidence)
     contract = next(iter(runtime.contracts.values()))
     assert contract.request.selected_inputs == {"symbol": "Abc"}
-    # The evidence registry is populated by document tools after construction.
+    # Validators cannot acquire or replace source evidence after construction.
     evidence.append({"evidence_record_id": "live-1", "quote": "Abc was observed."})
     result = runtime.assemble({"request_id": contract.request.request_id,
         "status": "unresolved", "explanation": "No database match yet."})
     assert result.status == "unresolved"
-    assert contract.request.evidence == evidence
+    assert contract.request.evidence == [supplied]
 
 
 @pytest.mark.parametrize("schema, record", [
@@ -554,7 +555,7 @@ def test_stored_condition_finalization_preserves_component_completeness(schemas,
         _ValidatorAgentRunOutput, _ValidatorBatchAgentRunOutput, _ValidatorFinalizationState,
         _build_finalize_validator_batch_results_tool, _build_finalize_validator_result_tool,
         _remap_validator_result_for_request, _validated_results_from_agent_batch_output,
-        validator_result_from_agent_output,
+        _validated_result_from_agent_output, _finalize_validator_result,
     )
 
     contract, workspace, decision = _stored_condition_workspace(schemas, with_chemical=False)
@@ -577,8 +578,8 @@ def test_stored_condition_finalization_preserves_component_completeness(schemas,
         response = tool(decision)
         assert response["status"] == "accepted", response
         result = state.accepted_result
-    result = validator_result_from_agent_output(
-        _ValidatorAgentRunOutput(None, result), request=contract.request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(
+        _ValidatorAgentRunOutput(None, result), request=contract.request), request=contract.request)
     result = _remap_validator_result_for_request(
         result, contract.request.model_copy(update={"request_id": "remapped-condition"}))
     assert result.status == "resolved"

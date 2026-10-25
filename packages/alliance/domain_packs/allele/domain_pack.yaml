@@ -485,9 +485,6 @@ object_definitions:
           curie: Validated allele ID (not paper-stated or accepted)
           symbol: Validated allele symbol
           taxon: Validated taxon
-        evidence:
-          object_type: EvidenceQuote
-          id_field: evidence_record_id
     fields:
       - field_path: mention.text
         field_type: string

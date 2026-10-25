@@ -296,6 +296,8 @@ def _validator_item(
             "explanation": "Fixture validator decision.",
         }
     )
+    from tests.validation_history_unit_support import result_with_history_receipt
+    result_with_history_receipt(result)
     return ValidatorResultMaterializationInput(
         match=match,
         request=request,
@@ -628,8 +630,9 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
     originals = result.envelope.validator_results
     assert len(originals) == 1
     original_ref, original = next(iter(originals.items()))
-    assert original["result"] == item.result.model_dump(mode="json")
-    assert original["request"] == item.request.model_dump(mode="json")
+    assert original["history_ref"] == item.result._history_ref
+    assert original["result"]["status"] == item.result.status
+    assert "request" not in original
     assert original["source_envelope_revision"] == 7
     reloaded = DomainEnvelope.model_validate_json(result.envelope.model_dump_json())
     assert reloaded.validator_results == originals
@@ -1846,12 +1849,16 @@ async def test_trace_derived_ai9_materialization_preserves_judgment_and_original
     # Synthetic qualification added only to exercise transport, not historical evidence.
     decision["unresolved_questions"] = ["Confirm the experimental background if needed."]
     assembled = runtime.assemble(decision)
+    from tests.validation_history_unit_support import result_with_history_receipt
+    result_with_history_receipt(assembled)
     materialized = materialize_validator_results_into_envelope(envelope, metadata, [
         ValidatorResultMaterializationInput(match=item.match, request=item.request, result=assembled),
     ])
     reference = next(obj for obj in materialized.materialized_objects if obj.object_type == "Allele")
     assert reference.payload["primary_external_id"] == "MGI:3809523"
-    original = next(iter(materialized.envelope.validator_results.values()))["result"]
+    descriptor = next(iter(materialized.envelope.validator_results.values()))
+    assert descriptor["history_ref"] == assembled._history_ref
+    original = assembled.model_dump(mode="json")
     assert original["status"] == "resolved" and original["output_issues"] == []
     assert original["lookup_attempts"][0]["outcome"] == "ambiguous"
     assert original["lookup_attempts"][0]["result_count"] == 13

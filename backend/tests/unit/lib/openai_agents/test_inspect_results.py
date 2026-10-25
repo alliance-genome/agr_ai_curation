@@ -853,10 +853,10 @@ async def test_post_validation_view_is_explicit_and_exact_with_pinned_reads(monk
     original["metadata"] = {"inspection_checkpoint": {"envelope_id": "saved-envelope", "revision": 2}}
     validated = deepcopy(original["payload_json"])
     validated["specialist_explanation"] = "Validated checkpoint explanation"
-    row = SimpleNamespace(revision=2, envelope_json=validated, source_extraction_result_id=RESULT_ID, document_id=DOCUMENT_ID)
+    row = SimpleNamespace(revision=2, body_sha="saved-body", source_extraction_result_id=RESULT_ID, document_id=DOCUMENT_ID)
     db = MagicMock()
     db.__enter__.return_value = db
-    db.get.return_value = row
+    db.get.side_effect = lambda model, key: SimpleNamespace(content=validated) if model.__name__ == "ValidationBody" else row
     monkeypatch.setattr(views, "SessionLocal", lambda: db)
     monkeypatch.setattr(views, "readable_document_ids", lambda *args, **kw: {DOCUMENT_ID})
     _patch_records(monkeypatch, [original])
@@ -871,7 +871,7 @@ async def test_post_validation_view_is_explicit_and_exact_with_pinned_reads(monk
     assert page["result_view"] == "post_validation"
     row.revision = 3
     stale = json.loads(await inspect_results_module.inspect_results(action="explanation", result_ref=ref, result_view="post_validation", envelope_revision=2))
-    assert stale["error_code"] == "result_view_unavailable"
+    assert stale["value"] == validated["specialist_explanation"]
     assert original["payload_json"] != validated
 
 
@@ -955,3 +955,36 @@ async def test_flow_capability_ignores_unrelated_metadata_but_pins_validation_vi
     assert original["status"] == "ok"
     unavailable = json.loads(await inspect_results_module.inspect_results(action="summary", result_ref=ref, result_view="post_validation", authorized_refs=scope))
     assert unavailable["error_code"] == "result_view_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_conflicting_evidence_reports_integrity_conflict_not_load_failure(monkeypatch):
+    payload = _payload()
+    original = payload['metadata']['evidence_records'][0]
+    payload['metadata']['evidence_records'].append({**original, 'verified_quote': 'Conflicting source'})
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+    captures = []
+    monkeypatch.setattr(inspect_results_module, 'report_runtime_exception', lambda *a, **k: captures.append(k))
+    result = json.loads(await inspect_results_module.inspect_results(action='evidence', object_ref='assertion-1'))
+    assert result['error_code'] == 'evidence_conflict'
+    assert result['conflicting_evidence_count'] == 1
+    assert captures[0]['operation'] == 'evidence_integrity_conflict'
+    assert 'Conflicting source' not in str(captures)
+
+
+@pytest.mark.asyncio
+async def test_search_builds_one_evidence_index_for_all_objects(monkeypatch):
+    payload = _payload()
+    second = deepcopy(payload['extracted_objects'][0])
+    second['pending_ref_id'] = 'assertion-2'
+    payload['extracted_objects'].append(second)
+    _patch_records(monkeypatch, [_InspectRecord(payload_json=payload)])
+    build = inspect_results_module._envelope_evidence_snapshot
+    calls = []
+    def counted(envelope):
+        calls.append(envelope.envelope_id)
+        return build(envelope)
+    monkeypatch.setattr(inspect_results_module, '_envelope_evidence_snapshot', counted)
+    response = json.loads(await inspect_results_module.inspect_results(action='search', query='gene'))
+    assert response['status'] == 'ok'
+    assert len(calls) == 1

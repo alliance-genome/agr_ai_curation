@@ -1138,6 +1138,23 @@ def _build_domain_envelope_submission_context(
             continue
 
         envelope = DomainEnvelope.model_validate(row.envelope_json)
+        review_problem = None
+        reference = envelope.metadata.get("selected_projection")
+        history_reference = envelope.metadata.get("validation_history") or {}
+        if reference is None:
+            review_problem = "Explicit review and selected-value publication are required."
+        elif not user_id or not history_reference.get("session_id"):
+            review_problem = "Authenticated selection scope is unavailable."
+        else:
+            from src.lib.validation_history.projection import read_published_projection_in_transaction
+            from src.lib.validation_history.store import HistoryScope, HistoryConflict
+            try:
+                envelope, _ = read_published_projection_in_transaction(
+                    db, HistoryScope(str(user_id), str(row.document_id), history_reference["session_id"]),
+                    reference, finalized=True,
+                )
+            except HistoryConflict:
+                review_problem = "The selected annotation is pending, stale, or structurally incomplete."
         context = _build_domain_envelope_object_context(
             db=db, user_id=user_id,
             active_groups=active_groups,
@@ -1147,6 +1164,14 @@ def _build_domain_envelope_submission_context(
             expected_revision=expected_revision,
             projection_refs=object_projection_refs,
         )
+        if review_problem is not None:
+            from dataclasses import replace
+            context = replace(context, blockers=(*context.blockers, _readiness_blocker(
+                envelope_id=envelope_id, object_id=object_id, field_path=None,
+                severity=ValidationFindingSeverity.BLOCKER.value,
+                status_value="pending", code="domain_envelope.machine_review_pending",
+                message=review_problem, projection_ref=projection_ref,
+            )))
         object_contexts[candidate_id] = context
         if row.revision == expected_revision and envelope_id not in envelope_snapshots:
             envelope_snapshots[envelope_id] = _domain_envelope_snapshot(
@@ -1251,6 +1276,12 @@ def _candidate_submission_readiness(
 
     blocking_reasons: list[str] = []
     warnings: list[str] = []
+
+    receipt = candidate.execution_receipt
+    if (receipt is not None
+            and receipt["output_contract"]["output_mode"] == "profile_bound_generic"
+            and not _domain_envelope_candidate(candidate)):
+        blocking_reasons.append("Explicit review and selected-value publication are required.")
 
     if candidate.status == CurationCandidateStatus.PENDING:
         blocking_reasons.append("Candidate is still pending curator review.")

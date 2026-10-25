@@ -49,7 +49,8 @@ def execution_settings() -> dict[str, Any]:
         "flow_selected_fields_direct_export", "flow_step_output_preview_chars",
         "flow_step_evidence_preview_limit", "flow_memory_max_visible_output_chars",
     )
-    return {name: getattr(config, "get_" + name)() for name in names}
+    return {**{name: getattr(config, "get_" + name)() for name in names},
+            "validation_review_limits": config.get_validation_review_limits()}
 
 
 def runtime_catalog_digest() -> str:

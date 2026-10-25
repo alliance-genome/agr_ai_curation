@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
@@ -43,6 +44,7 @@ from src.lib.domain_envelopes.persistence import (
 )
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
@@ -61,6 +63,8 @@ from src.schemas.domain_envelope import (
     HistoryEventKind,
 )
 
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 @compiles(PostgresUUID, "sqlite")
 def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
@@ -72,7 +76,10 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
     return "JSON"
 
 
+
 TEST_TABLES = [
+    ValidationBody.__table__,
+    ValidationCheckpoint.__table__,
     User.__table__,
     PDFDocument.__table__,
     CurationReviewSession.__table__,
@@ -107,6 +114,8 @@ def db_session():
         table.indexes.clear()
         for column in table.columns:
             restored_defaults.append((column, column.server_default))
+            if table.name == "validation_checkpoints" and column.name == "created_at":
+                continue
             if table.name.startswith("domain_") and column.name in {
                 "created_at",
                 "updated_at",
@@ -228,7 +237,7 @@ def _create_document(db_session) -> PDFDocument:
     return document
 
 
-def _create_session_with_envelope_projection(db_session) -> tuple[CurationReviewSession, CurationCandidate]:
+def _create_session_with_envelope_projection(db_session, *, source_agent_key=None) -> tuple[CurationReviewSession, CurationCandidate]:
     now = _now()
     document = _create_document(db_session)
     session = CurationReviewSession(
@@ -272,6 +281,16 @@ def _create_session_with_envelope_projection(db_session) -> tuple[CurationReview
             )
         ],
     )
+    source_id = None
+    if source_agent_key is not None:
+        envelope.metadata["source_agent_key"] = source_agent_key
+        source_id = uuid4()
+        db_session.add(CurationExtractionResultRecord(
+            id=source_id, document_id=document.id, agent_key=source_agent_key,
+            source_kind="chat", payload_json=envelope.model_dump(mode="json"),
+            candidate_count=1, extraction_metadata={}, created_at=now,
+        ))
+        db_session.flush()
     checkpoint = write_domain_envelope_checkpoint(
         db_session,
         DomainEnvelopeCheckpointRequest(
@@ -281,6 +300,7 @@ def _create_session_with_envelope_projection(db_session) -> tuple[CurationReview
             document_id=document.id,
             session_id=session.id,
             adapter_key="fixture_adapter",
+            source_extraction_result_id=source_id,
         ),
     )
     assert checkpoint.revision == 1
@@ -552,12 +572,9 @@ def test_profile_patch_service_rejects_before_checkpoint_or_projection_mutation(
 
 
 def test_historical_custom_envelope_remains_editable_without_inventing_receipt(db_session, loaded_pack):
-    session, _ = _create_session_with_envelope_projection(db_session)
+    session, _ = _create_session_with_envelope_projection(
+        db_session, source_agent_key="ca_historical")
     row = db_session.get(DomainEnvelopeModel, "env-1")
-    payload = deepcopy(row.envelope_json)
-    payload["metadata"]["source_agent_key"] = "ca_historical"
-    row.envelope_json = payload
-    db_session.commit()
 
     response = module.patch_envelope_field(
         db_session, session.id, _request(session.id), {"sub": "curator-1"},
@@ -778,9 +795,8 @@ def test_update_candidate_draft_materializes_envelope_backed_payload(
         ]["symbol"]
         == "abc-3"
     )
-    assert envelope_row.envelope_json["history"][-1]["details"]["reason"] == (
-        "draft_materialization"
-    )
+    assert any(event["details"].get("reason") == "draft_materialization"
+               for event in envelope_row.envelope_json["history"])
 
 
 def test_update_candidate_draft_coerces_integer_and_materializes_projection(

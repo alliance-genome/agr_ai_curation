@@ -1644,7 +1644,8 @@ def _spy_inline_persistence(monkeypatch):
     ],
 )
 @pytest.mark.parametrize("text_source", ["final_output", "new_items", "stream"])
-async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain, tools_module, agent_key, text_source):
+@pytest.mark.parametrize("reviewed_chat", [False, True])
+async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain, tools_module, agent_key, text_source, reviewed_chat):
     from datetime import datetime, timezone
     from importlib import import_module
     from src.lib.curation_workspace.domain_envelope_normalization import (
@@ -1673,7 +1674,11 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
             if False:
                 yield
 
+    source_metadata = []
+    source_payloads = []
+
     async def materialize(serialized_payload, *_args, **_kwargs):
+        source_metadata.append(_kwargs.get("source_metadata", {}))
         payload = json.loads(serialized_payload)
         require_recorded_resolution_states(payload, adapter_key=domain)
         record = CurationExtractionResultRecord.model_validate(
@@ -1683,6 +1688,10 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
              "created_at": datetime.now(timezone.utc), "metadata": {}}
         )
         envelope = domain_envelope_from_extraction_result(record, stored=False)
+        if reviewed_chat:
+            envelope.metadata["validation_review_runtime"] = "chat"
+            envelope.specialist_explanation = _kwargs["source_metadata"]["specialist_explanation"]
+        source_payloads.append(envelope.model_dump(mode="json"))
         return envelope.model_dump_json()
 
     from agents.items import ItemHelpers
@@ -1719,8 +1728,14 @@ async def test_explicit_empty_finalizer_reaches_chat_handoff(monkeypatch, domain
     assert event["internal"]["extraction_result_id"] == expected.extraction_result_id
 
     assert explanation in handoff_text
-    assert finalization.payload["specialist_explanation"] == explanation
-    assert event["internal"]["canonical_payload"]["specialist_explanation"] == explanation
+    if reviewed_chat:
+        assert source_metadata[0]["specialist_explanation"] == explanation
+        assert finalization.payload == source_payloads[0]
+        assert event["internal"]["canonical_payload"] == source_payloads[0]
+    else:
+        assert explanation in handoff_text
+        assert finalization.payload["specialist_explanation"] == explanation
+        assert event["internal"]["canonical_payload"]["specialist_explanation"] == explanation
 
 
 @pytest.mark.asyncio

@@ -3763,6 +3763,8 @@ def _append_live_evidence_record(
 async def _dispatch_domain_envelope_validators_for_chat(
     final_output: str,
     *,
+    history_scope_id: str,
+    producer_id: str,
     expected_output_type: Any,
     specialist_name: str,
     tool_name: Optional[str],
@@ -3771,6 +3773,10 @@ async def _dispatch_domain_envelope_validators_for_chat(
     is_builder_envelope: bool = False,
     runtime_context: Optional[Any] = None,
     execution_receipt: Optional[Mapping[str, Any]] = None,
+    source_metadata: Optional[Mapping[str, Any]] = None,
+    builder_finalization: Any = None,
+    source_agent: Any = None,
+    source_max_turns: int | None = None,
 ) -> str:
     """Run active domain-pack validators before extractor output reaches supervisor.
 
@@ -3862,8 +3868,8 @@ async def _dispatch_domain_envelope_validators_for_chat(
     try:
         envelope_started_at = time.monotonic()
         extraction_record = CurationExtractionResultRecord(
-            extraction_result_id=f"chat-runtime:{uuid.uuid4()}",
-            document_id="chat-runtime",
+            extraction_result_id=f"producer:{producer_id}",
+            document_id=runtime_context.document_id or "chat-runtime",
             adapter_key=candidate.adapter_key,
             agent_key=candidate.agent_key,
             source_kind=CurationExtractionSourceKind.CHAT,
@@ -3874,7 +3880,11 @@ async def _dispatch_domain_envelope_validators_for_chat(
             metadata=dict(candidate.metadata),
             execution_receipt=candidate.execution_receipt,
         )
-        envelope = domain_envelope_from_extraction_result(extraction_record, stored=False)
+        envelope = domain_envelope_from_extraction_result(
+            extraction_record, stored=False, include_persistence_history=False,
+        )
+        envelope.metadata.pop("source_extraction_result_id", None)
+        envelope.metadata["producer_id"] = producer_id
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
         dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
             envelope_started_at
@@ -3951,6 +3961,50 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     "validatorBatchUnresolvedCount": event.get("unresolved_count"),
                 },
             })
+
+        from src.lib.validation_history.runtime import capture_extraction
+        from src.lib.validation_history.store import HistoryScope
+        if runtime_context is None:
+            raise ValueError("Extraction history requires authenticated source context")
+        from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+        chat_review = ACTIVE_CHAT_REVIEW.get()
+        source_payload = json.loads(final_output)
+        if chat_review is not None:
+            explanation = (source_metadata or {}).get("specialist_explanation")
+            if isinstance(explanation, str):
+                # Make authored context part of the one immutable source, before
+                # capture/planning/persistence; readers use the envelope field.
+                envelope.specialist_explanation = explanation
+                source_payload["specialist_explanation"] = explanation
+        extractor_contract = None
+        if source_agent is not None and source_max_turns is not None:
+            from src.lib.validation_review.extractor_phase import contract as extractor_contract_for
+            extractor_contract = extractor_contract_for(source_agent, max_turns=source_max_turns)
+        envelope = await asyncio.to_thread(
+            capture_extraction,
+            scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, history_scope_id),
+            producer_id=producer_id,
+            typed=source_payload, envelope=envelope,
+            provenance={"agent_key": agent_key, "execution_receipt": execution_receipt,
+                        "extractor_contract": extractor_contract},
+        )
+
+        if chat_review is not None:
+            try:
+                return await chat_review.receive(envelope, domain_pack,
+                    agent_key=candidate.agent_key, adapter_key=candidate.adapter_key,
+                    tool_name=tool_name or candidate.agent_key,
+                    execution_receipt=candidate.execution_receipt, context=runtime_context,
+                    trace_id=get_current_trace_id(), builder_finalization=builder_finalization,
+                    source_metadata={**dict(source_metadata or {}), "specialist_name": specialist_name,
+                                     "domain_pack_id": envelope.domain_pack_id},
+                    event_emitter=_emit_validator_dispatch_event, source_agent=source_agent)
+            finally:
+                add_specialist_event({"type": "TOOL_COMPLETE",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "details": {"toolName": "dispatch_active_validator_bindings",
+                                "friendlyName": f"{specialist_name}: Validator dispatch paused or finished; consult review status",
+                                "isSpecialistInternal": True}})
 
         core_dispatch_started_at = time.monotonic()
         dispatch_kwargs: Dict[str, Any] = {
@@ -6340,12 +6394,19 @@ async def run_specialist_with_events(
         try:
             final_output = await _dispatch_domain_envelope_validators_for_chat(
                 final_output,
+                history_scope_id=builder_workspace.run_id,
+                producer_id=builder_workspace.builder_invocation_id,
+                source_agent=agent,
+                source_max_turns=max_turns,
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
                 adapter_key=runtime_curation_adapter_key,
                 source_agent_key=runtime_canonical_agent_key,
                 execution_receipt=builder_workspace.execution_receipt,
+                builder_finalization=builder_finalization,
+                source_metadata={"execution_context": execution_context.model_dump(mode="json") if execution_context else None,
+                                 "specialist_explanation": specialist_explanation},
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6401,6 +6462,10 @@ async def run_specialist_with_events(
         try:
             validated_builder_output = await _dispatch_domain_envelope_validators_for_chat(
                 json.dumps(builder_finalization.payload),
+                history_scope_id=builder_workspace.run_id,
+                producer_id=builder_workspace.builder_invocation_id,
+                source_agent=agent,
+                source_max_turns=max_turns,
                 expected_output_type=expected_output_type,
                 specialist_name=specialist_name,
                 tool_name=tool_name,
@@ -6408,6 +6473,9 @@ async def run_specialist_with_events(
                 source_agent_key=runtime_canonical_agent_key,
                 is_builder_envelope=True,
                 execution_receipt=builder_workspace.execution_receipt,
+                builder_finalization=builder_finalization,
+                source_metadata={"execution_context": execution_context.model_dump(mode="json") if execution_context else None,
+                                 "specialist_explanation": specialist_explanation},
                 runtime_context=_validator_runtime_context_for_chat(
                     document_id=builder_workspace.document_id,
                     user_id=get_current_user_id(),
@@ -6467,7 +6535,10 @@ async def run_specialist_with_events(
     phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
         validator_dispatch_started_at
     )
-    if builder_finalization is not None and specialist_explanation is not None:
+    if (builder_finalization is not None and specialist_explanation is not None
+            and builder_finalization.payload.get("metadata", {}).get("validation_review_runtime") != "chat"):
+        # Reviewed chat sources were saved before validation with explanation
+        # metadata. Keep their canonical payload unchanged for idempotent reuse.
         builder_finalization = replace(
             builder_finalization,
             payload={**builder_finalization.payload, "specialist_explanation": specialist_explanation},
@@ -6683,17 +6754,15 @@ def _validator_runtime_context_for_chat(
 ) -> Optional[Any]:
     normalized_document_id = str(document_id or "").strip()
     normalized_user_id = str(user_id or "").strip()
-    if (
-        not normalized_document_id
-        or not normalized_user_id
-        or normalized_document_id == "chat-runtime"
-    ):
+    if not normalized_user_id:
         return None
+    if normalized_document_id == "chat-runtime":
+        normalized_document_id = ""
 
     from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
 
     return ValidatorRuntimeContext(
-        document_id=normalized_document_id,
+        document_id=normalized_document_id or None,
         user_id=normalized_user_id,
         authenticated_groups=(
             tuple(authenticated_groups) if authenticated_groups is not None else None

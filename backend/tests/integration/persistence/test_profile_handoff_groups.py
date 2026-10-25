@@ -14,12 +14,13 @@ from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCand
 from src.lib.curation_workspace.models import CurationCandidate, CurationReviewSession
 from src.lib.flows.executor import _persist_flow_extraction_candidates
 from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.user import User
 from src.schemas.curation_workspace import CurationDocumentBootstrapRequest
 from tests.unit.lib.domain_packs.test_profile_validation import profile_envelope
 from .test_profile_validator_workspace import (
-    manual_profile_record,
-    migrated_database,
-    example,
+    manual_profile_record as manual_profile_record,
+    migrated_database as migrated_database,
+    example as example,
 )
 
 
@@ -42,11 +43,8 @@ async def test_saved_profile_35_records_handoff_and_replay(
     monkeypatch.setattr(
         bootstrap_service, "run_post_curation_pipeline", capture_pipeline
     )
-    # Keep real SQL/persistence and service transaction behavior, but contain
-    # commits in the fixture transaction so its rollback removes all test data.
-    monkeypatch.setattr(db, "commit", db.flush)
     document_id = str(manual.session.document_id)
-    owner = str(db.get(PDFDocument, manual.session.document_id).user_id)
+    owner = db.get(User, db.get(PDFDocument, manual.session.document_id).user_id).auth_sub
     flow_run_id, origin_session_id = str(uuid4()), str(uuid4())
     profile = resolve_receipt_profile(db, receipt)
     envelope = profile_envelope({"paper_name": "fixture-0"}, receipt, profile)
@@ -77,6 +75,15 @@ async def test_saved_profile_35_records_handoff_and_replay(
         }
         for obj in envelope.extracted_objects
     ]
+    from src.lib.validation_history.runtime import capture_extraction
+    from src.lib.validation_history.store import HistoryScope
+
+    envelope = capture_extraction(
+        scope=HistoryScope(owner, document_id, origin_session_id),
+        producer_id="fixture-handoff",
+        typed=envelope.model_dump(mode="json"), envelope=envelope,
+        provenance={"fixture": "saved-profile-handoff"},
+    )
     records = _persist_flow_extraction_candidates(
         candidates=[
             ExtractionEnvelopeCandidate(
@@ -92,7 +99,6 @@ async def test_saved_profile_35_records_handoff_and_replay(
         session_id=origin_session_id,
         trace_id="fixture-handoff",
         flow_run_id=flow_run_id,
-        db=db,
     )
     result = await run_flow_curation_handoff(
         extraction_results=records,

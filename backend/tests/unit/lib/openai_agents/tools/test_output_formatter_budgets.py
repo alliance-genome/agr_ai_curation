@@ -9,6 +9,12 @@ from typing import Any
 
 import pytest
 
+from tests.reviewed_output_unit_support import (
+    mark_reviewed_output_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
+
 from src.lib.flows import output_projection
 from src.lib.flows.chat_output_delivery import (
     chat_output_delivery_scope,
@@ -31,10 +37,12 @@ from tests.fixtures.flows.semantic_chat_output import (
     build_semantic_output_bundle,
 )
 
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
+
 
 @pytest.fixture(scope="module")
 def semantic_bundle() -> FlowOutputArtifactBundle:
-    return build_semantic_output_bundle()
+    return mark_reviewed_output_bundle(build_semantic_output_bundle())
 
 
 @pytest.fixture

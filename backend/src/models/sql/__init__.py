@@ -1,5 +1,7 @@
 """SQL models module."""
 
+from .validation_review import ValidationReviewScope, ValidationReviewEpisode, ValidationReviewReservation, ValidationReviewWork
+
 from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from .benchmark import (
     BenchmarkCell,
@@ -22,6 +24,7 @@ from .agent_run_history import AgentHistoryEvent, AgentHistoryPayload
 from .chat_message import ChatMessage
 from .chat_session import ChatSession
 from .validator_result import ValidatorResultRecord
+from .validation_history import ValidationArtifact, ValidationBody, ValidationFact, ValidationHead, ValidationCheckpoint
 from .cost_ledger import CostAttempt, CostFactRevision, CostSourceReference, RuntimeCostRequest
 from .chat_route_preference import ChatRoutePreference
 from .flow_shortcut_preference import FlowShortcutPreference
@@ -45,9 +48,14 @@ from .term_synonym import TermSynonym
 from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 
 __all__ = [
+    "ValidationReviewScope",
+    "ValidationReviewEpisode",
+    "ValidationReviewReservation",
+    "ValidationReviewWork",
     "AgentHistoryEvent",
     "AgentHistoryPayload",
     "ValidatorResultRecord",
+    "ValidationArtifact", "ValidationBody", "ValidationFact", "ValidationHead", "ValidationCheckpoint",
     "CostAttempt",
     "CostFactRevision",
     "CostSourceReference",

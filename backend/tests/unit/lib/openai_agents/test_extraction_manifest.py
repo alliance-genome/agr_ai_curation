@@ -354,7 +354,7 @@ def test_latest_resolved_correction_is_not_counted_as_unresolved_history(monkeyp
     page = build_extraction_manifest_page(payload)
     decisions = page["validator_results"]
     assert decisions["status_counts"] == {"resolved": 1, "unresolved": 1}
-    assert decisions["current_status_counts"] == {"resolved": 1}
+    assert decisions["latest_attempt_status_counts"] == {"resolved": 1}
     assert decisions["historical_total"] == 1
     assert decisions["outstanding_total"] == 0
     assert page["object_count"] == 1

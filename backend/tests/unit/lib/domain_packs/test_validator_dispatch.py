@@ -12,6 +12,8 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
@@ -19,7 +21,6 @@ from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
     _DEFAULT_VALIDATOR_BATCH_MAX_SIZE,
     ValidatorRuntimeContext,
-    _apply_validator_evidence_updates_to_envelope,
     _plan_validator_run_groups,
     _validated_results_from_agent_batch_output,
     _validator_batch_summary,
@@ -31,7 +32,8 @@ from src.lib.domain_packs.validator_dispatch import (
     run_package_scoped_validator_agent_batch,
     run_package_scoped_validator_agent,
     validator_request_payload_for_agent,
-    validator_result_from_agent_output,
+    _validated_result_from_agent_output,
+    _finalize_validator_result,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.domain_validator import (
@@ -41,6 +43,9 @@ from src.schemas.domain_validator import (
     ValidatorAgentRef,
 )
 from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
 @pytest.fixture(autouse=True)
@@ -652,7 +657,7 @@ def test_validator_guidance_is_advisory_in_single_and_batch_prompts():
     from src.lib.domain_packs.validator_dispatch import _append_validator_source_context_instructions
     for batch in (False, True):
         agent = SimpleNamespace(instructions="Existing validator policy")
-        _append_validator_source_context_instructions(agent, batch=batch, runtime_context=None)
+        _append_validator_source_context_instructions(agent)
         assert "Existing validator policy" in agent.instructions
         assert "Never resolve an identity solely from guidance" in agent.instructions
         assert "higher-priority policy" in agent.instructions
@@ -667,16 +672,12 @@ def test_validator_request_payload_for_agent_omits_semantic_duplicates():
     assert payload["selected_inputs"] == request.selected_inputs
     assert "validation_guidance" not in payload
     assert "input_selectors" not in payload
-    assert "evidence" not in payload
+    assert payload["evidence"] == request.evidence
     assert "input_values" not in payload["target"]
-    assert payload["evidence_summary"] == {
-        "evidence_count": 1,
-        "evidence_record_ids": ["evidence-1"],
-    }
+    assert payload["evidence"] == request.evidence
     assert payload["runtime_compaction"]["omitted_fields"] == [
         "input_selectors",
         "target.input_values",
-        "evidence",
     ]
 
 
@@ -730,52 +731,10 @@ def test_validator_request_payload_reports_runtime_capabilities_for_scoped_evide
         deep=True,
     )
 
-    payload = validator_request_payload_for_agent(
-        request,
-        runtime_context=ValidatorRuntimeContext(
-            document_id="doc-123",
-            user_id="user-1",
-        ),
-    )
+    payload = validator_request_payload_for_agent(request)
 
-    assert payload["validator_runtime_capabilities"] == {
-        "paper_search_available": True,
-        "scoped_evidence_update_available": True,
-        "allowed_evidence_record_ids": ["evidence-1"],
-        "target_object_id": "object-1",
-        "target_field_path": "gene.identifier",
-    }
-
-
-def test_validator_runtime_capabilities_scope_from_request_evidence_for_bare_quote():
-    request = _verbose_validation_request().model_copy(
-        update={
-            "target": ValidationTarget(
-                domain_pack_id="fixture.dispatch",
-                object_type="GeneAssertion",
-                object_id="object-1",
-                field_path="gene.identifier",
-                input_values={"identifier": "BAD:0001", "evidence_quote": "crb quote"},
-            ),
-        },
-        deep=True,
-    )
-
-    payload = validator_request_payload_for_agent(
-        request,
-        runtime_context=ValidatorRuntimeContext(
-            document_id="doc-123",
-            user_id="user-1",
-        ),
-    )
-
-    assert payload["validator_runtime_capabilities"] == {
-        "paper_search_available": True,
-        "scoped_evidence_update_available": True,
-        "allowed_evidence_record_ids": ["evidence-1"],
-        "target_object_id": "object-1",
-        "target_field_path": "gene.identifier",
-    }
+    assert "validator_runtime_capabilities" not in payload
+    assert payload["evidence"] == request.evidence
 
 
 def test_validator_request_dedupe_key_includes_field_and_evidence_context():
@@ -835,59 +794,6 @@ def test_validator_request_dedupe_key_includes_field_and_evidence_context():
     )
 
 
-def test_apply_validator_evidence_updates_replaces_matching_envelope_records():
-    envelope = _envelope(
-        evidence_records=[
-            {
-                "evidence_record_id": "evidence-1",
-                "entity": "BAD:0001",
-                "verified_quote": "Previous quote.",
-                "page": 3,
-                "section": "Results",
-                "chunk_id": "chunk-1",
-            }
-        ]
-    )
-    request = _validation_request().model_copy(
-        update={
-            "evidence": [
-                {
-                    "evidence_record_id": "evidence-1",
-                    "entity": "BAD:0001",
-                    "verified_quote": "Updated quote.",
-                    "page": 4,
-                    "section": "Results",
-                    "chunk_id": "chunk-2",
-                    "updated_at": "2026-06-08T00:00:00+00:00",
-                    "evidence_revision_history": [
-                        {
-                            "revision": 1,
-                            "previous_source": {
-                                "verified_quote": "Previous quote.",
-                                "chunk_id": "chunk-1",
-                            },
-                        }
-                    ],
-                }
-            ]
-        },
-        deep=True,
-    )
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope,
-        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-    )
-
-    evidence_record = updated.extracted_objects[0].payload["evidence_records"][0]
-    assert evidence_record["verified_quote"] == "Updated quote."
-    assert evidence_record["chunk_id"] == "chunk-2"
-    assert evidence_record["evidence_revision_history"][0]["previous_source"] == {
-        "verified_quote": "Previous quote.",
-        "chunk_id": "chunk-1",
-    }
-
-
 def test_validator_batch_summary_reports_payload_sizes_and_large_scalars():
     request = _verbose_validation_request().model_copy(
         update={
@@ -926,6 +832,7 @@ def _parent_validator_findings(result):
             "domain_pack.validator_resolved",
             "domain_pack.validator_unresolved",
             "domain_pack.validator_error",
+            "domain_pack.validator_output_incomplete",
         }
         and not finding.details.get("validation_metadata", {}).get(
             "generated_from_expected_result_field"
@@ -966,19 +873,9 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     assert finding.field_ref.field_path == "gene.identifier"
     assert finding.details["validation_metadata"]["source_envelope_revision"] == 7
     assert finding.details["validation_result"]["resolved_objects"][0]["object_type"] == "Gene"
-    materialized_gene = next(
-        domain_object
-        for domain_object in result.envelope.extracted_objects
-        if domain_object.object_type == "Gene"
-    )
-    assert materialized_gene.status.value == "validated"
-    assert materialized_gene.payload == {
-        "identifier": "AGR:0001",
-        "symbol": "ABC-1",
-    }
-    assert result.envelope.extracted_objects[0].object_refs == [
-        materialized_gene.to_object_ref()
-    ]
+    assert not any(obj.object_type == "Gene" for obj in result.envelope.extracted_objects)
+    assert finding.details["machine_review"] == "pending"
+    assert finding.details["selected_value"] is False
     assert result.validator_results[0].status == "resolved"
 
 
@@ -1014,55 +911,6 @@ def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, stat
     calls.clear()
     dispatch_active_validator_bindings(_envelope(), pack, runner=runner)
     assert set(calls) == {"fixture.identifier_lookup", "fixture.symbol_lookup"}
-
-
-@pytest.mark.parametrize("custom_fails", [False, True])
-def test_extractor_to_flow_runs_custom_once_without_standard_fallback(tmp_path, monkeypatch, custom_fails):
-    from src.lib.flows import executor
-    from src.lib.domain_packs.flow_validator_selection import (
-        set_flow_validator_selections, reset_flow_validator_selections,
-    )
-    from src.lib.domain_packs.materialization import materialize_validator_results_into_envelope
-    pack = _loaded_pack(tmp_path)
-    groups = [{"group_id": "custom", "binding_id": "fixture.identifier_lookup",
-               "state": "replaced", "validator_node_id": "custom-node"}]
-    calls = []
-
-    def standard(*args, **kwargs):
-        calls.append("standard")
-        raise AssertionError("standard must not run")
-
-    async def custom(request, **kwargs):
-        calls.append("custom")
-        assert request.validator_agent.agent_id == "custom-agent"
-        if custom_fails:
-            raise RuntimeError("custom source failed")
-        return DomainValidatorResultBase.model_validate(_result_payload(request))
-
-    monkeypatch.setattr(executor, "_run_custom_flow_validator_agent", custom)
-    token = set_flow_validator_selections(groups)
-    try:
-        upstream = dispatch_active_validator_bindings(_envelope(), pack, runner=standard)
-    finally:
-        reset_flow_validator_selections(token)
-    assert upstream.validator_agent_run_count == 0
-    flow = SimpleNamespace(flow_definition={"nodes": [{"id": "custom-node", "data": {"agent_id": "custom-agent"}}]})
-    units, findings, audit = asyncio.run(executor._collect_flow_validator_materialization_inputs(
-        source_envelope=upstream.envelope, source_envelope_revision=1,
-        registry=upstream.registry, groups=groups, flow=flow, agent_context={},
-    ))
-    assert calls == ["custom"]
-    assert not findings
-    assert len(units) == 1
-    assert audit[-1]["validator_agent"]["agent_id"] == "custom-agent"
-    assert audit[-1]["status"] == ("unresolved" if custom_fails else "resolved")
-    materialized = materialize_validator_results_into_envelope(
-        upstream.envelope, pack.metadata, units, actor_id="flow", source_envelope_revision=1,
-    )
-    results = [f.details["validation_result"] for f in materialized.envelope.validation_findings
-               if "validation_result" in f.details]
-    assert results
-    assert all(r["validator_agent"]["agent_id"] == "custom-agent" for r in results)
 
 
 def test_group_scope_normalizes_and_matching_authenticated_group_dispatches(
@@ -1400,16 +1248,8 @@ def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
         "domain_pack.validator_resolved",
         "domain_pack.validator_resolved",
     ]
-    materialized_gene = next(
-        domain_object
-        for domain_object in result.envelope.extracted_objects
-        if domain_object.object_type == "Gene"
-    )
-    assert all(
-        materialized_gene.to_object_ref() in domain_object.object_refs
-        for domain_object in result.envelope.extracted_objects
-        if domain_object.object_type == "GeneAssertion"
-    )
+    assert not any(obj.object_type == "Gene" for obj in result.envelope.extracted_objects)
+    assert len(result.envelope.validator_results) == 2
 
 
 def test_dispatch_runs_unique_validator_requests_in_parallel(tmp_path: Path):
@@ -1582,10 +1422,14 @@ def test_bad_batch_result_identity_becomes_controlled_unresolved_result(
     assert result.validator_results[1].status == "resolved"
     findings = _parent_validator_findings(result)
     assert [finding.code for finding in findings] == [
-        "domain_pack.validator_error",
+        "domain_pack.validator_output_incomplete",
         "domain_pack.validator_resolved",
     ]
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_bad_batch_extra_request_id_becomes_controlled_unresolved_results(
     tmp_path: Path,
@@ -1789,10 +1633,7 @@ def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context(
     ]
     assert result.validator_results[0].lookup_attempts[0].method == "search_genes"
     assert [item.payload.get("gene_symbol") for item in result.envelope.extracted_objects] == [
-        "crb",
-        "crb",
-        "ninaE",
-        None,
+        None, None, None, None,
     ]
 
 
@@ -1944,48 +1785,13 @@ def test_alliance_gene_expression_materializes_subject_gene_and_reference_fields
         "source_reference_validation",
         "subject_gene_validation",
     }
-    annotation = result.envelope.extracted_objects[0]
-    subject = annotation.payload["expression_annotation_subject"]
-    assert {key: subject[key] for key in ("primary_external_id", "gene_symbol", "mention")} == {
-        "primary_external_id": "MGI:1923928",
-        "gene_symbol": "Tmem67",
-        "mention": "Tmem67",
-    }
-    assert (subject["resolution_state"], subject["lookup_outcome"]) == ("resolved", "matched")
-    # A reference stored before the contract is verified by this re-validation (ALL-1283).
-    assert annotation.payload["single_reference"] == {
-        "pmid": "PMID:203506",
-        "title": "Resolved literature title",
-        "reference_id": 203506,
-        "curie": "PMID:203506",
-        "resolution_state": "resolved",
-        "lookup_outcome": "matched",
-        "validator_explanation": "Fixture validator resolved this field.",
-        "validator_curator_message": "source_reference_validation resolved.",
-    }
-    patch_events = {
-        event["validator_binding_id"]: event
-        for event in annotation.metadata["validator_resolved_value_materialization"]
-    }
-    assert patch_events["source_reference_validation"]["original_values"] == {
-        "single_reference.title": "Paper supplied title"
-    }
-    assert patch_events["subject_gene_validation"]["materialized_field_paths"] == [
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
+    assert [obj.payload for obj in result.envelope.extracted_objects] == [
+        obj.payload for obj in _gene_expression_envelope().extracted_objects
     ]
-    field_paths = [
-        finding.field_ref.field_path
-        for finding in result.appended_findings
-        if finding.field_ref is not None
-    ]
-    assert {
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
-        "single_reference.reference_id",
-        "single_reference.curie",
-        "single_reference.title",
-    } <= set(field_paths)
+    answers = {item.validator_binding_id: item for item in result.validator_results}
+    assert answers["subject_gene_validation"].resolved_values["primary_external_id"] == "MGI:1923928"
+    assert answers["source_reference_validation"].resolved_values["title"] == "Resolved literature title"
+    assert all(f.details["machine_review"] == "pending" for f in result.appended_findings)
 
 
 def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible():
@@ -2127,76 +1933,16 @@ def test_alliance_gene_expression_unresolved_gene_and_reference_remain_visible()
         max_parallel_validators=1,
     )
 
-    annotation = result.envelope.extracted_objects[0]
-    # The unresolved gene keeps its paper wording and records why; no identity is written.
-    assert annotation.payload["expression_annotation_subject"] == {
-        "primary_external_id": None,
-        "gene_symbol": None,
-        "mention": "Tmem67",
-        "resolution_state": "unresolved",
-        "lookup_outcome": "ambiguous",
-        "validator_explanation": "Multiple provider candidates matched.",
-        "validator_curator_message": "Subject gene lookup is ambiguous.",
-    }
-    # The lookup found no reference (decisive): the stored, unverified title is set aside.
-    assert annotation.payload["single_reference"] == {
-        "pmid": "PMID:203506",
-        "title": None,
-        "overruled_title": "Paper supplied title",
-        "resolution_state": "unresolved",
-        "lookup_outcome": "not_found",
-        "validator_explanation": "The API-backed lookup found no source reference.",
-        "validator_curator_message": "No unambiguous reference match found.",
-    }
-    open_findings = [
-        finding
-        for finding in result.appended_findings
-        if finding.status.value == "open"
+    assert [obj.payload for obj in result.envelope.extracted_objects] == [
+        obj.payload for obj in _gene_expression_envelope().extracted_objects
     ]
-    assert {
-        finding.field_ref.field_path
-        for finding in open_findings
-        if finding.field_ref is not None
-    } == {
-        "expression_annotation_subject.primary_external_id",
-        "expression_annotation_subject.gene_symbol",
-        "expression_experiment.entity_assayed.primary_external_id",
-        "expression_experiment.entity_assayed.gene_symbol",
-        "single_reference.reference_id",
-        "expression_experiment.single_reference.reference_id",
-        "single_reference.curie",
-        "single_reference.title",
-        # The experiment's copy mirrors the full reference identity (N6).
-        "expression_experiment.single_reference.curie",
-        "expression_experiment.single_reference.title",
+    answers = {item.validator_binding_id: item for item in result.validator_results}
+    assert answers["subject_gene_validation"].status == "unresolved"
+    assert answers["source_reference_validation"].status == "unresolved"
+    assert {candidate.value for candidate in answers["subject_gene_validation"].candidates} == {
+        "MGI:1923928", "RGD:1586167",
     }
-    classifications = {
-        finding.field_ref.field_path: finding.details["failure_classification"]
-        for finding in open_findings
-        if finding.field_ref is not None
-    }
-    assert classifications["expression_annotation_subject.primary_external_id"] == "ambiguous"
-    assert classifications["single_reference.reference_id"] == "not_found"
-    gene_finding = next(
-        finding
-        for finding in open_findings
-        if finding.field_ref is not None
-        and finding.field_ref.field_path
-        == "expression_annotation_subject.primary_external_id"
-    )
-    assert [item["value"] for item in gene_finding.details["candidate_matches"]] == [
-        "MGI:1923928",
-        "RGD:1586167",
-    ]
-    reference_finding = next(
-        finding
-        for finding in open_findings
-        if finding.field_ref is not None
-        and finding.field_ref.field_path == "single_reference.reference_id"
-    )
-    assert reference_finding.details["lookup_attempts"][0]["lookup_status"] == (
-        "not_found"
-    )
+    assert all(f.details["machine_review"] == "pending" for f in result.appended_findings)
 
 
 def test_invalid_validator_schema_becomes_controlled_unresolved_result(
@@ -2214,10 +1960,14 @@ def test_invalid_validator_schema_becomes_controlled_unresolved_result(
     )
 
     finding = _single_result_finding(result)
-    assert finding.code == "domain_pack.validator_error"
-    assert finding.details["failure_classification"] == "invalid_schema"
+    assert finding.code == "domain_pack.validator_output_incomplete"
+    assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert "incompatible output" in result.validator_results[0].explanation
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_active_package_validator_envelopes_project_across_dispatch_and_finalization():
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -2250,10 +2000,10 @@ def test_active_package_validator_envelopes_project_across_dispatch_and_finaliza
     ]
 
     for concrete_result, package_field in package_results:
-        result = validator_result_from_agent_output(
+        result = _finalize_validator_result(_validated_result_from_agent_output(
             SimpleNamespace(final_output=concrete_result),
             request=request,
-        )
+        ), request=request)
         feedback = _validator_result_finalization_feedback(
             concrete_result,
             request=request,
@@ -2278,7 +2028,7 @@ def test_embedded_validator_result_is_rejected_by_dispatch():
         result=DomainValidatorResultBase.model_validate(_result_payload(request))
     )
 
-    result = validator_result_from_agent_output(wrapped_result, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(wrapped_result, request=request), request=request)
 
     assert result.status == "unresolved"
     assert result.lookup_attempts[0].method == "invalid_schema"
@@ -2303,7 +2053,7 @@ def test_validator_result_identity_mismatch_becomes_invalid_schema_result():
         }
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "unresolved"
     assert result.request_id == request.request_id
@@ -2341,7 +2091,7 @@ def test_validator_result_allows_target_input_value_context_drift():
         "Molar abundance was 1.54 \u0000b1 0.34 fmole/eye."
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.target == request.target
@@ -2366,13 +2116,17 @@ def test_dispatch_rejects_identity_mismatch_without_materializing(tmp_path: Path
 
     finding = _single_result_finding(result)
     assert result.validator_results[0].status == "unresolved"
-    assert finding.details["failure_classification"] == "invalid_schema"
+    assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert "different request" in result.validator_results[0].explanation
     assert not any(
         domain_object.object_type == "Gene"
         for domain_object in result.envelope.extracted_objects
     )
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
@@ -2393,9 +2147,13 @@ def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
 
     finding = _single_result_finding(result)
     assert result.validator_results[0].status == "unresolved"
-    assert finding.details["failure_classification"] == "invalid_schema"
+    assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert "incompatible output" in result.validator_results[0].explanation
 
+
+    assert result.validator_results[0]._execution_failure is None
+    assert result.validator_results[0].output_issues
+    assert result.validator_results[0]._raw_output is not None
 
 def test_resolved_validator_without_lookup_preserves_judgment(
     tmp_path: Path,
@@ -2535,7 +2293,7 @@ def test_resolved_array_validator_result_requires_per_item_values():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.resolved_values["terms"] == [
@@ -2562,7 +2320,7 @@ def test_resolved_array_validator_result_rejects_invalid_item_projection(
         resolved_values={"terms": resolved_terms},
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert not result.is_complete
@@ -2592,7 +2350,7 @@ def test_resolved_array_validator_result_accepts_allowed_term_curies():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.missing_expected_fields == []
@@ -2647,7 +2405,7 @@ def test_resolved_array_validator_result_preserves_out_of_allowlist_judgment():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.missing_expected_fields == []
@@ -2674,7 +2432,7 @@ def test_resolved_array_validator_result_preserves_label_judgment():
         },
     )
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.missing_expected_fields == []
@@ -2704,7 +2462,7 @@ def test_unresolved_array_validator_outcomes_remain_field_addressed(outcome: str
         "outcome": outcome,
     }
 
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
 
     assert result.status == "unresolved"
     assert result.target.field_path == (
@@ -2956,8 +2714,8 @@ def test_package_scoped_validator_agent_uses_compact_finalization_schema(
     assert runtime_payload["selected_inputs"] == request.selected_inputs
     assert "input_values" not in runtime_payload["target"]
     assert "input_selectors" not in runtime_payload
-    assert "evidence" not in runtime_payload
-    assert runtime_payload["evidence_summary"]["evidence_record_ids"] == ["evidence-1"]
+    assert runtime_payload["evidence"] == request.evidence
+    assert runtime_payload["evidence"] == request.evidence
     assert captured["kwargs"]["max_turns"] == 18
     assert captured["agent_lookup"][1] == {
         "authenticated_groups": ["RGD"],
@@ -2980,7 +2738,7 @@ def test_package_scoped_validator_agent_uses_compact_finalization_schema(
 
 
 @pytest.mark.parametrize("output_format", ["csv", "tsv", "json"])
-def test_compact_candidate_science_survives_materialization_and_formatter_cells(tmp_path, output_format):
+def test_compact_candidate_science_is_retained_but_unreviewed_exports_are_blocked(tmp_path, output_format):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
     from src.lib.domain_packs.compact_runtime import runtime_for_schema
     from src.lib.flows.output_projection import (
@@ -3018,40 +2776,21 @@ def test_compact_candidate_science_survives_materialization_and_formatter_cells(
         "candidate": SimpleNamespace(agent_key="gene_extractor", adapter_key="gene", candidate_count=1,
             conversation_summary="Ambiguous gene.", payload_json=dispatched.envelope.model_dump(mode="json")),
     }], flow_name="Compact validation", output_format=output_format)
-    projection = apply_projection_plan(bundle, FlowOutputProjectionPlan.model_validate({
-        "format": output_format, "row_source": "validation_finding", "columns": [
-            {"key": "candidates", "field_ref": "validation.candidate_matches"},
-            {"key": "lookups", "field_ref": "validation.lookup_attempts"},
-            {"key": "target", "field_ref": "validation.target"},
-        ],
-    }))
-    assert projection.rows
-    row = projection.rows[0]
-    if output_format in {"csv", "tsv"}:
-        # File cells hold display text: every candidate, its science and the
-        # lookup audit stay visible (ALL-1115), with no JSON in the cell.
-        cells = " ".join(str(value) for value in row.values())
-        assert "{" not in cells
-        for expected in ("value: RGD:1", "value: RGD:2", "Paper does not distinguish the candidates.",
-                         "evidence-1", "source_call_id: source-call", "method: search_genes",
-                         "symbol: ABC-1", "candidate_count: 2",
-                         f"object_id: {captured['result'].target.object_id}",
-                         f"field_path: {captured['result'].target.field_path}"):
-            assert expected in cells, expected
-        return
-    candidates = json.loads(row["candidates"]) if isinstance(row["candidates"], str) else row["candidates"]
-    assert [candidate["value"] for candidate in candidates] == ["RGD:1", "RGD:2"]
-    for candidate in candidates:
+    # Scientific detail remains available in the original finding, but it is
+    # not an accepted/exportable selection until the supervisor records review.
+    for candidate in finding.details["candidate_matches"]:
         science = candidate["details"]["scientific_assessment"]
         assert science["explanation"] == "Paper does not distinguish the candidates."
         assert science["evidence_record_ids"] == ["evidence-1"]
         assert candidate["details"]["source_call_id"] == "source-call"
-    attempts = json.loads(row["lookups"]) if isinstance(row["lookups"], str) else row["lookups"]
-    assert attempts[0]["candidate_count"] == 2  # Existing finding/export name for the returned lookup count.
-    assert attempts[0]["attempted_query"]["provider_query"] == {"method": "search_genes", "symbol": "ABC-1"}
-    target = json.loads(row["target"]) if isinstance(row["target"], str) else row["target"]
-    assert target["object_id"] == captured["result"].target.object_id
-    assert target["field_path"] == captured["result"].target.field_path
+    with pytest.raises(ValueError, match="not available"):
+        apply_projection_plan(bundle, FlowOutputProjectionPlan.model_validate({
+            "format": output_format, "row_source": "validation_finding", "columns": [
+                {"key": "candidates", "field_ref": "validation.candidate_matches"},
+                {"key": "lookups", "field_ref": "validation.lookup_attempts"},
+                {"key": "target", "field_ref": "validation.target"},
+            ],
+        }))
 
 
 def test_validator_finalization_feedback_accepts_valid_result():
@@ -3136,7 +2875,7 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
             max_tool_calls=4,
         )),
     )
-    result = validator_result_from_agent_output(raw_output, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(raw_output, request=request), request=request)
 
     assert result.status == "resolved"
     assert result.resolved_values["identifier"] == "AGR:0001"
@@ -3144,7 +2883,7 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
         assert result.resolved_objects == []
 
 
-def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
+def test_package_scoped_validator_agent_keeps_lookup_and_supplied_context_only(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -3228,30 +2967,12 @@ def test_package_scoped_validator_agent_adds_scoped_runtime_tools(
         runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
     )
 
-    tool_names = [tool.name for tool in captured["agent"].tools]
-    assert tool_names == [
-        "agr_curation_query",
-        "search_document",
-        "read_chunk",
-        "record_evidence",
-        "list_recorded_evidence",
-        "get_recorded_evidence",
-        "finalize_validator_result",
+    assert [tool.name for tool in captured["agent"].tools] == [
+        "agr_curation_query", "finalize_validator_result",
     ]
-    instructions = captured["agent"].instructions
-    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
-        assert removed_tool not in instructions
-    assert "Extractor-provided evidence" in instructions
-    assert (
-        "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
-        in instructions
-    )
-    assert "search_document" in instructions
-    assert "document_id and user_id" not in instructions
-    assert "paper; you do not" not in instructions
-    assert captured["payload"]["validator_runtime_capabilities"][
-        "scoped_evidence_update_available"
-    ] is True
+    assert "cannot search/read the paper" in captured["agent"].instructions
+    assert captured["payload"]["evidence"] == request.evidence
+    assert "validator_runtime_capabilities" not in captured["payload"]
 
 
 def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
@@ -3309,14 +3030,7 @@ def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
     assert [tool.name for tool in captured["agent"].tools] == [
         "agr_curation_query", "finalize_validator_result"
     ]
-    instructions = captured["agent"].instructions
-    assert "Paper search and evidence update tools are unavailable" in instructions
-    assert (
-        "`selected_inputs.evidence_quote` or `selected_inputs.evidence_quotes`"
-        in instructions
-    )
-    assert "paper; you do not" not in instructions
-    assert "validator_runtime_capabilities" not in captured["payload"]
+    assert "cannot search/read the paper" in captured["agent"].instructions
 
 
 def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
@@ -3361,11 +3075,11 @@ def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
-    with pytest.raises(ValueError, match="mandatory finalize_validator_result"):
-        run_package_scoped_validator_agent(
-            request,
-            binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
-        )
+    output = run_package_scoped_validator_agent(
+        request, binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+    assert output.accepted_result.output_issues
+    assert output.accepted_result._execution_failure is None
+    assert output.accepted_result._raw_output["raw_output"] == _result_payload(request)
 
 
 def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
@@ -3398,11 +3112,11 @@ def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
         lambda agent, **kwargs: _result_payload(request),
     )
 
-    with pytest.raises(ValueError, match="mandatory finalize_validator_result"):
-        run_package_scoped_validator_agent(
-            request,
-            binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
-        )
+    output = run_package_scoped_validator_agent(
+        request, binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+    assert output.accepted_result.output_issues
+    assert output.accepted_result._execution_failure is None
+    assert output.accepted_result._raw_output["raw_output"] == _result_payload(request)
 
 
 def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
@@ -3491,28 +3205,14 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     assert payload["requests"][0]["request_id"] == request.request_id
     assert payload["requests"][0]["selected_inputs"] == request.selected_inputs
     assert "input_selectors" not in payload["requests"][0]
-    assert "evidence" not in payload["requests"][0]
+    assert payload["requests"][0]["evidence"] == request.evidence
     assert "input_values" not in payload["requests"][0]["target"]
-    assert payload["requests"][0]["evidence_summary"] == {
-        "evidence_count": 1,
-        "evidence_record_ids": ["evidence-1"],
-    }
+    assert payload["requests"][0]["evidence"] == request.evidence
     assert captured["kwargs"]["max_turns"] == 6
     assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
 
 
-# Never called by any validator in 522 production runs (Sep 16-22, 2026);
-# validators read the paper through search_document and read_chunk only.
-NEVER_CALLED_VALIDATOR_TOOLS = (
-    "read_section",
-    "read_subsection",
-    "attach_evidence_to_object",
-    "detach_evidence_from_object",
-    "update_recorded_evidence_metadata",
-)
-
-
-def test_package_scoped_validator_batch_agent_offers_only_used_paper_tools(
+def test_package_scoped_validator_batch_agent_never_offers_paper_tools(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from packages.alliance.agents.gene.schema import GeneResultEnvelope
@@ -3565,15 +3265,10 @@ def test_package_scoped_validator_batch_agent_offers_only_used_paper_tools(
         runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
     )
 
-    runtime_agent = captured["agent"]
-    assert [tool.name for tool in runtime_agent.tools] == [
-        "agr_curation_query",
-        "search_document",
-        "read_chunk",
-        "finalize_validator_batch_results",
+    assert [tool.name for tool in captured["agent"].tools] == [
+        "agr_curation_query", "finalize_validator_batch_results",
     ]
-    for removed_tool in NEVER_CALLED_VALIDATOR_TOOLS:
-        assert removed_tool not in runtime_agent.instructions
+    assert "cannot search/read the paper" in captured["agent"].instructions
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -3989,14 +3684,12 @@ def test_package_scoped_validator_batch_agent_requires_accepted_finalization_too
         lambda agent, **kwargs: {"results": [_result_payload(request)]},
     )
 
-    with pytest.raises(
-        ValueError,
-        match="mandatory finalize_validator_batch_results",
-    ):
-        run_package_scoped_validator_agent_batch(
-            cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-            binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
-        )
+    output = run_package_scoped_validator_agent_batch(
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
+        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+    assert output.accepted_results[0].output_issues
+    assert output.accepted_results[0]._execution_failure is None
+    assert output.accepted_results[0]._raw_output["raw_output"] == {"results": [_result_payload(request)]}
 
 
 def _multivalued_dispatch_pack(tmp_path: Path) -> LoadedDomainPack:
@@ -4096,11 +3789,11 @@ def test_dispatch_validates_and_materializes_every_multivalued_element(tmp_path:
     # EVERY element was sent to the validator, not just [0].
     assert sorted(dispatched_curies) == ["eco:0000315", "eco:0000316"]
 
-    # Both elements were written back per-element at field[0] and field[1].
+    # Both proposals were retained; neither changes the source before review.
     annotation = result.envelope.extracted_objects[0]
     assert annotation.payload["evidence_code_curies"] == [
-        "ECO:0000315",
-        "ECO:0000316",
+        "eco:0000315",
+        "eco:0000316",
     ]
 
     # Per-element findings carry the element index (D6).
@@ -4185,149 +3878,6 @@ def test_profile_finalization_instructions_scope_package_override_to_requests(ba
     assert "must remain unresolved" in agent.instructions
 
 
-# --- KANBAN-1773: write-back selects by actual change, not by a timestamp ----
-
-
-def _canonical_evidence(**overrides):
-    record = {
-        "evidence_record_id": "evidence-1",
-        "entity": "BAD:0001",
-        "verified_quote": "Previous quote.",
-        "page": 3,
-        "section": "Results",
-        "chunk_id": "chunk-1",
-        "source_span_ids": ["span-1"],
-    }
-    record.update(overrides)
-    return record
-
-
-def _items_with_evidence(evidence):
-    request = _validation_request().model_copy(update={"evidence": evidence}, deep=True)
-    return cast(Any, [SimpleNamespace(
-        request=request,
-        match=SimpleNamespace(binding=SimpleNamespace(raw={})),
-    )])
-
-
-def test_untouched_evidence_is_not_written_back():
-    """A validator that reads but does not change evidence leaves the envelope alone."""
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([_canonical_evidence()])
-    )
-
-    assert updated is envelope
-
-
-def test_changed_evidence_is_written_back_without_a_timestamp():
-    """The old gate required updated_at or evidence_revision_history to be present.
-
-    Every mutating tool a validator currently holds stamps updated_at, so the
-    gate happened to be correct. It coupled correctness to a side effect, and
-    discard writes no updated_at at all. Selection is now by actual change.
-    """
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    mutated = _canonical_evidence(verified_quote="Corrected quote.")
-    assert "updated_at" not in mutated
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([mutated])
-    )
-
-    written = updated.extracted_objects[0].payload["evidence_records"][0]
-    assert written["verified_quote"] == "Corrected quote."
-
-
-def test_written_back_evidence_is_projected_to_canonical_provenance():
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    mutated = {
-        **_canonical_evidence(verified_quote="Corrected quote."),
-        "status": "verified",
-        "span_ids": ["span-1"],
-        "updated_at": "2026-09-18T12:31:54+00:00",
-    }
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([mutated])
-    )
-
-    written = updated.extracted_objects[0].payload["evidence_records"][0]
-    assert written["source_span_ids"] == ["span-1"]
-    for field in ("status", "span_ids", "updated_at"):
-        assert field not in written
-
-
-def test_a_discarded_record_is_written_back():
-    """Review finding: the new gate misses a discard, like the old one did.
-
-    discard writes status/workspace_status/discard_reason/discarded_at, all of
-    which are workspace-only keys. strip_workspace_fields removes them from
-    BOTH sides of the comparison, so a discarded record compares equal to its
-    active envelope copy and nothing is written back.
-
-    Validators hold no discard tool today, so this is latent. It is exactly the
-    latency the previous commit claimed to remove.
-    """
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    discarded = {
-        **_canonical_evidence(),
-        "status": "discarded",
-        "workspace_status": "discarded",
-        "discard_reason": "Superseded by a better quote.",
-        "discarded_at": "2026-09-18T12:32:00+00:00",
-    }
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([discarded])
-    )
-
-    assert updated is not envelope, "a discard must reach the envelope"
-    records = updated.extracted_objects[0].payload["evidence_records"]
-    assert records == [], "discarded evidence must not remain as active support"
-
-
-def test_a_discard_prunes_the_object_reference():
-    """Second-review finding C1: dropping the record orphaned its ID.
-
-    CuratableObjectEnvelope.evidence_record_ids was never pruned, so a discard
-    left a dangling reference. gene_expression/conversion.py:1693 raises
-    alliance.gene_expression.evidence_records_missing (severity BLOCKER) for
-    exactly that state, and inspect_results reports a runtime exception to
-    Sentry when it cannot resolve the id to text. A normal curator action would
-    have manufactured a non-repairable blocker and a false alert.
-    """
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    assert envelope.extracted_objects[0].evidence_record_ids == ["evidence-1"]
-
-    discarded = {
-        **_canonical_evidence(),
-        "status": "discarded",
-        "workspace_status": "discarded",
-        "discard_reason": "Superseded by a better quote.",
-    }
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([discarded])
-    )
-
-    assert updated.extracted_objects[0].payload["evidence_records"] == []
-    assert updated.extracted_objects[0].evidence_record_ids == [], (
-        "a dropped record must not leave a dangling reference"
-    )
-
-
-def test_an_update_leaves_the_object_reference_intact():
-    envelope = _envelope(evidence_records=[_canonical_evidence()])
-    mutated = _canonical_evidence(verified_quote="Corrected quote.")
-
-    updated = _apply_validator_evidence_updates_to_envelope(
-        envelope, _items_with_evidence([mutated])
-    )
-
-    assert updated.extracted_objects[0].evidence_record_ids == ["evidence-1"]
-
-
 @pytest.mark.parametrize("curie", ["UBERON:0000068", "UBERON:0000092"])
 def test_allowed_term_guidance_does_not_override_per_element_judgment(curie):
     base_request = _array_terms_validation_request()
@@ -4336,7 +3886,7 @@ def test_allowed_term_guidance_does_not_override_per_element_judgment(curie):
         "expected_result_fields": {"curie": "stage_uberon_slim_terms[1].curie", "name": "stage_uberon_slim_terms[1].name"},
     })
     payload = _result_payload(request, resolved_values={"curie": curie, "name": "embryo stage"})
-    result = validator_result_from_agent_output(payload, request=request)
+    result = _finalize_validator_result(_validated_result_from_agent_output(payload, request=request), request=request)
     assert result.status == "resolved"
     assert result.resolved_values == payload["resolved_values"]
     assert result.explanation == payload["explanation"]
@@ -4519,7 +4069,7 @@ def test_validator_correction_preserves_judgment_until_complete(monkeypatch, bat
             [result] = _validated_results_from_agent_batch_output(raw, jobs=[job])
         else:
             raw = run_package_scoped_validator_agent(request, binding=binding)
-            result = validator_result_from_agent_output(raw, request=request)
+            result = _finalize_validator_result(_validated_result_from_agent_output(raw, request=request), request=request)
     _assert_recovery_reporting(
         recovery_reports, stages, ending=ending, request=request,
         phase="batch" if batch else "single", request_count=1,
@@ -4644,3 +4194,43 @@ def test_required_document_failure_cannot_become_validator_finding(tmp_path, mon
     assert caught.value is error
     assert len(calls) == 1
     assert reports == []  # Terminal entry point owns reporting, not validator recovery.
+
+
+def test_validator_cannot_write_back_source_evidence(tmp_path):
+    from copy import deepcopy
+    records = [{"evidence_record_id": "E1", "verified_quote": "Original source", "page": 1,
+                "source_fragments": [{"text": "Original source"}]}]
+    envelope = _envelope(evidence_records=deepcopy(records))
+    def runner(request, *, binding):
+        assert request.evidence
+        request.evidence[0]["verified_quote"] = "Replacement"
+        request.evidence[0]["source_fragments"][0]["text"] = "Nested replacement"
+        return _result_payload(request)
+    result = dispatch_active_validator_bindings(envelope, _loaded_pack(tmp_path), runner=runner)
+    assert envelope.extracted_objects[0].payload["evidence_records"] == records
+    assert result.envelope.extracted_objects[0].payload["evidence_records"] == records
+
+
+def test_validator_policy_refusal_is_configuration_failure_not_sentry(tmp_path, monkeypatch):
+    from src.lib.packages.tool_roles import ValidatorToolPolicyError
+    monkeypatch.setattr('src.lib.domain_packs.validator_dispatch._report_validator_dispatch_failure',
+                        lambda *a, **kw: pytest.fail('configuration refusal reported as server failure'))
+    def runner(request, *, binding):
+        raise ValidatorToolPolicyError('Forbidden configured paper reader')
+    result = dispatch_active_validator_bindings(_envelope(), _loaded_pack(tmp_path), runner=runner)
+    assert result.validator_results[0]._execution_failure == 'validator_tool_policy'
+
+
+def test_explicit_curator_guidance_is_scoped_to_requested_object(tmp_path):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+    envelope = _multi_object_envelope(["BAD:0001", "BAD:0002"])
+    first = envelope.extracted_objects[0]
+    captured = []
+    def batch(jobs, *, binding):
+        captured.extend(job.request.validation_guidance for job in jobs)
+        return [_result_payload(job.request, resolved_values={"identifier": "AGR:1", "symbol": "A"}) for job in jobs]
+    dispatch_active_validator_bindings(envelope, pack, batch_runner=batch,
+        runtime_context=ValidatorRuntimeContext(document_id="document", user_id="curator",
+            curator_revalidation=[{"object_id": first.object_id or first.pending_ref_id,
+                "field_paths": [], "actor_id": "curator", "guidance": "Check organism."}]))
+    assert captured == ["Curator revalidation guidance: Check organism.", None]

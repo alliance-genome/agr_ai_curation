@@ -86,7 +86,7 @@ const isValidAuditEventType = (type: string): type is AuditEventType => {
 
 // Batch status types
 type BatchStatus = 'setup' | 'running' | 'completed' | 'cancelled';
-type DocumentStatus = 'pending' | 'processing' | 'completed' | 'failed';
+type DocumentStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'review_pending' | 'review_exhausted' | 'interrupted';
 
 interface BatchResultFile {
   file_id: string;
@@ -106,6 +106,9 @@ interface BatchStatusStreamEvent {
   type: 'BATCH_STATUS';
   completed_documents: number;
   failed_documents: number;
+  review_pending_documents: number;
+  review_exhausted_documents: number;
+  interrupted_documents: number;
 }
 
 interface DocumentStatusStreamEventBase {
@@ -137,6 +140,9 @@ interface BatchCompleteStreamEvent {
   status: 'completed' | 'cancelled';
   completed_documents: number;
   failed_documents: number;
+  review_pending_documents: number;
+  review_exhausted_documents: number;
+  interrupted_documents: number;
   partial_documents: number;
   total_documents: number;
 }
@@ -165,7 +171,7 @@ type BatchStreamEvent =
   | BatchErrorStreamEvent
   | FlowBatchStreamEvent;
 
-const DOCUMENT_STATUSES = ['pending', 'processing', 'completed', 'failed'] as const;
+const DOCUMENT_STATUSES = ['pending', 'processing', 'completed', 'failed', 'review_pending', 'review_exhausted', 'interrupted'] as const;
 const BATCH_COMPLETION_STATUSES = ['completed', 'cancelled'] as const;
 
 export const requireBatchResultFiles = (value: unknown, documentId: unknown): BatchResultFile[] => {
@@ -294,6 +300,9 @@ interface BatchState {
   flowValidation: { valid: boolean; errors: string[] } | null;
   completedCount: number;
   failedCount: number;
+  reviewPendingCount: number;
+  reviewExhaustedCount: number;
+  interruptedCount: number;
   totalCount: number;
 }
 
@@ -321,6 +330,7 @@ const BatchPage: React.FC = () => {
     flowValidation: null,
     completedCount: 0,
     failedCount: 0,
+    reviewPendingCount: 0, reviewExhaustedCount: 0, interruptedCount: 0,
     totalCount: selectedDocuments.length,
   });
 
@@ -541,6 +551,9 @@ const BatchPage: React.FC = () => {
               ...prev,
               completedCount: completedDocuments,
               failedCount: failedDocuments,
+              reviewPendingCount: requireBatchEventNumber(data.review_pending_documents, "review_pending_documents", data.type),
+              reviewExhaustedCount: requireBatchEventNumber(data.review_exhausted_documents, "review_exhausted_documents", data.type),
+              interruptedCount: requireBatchEventNumber(data.interrupted_documents, "interrupted_documents", data.type),
             }));
             break;
           }
@@ -635,6 +648,9 @@ const BatchPage: React.FC = () => {
               data.type,
             );
             const failedDocs = requireBatchEventNumber(data.failed_documents, 'failed_documents', data.type);
+            const reviewPending = requireBatchEventNumber(data.review_pending_documents, 'review_pending_documents', data.type);
+            const reviewExhausted = requireBatchEventNumber(data.review_exhausted_documents, 'review_exhausted_documents', data.type);
+            const interrupted = requireBatchEventNumber(data.interrupted_documents, 'interrupted_documents', data.type);
             const partialDocs = requireBatchEventNumber(data.partial_documents, 'partial_documents', data.type);
             const totalDocs = requireBatchEventNumber(data.total_documents, 'total_documents', data.type);
             const fullySuccessfulDocs = Math.max(0, completedDocs - partialDocs);
@@ -647,7 +663,7 @@ const BatchPage: React.FC = () => {
               details: {
                 message: status === 'cancelled'
                   ? 'Batch processing cancelled'
-                  : `Batch completed: ${fullySuccessfulDocs} successful, ${partialDocs} partial, ${failedDocs} failed`,
+                  : `Batch completed: ${fullySuccessfulDocs} successful, ${partialDocs} partial, ${failedDocs} failed, ${reviewPending} awaiting review, ${reviewExhausted} review limits reached, ${interrupted} interrupted`,
                 totalSteps: totalDocs,
               },
             });
@@ -657,6 +673,7 @@ const BatchPage: React.FC = () => {
               status: status === 'cancelled' ? 'cancelled' : 'completed',
               completedCount: completedDocs,
               failedCount: failedDocs,
+              reviewPendingCount: reviewPending, reviewExhaustedCount: reviewExhausted, interruptedCount: interrupted,
             }));
             es.close();
             setEventSource(null);
@@ -667,10 +684,13 @@ const BatchPage: React.FC = () => {
                 message: 'Batch processing cancelled',
                 severity: 'info',
               });
+            } else if (reviewPending + reviewExhausted + interrupted > 0) {
+              setSnackbar({open: true, severity: 'warning',
+                message: `Batch finished: ${reviewPending} awaiting review, ${reviewExhausted} review limits reached, ${interrupted} interrupted. Saved results are retained.`});
             } else if (failedDocs > 0) {
               setSnackbar({
                 open: true,
-                message: `Batch completed: ${fullySuccessfulDocs} complete, ${partialDocs} partial, ${failedDocs} failed`,
+                message: `Batch completed: ${fullySuccessfulDocs} complete, ${partialDocs} partial, ${failedDocs} failed, ${reviewPending} awaiting review, ${reviewExhausted} review limits reached, ${interrupted} interrupted`,
                 severity: 'error',
               });
             } else if (partialDocs > 0) {
@@ -806,6 +826,9 @@ const BatchPage: React.FC = () => {
             flowValidation: null,
             completedCount: batch.completed_documents,
             failedCount: batch.failed_documents,
+            reviewPendingCount: batch.review_pending_documents,
+            reviewExhaustedCount: batch.review_exhausted_documents,
+            interruptedCount: batch.interrupted_documents,
             totalCount: batch.total_documents,
           });
 
@@ -1072,6 +1095,9 @@ const BatchPage: React.FC = () => {
         flowValidation: null,
         completedCount: batch.completed_documents,
         failedCount: batch.failed_documents,
+            reviewPendingCount: batch.review_pending_documents,
+            reviewExhaustedCount: batch.review_exhausted_documents,
+            interruptedCount: batch.interrupted_documents,
         totalCount: batch.total_documents,
       });
 
@@ -1115,6 +1141,10 @@ const BatchPage: React.FC = () => {
         return <SuccessIcon color="success" />;
       case 'failed':
         return <ErrorIcon color="error" />;
+      case 'review_pending':
+      case 'review_exhausted':
+      case 'interrupted':
+        return <PendingIcon color="warning" />;
       case 'processing':
         return <ProcessingIcon color="primary" sx={{ animation: 'spin 1s linear infinite' }} />;
       default:
@@ -1122,9 +1152,16 @@ const BatchPage: React.FC = () => {
     }
   };
 
+  const reviewOutcomeLabel = (status: DocumentStatus): string | undefined => ({
+    review_pending: 'Awaiting review — saved results retained',
+    review_exhausted: 'Review limit reached — saved results retained',
+    interrupted: 'Interrupted — saved results retained',
+  } as Partial<Record<DocumentStatus, string>>)[status];
+  const reviewedStopCount = batchState.reviewPendingCount + batchState.reviewExhaustedCount + batchState.interruptedCount;
+
   // Calculate progress percentage
   const progressPercent = batchState.totalCount > 0
-    ? ((batchState.completedCount + batchState.failedCount) / batchState.totalCount) * 100
+    ? ((batchState.completedCount + batchState.failedCount + reviewedStopCount) / batchState.totalCount) * 100
     : 0;
 
   // Render setup panel (left side)
@@ -1325,7 +1362,7 @@ const BatchPage: React.FC = () => {
       <Box sx={{ mb: 3 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
           <Typography variant="body2">
-            {batchState.completedCount + batchState.failedCount} / {batchState.totalCount}
+            {batchState.completedCount + batchState.failedCount + reviewedStopCount} / {batchState.totalCount}
           </Typography>
           <Typography variant="body2">{Math.round(progressPercent)}%</Typography>
         </Box>
@@ -1372,7 +1409,7 @@ const BatchPage: React.FC = () => {
                   doc.status === 'processing' ? 'Processing...' :
                   doc.status === 'completed' ? `${doc.processing_time_ms}ms` :
                   doc.status === 'failed' ? doc.error_message :
-                  'Pending'
+                  reviewOutcomeLabel(doc.status) || 'Pending'
                 }
                 sx={{ pr: 2 }}
                 slotProps={{
@@ -1418,6 +1455,9 @@ const BatchPage: React.FC = () => {
             color="success"
             size="small"
           />
+          {batchState.reviewPendingCount > 0 && <Chip size="small" color="warning" label={`${batchState.reviewPendingCount} awaiting review`} />}
+          {batchState.reviewExhaustedCount > 0 && <Chip size="small" color="warning" label={`${batchState.reviewExhaustedCount} review limits reached`} />}
+          {batchState.interruptedCount > 0 && <Chip size="small" color="warning" label={`${batchState.interruptedCount} interrupted`} />}
           {batchState.failedCount > 0 && (
             <Chip
               icon={<ErrorIcon />}
@@ -1485,13 +1525,13 @@ const BatchPage: React.FC = () => {
               <ListItemText
                 primary={doc.title}
                 secondary={
-                  doc.status === 'failed'
+                  reviewOutcomeLabel(doc.status) || (doc.status === 'failed'
                     ? doc.error_message
                     : doc.result_files.length
                       ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${doc.result_files
                         .map((resultFile) => `${resultFile.filename}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
                         .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}${getEmptyOutputSummary(doc) ? ` · ${getEmptyOutputSummary(doc)}` : ''}`
-                      : getEmptyOutputSummary(doc) || undefined
+                      : getEmptyOutputSummary(doc) || undefined)
                 }
                 sx={{ pr: 2 }}
                 slotProps={{
@@ -1525,6 +1565,7 @@ const BatchPage: React.FC = () => {
             flowValidation: null,
             completedCount: 0,
             failedCount: 0,
+    reviewPendingCount: 0, reviewExhaustedCount: 0, interruptedCount: 0,
             totalCount: 0,
           }))}
           fullWidth

@@ -521,11 +521,13 @@ def validator_result_entries(
             ) if name in result
         }
         decisions[ref].update({
-            "original_available": True,
+            "original_available": snapshot.get("original_available", True),
+            "review_status": "requires_history_read" if snapshot.get("schema_version") == 2 else "historical_unknown",
+            "history_ref": snapshot.get("history_ref"),
             "original_ref": ref,
             "source_envelope_revision": snapshot.get("source_envelope_revision"),
-            "output_complete": not bool(result.get("output_issues")),
-            "follow_up_question_count": len(result.get("unresolved_questions") or []),
+            "output_complete": snapshot.get("output_complete", not bool(result.get("output_issues"))),
+            "follow_up_question_count": snapshot.get("follow_up_question_count", len(result.get("unresolved_questions") or [])),
         })
         if isinstance(result.get("target"), Mapping):
             decisions[ref]["target"] = {name: result["target"][name] for name in (
@@ -566,6 +568,7 @@ def validator_result_entries(
                 or details.get("failure_classification") == "invalid_materialization_input"
                 or finding.code == "domain_pack.validator_materialization_invalid"):
             entry["writeback_rejected"] = True
+    # This is attempt recency, never supervisor acceptance.
     # Source revision and append order distinguish revalidation from per-field
     # copies. Historical records remain inspectable, never counted as current
     # solely because they used the same target in an earlier round.
@@ -577,15 +580,15 @@ def validator_result_entries(
         if (entry.get("source_envelope_revision") or 0) >= (previous.get("source_envelope_revision") or 0):
             latest[target_key] = key
     for key, entry in decisions.items():
-        entry["is_current"] = latest[entry.pop("_target_key")] == key
+        entry["is_latest_attempt"] = latest[entry.pop("_target_key")] == key
         entry["outstanding"] = bool(entry.get("open_finding") or (
-            entry["is_current"] and (entry.get("writeback_rejected") or entry.get("status") != "resolved" or entry.get("output_complete") is False)
+            entry["is_latest_attempt"] and (entry.get("writeback_rejected") or entry.get("status") != "resolved" or entry.get("output_complete") is False)
         ))
     return sorted(decisions.items(), key=lambda item: (
         not bool(item[1]["outstanding"] and item[1].get("writeback_rejected")),
         not bool(item[1].get("open_error_count")),
         not item[1]["outstanding"],
-        not item[1]["is_current"],
+        not item[1]["is_latest_attempt"],
     ))
 
 
@@ -596,14 +599,14 @@ def _validator_results_summary(
     """Expose canonical validator decisions, including targets hidden by object policy."""
     decisions = dict(validator_result_entries(findings, originals))
     counts: dict[str, int] = {}
-    current_counts: dict[str, int] = {}
+    latest_attempt_counts: dict[str, int] = {}
     entries: list[dict[str, Any]] = []
     for key, original_entry in decisions.items():
         entry = dict(original_entry)
         status = entry["status"]
         counts[status] = counts.get(status, 0) + 1
-        if entry["is_current"]:
-            current_counts[status] = current_counts.get(status, 0) + 1
+        if entry["is_latest_attempt"]:
+            latest_attempt_counts[status] = latest_attempt_counts.get(status, 0) + 1
         if len(entries) >= get_supervisor_manifest_page_size():
             continue
         entry["validator_result_key"] = key
@@ -618,8 +621,8 @@ def _validator_results_summary(
         "total": len(decisions),
         "unit": "validator_decisions",
         "status_counts": counts,
-        "current_status_counts": current_counts,
-        "historical_total": sum(not entry["is_current"] for entry in decisions.values()),
+        "latest_attempt_status_counts": latest_attempt_counts,
+        "historical_total": sum(not entry["is_latest_attempt"] for entry in decisions.values()),
         "incomplete_total": sum(entry.get("output_complete") is False for entry in decisions.values()),
         "original_unavailable_total": sum(not entry["original_available"] for entry in decisions.values()),
         "outstanding_total": sum(entry["outstanding"] for entry in decisions.values()),

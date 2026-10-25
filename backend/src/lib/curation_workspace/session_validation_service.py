@@ -10,15 +10,14 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
-from src.lib.domain_packs.not_validatable import supersede_not_validatable_findings
 from src.lib.curation_workspace.execution_contracts import require_candidate_conformance
 
 from src.lib.curation_workspace.adapter_registry import (
-    resolve_curation_domain_envelope_validator_by_id,
     resolve_curation_domain_pack_by_id,
 )
 from src.lib.curation_workspace.models import (
     CurationCandidate,
+    CurationDraft,
     CurationReviewSession as ReviewSessionModel,
     DomainEnvelopeModel,
 )
@@ -42,20 +41,8 @@ from src.lib.curation_workspace.validation_runtime import (
     field_validation_status,
     increment_validation_count,
 )
-from src.lib.domain_envelopes.persistence import (
-    DomainEnvelopeCheckpointRequest,
-    DomainEnvelopePersistenceError,
-    write_domain_envelope_checkpoint,
-)
-from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
-from src.lib.domain_packs.validation_findings import (
-    append_validation_findings_to_envelope,
-    remove_open_validation_findings_for_scope,
-    resolve_stale_validation_findings_after_refresh,
-)
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorRuntimeContext,
-    dispatch_active_validator_bindings,
 )
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
@@ -166,7 +153,6 @@ def _compute_candidate_validation(
     field_keys: Sequence[str] | None = None,
 ) -> CandidateValidationComputation:
     require_candidate_conformance(db, candidate)
-    _ensure_manual_profile_envelope(db, candidate)
     profile_cache_current = _profile_validation_cache_is_current(db, candidate, runtime_context)
     requested_field_keys = set(field_keys or [])
     draft_fields = [
@@ -322,7 +308,7 @@ def _compute_candidate_validation(
     )
 
 
-def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate) -> None:
+def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate, *, runtime_context: ValidatorRuntimeContext | None) -> None:
     """Give manual profile records the normal durable validation/patch surface.
 
     The record is explicitly curator-created using a saved output contract, not
@@ -355,17 +341,52 @@ def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate) -
                 "execution_receipt": receipt.model_dump(mode="json"), "generic_profile_ref": pin,
                 "record_source": "curator_manual", "candidate_id": str(candidate.id)}}},
     )
-    checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
-        project_key=envelope.domain_pack_id, envelope=envelope, expected_revision=0,
-        execution_receipt=receipt, document_id=candidate.session.document_id,
-        session_id=candidate.session_id, flow_run_id=candidate.session.flow_run_id,
-        adapter_key=candidate.adapter_key,
-    ))
+    from src.lib.validation_history.runtime import capture_extraction
+    from src.lib.validation_history.store import HistoryScope, canonical
+    if runtime_context is None:
+        raise ValueError("Curator-authored history requires an authenticated source context")
+    source_hash = canonical(envelope.model_dump(mode="json"))[0]
+    envelope.envelope_id += ":" + source_hash
+    envelope.metadata["manual_preparation"] = {"candidate_id": str(candidate.id), "source_sha256": source_hash}
+    envelope = capture_extraction(
+        scope=HistoryScope(runtime_context.user_id, runtime_context.document_id, str(candidate.session_id)),
+        producer_id=f"manual:{candidate.id}:" + canonical(envelope.model_dump(mode="json"))[0], typed=envelope.model_dump(mode="json"), envelope=envelope,
+        provenance={"source": "curator_manual", "execution_receipt": receipt.model_dump(mode="json")},
+        subject_kind="curator_authored",
+    )
+    from src.lib.curation_workspace.manual_profile_preparation import prepare_manual_source
+    from src.lib.validation_history.store import HistoryConflict
+    try:
+        checkpoint = prepare_manual_source(
+            envelope=envelope, receipt=receipt,
+            document_id=candidate.session.document_id, session_id=candidate.session_id,
+            flow_run_id=candidate.session.flow_run_id, adapter_key=candidate.adapter_key,
+        )
+    except HistoryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _lock_unlinked_manual_candidate(db, candidate.id)
+    with db.no_autoflush:
+        current = db.execute(select(CurationDraft.version, CurationDraft.fields).where(
+            CurationDraft.id == candidate.draft.id,
+        ).with_for_update()).one()
+    if current.version != candidate.draft.version or current.fields != candidate.draft.fields:
+        raise HTTPException(status_code=409, detail="Curator draft changed during source preparation; reload and retry")
     candidate.envelope_id = checkpoint.envelope_id
     candidate.object_id = object_id
     candidate.envelope_revision = checkpoint.revision
     candidate.normalized_payload = {}
     db.flush()
+
+
+def _lock_unlinked_manual_candidate(db: Session, candidate_id: UUID) -> None:
+    # A different first validation may have linked this candidate while source
+    # preparation ran. Read the database value, not the ORM identity map.
+    with db.no_autoflush:
+        linked_envelope = db.execute(select(CurationCandidate.envelope_id).where(
+            CurationCandidate.id == candidate_id,
+        ).with_for_update()).one()[0]
+    if linked_envelope is not None:
+        raise HTTPException(status_code=409, detail="Candidate source changed during validation; reload and retry")
 
 
 def _profile_validation_cache_is_current(
@@ -481,15 +502,29 @@ def _envelope_validation_results_for_candidate(
         )
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
-    envelope, envelope_revision, dispatch_warnings = _dispatch_workspace_envelope_validation(
-        db,
-        candidate,
-        envelope_row=envelope_row,
-        envelope=envelope,
-        field_paths=_candidate_validation_field_paths(draft_fields),
-        validated_at=validated_at,
-        runtime_context=runtime_context,
-    )
+    reference = envelope.metadata.get("selected_projection")
+    if reference is not None:
+        # A readiness check consumes selection; it must not create another review
+        # episode just because its display/validation snapshot needs refreshing.
+        from src.lib.validation_history.projection import read_published_projection_in_transaction
+        from src.lib.validation_history.store import HistoryScope, HistoryConflict
+        history = envelope.metadata.get("validation_history") or {}
+        if runtime_context is None or not runtime_context.user_id or not history.get("session_id"):
+            raise HTTPException(status_code=403, detail="Selected validation requires authenticated scope")
+        envelope_revision = reference.get("envelope_revision") or int(envelope_row.revision)
+        dispatch_warnings = []
+        try:
+            envelope, manifest = read_published_projection_in_transaction(
+                db, HistoryScope(runtime_context.user_id, str(envelope_row.document_id), history["session_id"]),
+                reference, current=True,
+            )
+            if not manifest["ready"]:
+                dispatch_warnings.append("Selected values remain current; another review episode is pending.")
+        except HistoryConflict:
+            dispatch_warnings.append("Selected projection awaits refresh; finalization is blocked.")
+    else:
+        envelope_revision = int(envelope_row.revision)
+        dispatch_warnings = ["Current values await explicit validation/review."]
     field_results, warnings = domain_envelope_field_validation_results(
         envelope,
         envelope_revision=envelope_revision,
@@ -513,154 +548,8 @@ def _envelope_validation_results_for_candidate(
     return field_results, dedupe(warnings), envelope.envelope_id, envelope_revision
 
 
-def _candidate_validation_field_paths(
-    draft_fields: Sequence[CurationDraftFieldSchema],
-) -> tuple[str, ...]:
-    paths: list[str] = []
-    for field in draft_fields:
-        for path in field_validation_aliases(field.field_key, field.metadata):
-            if path not in paths:
-                paths.append(path)
-    return tuple(paths)
 
 
-def _dispatch_workspace_envelope_validation(
-    db: Session,
-    candidate: CurationCandidate,
-    *,
-    envelope_row: DomainEnvelopeModel,
-    envelope: DomainEnvelope,
-    field_paths: Sequence[str],
-    validated_at: datetime,
-    runtime_context: ValidatorRuntimeContext | None = None,
-) -> tuple[DomainEnvelope, int, list[str]]:
-    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
-    if domain_pack is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Domain pack {envelope.domain_pack_id} is not available for "
-                "workspace candidate validation."
-            ),
-        )
-
-    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
-    profile_context = resolve_envelope_profile_validation(
-        envelope, domain_pack, db=db, user_id=runtime_context.user_id if runtime_context else None,
-        active_group_ids=(runtime_context.authenticated_groups or ()) if runtime_context is not None else (),
-    )
-    if profile_context is not None:
-        domain_pack = profile_context.registry.domain_pack
-    source_revision = int(envelope_row.revision)
-    refresh_scope = remove_open_validation_findings_for_scope(
-        envelope,
-        object_id=candidate.object_id,
-        field_paths=field_paths,
-    )
-    # The package validator runs first: an object it marks not validatable
-    # (not_validatable.NOT_VALIDATABLE_DETAIL_KEY) is skipped by the structural
-    # checks and the binding dispatch below.
-    package_validator = resolve_curation_domain_envelope_validator_by_id(
-        envelope.domain_pack_id
-    )
-    package_appended_findings = ()
-    package_envelope = refresh_scope.envelope
-    if package_validator is not None and profile_context is None:
-        package_findings = package_validator(package_envelope)
-        package_envelope, package_appended_findings = (
-            append_validation_findings_to_envelope(
-                supersede_not_validatable_findings(
-                    package_envelope,
-                    package_findings,
-                    actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
-                ),
-                package_findings,
-                actor_id=f"{envelope.domain_pack_id}.domain_envelope_validator",
-            )
-        )
-    structural_result = run_domain_envelope_structural_checks(
-        package_envelope,
-        domain_pack,
-        registry=profile_context.registry if profile_context is not None else None,
-        profile_context=profile_context,
-    )
-    validator_envelope = structural_result.envelope
-    dispatch_result = dispatch_active_validator_bindings(
-        validator_envelope,
-        domain_pack,
-        actor_id="workspace_candidate_validation",
-        profile_context=profile_context,
-        registry=structural_result.registry,
-        source_envelope_revision=source_revision,
-        runtime_context=runtime_context,
-    )
-    stale_resolution = resolve_stale_validation_findings_after_refresh(
-        original_envelope=envelope,
-        refreshed_envelope=dispatch_result.envelope,
-        removed_findings=refresh_scope.removed_findings,
-        actor_id="workspace_candidate_validation",
-    )
-    appended_findings = (
-        *structural_result.appended_findings,
-        *package_appended_findings,
-        *dispatch_result.appended_findings,
-        *stale_resolution.resolved_findings,
-    )
-    group_sensitive = any(
-        entry.get("group_scope") is not None
-        for entry in getattr(dispatch_result, "binding_audit", ())
-    )
-    context_changed = (
-        group_sensitive
-        and _envelope_group_context_identity(envelope)
-        != _runtime_group_context_identity(runtime_context)
-    )
-    if not appended_findings and not stale_resolution.changed and not context_changed:
-        return stale_resolution.envelope, source_revision, []
-
-    try:
-        checkpoint = write_domain_envelope_checkpoint(
-            db,
-            DomainEnvelopeCheckpointRequest(
-                project_key=envelope_row.project_key,
-                envelope=stale_resolution.envelope,
-                expected_revision=source_revision,
-                document_id=envelope_row.document_id,
-                session_id=envelope_row.session_id,
-                flow_run_id=envelope_row.flow_run_id,
-                object_model_ref_json=dict(envelope_row.object_model_ref_json),
-                model_field_ref_json=dict(envelope_row.model_field_ref_json),
-                authenticated_groups=(
-                    runtime_context.authenticated_groups
-                    if group_sensitive and runtime_context is not None
-                    else None
-                ),
-            ),
-        )
-    except DomainEnvelopePersistenceError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-
-    candidate.envelope_revision = checkpoint.revision
-    candidate.updated_at = validated_at
-    if profile_context is not None:
-        from src.lib.curation_workspace.session_mutation_service import (
-            _refresh_candidate_projection_from_envelope, load_envelope_candidates_for_patch,
-        )
-        linked = load_envelope_candidates_for_patch(db, session_id=candidate.session_id,
-                                                    envelope_id=envelope.envelope_id)
-        for projection in [candidate, *(item for item in linked if item.id != candidate.id)]:
-            obj = next(item for item in stale_resolution.envelope.extracted_objects
-                       if projection.object_id in (item.object_id, item.pending_ref_id))
-            _refresh_candidate_projection_from_envelope(
-                projection, obj, envelope_revision=checkpoint.revision,
-                changed_field_path=[path for binding in profile_context.registry.bindings
-                                    for path in binding.expected_result_fields.values()],
-                updated_at=validated_at,
-            )
-    return stale_resolution.envelope, checkpoint.revision, []
 
 
 def _aggregate_session_validation_snapshot(
@@ -842,18 +731,11 @@ def validate_session(
     changed = False
 
     for target_candidate_id in target_candidate_ids:
+        candidate = candidate_map[target_candidate_id]
         runtime_context = _validator_runtime_context_for_candidate(
-            candidate_map[target_candidate_id],
-            user_id=user_id,
-            authenticated_groups=active_groups,
-        )
+            candidate, user_id=user_id, authenticated_groups=active_groups)
         validation_snapshot, candidate_changed = _apply_candidate_validation(
-            db,
-            candidate_map[target_candidate_id],
-            force=request.force,
-            validated_at=validated_at,
-            runtime_context=runtime_context,
-        )
+            db, candidate, force=request.force, validated_at=validated_at, runtime_context=runtime_context)
         candidate_validations.append(validation_snapshot)
         changed |= candidate_changed
 

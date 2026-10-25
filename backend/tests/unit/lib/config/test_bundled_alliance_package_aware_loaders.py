@@ -163,7 +163,7 @@ def test_core_only_profile_loads_exact_declared_agent_set(monkeypatch, tmp_path)
     agents = agent_loader.load_agent_definitions(force_reload=True)
 
     assert set(agents) == _declared_agent_ids(packages_dir)
-    assert set(agents) == {"curation_handoff", "curation_prep", "supervisor"}
+    assert set(agents) == {"curation_handoff", "curation_prep", "supervisor", "validation_reviewer"}
     assert {agent.package_id for agent in agents.values()} == {"agr.core"}
     supervisor_source = next(
         source

@@ -604,3 +604,36 @@ def test_capacity_event_writer_and_timeline_keep_counts_and_redact_credentials(t
         writer.clear_extraction_trace_run()
     result = ExtractionTimelineAnalyzer.analyze(trace_id="capacity", raw_trace={}, observations=[], include_raw_outputs=True)
     assert result["timeline"][0]["output"]["preview"] == {**metrics, "access_token": "<redacted>"}
+
+
+def test_validation_review_operations_keep_exact_history_refs(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    _write_event(tmp_path, 'review', _event('review', 1, 'validation_review.review_response',
+        output_summary={'preview': {'artifact_id': 'artifact', 'fact_id': 'decision-fact',
+                                    'sha256': 'exact-body', 'content': {'reason': 'Caveat accepted'}}}))
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='review', raw_trace={}, observations=[], include_raw_outputs=True)
+    assert result['validation_review']['event_count'] == 1
+    assert result['validation_review']['events'][0]['output']['preview']['fact_id'] == 'decision-fact'
+
+
+def test_chat_review_plan_coverage_and_phase_are_visible(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    kinds = ['review_chat_plan', 'review_coverage', 'review_validator_config', 'chat_phase']
+    for sequence, kind in enumerate(kinds, 1):
+        _write_event(tmp_path, 'chat-review', _event('chat-review', sequence, 'validation_review.' + kind,
+            output_summary={'preview': {'artifact_id': 'artifact', 'episode_id': 'episode',
+                                        'actor_id': 'supervisor', 'plan_ref': 'plan'}}))
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='chat-review', raw_trace={}, observations=[], include_raw_outputs=True)
+    assert result['validation_review']['event_count'] == 4
+    assert [item['event_type'] for item in result['validation_review']['events']] == ['validation_review.' + kind for kind in kinds]
+
+
+def test_workspace_curator_rounds_are_visible_with_exact_request_history(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    for sequence, kind in enumerate(['workspace_operation', 'workspace_revalidation_request', 'review_episode_abandoned'], 1):
+        _write_event(tmp_path, 'workspace-round', _event('workspace-round', sequence, 'validation_review.' + kind,
+            output_summary={'preview': {'operation_id': 'round', 'fact_id': 'request', 'sha256': 'exact-request'}}))
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='workspace-round', raw_trace={}, observations=[], include_raw_outputs=True)
+    assert result['validation_review']['event_count'] == 3
+    assert len(result['workspace_validation_review']['events']) == 3
+    assert result['workspace_validation_review']['events'][1]['output']['preview']['sha256'] == 'exact-request'

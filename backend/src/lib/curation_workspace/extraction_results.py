@@ -352,18 +352,12 @@ def persist_inline_validated_extraction_result(
 
     receipt = _normalized_execution_receipt(execution_receipt, agent_key)
     canonical_payload = _validated_inline_domain_envelope_payload(payload_json)
+    from src.lib.validation_history.runtime import require_captured_envelope
+    require_captured_envelope(canonical_payload, user_id=user_id, document_id=document_id)
     payload_hash = _canonical_payload_hash(canonical_payload)
     builder_summary = _builder_finalization_summary(builder_finalization)
     idempotency_key = _inline_extraction_idempotency_key(
-        source_kind=source_kind,
-        origin_session_id=origin_session_id,
-        trace_id=trace_id,
-        tool_name=tool_name,
-        agent_key=agent_key,
-        adapter_key=adapter_key,
-        builder_run_id=builder_summary.get("builder_run_id"),
-        builder_invocation_id=builder_summary.get("builder_invocation_id"),
-        canonical_payload_hash=payload_hash,
+        baseline_artifact_id=canonical_payload["metadata"]["validation_history"]["artifact_id"],
     )
     candidate_count = len(canonical_payload.get("extracted_objects", []))
 
@@ -741,40 +735,10 @@ def _canonical_payload_hash(payload: Mapping[str, Any]) -> str:
     return canonical_extraction_payload_hash(payload)
 
 
-def _inline_extraction_idempotency_key(
-    *,
-    source_kind: Any,
-    origin_session_id: str | None,
-    trace_id: str | None,
-    tool_name: str,
-    agent_key: str,
-    adapter_key: str,
-    builder_run_id: Any,
-    builder_invocation_id: Any,
-    canonical_payload_hash: str,
-) -> str:
-    material = {
-        "source_kind": _source_kind_value(source_kind),
-        "origin_session_id": _optional_idempotency_text(origin_session_id),
-        "trace_id": _optional_idempotency_text(trace_id),
-        "tool_name": _required_idempotency_text(tool_name, "tool_name"),
-        "agent_key": _required_idempotency_text(agent_key, "agent_key"),
-        "adapter_key": _required_idempotency_text(adapter_key, "adapter_key"),
-        "builder_run_id": _optional_idempotency_text(builder_run_id),
-        "builder_invocation_id": _optional_idempotency_text(builder_invocation_id),
-        "canonical_payload_hash": _required_idempotency_text(
-            canonical_payload_hash,
-            "canonical_payload_hash",
-        ),
-    }
-    serialized = json.dumps(
-        material,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-    return f"inline-extraction:{digest}"
+def _inline_extraction_idempotency_key(*, baseline_artifact_id: str) -> str:
+    """One producer artifact stays one extraction even when validation changes."""
+    identity = _required_idempotency_text(baseline_artifact_id, "baseline_artifact_id")
+    return "inline-extraction:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 def _source_kind_value(source_kind: Any) -> str:
@@ -870,6 +834,9 @@ def _inline_persistence_result(
     idempotency_key: str,
     payload_hash: str,
 ) -> InlineExtractionPersistenceResult:
+    if not created_new:
+        _assert_matching_payload_hash(idempotency_key=idempotency_key,
+            requested_payload_hash=payload_hash, authoritative_payload_hash=record.payload_hash)
     schema = _record_to_schema(record)
     extraction_result_id = schema.extraction_result_id
     return InlineExtractionPersistenceResult(

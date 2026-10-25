@@ -90,11 +90,11 @@ async def run_curation_prep(
     db: Session | None = None,
     persistence_context: CurationPrepPersistenceContext | None = None,
 ) -> CurationPrepAgentOutput:
-    """Build prep candidates in one transaction owned by the outermost caller.
+    """Prepare durable sources, then save the prep record in the caller transaction.
 
-    A supplied session is flushed but never committed or rolled back here. If
-    no session is supplied, this function creates and completes one transaction
-    spanning every envelope materialization and the prep extraction record.
+    Source envelopes commit independently before later validator dispatch. A
+    supplied session owns the prep record and is never committed or rolled back
+    here. Without one, this function also owns the prep-record transaction.
     """
 
     persistence_context = persistence_context or CurationPrepPersistenceContext()
@@ -233,8 +233,9 @@ async def _run_curation_prep_impl(
     materialization_result = _materialize_extraction_results_to_envelope_refs(
         scoped_results,
         scope_notes=scope_notes,
+        # Sources must commit before bootstrap dispatches validators through
+        # independent history sessions. The caller still owns prep/session writes.
         persist=True,
-        db=db,
     )
     if not materialization_result.envelope_refs:
         raise ValueError(
@@ -412,6 +413,15 @@ def ensure_domain_envelope_materialization(
     db: Session | None = None,
 ) -> CurationPrepEnvelopeRef:
     envelope = domain_envelope_from_extraction_result(extraction_result, stored=True)
+    if extraction_result.metadata.get("chat_review") is not None:
+        from src.lib.validation_history.store import HistoryScope, SelectionNotReady
+        from src.lib.validation_history.projection import latest_publication_reference, read_published_projection
+        ref = extraction_result.metadata["chat_review"]
+        scope = HistoryScope(extraction_result.user_id, extraction_result.document_id, ref["history_scope_id"])
+        selected = latest_publication_reference(scope, ref["artifact_id"])
+        if selected is None:
+            raise SelectionNotReady("Chat validation review is pending")
+        read_published_projection(scope, selected, finalized=True)
     materializer = _review_row_materializer_for_extraction_result(
         extraction_result,
         domain_pack_id=envelope.domain_pack_id,

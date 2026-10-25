@@ -191,6 +191,24 @@ def _completed_mixed_semantic_generic_attribute_step() -> dict:
     return step
 
 
+@pytest.fixture
+def published_formatter_sources(monkeypatch):
+    """Layout tests receive reviewed publications; dedicated tests cover refusal."""
+    import sys
+    build = build_flow_output_artifact_bundle
+    def published(*args, **kwargs):
+        bundle = build(*args, **kwargs)
+        bundle.authorization_user_id = "curator"
+        bundle.document_id = "00000000-0000-0000-0000-000000000001"
+        for artifact in bundle.artifacts:
+            artifact.review_session_id = "chat"
+            artifact.selected_projection = {"fact_id": artifact.envelope_id}
+        return bundle
+    monkeypatch.setattr(sys.modules[__name__], "build_flow_output_artifact_bundle", published)
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
+                        lambda *args, **kwargs: (None, {"ready": True}))
+
+
 def _bundle() -> FlowOutputArtifactBundle:
     return build_flow_output_artifact_bundle(
         completed_steps=[_completed_gene_step()],
@@ -514,7 +532,7 @@ async def test_default_plan_preserves_selected_older_result_source_ref():
 
 
 @pytest.mark.asyncio
-async def test_bundle_default_source_binds_default_custom_and_blank_finalize_paths():
+async def test_bundle_default_source_binds_default_custom_and_blank_finalize_paths(published_formatter_sources):
     older_step = _completed_generic_attribute_step_for_result(
         "extract-older-1",
         label="Older session observation",
@@ -641,7 +659,7 @@ async def test_inspection_tools_read_bounded_saved_bundle_rows_and_values():
 
 
 @pytest.mark.asyncio
-async def test_default_plan_and_finalize_save_projected_rows_only():
+async def test_default_plan_and_finalize_save_projected_rows_only(published_formatter_sources):
     saved = []
 
     async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
@@ -698,7 +716,7 @@ async def test_default_plan_and_finalize_save_projected_rows_only():
 
 
 @pytest.mark.asyncio
-async def test_finalize_and_save_saves_once_per_formatter_tool_suite():
+async def test_finalize_and_save_saves_once_per_formatter_tool_suite(published_formatter_sources):
     saved = []
 
     async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
@@ -776,7 +794,7 @@ async def test_finalize_and_save_saves_once_per_formatter_tool_suite():
 
 
 @pytest.mark.asyncio
-async def test_validate_preview_and_finalize_support_full_csv_shaping_surface():
+async def test_validate_preview_and_finalize_support_full_csv_shaping_surface(published_formatter_sources):
     saved = []
 
     async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
@@ -934,7 +952,7 @@ async def test_validate_preview_and_finalize_support_full_csv_shaping_surface():
 
 
 @pytest.mark.asyncio
-async def test_json_formatter_supports_grouped_and_bundle_shapes():
+async def test_json_formatter_supports_grouped_and_bundle_shapes(published_formatter_sources):
     saved = []
 
     async def _fake_save(output_format, projection, filename_hint, formatter_agent_id):
@@ -1425,3 +1443,15 @@ def test_chat_group_by_renders_separate_sections_with_the_stored_rationale():
     assert "| BRCA1 | Loss of BRCA1 abolished the repair phenotype. |" in rendered
     assert "| TP53 | Only TP53 knockdown changed the reporter. |" in rendered
     assert "| MAPK | Not recorded |" in rendered
+
+
+@pytest.mark.asyncio
+async def test_finalizer_refuses_unreviewed_canonical_source_without_saving():
+    async def forbidden_save(*args, **kwargs):
+        pytest.fail("Pending review must never write a finalized file")
+    tools = build_output_formatter_tools(bundle=_bundle(), output_format="csv",
+        formatter_agent_id="csv_formatter", save_projected_output=forbidden_save)
+    result = await _invoke(_tool_by_name(tools, "finalize_and_save"),
+                           {"plan_json": "", "filename_hint": "pending"})
+    assert result["status"] == "invalid"
+    assert "explicit review" in json.dumps(result)

@@ -573,10 +573,13 @@ async def lifespan(app: FastAPI):
 
     from src.lib.config.connections_monitor import ConnectionsHealthMonitor
 
+    from src.lib.curation_workspace import review_worker
+    review_worker.start()
     app.state.connections_health_monitor = ConnectionsHealthMonitor()
     try:
         yield
     finally:
+        await review_worker.stop()
         await app.state.connections_health_monitor.close()
         await stop_pdf_job_recovery()
         await stop_submission_attempt_cleanup()

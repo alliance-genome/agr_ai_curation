@@ -3,14 +3,18 @@
 from dataclasses import replace
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 
 from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
 from src.lib.domain_packs.profile_materialization import materialize_profile_validator_results
-from src.lib.domain_packs.validator_dispatch import _apply_validator_evidence_updates_to_envelope
 from src.lib.domain_packs.profile_validation import compile_profile_validation
 from src.schemas.domain_validator import DomainValidatorResultBase
 from .test_profile_validation import example as example, envelope, resolve
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
 
 def prepared(example, *, attributes=None, per_element=False, active_group_ids=()):
@@ -48,6 +52,8 @@ def results(source, context, values, *, status="resolved", objects=None):
                               "outcome": "not_found" if status == "unresolved" else "success"}],
             curator_message=None, explanation="Fixture lookup",
         )
+        from tests.validation_history_unit_support import result_with_history_receipt
+        result_with_history_receipt(result)
         items.append(ValidatorResultMaterializationInput(match, request, result))
     return items
 
@@ -79,9 +85,9 @@ def test_complete_commit_preserves_original_and_audits_exact_contract(example, m
     assert finding.details["linkml_alignment"] == "not_assessed"
     assert len(output.envelope.validator_results) == 1
     ref = finding.details["validation_result_ref"]
-    assert output.envelope.validator_results[ref]["result"] == items[0].result.model_dump(mode="json")
-    assert output.envelope.validator_results[ref]["request"] == items[0].request.model_dump(mode="json")
-
+    assert output.envelope.validator_results[ref]["history_ref"] == items[0].result._history_ref
+    assert output.envelope.validator_results[ref]["result"]["status"] == items[0].result.status
+    assert "request" not in output.envelope.validator_results[ref]
 
 
 @pytest.mark.parametrize("value", [1, True, [], {}, None])
@@ -161,17 +167,18 @@ def test_rejects_changed_record_request_before_applying_stale_lookup(example):
     assert "stale" in output.appended_findings[0].message
 
 
-def test_existing_dispatcher_uses_profile_transaction(example, monkeypatch):
+def test_existing_dispatcher_retains_profile_candidate_until_review(example, monkeypatch):
     from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
     source, context = prepared(example)
     item, = results(source, context, [{"identifier": "EX:1"}])
-    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.materialize_validator_results_into_envelope",
+    monkeypatch.setattr("src.lib.domain_packs.materialization.materialize_validator_results_into_envelope",
                         lambda *a, **kw: pytest.fail("Profile entered the packaged sequential writer"))
     output = dispatch_active_validator_bindings(
         source, context.registry.domain_pack, profile_context=context,
         runner=lambda request, **kwargs: item.result.model_dump(mode="json"),
     )
-    assert output.envelope.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert output.envelope.extracted_objects[0].payload == source.extracted_objects[0].payload
+    assert output.appended_findings[0].details["machine_review"] == "pending"
     assert output.validator_agent_run_count == 1
 
 
@@ -183,11 +190,12 @@ def test_dispatch_resolves_authoritative_profile_without_caller_opt_in(example, 
                         lambda receipt: context.profile if receipt == context.receipt else pytest.fail("Wrong receipt"))
     monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog",
                         lambda **kwargs: [example[1]])
-    monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.materialize_validator_results_into_envelope",
+    monkeypatch.setattr("src.lib.domain_packs.materialization.materialize_validator_results_into_envelope",
                         lambda *args, **kwargs: pytest.fail("Profile entered the packaged writer"))
     output = dispatch_active_validator_bindings(source, example[2],
         runner=lambda request, **kwargs: item.result.model_dump(mode="json"))
-    assert output.envelope.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert output.envelope.extracted_objects[0].payload == source.extracted_objects[0].payload
+    assert output.appended_findings[0].details["machine_review"] == "pending"
 
 
 def test_supplied_context_cannot_override_authoritative_receipt(example):
@@ -245,7 +253,8 @@ def test_packaged_dispatch_does_not_enter_profile_transaction(example, monkeypat
                         lambda *args, **kwargs: pytest.fail("Packaged path entered profile transaction"))
     output = dispatch_active_validator_bindings(source, context.registry.domain_pack, registry=context.registry,
         runner=lambda request, **kwargs: item.result.model_dump(mode="json"))
-    assert output.envelope.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
+    assert output.envelope.extracted_objects[0].payload == source.extracted_objects[0].payload
+    assert output.appended_findings[0].details["machine_review"] == "pending"
 
 
 @pytest.mark.parametrize("groups", [None, (), ("WB",)])
@@ -290,7 +299,8 @@ def test_explicit_typed_slots_preserve_json_kinds_and_whole_array(example, schem
     assert output.materialized_objects == ()
 
 
-def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(example):
+@pytest.mark.parametrize("reference_input", ["title", "reference_mention"])
+def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(example, reference_input):
     from src.lib.agent_studio.profile_mapping_service import capability_catalog
     from .test_profile_validation import profile_envelope
     from src.lib.domain_packs.profile_validation import profile_dispatch_matches
@@ -309,7 +319,7 @@ def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(exa
          "policy": {"unresolved": "requires_curator_review", "blocks_readiness": False}}
         for name, cap, input_slot, source, output_slot, destination in [
             ("gene", gene, "gene_symbol", "attributes.gene_mention", "primary_external_id", "attributes.gene_id"),
-            ("reference", reference, "title", "attributes.paper_title", "curie", "attributes.reference_id")]
+            ("reference", reference, reference_input, "attributes.paper_title", "curie", "attributes.reference_id")]
     ]}
     receipt, profile = resolve(raw)
     context = compile_profile_validation(receipt, profile, pack, capabilities=[gene, reference], active_group_ids=["FB"])
@@ -319,6 +329,9 @@ def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(exa
     source = profile_envelope(attrs, receipt, profile)
     matches, findings, _ = profile_dispatch_matches(source, context, authenticated_groups=["FB"])
     assert len(matches) == 2 and not findings
+    reference_request = build_domain_validation_request(matches[1]).request
+    assert reference_request.selected_inputs[reference_input] == "Fixture paper"
+    assert "curie" not in reference_request.selected_inputs
     values = [{slot: "FB:FBgn0004009" if slot == "primary_external_id" else "PMID:12345"
                for slot in match.binding.expected_result_fields} for match in matches]
     output = materialize_profile_validator_results(source, context, results(source, context, values))
@@ -341,19 +354,6 @@ def test_gillian_style_record_only_runs_explicit_gene_and_reference_mappings(exa
 # them because EvidenceRecord sets extra='forbid' (base.py:214).
 
 
-def _clean_evidence_record():
-    """Evidence as the pack materializers write it: declared fields only."""
-    return {
-        "evidence_record_id": "evidence-24d4a4973cd8d45f",
-        "entity": "Adgrl1",
-        "verified_quote": "The allele was generated by CRISPR mutagenesis.",
-        "page": 3,
-        "section": "Results",
-        "chunk_id": "chunk-1",
-        "source_span_ids": ["span-1", "span-2"],
-    }
-
-
 def _revalidated_workspace_record():
     """The same record after a validator re-recorded it through record_evidence."""
     return {
@@ -368,46 +368,6 @@ def _revalidated_workspace_record():
         "evidence_record_id": "evidence-24d4a4973cd8d45f",
         "updated_at": "2026-09-18T12:31:54+00:00",
     }
-
-
-def _items_with_validator_evidence(source, context, records):
-    items = results(source, context, [{"identifier": "EX:1"}])
-    return [
-        ValidatorResultMaterializationInput(
-            item.match,
-            item.request.model_copy(update={"evidence": records}, deep=True),
-            item.result,
-        )
-        for item in items
-    ]
-
-
-def test_validator_evidence_writeback_keeps_envelope_canonical(example):
-    source, context = prepared(example)
-    source.metadata["extraction_metadata"]["evidence_records"] = [_clean_evidence_record()]
-    items = _items_with_validator_evidence(source, context, [_revalidated_workspace_record()])
-
-    updated = _apply_validator_evidence_updates_to_envelope(source, items)
-
-    # The canonical envelope must survive the write-back. Today it does not:
-    # metadata.evidence_records[0].status/.span_ids/.updated_at are extra_forbidden.
-    materialize_profile_validator_results(updated, context, items)
-
-
-def test_validator_evidence_writeback_preserves_provenance(example):
-    source, context = prepared(example)
-    source.metadata["extraction_metadata"]["evidence_records"] = [_clean_evidence_record()]
-    items = _items_with_validator_evidence(source, context, [_revalidated_workspace_record()])
-
-    updated = _apply_validator_evidence_updates_to_envelope(source, items)
-
-    written = updated.metadata["extraction_metadata"]["evidence_records"][0]
-    assert written["source_span_ids"] == ["span-1", "span-2"]
-    assert written["verified_quote"] == "The allele was generated by CRISPR mutagenesis."
-    assert written["chunk_id"] == "chunk-1"
-    assert "span_ids" not in written
-    assert "status" not in written
-    assert "updated_at" not in written
 
 
 # --- KANBAN-1773: integrity failures are not curator configuration errors ----
@@ -603,3 +563,31 @@ def test_one_disagreement_per_value_ignoring_empty_slots_with_the_validator_word
     assert finding.field_ref.field_path == "attributes.gene"
     assert finding.details["validator_curator_message"] == "Check the symbol."
     assert finding.details["source_envelope_revision"] == 4
+
+
+def test_generic_profile_validation_preserves_source_for_all_readers(example):
+    from copy import deepcopy
+    from src.lib.flows.output_projection import _attach_source_linked_evidence
+    from src.lib.openai_agents.inspect_results import _object_evidence_records
+    source, context = prepared(example)
+    evidence = {
+        "evidence_record_id": "source-1", "entity": "A",
+        "verified_quote": "The paper calls this A.", "page": 3,
+        "section": "Results", "chunk_id": "chunk-1", "source_span_ids": ["span-1"],
+    }
+    source.metadata["extraction_metadata"]["evidence_records"] = [deepcopy(evidence)]
+    source.extracted_objects[0].evidence_record_ids = ["source-1"]
+    original = source.model_dump(mode="json")
+    items = results(source, context, [{"identifier": "EX:1"}])
+    items[0].request.evidence.append({**evidence, "verified_quote": "Unauthorized replacement"})
+    output = materialize_profile_validator_results(source, context, items)
+    assert source.model_dump(mode="json") == original
+    assert output.envelope.metadata["extraction_metadata"]["evidence_records"] == [evidence]
+    obj = output.envelope.extracted_objects[0]
+    assert obj.payload["attributes"]["resolved_id"] == "EX:1"
+    assert _object_evidence_records(output.envelope, obj) == [evidence]
+    saved = output.envelope.model_dump(mode="json")
+    rows = [{} for _ in saved["extracted_objects"]]
+    _attach_source_linked_evidence(rows, saved["extracted_objects"], saved)
+    assert rows[0]["object.supporting_evidence"] == [evidence]
+    assert not rows[0]["object.evidence_link_issues"]

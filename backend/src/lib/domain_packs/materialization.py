@@ -151,6 +151,9 @@ class ValidatorResultMaterializationInput:
     request: DomainValidationRequest
     result: DomainValidatorResultBase
     dispatch_context: Mapping[str, Any] | None = None
+    selected_result_slots: frozenset[str] | None = None
+    original_result: DomainValidatorResultBase | None = None
+    original_source_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -481,9 +484,21 @@ def materialize_validator_results_into_envelope(
         from .validator_result_records import retain_validator_original
 
         working_envelope, original_ref = retain_validator_original(
-            working_envelope, result=item.result, request=item.request,
-            source_envelope_revision=source_envelope_revision,
+            working_envelope, result=item.original_result or item.result, request=item.request,
+            source_envelope_revision=item.original_source_revision if item.original_result is not None else source_envelope_revision,
         )
+        if item.selected_result_slots is not None:
+            from dataclasses import replace
+            item = replace(item, request=item.request.model_copy(update={
+                "expected_result_fields": {
+                    key: value for key, value in item.request.expected_result_fields.items()
+                    if key in item.selected_result_slots
+                },
+                "optional_result_fields": {
+                    key: value for key, value in (item.request.optional_result_fields or {}).items()
+                    if key in item.selected_result_slots
+                },
+            }))
         try:
             working_envelope, item_findings, linked_objects = _materialize_one_result(
                 working_envelope,
@@ -3044,8 +3059,6 @@ def _validation_result_finding_projection(
 ) -> dict[str, Any]:
     """Display/patch-lifecycle projection; the complete original is saved separately."""
     payload = result.model_dump(mode="json", exclude_none=True)
-    if not result.is_complete:
-        return result.model_dump(mode="json")
     compact: dict[str, Any] = {
         key: payload[key]
         for key in (
@@ -3056,6 +3069,7 @@ def _validation_result_finding_projection(
             "target",
             "resolved_values",
             "missing_expected_fields",
+            "output_issues",
             "curator_message",
             "explanation",
         )
@@ -3287,7 +3301,7 @@ def project_evidence_anchor_projections(
     """Project curator evidence navigation anchors from envelope metadata records."""
 
     records_by_id, record_ids_by_metadata_path = _evidence_record_indexes(
-        envelope.metadata
+        envelope
     )
     projections: list[DomainEnvelopeEvidenceAnchorProjection] = []
 
@@ -3303,7 +3317,7 @@ def project_evidence_anchor_projections(
             record_ids_by_metadata_path,
         ):
             evidence_record = records_by_id.get(evidence_record_id)
-            if evidence_record is None:
+            if evidence_record is None or evidence_record.get("evidence_link_issue"):
                 continue
             for field_path in _projection_field_paths(evidence_record, domain_object):
                 projection_key = (evidence_record_id, field_path)
@@ -4300,8 +4314,14 @@ def _validation_state_by_object(envelope: DomainEnvelope) -> dict[str, str]:
 
 
 def _evidence_record_indexes(
-    metadata: Mapping[str, Any],
+    envelope: DomainEnvelope,
 ) -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
+    from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+    snapshot = EvidenceSnapshot.from_payload(
+        {"metadata": envelope.metadata},
+        [item.model_dump(mode="json") for item in envelope.extracted_objects],
+    )
+    metadata = envelope.metadata
     records_by_id: dict[str, Mapping[str, Any]] = {}
     record_ids_by_metadata_path: dict[str, str] = {}
 
@@ -4312,11 +4332,20 @@ def _evidence_record_indexes(
             evidence_record_id = _optional_string(raw_record.get("evidence_record_id"))
             if evidence_record_id is None:
                 continue
-            records_by_id[evidence_record_id] = raw_record
+            record, problem = snapshot.resolve(evidence_record_id)
+            records_by_id[evidence_record_id] = record if record is not None else {
+                "evidence_record_id": evidence_record_id, "evidence_link_issue": problem,
+            }
             record_ids_by_metadata_path[
                 f"{metadata_path}[{record_index}]"
             ] = evidence_record_id
 
+    for obj in envelope.extracted_objects:
+        for identity in obj.evidence_record_ids:
+            record, problem = snapshot.resolve(identity)
+            records_by_id[identity] = record if record is not None else {
+                "evidence_record_id": identity, "evidence_link_issue": problem,
+            }
     return records_by_id, record_ids_by_metadata_path
 
 

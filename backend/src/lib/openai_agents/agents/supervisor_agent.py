@@ -297,6 +297,7 @@ def _build_chat_formatter_bundle(
         from src.lib.curation_workspace.execution_contracts import load_receipt_profile
 
         bundle = build_extraction_result_artifact_bundle(
+            user_id=resolved_user_id,
             extraction_results=records,
             bundle_name="Chat Extraction Results",
             profile_resolver=load_receipt_profile,
@@ -797,7 +798,27 @@ async def _run_streaming_specialist_tool(
                 )
             return json.dumps(payload, ensure_ascii=True)
 
-        return await ledger.run_or_replay(tool_name, query, _run_with_deadline)
+        async def durable_run():
+            from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+            from src.lib.validation_review import chat_dispatch
+            from src.lib.openai_agents.streaming_tools import is_builder_materializer_agent
+            review = ACTIVE_CHAT_REVIEW.get()
+            if review is None or not (getattr(agent, "generic_profile", None) is not None or is_builder_materializer_agent(agent)):
+                return await _run_with_deadline()
+            dispatch = await asyncio.to_thread(chat_dispatch.claim, review, tool_name, query)
+            if not dispatch["claimed"]:
+                if dispatch["state"] == "completed":
+                    return dispatch["result"]["output"] + "\nAuthoritative validation review: " + json.dumps(await asyncio.to_thread(review.supervisor_handoff))
+                return json.dumps({"state": "pending", "reason": "previous_dispatch_not_completed",
+                    "message": "Inspect saved results and review history. Do not repeat extraction; a prior submission may still be running."})
+            output = await _run_with_deadline()
+            await asyncio.to_thread(chat_dispatch.complete, review, dispatch["id"], {"output": output})
+            # The extraction deadline has ended; review uses its own frozen
+            # episode budget and the same supervisor identity.
+            await review.resume()
+            return output + "\nAuthoritative validation review: " + json.dumps(await asyncio.to_thread(review.supervisor_handoff))
+
+        return await ledger.run_or_replay(tool_name, query, durable_run)
 
     return await _runner_coro_factory()
 
@@ -1819,6 +1840,8 @@ def create_supervisor_agent(
     # ALL-1280: runtime key for the tool loading policy; the surface is
     # compiled at the run point (runner.py) after run-state rebinding.
     supervisor.tool_surface_runtime = "chat_supervisor"
+    supervisor.validation_review_policy_layers = tuple(
+        layer for layer in prompt_bundle.layers if layer.kind in {"group_rules", "curator_overlay"})
 
     from src.lib.observability.cost_context import agent_identity, attach_agent_cost_identity
     attach_agent_cost_identity(supervisor, {**agent_identity(

@@ -5,6 +5,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+from src.schemas.validation_history import DecisionUnit
+
+
 class MappingModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -48,6 +51,16 @@ class ProfileValidatorMapping(MappingModel):
     capability_fingerprint: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     inputs: dict[str, ProfileMappingInput]
     outputs: dict[str, str]
+    decision_units: list[DecisionUnit] | None = Field(default=None, exclude_if=lambda value: value is None)
     policy: ProfileMappingPolicy
     # [] paths are explicit per-element mappings; no implicit array coercion.
     mode: Literal["whole", "per_element"] = "whole"
+
+    @model_validator(mode="after")
+    def decision_coverage(self):
+        if self.decision_units:
+            keys = [unit.key for unit in self.decision_units]
+            fields = [field for unit in self.decision_units for field in unit.fields]
+            if len(set(keys)) != len(keys) or len(set(fields)) != len(fields) or set(fields) != set(self.outputs):
+                raise ValueError("Decision units must partition all mapped output slots")
+        return self

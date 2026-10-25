@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
 import yaml
 from pydantic import ValidationError
 
@@ -21,6 +24,10 @@ from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bi
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.schemas.domain_envelope import DomainEnvelope
 from src.schemas.domain_validator import DomainValidatorResultBase
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 FIXTURE_PATH = (
@@ -274,17 +281,12 @@ def test_validator_dispatch_end_to_end_fixture_cases(tmp_path, dispatch_fixture,
             for candidate in finding.details["candidate_matches"]
         ] == expected_projection["candidate_values"]
     if "materialized_object_type" in expected_projection:
-        materialized = next(
-            domain_object
-            for domain_object in result.envelope.extracted_objects
-            if domain_object.object_type
-            == expected_projection["materialized_object_type"]
-        )
-        assert materialized.status.value == expected_projection[
-            "materialized_object_status"
-        ]
-        assert materialized.payload == expected_projection["materialized_payload"]
-        assert result.envelope.extracted_objects[0].object_refs == [materialized.to_object_ref()]
+        proposed = next(obj for obj in result.validator_results[0].resolved_objects
+            if obj["object_type"] == expected_projection["materialized_object_type"])
+        assert proposed["payload"] == expected_projection["materialized_payload"]
+        assert result.envelope.extracted_objects == envelope.extracted_objects
+        assert finding.details["machine_review"] == "pending"
+        assert finding.details["selected_value"] is False
 
     readiness_blockers = _readiness_blockers_for_result(result)
     expected_readiness = case["readiness_outcome"]

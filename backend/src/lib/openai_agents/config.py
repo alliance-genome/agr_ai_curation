@@ -2128,6 +2128,11 @@ def get_inspect_results_validation_page_size() -> int:
     return max(1, _get_env_int_with_fallback("INSPECT_RESULTS_VALIDATION_PAGE_SIZE", 5))
 
 
+def get_validation_history_page_size() -> int:
+    """Maximum immutable history facts per page (default 5)."""
+    return max(1, _get_env_int_with_fallback("VALIDATION_HISTORY_PAGE_SIZE", 5))
+
+
 def get_list_recorded_evidence_limit() -> int:
     """Default cap on records returned by list_recorded_evidence (LIST_RECORDED_EVIDENCE_LIMIT).
 
@@ -3825,4 +3830,32 @@ def get_connections_health_snapshot_ttl_seconds() -> float:
     value = float(_get_env("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", "30"))
     if value is None or not math.isfinite(value) or value <= 0:
         raise ValueError("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS must be finite and positive")
+    return value
+
+
+def get_validation_review_limits() -> dict[str, int]:
+    """Provisional development/staging review policy (ALL-1442); frozen per scope."""
+    defaults = {
+        "attempts_per_target": 2, "extraction_attempts_per_entry": 2,
+        "extra_per_run": 16, "extra_per_batch": 64,
+        "reviewer_turns": 64, "reviewer_tools": 256, "deadline_seconds": 1800,
+        "reviewer_tokens": 1_000_000, "tokens_per_target": 150_000,
+        "tokens_per_extra": 150_000, "warning_percent": 75, "critical_percent": 90,
+        "instruction_chars": 8000, "decision_entries": 100, "evidence_refs": 100,
+        "packet_bytes": 65536, "lease_seconds": 60,
+    }
+    limits = {key: _get_env_int_with_fallback("VALIDATION_REVIEW_" + key.upper(), value)
+              for key, value in defaults.items()}
+    if any(value <= 0 for value in limits.values()):
+        raise ValueError("Validation review limits must be positive")
+    if not limits["warning_percent"] < limits["critical_percent"] <= 100:
+        raise ValueError("Review warning percentages must be ordered and at most 100")
+    return limits
+
+
+def get_workspace_review_concurrency() -> int:
+    """Concurrent durable curator operations per backend process."""
+    value = _get_env_int_with_fallback("WORKSPACE_REVIEW_CONCURRENCY", 1)
+    if value <= 0:
+        raise ValueError("WORKSPACE_REVIEW_CONCURRENCY must be positive")
     return value

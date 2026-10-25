@@ -2052,5 +2052,14 @@
       "At the end of a flow when a downstream tool or loader expects tab-separated columns.",
       "When you want a spreadsheet-style file and the values themselves contain commas."
     ]
+  },
+  "validation_reviewer": {
+    "avoid_when": [],
+    "capabilities": [],
+    "data_sources": [],
+    "limitations": [],
+    "note": "",
+    "summary": "Reviews exact extraction and validator history and records explicit decisions. Invoked within an authenticated pending review episode by runtime orchestration.",
+    "use_when": []
   }
 }

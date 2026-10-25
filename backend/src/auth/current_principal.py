@@ -30,3 +30,27 @@ def get_current_principal_resolver() -> CurrentPrincipalResolver:
     if not callable(resolver):
         raise TypeError("Current principal resolver entry point must be callable")
     return cast(CurrentPrincipalResolver, resolver)
+
+
+def get_current_subject_resolver():
+    """Resolve a trusted local subject for queued work, without saved tokens.
+
+    Providers may register exactly one callable in
+    agr_ai_curation.current_subject_resolvers. It must return an authoritative
+    enabled AuthPrincipal, not a cached token-derived identity.
+    """
+    provider = get_auth_provider()
+    if is_dev_mode() or provider == "dev":
+        raise ValueError("Current subject lookup is unavailable in development mode")
+    registered = tuple(entry_points(
+        group="agr_ai_curation.current_subject_resolvers", name=provider,
+    ))
+    if len(registered) + (provider == "cognito") != 1:
+        raise ValueError("Exactly one current subject resolver must be configured")
+    if provider == "cognito":
+        from src.auth.providers.cognito_current_principal import resolve_current_subject
+        return resolve_current_subject
+    resolver = registered[0].load()
+    if not callable(resolver):
+        raise TypeError("Current subject resolver entry point must be callable")
+    return resolver

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import inspect
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
@@ -41,6 +41,7 @@ from src.lib.domain_envelopes.persistence import (
 )
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepCandidate
@@ -61,6 +62,8 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 @compiles(PostgresUUID, "sqlite")
 def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
@@ -72,7 +75,10 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
     return "JSON"
 
 
+
 TEST_TABLES = [
+    ValidationBody.__table__,
+    ValidationCheckpoint.__table__,
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
     CurationSessionAgentRevision.__table__,
@@ -97,15 +103,6 @@ _REAL_REFRESH_DOMAIN_ENVELOPE_VALIDATION_FOR_REF = (
 _REAL_ENVELOPE_FIELD_RESULTS_FOR_CANDIDATE = module._envelope_field_results_for_candidate
 
 
-def test_envelope_refresh_uses_structural_checks_and_active_dispatch():
-    source = inspect.getsource(_REAL_REFRESH_DOMAIN_ENVELOPE_VALIDATION_FOR_REF)
-
-    assert "run_domain_envelope_structural_checks" in source
-    assert "resolve_curation_domain_envelope_validator_by_id" in source
-    assert "dispatch_active_validator_bindings" in source
-    assert "run_validation_supervisor" not in source
-
-
 @pytest.fixture
 def db_session():
     engine = create_engine(
@@ -121,6 +118,8 @@ def db_session():
         table.indexes.clear()
         for column in table.columns:
             restored_defaults.append((column, column.server_default))
+            if table.name == "validation_checkpoints" and column.name == "created_at":
+                continue
             column.server_default = None
 
     Base.metadata.create_all(bind=engine, tables=TEST_TABLES)
@@ -628,7 +627,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     }
 
 
-def test_execute_post_curation_pipeline_refreshes_envelope_validation_before_materializing(
+def test_execute_post_curation_pipeline_materializes_without_running_paid_validation(
     db_session,
     monkeypatch,
     tmp_path,
@@ -710,66 +709,8 @@ metadata:
         "resolve_curation_domain_pack_by_id",
         lambda domain_pack_id: loaded_pack if domain_pack_id == "fixture.pack" else None,
     )
-    real_dispatch = module.dispatch_active_validator_bindings
-    dispatch_calls = []
-
-    def _fake_validator_dispatch(
-        envelope,
-        domain_pack,
-        *,
-        registry=None,
-        source_envelope_revision=None,
-        runtime_context=None,
-        profile_context=None,
-    ):
-        assert profile_context is None
-        assert source_envelope_revision == 1
-
-        def _runner(request, *, binding):
-            dispatch_calls.append(
-                {
-                    "request": request,
-                    "max_tool_calls": binding.max_tool_calls,
-                    "runtime_context": runtime_context,
-                }
-            )
-            return {
-                "status": "unresolved",
-                "request_id": request.request_id,
-                "validator_binding_id": request.validator_binding_id,
-                "validator_agent": request.validator_agent.model_dump(mode="json"),
-                "target": request.target.model_dump(mode="json"),
-                "resolved_values": {},
-                "resolved_objects": [],
-                "missing_expected_fields": ["identifier"],
-                "candidates": [],
-                "lookup_attempts": [
-                    {
-                        "provider": "fixture",
-                        "method": "identifier_prefix",
-                        "query": dict(request.selected_inputs),
-                        "result_count": 0,
-                        "outcome": "not_found",
-                    }
-                ],
-                "curator_message": "Identifier prefix was not resolved.",
-                "explanation": "Fixture validator could not resolve the identifier.",
-            }
-
-        return real_dispatch(
-            envelope,
-            domain_pack,
-            registry=registry,
-            runner=_runner,
-            source_envelope_revision=source_envelope_revision,
-            runtime_context=runtime_context,
-        )
-
-    monkeypatch.setattr(
-        module,
-        "dispatch_active_validator_bindings",
-        _fake_validator_dispatch,
-    )
+    monkeypatch.setattr('src.lib.domain_packs.validator_dispatch.dispatch_active_validator_bindings',
+        lambda *args, **kwargs: pytest.fail('Opening the workspace must not run a synchronous provider'))
 
     envelope = DomainEnvelope(
         envelope_id="env-validation-1",
@@ -787,6 +728,10 @@ metadata:
             )
         ],
     )
+    # Supply the durable identity input to this SQLite pipeline unit; real history
+    # reference persistence is covered by the PostgreSQL authority suite.
+    envelope.extracted_objects[0].metadata["validation_history"] = {"target_id": str(uuid4())}
+    monkeypatch.setattr("src.lib.validation_history.store._append", lambda *args, **kwargs: None)
     checkpoint = write_domain_envelope_checkpoint(
         db_session,
         DomainEnvelopeCheckpointRequest(
@@ -834,7 +779,7 @@ metadata:
     def _fake_materialize(db, envelope_id, *, revision=None, materializer=None, active_group_ids=(), user_id=None):
         assert user_id == "user-1"
         assert envelope_id == "env-validation-1"
-        assert revision == 2
+        assert revision == 1
         envelope_row = db.get(DomainEnvelopeModel, envelope_id)
         return DomainEnvelopeReviewRowsResponse(
             envelope_id=envelope_id,
@@ -884,40 +829,20 @@ metadata:
     )
 
     envelope_row = db_session.get(DomainEnvelopeModel, "env-validation-1")
-    assert envelope_row.revision == 2
-    assert len(dispatch_calls) == 1
-    assert dispatch_calls[0]["request"].selected_inputs == {
-        "identifier": "BAD:0001",
-    }
-    assert dispatch_calls[0]["request"].target.input_values == (
-        dispatch_calls[0]["request"].selected_inputs
-    )
-    assert dispatch_calls[0]["runtime_context"].authenticated_groups == ("ZFIN",)
-    assert envelope_row.envelope_json["validation_findings"][0]["code"] == (
-        "domain_pack.validator_unresolved"
-    )
-    assert envelope_row.envelope_json["validation_findings"][0]["details"][
-        "validation_request"
-    ]["target"]["input_values"] == {
-        "identifier": "BAD:0001",
-    }
-    assert envelope_row.envelope_json["validation_findings"][0]["details"][
-        "validation_metadata"
-    ]["source_envelope_revision"] == 1
-    indexed_findings = db_session.scalars(select(DomainValidationFinding)).all()
-    assert len(indexed_findings) == 1
-    assert indexed_findings[0].field_path == "gene.identifier"
+    assert envelope_row.revision == 1
+    assert not envelope_row.envelope_json['validation_findings']
+    assert not list(db_session.scalars(select(DomainValidationFinding)))
 
     candidate_row = db_session.scalars(
         select(CurationCandidate).where(CurationCandidate.session_id == UUID(result.session_id))
     ).one()
-    assert candidate_row.envelope_revision == 2
+    assert candidate_row.envelope_revision == 1
     draft_row = db_session.scalars(
         select(DraftModel).where(DraftModel.candidate_id == candidate_row.id)
     ).one()
     fields_by_key = {field["field_key"]: field for field in draft_row.fields}
     assert fields_by_key["gene.identifier"]["validation_result"]["status"] == (
-        FieldValidationStatus.NOT_FOUND.value
+        FieldValidationStatus.SKIPPED.value
     )
     assert fields_by_key["gene.symbol"]["validation_result"]["status"] == (
         FieldValidationStatus.SKIPPED.value
@@ -928,8 +853,8 @@ metadata:
             ValidationSnapshotModel.candidate_id == candidate_row.id,
         )
     ).one()
-    assert candidate_snapshot.summary["counts"]["not_found"] == 1
-    assert candidate_snapshot.summary["counts"]["skipped"] == 1
+    assert candidate_snapshot.summary["counts"].get("not_found", 0) == 0
+    assert candidate_snapshot.summary["counts"]["skipped"] == 2
 
 
 def test_execute_post_curation_pipeline_persists_domain_envelope_projection_ref_from_envelope_row(
@@ -1423,3 +1348,60 @@ async def test_run_post_curation_pipeline_schedules_async_for_large_sets():
     assert result.execution_mode is module.PipelineExecutionMode.ASYNC
     assert result.task_name is not None
     assert scheduler.calls[0]["task_name"].startswith("curation-post-agent-pipeline:")
+
+
+@pytest.mark.parametrize(
+    "created,metadata,subject_kind,expected",
+    [
+        (True, {"validation_history": {"artifact_id": "artifact"}}, "extracted", 1),
+        (False, {"validation_history": {"artifact_id": "artifact"}}, "extracted", 0),
+        (True, {"validation_history": {"artifact_id": "artifact"}}, "historical", 0),
+        (True, {}, "extracted", 0),
+        (
+            True,
+            {
+                "validation_history": {"artifact_id": "artifact"},
+                "review_episode_id": "flow-reviewed",
+            },
+            "extracted",
+            0,
+        ),
+        (
+            True,
+            {
+                "validation_history": {"artifact_id": "artifact"},
+                "selected_projection": {"id": "chat-reviewed"},
+            },
+            "extracted",
+            0,
+        ),
+    ],
+)
+def test_bootstrap_only_queues_fresh_captured_unreviewed_sources(
+    monkeypatch, created, metadata, subject_kind, expected
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from src.lib.curation_workspace import review_operations
+
+    session_id = str(uuid4())
+    candidate_id = str(uuid4())
+    db = Mock()
+    db.scalars.return_value = [SimpleNamespace(id=candidate_id, envelope_id="envelope")]
+    db.get.side_effect = lambda model, key: (
+        SimpleNamespace(envelope_json={"metadata": metadata})
+        if key == "envelope"
+        else SimpleNamespace(owner_id="owner", subject_kind=subject_kind)
+    )
+    submit = Mock()
+    monkeypatch.setattr(review_operations, "submit", submit)
+    module._enqueue_workspace_bootstrap(
+        db,
+        SimpleNamespace(user_id="owner", active_groups=("group",)),
+        SimpleNamespace(created=created, session_id=session_id),
+    )
+    assert submit.call_count == expected
+    if expected:
+        assert submit.call_args.kwargs["origin"] == "bootstrap"
+        assert submit.call_args.kwargs["candidate_ids"] == [candidate_id]
+        assert submit.call_args.kwargs["groups"] == ("group",)

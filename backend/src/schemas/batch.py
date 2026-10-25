@@ -69,6 +69,7 @@ class BatchDocumentResponse(BaseModel):
     extraction_result_refs: List[Dict[str, Any]] = Field(default_factory=list)
     flow_run_id: Optional[str] = None
     origin_session_id: Optional[str] = None
+    review_details: Optional[dict] = None
     error_message: Optional[str] = None
     processing_time_ms: Optional[int] = None
     processed_at: Optional[datetime] = None
@@ -85,6 +86,9 @@ class BatchSummary(BaseModel):
     total_documents: int
     completed_documents: int
     failed_documents: int
+    review_pending_documents: int = 0
+    review_exhausted_documents: int = 0
+    interrupted_documents: int = 0
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

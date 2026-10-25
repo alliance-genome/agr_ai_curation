@@ -6,6 +6,12 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+
+from tests.reviewed_output_unit_support import (
+    build_reviewed_output_bundle as build_flow_output_artifact_bundle,
+    reviewed_output_reader as reviewed_output_reader,
+)
+
 from pydantic import ValidationError
 
 from src.lib.flows import export_fields
@@ -15,12 +21,13 @@ from src.lib.flows.output_projection import (
     FlowOutputField,
     FlowOutputProjectionPlan,
     apply_projection_plan,
-    build_flow_output_artifact_bundle,
     default_projection_plan,
     finalize_output_projection,
 )
 from src.lib.flows.value_display import display_text
 from src.schemas.domain_pack_metadata import DomainPackFieldDefinition, DomainPackModelDefinition
+
+pytestmark = pytest.mark.usefixtures("reviewed_output_reader")
 
 TERM = {"label": "name", "id": "curie"}
 CONDITION = {"label": "condition_summary", "id": "condition_class.curie"}

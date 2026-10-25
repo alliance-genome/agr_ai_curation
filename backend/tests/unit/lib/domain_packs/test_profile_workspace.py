@@ -6,11 +6,25 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+
+
 from src.lib.curation_workspace import pipeline, session_validation_service
 from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
 from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
 from .test_profile_validation import example as example
-from .test_profile_materialization import prepared, results
+from .test_profile_materialization import prepared
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
+
+@pytest.fixture(autouse=True)
+def workspace_database_boundaries(monkeypatch):
+    # These profile unit tests use in-memory rows. Real lock/CAS behavior is
+    # covered by test_profile_validator_workspace against migrated PostgreSQL.
+    monkeypatch.setattr(session_validation_service, "_lock_unlinked_manual_candidate", lambda *args: None)
+
 
 
 @pytest.mark.parametrize("inline_complete", [False, True])
@@ -33,7 +47,7 @@ def test_prep_checks_live_profile_access_without_open_generic_fallback(example, 
     monkeypatch.setattr(pipeline, "write_domain_envelope_checkpoint",
                         lambda _db, request: (checkpoints.append(request), SimpleNamespace(revision=2))[1])
     if inline_complete:
-        monkeypatch.setattr(pipeline, "dispatch_active_validator_bindings",
+        monkeypatch.setattr("src.lib.domain_packs.validator_dispatch.dispatch_active_validator_bindings",
                             lambda *args, **kwargs: pytest.fail("Prep reran inline validators"))
     revision = pipeline._refresh_domain_envelope_validation_for_ref(
         db, SimpleNamespace(envelope_id=source.envelope_id, envelope_revision=1),
@@ -47,45 +61,15 @@ def test_prep_checks_live_profile_access_without_open_generic_fallback(example, 
     assert finding.details["generic_profile_ref"] == context.profile.receipt
 
 
-def test_workspace_revalidation_uses_profile_registry_and_atomic_writer(example, monkeypatch):
-    monkeypatch.setattr("src.lib.curation_workspace.session_mutation_service.load_envelope_candidates_for_patch",
-                        lambda *args, **kwargs: [])
-    from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
-    source, context = prepared(example)
-    item, = results(source, context, [{"identifier": "EX:1"}])
-    row = SimpleNamespace(revision=1, project_key="fixture", document_id=None,
-        session_id=None, flow_run_id=None, object_model_ref_json={}, model_field_ref_json={})
-    monkeypatch.setattr("src.lib.curation_workspace.execution_contracts.resolve_receipt_profile",
-                        lambda session, receipt: context.profile)
-    monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog",
-                        lambda **kwargs: [example[1]])
-    monkeypatch.setattr(session_validation_service, "resolve_curation_domain_pack_by_id", lambda _key: example[2])
-    monkeypatch.setattr(session_validation_service, "resolve_curation_domain_envelope_validator_by_id",
-                        lambda _key: lambda *_args: pytest.fail("Open generic validator ran"))
-    monkeypatch.setattr(session_validation_service, "dispatch_active_validator_bindings",
-        lambda *args, **kwargs: dispatch_active_validator_bindings(*args, **kwargs,
-            runner=lambda request, **run_kwargs: item.result.model_dump(mode="json")))
-    checkpoints = []
-    monkeypatch.setattr(session_validation_service, "write_domain_envelope_checkpoint",
-                        lambda _db, request: (checkpoints.append(request), SimpleNamespace(revision=2))[1])
-    candidate = SimpleNamespace(id="candidate", session_id="session", object_id="one", envelope_revision=1, draft=None)
-    updated, revision, warnings = session_validation_service._dispatch_workspace_envelope_validation(
-        object(), candidate, envelope_row=row, envelope=source, field_paths=(),
-        validated_at=datetime.now(timezone.utc),
-    )
-    assert revision == candidate.envelope_revision == 2
-    assert not warnings
-    assert updated.extracted_objects[0].payload["attributes"]["resolved_id"] == "EX:1"
-    assert checkpoints[0].envelope == updated
-    assert source.extracted_objects[0].payload["attributes"] == {"paper_name": "A"}
 
 
 @pytest.mark.parametrize("available", [True, False])
 def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(example, monkeypatch, available):
+    monkeypatch.setattr("src.lib.agent_studio.custom_profile_validators.runtime_validator_user_id",
+                        lambda user_id: 1)
     monkeypatch.setattr("src.lib.curation_workspace.session_mutation_service.load_envelope_candidates_for_patch",
                         lambda *args, **kwargs: [])
     from uuid import uuid4
-    from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
     from src.lib.curation_workspace.execution_contracts import require_extraction_conformance
     from src.schemas.curation_workspace import CurationCandidateSource, CurationDraftField
     from src.schemas.domain_envelope import DomainEnvelope
@@ -95,8 +79,6 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
     monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog",
                         lambda **kwargs: [example[1]] if available else [])
     monkeypatch.setattr(session_validation_service, "resolve_curation_domain_pack_by_id", lambda key: example[2])
-    monkeypatch.setattr(session_validation_service, "resolve_curation_domain_envelope_validator_by_id",
-                        lambda key: lambda *args: pytest.fail("Manual profile used open generic validation"))
     candidate = SimpleNamespace(id=uuid4(), session_id=uuid4(), agent_revision_id=context.receipt.agent_revision_id,
         execution_receipt=context.receipt.model_dump(mode="json"), source=CurationCandidateSource.MANUAL,
         envelope_id=None, object_id=None, envelope_revision=None, domain_envelope=None,
@@ -104,10 +86,12 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
         normalized_payload={"object_type": "generic_object", "class_key": "generic:generic_object",
                             "semantic_class": "record", "attributes": {"paper_name": "A"}},
         session=SimpleNamespace(document_id=uuid4(), flow_run_id=None),
-        draft=SimpleNamespace(version=1, fields=[CurationDraftField(field_key="attributes", label="Record",
+        draft=SimpleNamespace(id=uuid4(), version=1, fields=[CurationDraftField(field_key="attributes", label="Record",
             value={"paper_name": "A"}, seed_value={"paper_name": "A"}, field_type="object").model_dump(mode="json")]))
     rows, requests = {}, []
-    db = SimpleNamespace(get=lambda model, key: rows.get(key), flush=lambda: None)
+    from contextlib import nullcontext
+    db = SimpleNamespace(get=lambda model, key: rows.get(key), flush=lambda: None,
+        no_autoflush=nullcontext(), execute=lambda statement: SimpleNamespace(one=lambda: candidate.draft))
 
     def checkpoint(session, request):
         assert session is db
@@ -122,29 +106,32 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
         row.envelope_json = request.envelope.model_dump(mode="json")
         return SimpleNamespace(envelope_id=request.envelope.envelope_id, revision=row.revision)
 
-    monkeypatch.setattr(session_validation_service, "write_domain_envelope_checkpoint", checkpoint)
+    def prepare_source(**kwargs):
+        from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+        return checkpoint(db, DomainEnvelopeCheckpointRequest(
+            project_key="generic", envelope=kwargs["envelope"], expected_revision=0,
+            execution_receipt=kwargs["receipt"], document_id=kwargs["document_id"],
+            session_id=kwargs["session_id"], flow_run_id=kwargs["flow_run_id"], adapter_key=kwargs["adapter_key"]))
+    monkeypatch.setattr("src.lib.curation_workspace.manual_profile_preparation.prepare_manual_source", prepare_source)
 
-    def dispatch(envelope, pack, **kwargs):
-        values = results(envelope, kwargs["profile_context"], [{"identifier": "EX:1"}]) if available else []
-        return dispatch_active_validator_bindings(envelope, pack, **kwargs,
-            runner=lambda *args, **kw: values[0].result.model_dump(mode="json"))
-
-    monkeypatch.setattr(session_validation_service, "dispatch_active_validator_bindings", dispatch)
+    session_validation_service._ensure_manual_profile_envelope(db, candidate,
+        runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id=str(candidate.session.document_id)))
     computation = session_validation_service._compute_candidate_validation(
-        db, candidate, force=True, validated_at=datetime.now(timezone.utc))
-    assert len(requests) == 2 and requests[0].expected_revision == 0
-    assert candidate.envelope_id == f"manual-profile:{candidate.id}"
+        db, candidate, force=True, validated_at=datetime.now(timezone.utc),
+        runtime_context=ValidatorRuntimeContext(user_id="unit-owner", document_id=str(candidate.session.document_id)))
+    assert len(requests) == 1 and requests[0].expected_revision == 0
+    assert candidate.envelope_id.startswith(f"manual-profile:{candidate.id}:")
     assert candidate.normalized_payload == {}
     final = DomainEnvelope.model_validate(rows[candidate.envelope_id].envelope_json)
     assert final.metadata["source"] == "manual"
     assert final.metadata["extraction_metadata"]["provenance"]["record_source"] == "curator_manual"
     attributes = final.extracted_objects[0].payload["attributes"]
-    assert attributes == ({"paper_name": "A", "resolved_id": "EX:1"} if available else {"paper_name": "A"})
+    assert attributes == {"paper_name": "A"}
+    assert not final.validator_results
     assert computation.updated_fields[0]["value"] == attributes
     assert computation.snapshot.envelope_id == candidate.envelope_id
-    assert computation.snapshot.envelope_revision == 2
-    if not available:
-        assert final.validation_findings[0].code == "generic_profile.validator_unavailable"
+    assert computation.snapshot.envelope_revision == 1
+    assert not final.validation_findings
 
 
 def test_profile_structural_check_handles_empty_array_of_required_fields(example):

@@ -309,7 +309,7 @@ def test_load_prompts_supports_core_only_runtime_packages(tmp_path, monkeypatch)
 
     result = prompt_loader.load_prompts(db=db, force_reload=True)
 
-    assert result == {"base_prompts": 3, "group_rules": 0}
+    assert result == {"base_prompts": 4, "group_rules": 0}
     assert db.commit.called
     assert any(
         call["agent_name"] == "supervisor"

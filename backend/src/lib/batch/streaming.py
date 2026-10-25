@@ -55,6 +55,7 @@ def _batch_document_status_event(
         ),
         "review_session_ids": doc.review_session_ids,
         **(handoff_metadata or {}),
+        "review_details": getattr(doc, "review_details", None),
         "error_message": doc.error_message,
         "processing_time_ms": doc.processing_time_ms,
     }
@@ -75,7 +76,7 @@ def _batch_partial_document_count(batch: Any) -> int:
 class Snapshot:
     events: tuple[str, ...] = ()
     statuses: dict[str, str] = field(default_factory=dict)
-    counts: tuple[int, int] | None = None
+    counts: tuple[int, ...] | None = None
     terminal: bool = False
 
 
@@ -120,9 +121,13 @@ def read_snapshot(batch_id: UUID, user_id: int, previous: Snapshot) -> Snapshot:
                 "total_documents": batch.total_documents,
                 "completed_documents": batch.completed_documents,
                 "failed_documents": batch.failed_documents,
+                "review_pending_documents": batch.review_pending_documents,
+                "review_exhausted_documents": batch.review_exhausted_documents,
+                "interrupted_documents": batch.interrupted_documents,
                 "partial_documents": _batch_partial_document_count(batch),
             }
-            counts = (batch.completed_documents, batch.failed_documents)
+            counts = (batch.completed_documents, batch.failed_documents, batch.review_pending_documents,
+                      batch.review_exhausted_documents, batch.interrupted_documents)
             events = []
             if previous.counts is None:
                 events.append(_encode({"type": "BATCH_STATUS", **status}))

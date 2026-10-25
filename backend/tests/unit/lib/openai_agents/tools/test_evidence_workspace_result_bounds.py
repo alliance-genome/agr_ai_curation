@@ -133,25 +133,16 @@ async def test_detail_read_reports_changed_record_as_stale(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_detail_reads_keep_document_and_validator_scope():
+async def test_detail_reads_keep_document_scope():
     records = [_record(1, quote="q" * 50)]
     records.append({**_record(2), "document_id": "doc-2"})
     get_tool = _tool(evidence_workspace.create_get_recorded_evidence_tool, records)
-    scoped = _tool(
-        evidence_workspace.create_get_recorded_evidence_tool,
-        records,
-        allowed_evidence_record_ids={"ev-0001"},
-    )
 
     other_document = await get_tool(
         "ev-0002", detail_path="record.verified_quote", detail_cursor=0
     )
-    out_of_scope = await scoped(
-        "ev-0002", detail_path="record.verified_quote", detail_cursor=0
-    )
 
     assert other_document["status"] == "not_found"
-    assert out_of_scope["status"] == "forbidden"
 
 
 @pytest.mark.asyncio

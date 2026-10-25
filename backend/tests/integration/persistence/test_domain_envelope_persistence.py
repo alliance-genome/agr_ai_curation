@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from src.lib.curation_workspace.models import (
@@ -24,7 +22,6 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeModel,
     DomainEnvelopeObject,
     DomainEnvelopeProjectionIndex,
-    DomainValidationFinding,
 )
 from src.lib.domain_envelopes.persistence import (
     DEFAULT_OBJECT_PROJECTION_TYPE,
@@ -64,6 +61,15 @@ from tests.pdf_document_test_support import ensure_test_pdf_owner
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
+TEST_ENVELOPE_ID = "unused-before-test"
+
+
+@pytest.fixture(autouse=True)
+def unique_envelope_identity(monkeypatch):
+    # Audit identities cannot be reused after deleting the current projection.
+    monkeypatch.setattr(__import__(__name__, fromlist=["_"]), "TEST_ENVELOPE_ID", "test-" + uuid4().hex)
+
+
 OWNER_DOCUMENT_ID = UUID("00000000-0000-0000-0000-000000000697")
 OWNER_SESSION_ID = UUID("00000000-0000-0000-0000-000000006697")
 
@@ -93,19 +99,15 @@ def db_session():
 
 
 def _clean_domain_tables(session):
-    for model in (
-        DomainEnvelopeProjectionIndex,
-        DomainEnvelopeHistory,
-        DomainValidationFinding,
-        DomainEnvelopeObject,
-        CurationActionLogEntry,
-        DomainEnvelopeModel,
-        CurationReviewSession,
-    ):
-        session.execute(delete(model))
-    session.execute(
-        delete(PDFDocument).where(PDFDocument.filename.like("field_patch_constraint_%"))
-    )
+    # This module owns only its fixture documents, not every session created by
+    # earlier persistence tests. Preserve immutable audit facts through retirement.
+    from src.lib.document_cleanup import cleanup_document_curation_dependencies
+    documents = list(session.scalars(select(PDFDocument).where(
+        PDFDocument.filename.like("field_patch_constraint_%")
+    )))
+    for document in documents:
+        cleanup_document_curation_dependencies(session, document.id)
+        session.delete(document)
     session.commit()
 
 
@@ -244,7 +246,7 @@ def _envelope(*, include_second_object: bool = True, symbol: str = "ABC-1") -> D
         )
 
     return DomainEnvelope(
-        envelope_id="env-persistence-test",
+        envelope_id=TEST_ENVELOPE_ID,
         domain_pack_id="fixture.core",
         domain_pack_version="0.7.0",
         status=DomainEnvelopeStatus.EXTRACTED,
@@ -326,7 +328,7 @@ def test_migrated_constraints_accept_curator_field_patch_history_and_action_log(
     assert checkpoint.inserted_history_event_count == 4
     history_event_types = {
         row.event_type
-        for row in db_session.scalars(select(DomainEnvelopeHistory)).all()
+        for row in db_session.scalars(select(DomainEnvelopeHistory).where(DomainEnvelopeHistory.envelope_id == TEST_ENVELOPE_ID)).all()
     }
     assert HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED in history_event_types
     assert HistoryEventKind.CURATOR_FIELD_PATCH_REJECTED in history_event_types
@@ -347,7 +349,7 @@ def test_migrated_constraints_accept_curator_field_patch_history_and_action_log(
     db_session.add(action)
     db_session.commit()
 
-    persisted_action = db_session.scalars(select(CurationActionLogEntry)).one()
+    persisted_action = db_session.scalars(select(CurationActionLogEntry).where(CurationActionLogEntry.id == action.id)).one()
     assert persisted_action.action_type == CurationActionType.ENVELOPE_FIELD_PATCHED
 
 
@@ -409,7 +411,7 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     assert result.projection_count == 4
     assert result.inserted_history_event_count == 1
 
-    envelope_row = db_session.get(DomainEnvelopeModel, "env-persistence-test")
+    envelope_row = db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID)
     assert envelope_row is not None
     assert envelope_row.revision == 1
     assert envelope_row.domain_pack_key == "fixture.core"
@@ -421,14 +423,14 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
 
     object_rows = db_session.scalars(
-        select(DomainEnvelopeObject).order_by(DomainEnvelopeObject.object_id)
+        select(DomainEnvelopeObject).where(DomainEnvelopeObject.envelope_id == TEST_ENVELOPE_ID).order_by(DomainEnvelopeObject.object_id)
     ).all()
     assert [row.object_id for row in object_rows] == ["gene-1", "reference-1"]
     assert object_rows[0].validation_state == "warning"
 
     projection_keys = {
         (row.object_id, row.projection_type, row.projection_key)
-        for row in db_session.scalars(select(DomainEnvelopeProjectionIndex)).all()
+        for row in db_session.scalars(select(DomainEnvelopeProjectionIndex).where(DomainEnvelopeProjectionIndex.envelope_id == TEST_ENVELOPE_ID)).all()
     }
     assert (
         "gene-1",
@@ -452,7 +454,7 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
             ),
         )
 
-    unchanged = db_session.get(DomainEnvelopeModel, "env-persistence-test")
+    unchanged = db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID)
     assert unchanged.revision == 1
     assert unchanged.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "ABC-1"
 
@@ -469,35 +471,38 @@ def test_checkpoint_insert_update_stale_rejection_and_index_regeneration(db_sess
     assert update_result.projection_count == 3
     assert update_result.inserted_history_event_count == 1
 
-    refreshed = db_session.get(DomainEnvelopeModel, "env-persistence-test")
+    refreshed = db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID)
     assert refreshed.revision == 2
     assert refreshed.envelope_json["extracted_objects"][0]["payload"]["gene"]["symbol"] == "XYZ-2"
     assert _legacy_semantic_row_counts(db_session) == legacy_counts_before
     assert load_domain_envelope(
         db_session,
-        "env-persistence-test",
+        TEST_ENVELOPE_ID,
         revision=2,
     ).extracted_objects[0].payload["gene"]["symbol"] == "XYZ-2"
 
     assert db_session.scalar(
-        select(DomainEnvelopeObject).where(DomainEnvelopeObject.object_id == "reference-1")
+        select(DomainEnvelopeObject).where(DomainEnvelopeObject.envelope_id == TEST_ENVELOPE_ID).where(DomainEnvelopeObject.object_id == "reference-1")
     ) is None
     assert db_session.scalar(
-        select(DomainEnvelopeProjectionIndex).where(
+        select(DomainEnvelopeProjectionIndex).where(DomainEnvelopeProjectionIndex.envelope_id == TEST_ENVELOPE_ID).where(
             DomainEnvelopeProjectionIndex.object_id == "reference-1"
         )
     ) is None
 
     history_rows = db_session.scalars(
-        select(DomainEnvelopeHistory).order_by(DomainEnvelopeHistory.event_id)
+        select(DomainEnvelopeHistory).where(DomainEnvelopeHistory.envelope_id == TEST_ENVELOPE_ID).order_by(DomainEnvelopeHistory.event_id)
     ).all()
     assert [(row.event_id, row.envelope_revision) for row in history_rows] == [
         ("evt-created", 1),
         ("evt-updated", 2),
     ]
 
+    original = load_domain_envelope(db_session, TEST_ENVELOPE_ID, revision=1)
+    assert original.extracted_objects[0].payload["gene"]["symbol"] == "ABC-1"
+    assert len(original.extracted_objects) == 2
     with pytest.raises(DomainEnvelopePersistenceError):
-        load_domain_envelope(db_session, "env-persistence-test", revision=1)
+        load_domain_envelope(db_session, TEST_ENVELOPE_ID, revision=3)
 
 
 @pytest.mark.integration
@@ -514,7 +519,7 @@ def test_candidate_cannot_link_owned_envelope_to_another_session(db_session):
         status=CurationCandidateStatus.PENDING,
         order=0,
         adapter_key="fixture_adapter",
-        envelope_id="env-persistence-test",
+        envelope_id=TEST_ENVELOPE_ID,
         object_id="gene-1",
         envelope_revision=1,
         normalized_payload={},
@@ -534,7 +539,7 @@ def test_database_rejects_domain_envelope_scope_identity_changes(db_session):
         _checkpoint_request(_envelope(), expected_revision=0),
     )
     db_session.commit()
-    envelope_row = db_session.get(DomainEnvelopeModel, "env-persistence-test")
+    envelope_row = db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID)
     envelope_row.project_key = "different-project"
 
     with pytest.raises(DBAPIError, match="identity scope is immutable"):
@@ -559,175 +564,11 @@ def test_checkpoint_flushes_without_committing_caller_session(db_session, monkey
 
     assert result.revision == 1
     assert commit_calls == 0
-    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is not None
+    assert db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID) is not None
     db_session.rollback()
-    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("commit_fails", [False, True])
-def test_validation_group_worker_commits_materialized_checkpoint(db_session, monkeypatch, commit_fails):
-    """The flow validator worker must commit the transaction for the session it opens."""
-    from src.lib.flows import executor
-
-    from src.lib.curation_workspace.models import CurationExtractionResultRecord as ExtractionRow
-    from src.schemas.curation_workspace import CurationExtractionSourceKind
-    result_id = uuid4()
-    source_envelope = _envelope()
-    extraction = ExtractionRow(id=result_id, document_id=OWNER_DOCUMENT_ID,
-        agent_key="fixture-extractor", source_kind=CurationExtractionSourceKind.FLOW,
-        payload_json=source_envelope.model_dump(mode="json"), extraction_metadata={})
-    db_session.add(extraction)
-    db_session.flush()
-    write_domain_envelope_checkpoint(
-        db_session,
-        replace(_checkpoint_request(source_envelope, expected_revision=0), source_extraction_result_id=str(result_id)),
-    )
-    db_session.commit()
-
-    appended_finding = ValidationFinding(
-        severity=ValidationFindingSeverity.INFO,
-        message="Flow validator confirmed the symbol.",
-        code="fixture.flow_validator_confirmed",
-        field_ref=FieldRef(
-            object_ref=ObjectRef(object_id="gene-1"),
-            field_path="gene.symbol",
-        ),
-    )
-
-    async def _collect_materialization_inputs(**_kwargs):
-        return [], [appended_finding], []
-
-    monkeypatch.setattr(
-        executor,
-        "_persist_flow_extraction_candidates",
-        lambda **_kwargs: [SimpleNamespace(extraction_result_id=str(result_id))],
-    )
-    monkeypatch.setattr(
-        executor,
-        "ensure_domain_envelope_materialization",
-        lambda _record, *, persist: SimpleNamespace(
-            envelope_id=source_envelope.envelope_id
-        ),
-    )
-    monkeypatch.setattr(
-        executor,
-        "resolve_curation_domain_pack_by_id",
-        lambda _domain_pack_id: SimpleNamespace(),
-    )
-    monkeypatch.setattr(
-        executor.DomainPackValidationRegistry,
-        "from_domain_pack",
-        lambda _domain_pack: SimpleNamespace(),
-    )
-    monkeypatch.setattr(
-        executor,
-        "_collect_flow_validator_materialization_inputs",
-        _collect_materialization_inputs,
-    )
-
-    result = None
-    if commit_fails:
-        from sqlalchemy import event
-        worker = SessionLocal()
-        def reject_commit(session):
-            raise RuntimeError("fixture checkpoint commit rejected")
-        event.listen(worker, "before_commit", reject_commit)
-        monkeypatch.setattr(executor, "SessionLocal", lambda: worker)
-        with pytest.raises(RuntimeError, match="fixture checkpoint commit rejected"):
-            result = asyncio.run(
-                executor._execute_validation_groups_for_step(
-                    flow=executor.CurationFlow(
-                        user_id=1,
-                        name="Validation persistence test",
-                        flow_definition={"nodes": [], "edges": []},
-                    ),
-                    candidate=executor.ExtractionEnvelopeCandidate(
-                        agent_key="fixture-extractor",
-                        payload_json=source_envelope.model_dump(mode="json"),
-                    ),
-                    node_data={
-                        "validation_groups": [
-                            {
-                                "group_id": "automatic-symbol-check",
-                                "state": "automatic",
-                                "binding_id": "fixture.symbol-check",
-                            }
-                        ]
-                    },
-                    document_id=str(uuid4()),
-                    user_id="curator-1",
-                    session_id=str(uuid4()),
-                    flow_run_id="flow-run-validator",
-                    agent_context={"user_id": "curator-1"},
-                    flow_conversation_summary="Validated the extracted symbol.",
-                )
-            )
-
-    else:
-        result = asyncio.run(
-            executor._execute_validation_groups_for_step(
-                flow=executor.CurationFlow(
-                    user_id=1,
-                    name="Validation persistence test",
-                    flow_definition={"nodes": [], "edges": []},
-                ),
-                candidate=executor.ExtractionEnvelopeCandidate(
-                    agent_key="fixture-extractor",
-                    payload_json=source_envelope.model_dump(mode="json"),
-                ),
-                node_data={
-                    "validation_groups": [
-                        {
-                            "group_id": "automatic-symbol-check",
-                            "state": "automatic",
-                            "binding_id": "fixture.symbol-check",
-                        }
-                    ]
-                },
-                document_id=str(uuid4()),
-                user_id="curator-1",
-                session_id=str(uuid4()),
-                flow_run_id="flow-run-validator",
-                agent_context={"user_id": "curator-1"},
-                flow_conversation_summary="Validated the extracted symbol.",
-            )
-        )
-
-        assert result["validation_group_results"]["materialized_envelope_revision"] == 2
-    fresh_session = SessionLocal()
-    try:
-        persisted = fresh_session.get(DomainEnvelopeModel, source_envelope.envelope_id)
-        assert persisted is not None
-        saved_source = fresh_session.get(ExtractionRow, result_id)
-        if commit_fails:
-            assert persisted.revision == 1
-            assert saved_source.extraction_metadata == {}
-            assert saved_source.payload_json == source_envelope.model_dump(mode="json")
-            return
-        assert persisted.revision == 2
-        assert saved_source.extraction_metadata["inspection_checkpoint"] == {
-            "envelope_id": source_envelope.envelope_id, "revision": 2,
-        }
-        assert saved_source.payload_json == source_envelope.model_dump(mode="json")
-        from src.lib.openai_agents.result_inspection_views import validation_view, InspectionViewUnavailable
-        record = {"extraction_result_id": str(result_id), "document_id": str(OWNER_DOCUMENT_ID),
-                  "metadata": saved_source.extraction_metadata, "payload_json": saved_source.payload_json}
-        view = validation_view(record, revision=2, user_id="test_pdf_owner_domain_envelope")
-        assert result is not None
-        assert view["payload_json"] == result["validated_candidate"].payload_json
-        with pytest.raises(InspectionViewUnavailable):
-            validation_view(record, revision=2, user_id="another-user")
-        assert {
-            finding["code"] for finding in persisted.envelope_json["validation_findings"]
-        } == {
-            "fixture.symbol_case",
-            "fixture.flow_validator_confirmed",
-        }
-    finally:
-        fresh_session.close()
-        db_session.execute(delete(ExtractionRow).where(ExtractionRow.id == result_id))
-        db_session.commit()
+    assert db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID) is None
+    with pytest.raises(DomainEnvelopePersistenceError):
+        load_domain_envelope(db_session, TEST_ENVELOPE_ID, revision=1)
 
 
 @pytest.mark.integration
@@ -764,7 +605,7 @@ def test_projection_uniqueness_rolls_back_checkpoint(db_session):
         )
 
     db_session.rollback()
-    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+    assert db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID) is None
 
 
 @pytest.mark.integration
@@ -796,7 +637,7 @@ def test_malformed_projection_metadata_rolls_back_checkpoint(db_session):
         )
 
     db_session.rollback()
-    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+    assert db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID) is None
 
 
 @pytest.mark.integration
@@ -834,7 +675,7 @@ def test_projection_entries_require_projection_json(db_session):
         )
 
     db_session.rollback()
-    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+    assert db_session.get(DomainEnvelopeModel, TEST_ENVELOPE_ID) is None
 
 
 def test_missing_stable_object_id_fails_loudly():

@@ -64,8 +64,6 @@ def build_compact_validator_runtime(requests, *, result_schema, profile_request_
         contracts.append(contract)
     runtime = CompactValidatorRuntime(contracts, capture_lookup)
     runtime.lookup_tool_names = LOOKUP_TOOLS
-    if standalone and isinstance(evidence, list):
-        runtime.standalone_evidence_records = evidence
     if result_schema.__name__ == "RGDGOEvidencePolicyValidationResult":
         import sys
         policy = sys.modules[result_schema.__module__].EVIDENCE_POLICY

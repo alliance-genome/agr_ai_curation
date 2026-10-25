@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from tests.validation_history_unit_support import isolated_validation_history as isolated_validation_history
+import pytest
+
+
 from pathlib import Path
 
 from src.lib.domain_packs.not_validatable import (
@@ -25,6 +29,10 @@ from src.schemas.domain_pack_metadata import (
     DomainPackMetadata,
     DomainPackObjectDefinition,
 )
+
+
+pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
 
 
 def _pack() -> LoadedDomainPack:
