@@ -838,6 +838,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     client: TestClient,
     test_db,
     monkeypatch,
+    request,
     tmp_path: Path,
 ):
     from src.lib.context import set_current_trace_id
@@ -888,6 +889,22 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     )
 
     document_id = uuid4()
+    envelope_id = "sample-export-" + uuid4().hex
+
+    def cleanup_review_projection():
+        from src.lib.curation_workspace.models import (
+            DomainEnvelopeModel, DomainEnvelopeHistory, DomainEnvelopeObject,
+            DomainEnvelopeProjectionIndex, DomainValidationFinding,
+        )
+        # Delete only this fixture's live projection before shared PDF cleanup.
+        # Immutable validation facts and checkpoints remain in the disposable DB.
+        test_db.rollback()
+        for model in (DomainValidationFinding, DomainEnvelopeProjectionIndex,
+                      DomainEnvelopeObject, DomainEnvelopeHistory, DomainEnvelopeModel):
+            test_db.query(model).filter_by(envelope_id=envelope_id).delete(synchronize_session=False)
+        test_db.commit()
+
+    request.addfinalizer(cleanup_review_projection)
     owner = User(
         auth_sub="test_valid_user_00u1abc2def4",
         is_active=True,
@@ -938,7 +955,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
         from tests.integration.persistence.test_chat_review_adapter import entries_for
 
         scope = store.HistoryScope(owner.auth_sub, str(document_id), execute_payload["session_id"])
-        payload["envelope_id"] = "sample-export-" + uuid4().hex
+        payload["envelope_id"] = envelope_id
         obj = payload["extracted_objects"][0]
         payload["metadata"] = {"evidence_records": obj.pop("evidence_records")}
         obj["status"] = "pending"
