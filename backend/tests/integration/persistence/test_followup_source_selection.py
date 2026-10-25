@@ -301,3 +301,55 @@ async def test_split_reparents_retained_and_revised_children_with_attempt_histor
         ep, _ = admission.lock_episode(db, item.scope, item.ep)
         assert set(counts(db, ep, targets).values()) == {2}
     assert store.read_baseline(item.scope, item.aid) == baseline
+
+
+@pytest.mark.parametrize("planned", ["absent"], indirect=True)
+@pytest.mark.asyncio
+async def test_source_publication_retires_absence_coverage_and_rejects_late_answer(planned):
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    from src.lib.validation_history.projection import read_published_projection
+
+    item = planned
+    original = store.read_baseline(item.scope, item.aid)
+    frozen = item.adapter.plan["initial_requests"]
+    assert len(frozen) == 1
+    old_target = frozen[0]["target_id"]
+    execution = store.begin_execution(item.scope, item.aid, operation_id=uuid4().hex,
+                                     receipt={"fixture": True}, requests=frozen)
+    args = request_args(item)
+    root = args["entry_ids"][0]
+    context = ReviewContext(item.scope, item.ep, "supervisor")
+    wid = extraction_scheduling.request(context, **args)
+    claim = work.claim(item.scope, wid)
+    work.mark_submitted(item.scope, wid, claim["lease_token"])
+    proposal = {"entries": [{"entry_id": root, "outcome": "proposed_correction",
+        "assessment": "The Methods clarify the omitted value", "remaining_uncertainty": "",
+        "evidence_record_ids": [], "proposed_values": [{"field_path": "optional",
+            "value": {"term": "new extracted wording"}, "evidence_record_ids": [],
+            "collection_mappings": []}]}]}
+    retained = extraction_results.retain(item.scope, wid, claim["lease_token"], proposal, evidence_records=[])
+    work.finish(item.scope, wid, claim["lease_token"], outcome=retained)
+    checkpoint = checkpoint_provider(item)
+    with store.SessionLocal() as db:
+        digest = selections.source_state_digest(db, item.aid)
+    result = await item.adapter.select_source(context, checkpoint,
+        operation_id="populate-absent-source", contribution_ref=retained["contributions"][0],
+        field_paths=["optional"], evidence_ids=[], expected_source_sha=digest,
+        reason="Explicitly use the extractor clarification")
+    assert not result["publication"]["ready"]
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert len(manifest["units"]) == 1
+    assert manifest["units"][0]["target_id"] != old_target
+    current = checkpoint().envelope
+    projection, pending = read_published_projection(item.scope, current.metadata["selected_projection"])
+    assert projection.extracted_objects[0].payload == {"optional": {"term": "new extracted wording"}}
+    assert not pending["ready"]
+    late = store.complete_attempt(item.scope, item.aid, execution["attempt_ids"][0],
+        state="completed", result={"status": "resolved", "resolved_values": {"curie": "obsolete answer"}},
+        diagnostics={})
+    assert late is not None  # Retain the late answer as history, never as current.
+    with store.SessionLocal() as db:
+        assert not store._current(db, item.aid, old_target)["active"]
+        attempt = store._content(db, store._fact(db, item.aid, execution["attempt_ids"][0]))
+        assert not store._attempt_is_current(db, item.scope, item.aid, attempt)
+    assert store.read_baseline(item.scope, item.aid) == original

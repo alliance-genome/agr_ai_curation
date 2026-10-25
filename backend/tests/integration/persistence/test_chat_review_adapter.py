@@ -63,6 +63,18 @@ def planned(scope, tmp_path, monkeypatch, request):
         text = text.replace("    fields:\n", "    fields:\n      - field_path: genes\n        field_type: string\n        metadata:\n          multivalued: true\n")
         pack.metadata_path.write_text(text)
         pack = replace(pack, metadata=load_domain_pack_metadata(pack.metadata_path))
+    if getattr(request, "param", None) == "absent":
+        from copy import deepcopy
+        raw = deepcopy(pack.metadata.metadata)
+        binding = raw["validator_bindings"]["active"][0]
+        binding["applies_to"]["field_paths"] = ["optional.term"]
+        binding["input_fields"] = {"query": {"source": "literal", "value": "fixture lookup"}}
+        binding["expected_result_fields"] = {"curie": "optional.term"}
+        field = pack.metadata.object_definitions[0].fields[0].model_copy(
+            update={"field_path": "optional.term", "metadata": {}})
+        definition = pack.metadata.object_definitions[0].model_copy(update={"fields": [field]})
+        pack = replace(pack, metadata=pack.metadata.model_copy(update={
+            "metadata": raw, "object_definitions": [definition]}))
     groups = ()
     if getattr(request, "param", None) == "authorized":
         from copy import deepcopy
@@ -90,6 +102,8 @@ def planned(scope, tmp_path, monkeypatch, request):
             )
         ],
     )
+    if getattr(request, "param", None) == "absent":
+        env.extracted_objects[0].payload = {"optional": {}}
     if getattr(request, "param", None) == "three":
         env.extracted_objects = [CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=name,
             payload={"evidence_code_curies": ["eco:" + name]}) for name in "ABC"]

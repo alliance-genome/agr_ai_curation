@@ -2731,6 +2731,10 @@ metadata:
             - single_reference.curie
             - single_reference.title
         input_fields:
+          reference_mention:
+            source: payload
+            path: single_reference.mention
+            required: false
           reference_id:
             source: payload
             path: single_reference.reference_id

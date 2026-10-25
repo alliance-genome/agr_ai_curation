@@ -128,7 +128,7 @@ def test_reference_validation_bindings_select_optional_lookup_context():
             for item in registry.bindings
         }[expected["binding_id"]]
 
-        assert set(binding.input_fields) == {
+        expected_inputs = {
             "reference_id",
             "curie",
             "pmid",
@@ -136,6 +136,11 @@ def test_reference_validation_bindings_select_optional_lookup_context():
             "title",
             "source_document_id",
         }
+        if pack_id == "agr.alliance.gene_expression":
+            expected_inputs.add("reference_mention")
+            assert binding.input_fields["reference_mention"].path == "single_reference.mention"
+            assert binding.input_fields["reference_mention"].context_only is False
+        assert set(binding.input_fields) == expected_inputs
         assert all(not selector.required for selector in binding.input_fields.values())
         assert binding.input_fields["source_document_id"].source == "envelope_metadata"
         assert binding.input_fields["source_document_id"].path == "document_id"

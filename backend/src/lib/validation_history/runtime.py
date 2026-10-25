@@ -172,10 +172,107 @@ def request_target(binding: CapturedArtifact, job) -> str:
     return binding_target(binding, job.match)
 
 
-def binding_target(binding: CapturedArtifact, match, *, db=None) -> str:
-    """Binding target identity pins stable element, never a mutable array position."""
+def binding_location(obj, field):
+    """Resolve exact source ancestry plus an optional absent string-key suffix.
+
+    Used by dispatch and selected-recipe replay. Missing list elements and
+    present values without captured identities remain structural conflicts.
+    """
     from src.schemas.domain_envelope import parse_field_path
 
+    refs = obj.metadata["validation_history"]
+    parts = parse_field_path(field) if field else ()
+    stable = []
+    prefix = ""
+    current = obj.payload
+    parent_target = refs["target_id"]
+    for position, part in enumerate(parts):
+        if isinstance(part, int):
+            if not isinstance(current, list) or len(current) != len(
+                refs["elements"].get(prefix, [])
+            ):
+                raise store.HistoryConflict(
+                    "Collection mutation requires an explicit stable-identity update"
+                )
+            if part >= len(current) or part < 0:
+                raise store.HistoryConflict("Collection target is no longer present")
+            parent_target = refs["elements"][prefix][part]
+            stable.append(parent_target)
+            prefix += f"[{part}]"
+        else:
+            prefix = f"{prefix}.{part}" if prefix else part
+            if prefix not in refs["fields"]:
+                suffix = list(parts[position:])
+                if ((current is None or isinstance(current, dict) and part not in current)
+                        and all(isinstance(key, str) for key in suffix)):
+                    # A configured scalar location can be absent in the source.
+                    # It is a binding location, never a fabricated source value.
+                    return stable, parent_target, {
+                        "target_id": parent_target, "suffix": suffix,
+                    }
+                raise store.HistoryConflict(
+                    "Field requires an explicit stable-identity update"
+                )
+            parent_target = refs["fields"][prefix]
+            stable.append(parent_target)
+        current = (
+            current.get(part)
+            if isinstance(current, dict)
+            else current[part]
+            if isinstance(current, list) and isinstance(part, int)
+            else None
+        )
+    if isinstance(current, list) and len(current) != len(
+        refs["elements"].get(prefix, [])
+    ):
+        raise store.HistoryConflict(
+            "Collection mutation requires an explicit stable-identity update"
+        )
+    return stable, parent_target, None
+
+
+def reconcile_absent_binding_targets(db, scope, artifact_id, objects, *, operation_id, actor, reason):
+    """Retire obsolete absence locations inside an authorized source mutation.
+
+    This changes structural coverage only: it never approves a missing value or
+    changes the immutable extraction. Unrelated edits retain the same location.
+    """
+    from sqlalchemy import select
+    from src.models.sql.validation_history import ValidationFact
+    from .curator_authority import anchored_path
+
+    store._artifact(db, artifact_id, scope)
+    by_root = {obj.metadata["validation_history"]["target_id"]: obj for obj in objects}
+    entries = []
+    for fact in db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target",
+            ValidationFact.operation_id.startswith("target:binding:"))
+            .order_by(ValidationFact.sequence)):
+        body = store._content(db, fact)
+        anchor = body.get("absent_anchor")
+        obj = by_root.get(body.get("object_target"))
+        if anchor is None or obj is None:
+            continue
+        state = store._current(db, artifact_id, fact.id)
+        if not state["active"]:
+            continue
+        refs = obj.metadata["validation_history"]
+        current_ids = {refs["target_id"], *refs["fields"].values(),
+                       *(tid for ids in refs["elements"].values() for tid in ids)}
+        same = False
+        if anchor["target_id"] in current_ids:
+            stable, _, current_anchor = binding_location(obj, anchored_path(refs, anchor))
+            same = stable == body["stable_path"] and current_anchor == anchor
+        if not same:
+            entries.append({"target_id": fact.id, "expected_version": state["version"],
+                            "action": "retire", "reason": reason})
+    if entries:
+        store.apply_decisions_in_transaction(db, scope, artifact_id,
+            operation_id="absence-reconciliation:" + operation_id, actor=actor, entries=entries)
+
+
+def binding_target(binding: CapturedArtifact, match, *, db=None) -> str:
+    """Binding target identity pins stable element, never a mutable array position."""
     if db is None:
         with store.SessionLocal.begin() as session:
             return binding_target(binding, match, db=session)
@@ -198,53 +295,38 @@ def binding_target(binding: CapturedArtifact, match, *, db=None) -> str:
         obj.pending_ref_id,
     }:
         raise store.HistoryConflict("Object identity does not match its history target")
-    field = match.field_path
-    parts = parse_field_path(field) if field else ()
-    stable = []
-    prefix = ""
-    current = obj.payload
-    parent_target = refs["target_id"]
-    for part in parts:
-        if isinstance(part, int):
-            if not isinstance(current, list) or len(current) != len(
-                refs["elements"].get(prefix, [])
-            ):
-                raise store.HistoryConflict(
-                    "Collection mutation requires an explicit stable-identity update"
-                )
-            if part >= len(current) or part < 0:
-                raise store.HistoryConflict("Collection target is no longer present")
-            parent_target = refs["elements"][prefix][part]
-            stable.append(parent_target)
-            prefix += f"[{part}]"
-        else:
-            prefix = f"{prefix}.{part}" if prefix else part
-            if prefix not in refs["fields"]:
-                raise store.HistoryConflict(
-                    "Field requires an explicit stable-identity update"
-                )
-            parent_target = refs["fields"][prefix]
-            stable.append(parent_target)
-        current = (
-            current.get(part)
-            if isinstance(current, dict)
-            else current[part]
-            if isinstance(current, list)
-            else None
-        )
-    if isinstance(current, list) and len(current) != len(
-        refs["elements"].get(prefix, [])
-    ):
-        raise store.HistoryConflict(
-            "Collection mutation requires an explicit stable-identity update"
-        )
+    stable, parent_target, absent_anchor = binding_location(obj, match.field_path)
+    previous = refs["target_id"]
+    store._require_active_target(db, binding.artifact_id, previous)
+    for target_id in stable:
+        target = store._fact(db, binding.artifact_id, target_id, kind="target")
+        if target.parent_id != previous:
+            raise store.HistoryConflict("Binding source belongs to another parent")
+        store._require_active_target(db, binding.artifact_id, target_id)
+        previous = target_id
+    location = {"absent_anchor": absent_anchor} if absent_anchor is not None else {}
     identity = store.canonical(
         {
             "object": refs["target_id"],
             "binding": match.binding.binding_id,
             "path": stable,
+            **location,
         }
     )[0]
+    predecessor = {}
+    if absent_anchor is not None:
+        # A location can disappear and recur. A retired incarnation must never
+        # regain an earlier decision simply because the same suffix reappears.
+        from sqlalchemy import select
+        from src.models.sql.validation_history import ValidationFact
+        while True:
+            existing = db.scalar(select(ValidationFact).where(
+                ValidationFact.artifact_id == binding.artifact_id,
+                ValidationFact.operation_id == "target:binding:" + identity))
+            if existing is None or store._current(db, binding.artifact_id, existing.id)["active"]:
+                break
+            predecessor = {"retired_predecessor": existing.id}
+            identity = store.canonical({"location": identity, **predecessor})[0]
     return store.register_target_in_transaction(
         db,
         binding.artifact_id,
@@ -253,6 +335,8 @@ def binding_target(binding: CapturedArtifact, match, *, db=None) -> str:
             "object_target": refs["target_id"],
             "binding_id": match.binding.binding_id,
             "stable_path": stable,
+            **location,
+            **predecessor,
         },
         parent_target_id=parent_target,
     )

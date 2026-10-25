@@ -277,16 +277,9 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
             refs = obj.metadata["validation_history"]
             if refs["target_id"] != target.get("object_target"):
                 continue
-            expected_path_target = target.get("stable_path", [])
-            if expected_path_target:
-                current_path_target = refs["fields"].get(match.field_path)
-                for list_path, element_ids in refs["elements"].items():
-                    for index, element_id in enumerate(element_ids):
-                        if match.field_path == f"{list_path}[{index}]":
-                            current_path_target = element_id
-                if current_path_target != expected_path_target[-1]:
-                    continue
-            elif match.field_path:
+            from .runtime import binding_location
+            stable, _, absent = binding_location(obj, match.field_path)
+            if stable != target["stable_path"] or absent != target.get("absent_anchor"):
                 continue
             found.append(match)
         if len(found) != 1:
