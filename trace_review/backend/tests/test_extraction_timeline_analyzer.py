@@ -630,10 +630,10 @@ def test_chat_review_plan_coverage_and_phase_are_visible(tmp_path, monkeypatch):
 
 def test_workspace_curator_rounds_are_visible_with_exact_request_history(tmp_path, monkeypatch):
     monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
-    for sequence, kind in enumerate(['workspace_operation', 'workspace_revalidation_request'], 1):
+    for sequence, kind in enumerate(['workspace_operation', 'workspace_revalidation_request', 'review_episode_abandoned'], 1):
         _write_event(tmp_path, 'workspace-round', _event('workspace-round', sequence, 'validation_review.' + kind,
             output_summary={'preview': {'operation_id': 'round', 'fact_id': 'request', 'sha256': 'exact-request'}}))
     result = ExtractionTimelineAnalyzer.analyze(trace_id='workspace-round', raw_trace={}, observations=[], include_raw_outputs=True)
-    assert result['validation_review']['event_count'] == 2
-    assert len(result['workspace_validation_review']['events']) == 2
+    assert result['validation_review']['event_count'] == 3
+    assert len(result['workspace_validation_review']['events']) == 3
     assert result['workspace_validation_review']['events'][1]['output']['preview']['sha256'] == 'exact-request'

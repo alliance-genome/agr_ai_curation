@@ -16,17 +16,15 @@ from src.lib.agent_studio.execution_revision_service import append_execution_rev
 from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
 from src.lib.curation_workspace import session_validation_service as validation
 from src.lib.curation_workspace.models import (
-    CurationCandidate, CurationDraft, CurationSessionAgentRevision, DomainEnvelopeModel,
+    CurationCandidate, CurationDraft, DomainEnvelopeModel,
 )
-from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings, ValidatorRuntimeContext
+from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
 from src.models.sql.agent import Agent
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.agent_execution_revision import AgentOutputContract
 from src.schemas.curation_workspace import CurationCandidateSource, CurationDraftField
-from src.schemas.domain_envelope import DomainEnvelope
 from tests.unit.lib.domain_packs.test_profile_validation import example as example
-from tests.unit.lib.domain_packs.test_profile_materialization import results
 from .test_domain_envelope_persistence import (
     migrated_database as migrated_database, _create_review_session_for_action_log,
 )
@@ -41,7 +39,10 @@ def manual_profile_record(migrated_database, example, monkeypatch, request):
     monkeypatch.setattr("src.lib.agent_studio.profile_mapping_service.capability_catalog", lambda **kw: [capability])
     monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog", lambda **kw: [capability])
     monkeypatch.setattr(validation, "resolve_curation_domain_pack_by_id", lambda key: pack)
-    monkeypatch.setattr(validation, "resolve_curation_domain_envelope_validator_by_id", lambda key: None)
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda key: pack)
+    from auth_runtime.base import AuthPrincipal
+    monkeypatch.setattr("src.lib.curation_workspace.review_authorization.get_current_subject_resolver",
+        lambda: lambda subject: AuthPrincipal(subject=subject, provider="fixture", groups=[]))
     # Independent history/preparation transactions need committed profile/session
     # fixtures, just as the real API receives. Bound lock waits expose self-blocks.
     engine = SessionLocal.kw["bind"]
@@ -100,105 +101,47 @@ def manual_profile_record(migrated_database, example, monkeypatch, request):
 
 
 @pytest.mark.parametrize("available", [True, False])
-def test_manual_profile_validation_persists_receipt_findings_and_current_draft(manual_profile_record, monkeypatch, available):
+def test_explicit_manual_review_persists_receipt_and_plan_without_paid_calls(manual_profile_record, monkeypatch, available):
+    from src.lib.curation_workspace import review_operations as operations
+    from src.lib.validation_review import validator_adapter
+    from src.models.sql.validation_review import WorkspaceReviewOperation
+    from src.models.sql.validation_history import ValidationFact
     db, candidate, receipt = manual_profile_record
     if not available:
         monkeypatch.setattr("src.lib.domain_packs.profile_validation.capability_catalog", lambda **kw: [])
-
-    def dispatch(envelope, pack, **kwargs):
-        context = kwargs["profile_context"]
-        fixtures = results(envelope, context, [{"identifier": "EX:1"}]) if available else []
-        return dispatch_active_validator_bindings(envelope, pack, **kwargs,
-            runner=lambda *args, **kw: fixtures[0].result.model_dump(mode="json"))
-
-    monkeypatch.setattr(validation, "dispatch_active_validator_bindings", dispatch)
-    snapshot, changed = validation._apply_candidate_validation(
-        db, candidate, force=True, validated_at=datetime.now(timezone.utc), runtime_context=_history_context(candidate))
-    assert changed
-    candidate_id = candidate.id
-    db.flush()
-    db.expire_all()
-    candidate = db.get(CurationCandidate, candidate_id)
+    monkeypatch.setattr(validator_adapter, "binding_contract", lambda match: {"binding_id": match.binding.binding_id})
+    monkeypatch.setattr(validator_adapter, "_default_package_scoped_validator_runner", lambda: pytest.fail("Preparation must not call a model"))
+    # Structural refresh never creates a source or queues a review by itself.
+    validation._apply_candidate_validation(db, candidate, force=True,
+        validated_at=datetime.now(timezone.utc), runtime_context=_history_context(candidate))
+    assert candidate.envelope_id is None
+    db.commit()
+    saved = _submit(db, candidate)
     row = db.get(DomainEnvelopeModel, candidate.envelope_id)
-    envelope = DomainEnvelope.model_validate(row.envelope_json)
     assert row.execution_receipt == candidate.execution_receipt == receipt.model_dump(mode="json")
-    assert row.agent_revision_id == candidate.agent_revision_id == receipt.agent_revision_id
-    membership = db.scalar(select(CurationSessionAgentRevision).where(
-        CurationSessionAgentRevision.session_id == candidate.session_id,
-        CurationSessionAgentRevision.agent_revision_id == receipt.agent_revision_id))
-    assert membership.execution_receipt == row.execution_receipt
-    assert row.source_extraction_result_id is None and envelope.metadata["source"] == "manual"
-    assert snapshot.envelope_revision == candidate.envelope_revision == row.revision == 2
-    assert candidate.normalized_payload == {}
-    attributes = envelope.extracted_objects[0].payload["attributes"]
-    assert candidate.draft.fields[0]["value"] == attributes
-    if available:
-        assert attributes == {"paper_name": "A"}
-        assert envelope.validator_results
-        assert envelope.validation_findings[0].details["machine_review"] == "pending"
-    else:
-        assert attributes == {"paper_name": "A"}
-        finding, = envelope.validation_findings
-        assert finding.code == "generic_profile.validator_unavailable"
-        assert finding.severity.value == "blocker"
-    assert candidate.validation_snapshots[-1].envelope_revision == row.revision
-    from src.lib.curation_workspace import session_submission_service as submission
-    ready_context = submission._build_domain_envelope_object_context(
-        db=db, candidate=candidate, envelope_row=row, envelope=envelope,
-        expected_revision=row.revision, projection_refs=())
-    assert not any(blocker.field_path == "label" for blocker in ready_context.blockers)
-    readiness = submission._build_domain_envelope_submission_context(
-        db=db, candidates={str(candidate.id): candidate},
-        target_candidate_ids=[str(candidate.id)],
-        user_id=_history_context(candidate).user_id,
-    )
-    assert readiness.object_contexts[str(candidate.id)].blockers
-
-
-def test_profile_validation_refreshes_sibling_drafts_in_same_envelope(manual_profile_record, monkeypatch):
-    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint
-    db, candidate, receipt = manual_profile_record
-    validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
-    row = db.get(DomainEnvelopeModel, candidate.envelope_id)
-    envelope = DomainEnvelope.model_validate(row.envelope_json)
-    second = envelope.extracted_objects[0].model_copy(deep=True)
-    second.object_id = "second"
-    second.metadata.pop("validation_history")
-    second.payload["attributes"] = {"paper_name": "B"}
-    envelope.extracted_objects.append(second)
-    from src.lib.validation_history.runtime import bind_artifact, capture_curator_objects
-    envelope = capture_curator_objects(bind_artifact(envelope, _history_context(candidate)), envelope,
-                                      actor_id="test_pdf_owner_domain_envelope")
-    checkpoint = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
-        project_key=row.project_key, envelope=envelope, expected_revision=row.revision,
-        document_id=row.document_id, session_id=row.session_id, flow_run_id=row.flow_run_id))
-    candidate.envelope_revision = checkpoint.revision
-    sibling = CurationCandidate(session=candidate.session, source=CurationCandidateSource.MANUAL,
-        order=1, adapter_key=candidate.adapter_key, agent_revision_id=receipt.agent_revision_id,
-        execution_receipt=receipt.model_dump(mode="json"), envelope_id=row.envelope_id,
-        envelope_revision=checkpoint.revision, object_id=second.object_id, normalized_payload={})
-    sibling.draft = CurationDraft(adapter_key=candidate.adapter_key, version=1, fields=[
-        CurationDraftField(field_key="attributes", label="Record", field_type="object",
-            value={"paper_name": "B"}, seed_value={"paper_name": "B"}).model_dump(mode="json")])
-    db.add(sibling)
-    db.commit()  # Source preparation ends before independent validator execution.
-
-    def dispatch(source, pack, **kwargs):
-        fixtures = results(source, kwargs["profile_context"], [{"identifier": "EX:1"}, {"identifier": "EX:2"}])
-        by_request = {item.request.request_id: item.result for item in fixtures}
-        return dispatch_active_validator_bindings(source, pack, **kwargs,
-            runner=lambda request, **kw: by_request[request.request_id].model_dump(mode="json"))
-
-    monkeypatch.setattr(validation, "dispatch_active_validator_bindings", dispatch)
-    validation._apply_candidate_validation(db, candidate, force=True, validated_at=datetime.now(timezone.utc), runtime_context=_history_context(candidate))
-    candidate_id, sibling_id = candidate.id, sibling.id
-    db.flush()
+    assert row.agent_revision_id == receipt.agent_revision_id
+    assert row.envelope_json["metadata"]["source"] == "manual"
+    assert row.envelope_json["extracted_objects"][0]["payload"]["attributes"] == {"paper_name": "A"}
+    operation = db.get(WorkspaceReviewOperation, saved["operation_id"])
+    operation.state, operation.lease_token = "preparing", "manual-test"
+    db.commit()
+    operations.prepare(saved["operation_id"], "manual-test")
     db.expire_all()
-    candidate, sibling = db.get(CurationCandidate, candidate_id), db.get(CurationCandidate, sibling_id)
-    assert candidate.envelope_revision == sibling.envelope_revision == 3
+    operation = db.get(WorkspaceReviewOperation, saved["operation_id"])
+    assert operation.state == "running"
+    artifact_id = operation.artifacts[0]["artifact_id"]
+    facts = list(db.scalars(select(ValidationFact).where(ValidationFact.artifact_id == artifact_id)))
+    assert any(f.kind == "review_chat_plan" for f in facts)
+    assert not any(f.kind == "attempt" for f in facts)
     assert candidate.draft.fields[0]["value"] == {"paper_name": "A"}
-    assert sibling.draft.fields[0]["value"] == {"paper_name": "B"}
-    assert sibling.validation_snapshots == []
+    operations.cancel(saved["operation_id"], owner_id=_history_context(candidate).user_id)
+
+
+def _submit(db, candidate, *, request_id=None):
+    from src.lib.curation_workspace import review_operations as operations
+    return operations.submit(db, owner_id=_history_context(candidate).user_id,
+        session_id=str(candidate.session_id), request_id=request_id or str(uuid4()),
+        candidate_ids=[str(candidate.id)], guidance="Recheck the supplied mention", groups=[])
 
 
 def _history_context(candidate):
@@ -219,6 +162,7 @@ def test_manual_capture_retry_after_checkpoint_rollback_and_draft_edit(manual_pr
     fields = deepcopy(candidate.draft.fields)
     fields[0]["value"]["paper_name"] = "Edited after rollback"
     candidate.draft.fields = fields
+    db.commit()  # Autosave completes before an explicit revalidation request.
     validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
     row = db.get(DomainEnvelopeModel, candidate.envelope_id)
     second = row.envelope_json["metadata"]["validation_history"]
@@ -228,118 +172,37 @@ def test_manual_capture_retry_after_checkpoint_rollback_and_draft_edit(manual_pr
     assert store.read_baseline(scope, second["artifact_id"])["typed"]["extracted_objects"][0]["payload"]["attributes"]["paper_name"] == "Edited after rollback"
 
 
-@pytest.mark.parametrize("failure_phase", ["dispatch", "checkpoint"])
-def test_failed_manual_validation_keeps_hidden_source_and_exact_retry_adopts_it(
-    manual_profile_record, monkeypatch, failure_phase,
-):
-    from asyncio import CancelledError
-    from src.lib.agent_studio.domain_envelope_tools import (
-        get_domain_envelope_state, list_domain_envelopes,
-    )
-    from src.lib.curation_workspace.benchmark_snapshots import (
-        CurationBenchmarkSnapshotError, create_benchmark_snapshot,
-    )
+def test_failed_manual_submit_keeps_hidden_source_and_exact_retry_adopts_it(manual_profile_record, monkeypatch):
+    from src.lib.agent_studio.domain_envelope_tools import get_domain_envelope_state, list_domain_envelopes
+    from src.lib.curation_workspace.benchmark_snapshots import CurationBenchmarkSnapshotError, create_benchmark_snapshot
     db, candidate, _ = manual_profile_record
     candidate_id, session_id = candidate.id, candidate.session_id
     prepared = []
-
-    def fail(envelope, pack, **kwargs):
-        prepared.append(envelope.envelope_id)
-        fixtures = results(envelope, kwargs["profile_context"], [{"identifier": "EX:1"}])
-        def runner(*args, **kw):
-            if failure_phase == "dispatch":
-                raise CancelledError("synthetic cancellation")
-            return fixtures[0].result.model_dump(mode="json")
-        return dispatch_active_validator_bindings(envelope, pack, **kwargs, runner=runner)
-
-    monkeypatch.setattr(validation, "dispatch_active_validator_bindings", fail)
-    if failure_phase == "checkpoint":
-        def fail_checkpoint(*args, **kwargs):
-            raise RuntimeError("synthetic checkpoint failure")
-        monkeypatch.setattr(validation, "write_domain_envelope_checkpoint", fail_checkpoint)
-    error = CancelledError if failure_phase == "dispatch" else RuntimeError
-    with pytest.raises(error, match="synthetic"):
-        validation._apply_candidate_validation(
-            db, candidate, force=True, validated_at=datetime.now(timezone.utc),
-            runtime_context=_history_context(candidate),
-        )
+    original_lock = validation._lock_unlinked_manual_candidate
+    def fail(db, candidate_id):
+        prepared.extend(db.scalars(select(DomainEnvelopeModel.envelope_id).where(DomainEnvelopeModel.session_id == session_id)))
+        raise RuntimeError("synthetic linkage failure")
+    monkeypatch.setattr(validation, "_lock_unlinked_manual_candidate", fail)
+    with pytest.raises(RuntimeError, match="synthetic"):
+        _submit(db, candidate)
     db.rollback()
     candidate = db.get(CurationCandidate, candidate_id)
     assert candidate.envelope_id is None
-    assert candidate.draft.fields[0]["value"] == {"paper_name": "A"}
     source = db.get(DomainEnvelopeModel, prepared[0])
     assert source.revision == 1
     assert source.envelope_json["extracted_objects"][0]["payload"]["attributes"] == {"paper_name": "A"}
-
-    from src.lib.validation_history import store
-    from src.models.sql.validation_history import ValidationFact
-    history = source.envelope_json["metadata"]["validation_history"]
-    completion = db.scalar(select(ValidationFact).where(
-        ValidationFact.artifact_id == history["artifact_id"], ValidationFact.kind == "completion"))
-    assert completion is not None  # Attempt outcome survives the outer rollback.
-    scope = store.HistoryScope(_history_context(candidate).user_id,
-        str(candidate.session.document_id), str(candidate.session_id))
-    outcome = store.read_fact(scope, history["artifact_id"], completion.id)["content"]
-    assert outcome["state"] == ("interrupted" if failure_phase == "dispatch" else "completed")
     owner = _history_context(candidate).user_id
-    listing = list_domain_envelopes(
-        session_factory=SessionLocal, user_auth_sub=owner, session_id=str(session_id),
-    )
-    assert prepared[0] not in str(listing)
-    inspected = get_domain_envelope_state(
-        session_factory=SessionLocal, user_auth_sub=owner, envelope_id=prepared[0],
-    )
-    assert "was not found" in str(inspected)
+    assert prepared[0] not in str(list_domain_envelopes(session_factory=SessionLocal, user_auth_sub=owner, session_id=str(session_id)))
+    assert "was not found" in str(get_domain_envelope_state(session_factory=SessionLocal, user_auth_sub=owner, envelope_id=prepared[0]))
     with pytest.raises(CurationBenchmarkSnapshotError, match="Envelope was not found"):
-        create_benchmark_snapshot(db, session_id=session_id, envelope_id=prepared[0],
-                                  expected_revision=1, current_user_id=owner)
-    validation._ensure_manual_profile_envelope(db, candidate, runtime_context=_history_context(candidate))
+        create_benchmark_snapshot(db, session_id=session_id, envelope_id=prepared[0], expected_revision=1, current_user_id=owner)
+    monkeypatch.setattr(validation, "_lock_unlinked_manual_candidate", original_lock)
+    saved = _submit(db, candidate)
     assert candidate.envelope_id == prepared[0]
     assert candidate.envelope_revision == 1
     db.commit()
-    listing = list_domain_envelopes(
-        session_factory=SessionLocal, user_auth_sub=owner, session_id=str(session_id),
-    )
-    assert prepared[0] in str(listing)
-
-
-def test_manual_validation_rejects_concurrently_advanced_source(manual_profile_record, monkeypatch):
-    from fastapi import HTTPException
-    from src.lib.domain_envelopes.persistence import (
-        DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint,
-    )
-    db, candidate, _ = manual_profile_record
-    source_ids = []
-
-    def dispatch(envelope, pack, **kwargs):
-        fixtures = results(envelope, kwargs["profile_context"], [{"identifier": "EX:1"}])
-        outcome = dispatch_active_validator_bindings(envelope, pack, **kwargs,
-            runner=lambda *args, **kw: fixtures[0].result.model_dump(mode="json"))
-        source_ids.append(envelope.envelope_id)
-        with SessionLocal.begin() as concurrent:
-            row = concurrent.get(DomainEnvelopeModel, envelope.envelope_id)
-            newer = DomainEnvelope.model_validate(row.envelope_json)
-            newer.metadata["concurrent_edit"] = "newer checkpoint wins"
-            write_domain_envelope_checkpoint(concurrent, DomainEnvelopeCheckpointRequest(
-                project_key=row.project_key, envelope=newer, expected_revision=row.revision,
-                document_id=row.document_id, session_id=row.session_id,
-                adapter_key=row.adapter_key, flow_run_id=row.flow_run_id,
-            ))
-        return outcome
-
-    monkeypatch.setattr(validation, "dispatch_active_validator_bindings", dispatch)
-    with pytest.raises(HTTPException) as failure:
-        validation._apply_candidate_validation(
-            db, candidate, force=True, validated_at=datetime.now(timezone.utc),
-            runtime_context=_history_context(candidate),
-        )
-    assert failure.value.status_code == 409
-    db.rollback()
-    row = db.get(DomainEnvelopeModel, source_ids[0])
-    assert row.revision == 2
-    assert row.envelope_json["metadata"]["concurrent_edit"] == "newer checkpoint wins"
-    assert candidate.envelope_id is None
-    assert candidate.draft.fields[0]["value"] == {"paper_name": "A"}
+    assert saved["state"] == "queued"
+    assert prepared[0] in str(list_domain_envelopes(session_factory=SessionLocal, user_auth_sub=owner, session_id=str(session_id)))
 
 
 @pytest.mark.parametrize("concurrent_change", ["draft", "linkage"])
@@ -370,18 +233,9 @@ def test_first_manual_validation_preserves_newer_unlinked_draft(manual_profile_r
                 other.normalized_payload = {}
         return prepared
 
-    def dispatch(envelope, pack, **kwargs):
-        fixtures = results(envelope, kwargs["profile_context"], [{"identifier": "EX:1"}])
-        return dispatch_active_validator_bindings(envelope, pack, **kwargs,
-            runner=lambda *args, **kw: fixtures[0].result.model_dump(mode="json"))
-
     monkeypatch.setattr(manual_profile_preparation, "prepare_manual_source", concurrent_edit)
-    monkeypatch.setattr(validation, "dispatch_active_validator_bindings", dispatch)
     with pytest.raises(HTTPException) as conflict:
-        validation._apply_candidate_validation(
-            db, candidate, force=True, validated_at=datetime.now(timezone.utc),
-            runtime_context=_history_context(candidate),
-        )
+        _submit(db, candidate)
     assert conflict.value.status_code == 409
     assert ("draft changed" if concurrent_change == "draft" else "source changed") in conflict.value.detail
     db.rollback()
@@ -447,3 +301,60 @@ def test_autosave_loaded_before_source_linkage_is_refused(manual_profile_record,
     candidate = db.get(CurationCandidate, candidate_id)
     assert candidate.envelope_id is not None
     assert candidate.draft.fields[0]["value"] == {"paper_name": "A"}
+
+
+@pytest.mark.asyncio
+async def test_manual_profile_worker_selects_saved_answer_and_refreshes_draft(manual_profile_record, monkeypatch):
+    from unittest.mock import AsyncMock
+    from agents import Agent
+    from src.lib.curation_workspace import review_operations as operations
+    from src.lib.validation_history import store
+    from src.lib.validation_review import validator_adapter, reviewer, decisions
+    from src.models.sql.validation_history import ValidationFact
+    from src.models.sql.validation_review import WorkspaceReviewOperation
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+    db, candidate, _ = manual_profile_record
+    owner = _history_context(candidate).user_id
+    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False))
+    monkeypatch.setattr(validator_adapter, "binding_contract", lambda match: {"binding_id": match.binding.binding_id})
+    requests = []
+    def answer(request, **kwargs):
+        requests.append(request)
+        return {**_result_payload(request, resolved_values={"identifier": "EX:1"}), "resolved_objects": []}
+    monkeypatch.setattr(validator_adapter, "_default_package_scoped_validator_runner", lambda: answer)
+    monkeypatch.setattr(validator_adapter, "_default_package_scoped_validator_batch_runner", lambda: lambda *a, **k: pytest.fail("Unexpected batch"))
+    def supervisor(**kwargs):
+        from src.lib.observability.cost_context import attach_agent_cost_identity
+        agent = Agent(name="Supervisor", instructions="Review the supplied answer.")
+        attach_agent_cost_identity(agent, {"agent_id": "supervisor", "agent_name": "Supervisor", "agent_role": "supervisor"})
+        return agent
+    monkeypatch.setattr(reviewer, "create_direct_supervisor", supervisor)
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    saved = _submit(db, candidate)
+    operation = db.get(WorkspaceReviewOperation, saved["operation_id"])
+    operation.state, operation.lease_token = "preparing", "manual-worker"
+    db.commit()
+    async def select_answer(context, agent, **kwargs):
+        with SessionLocal() as inspect:
+            row = inspect.get(WorkspaceReviewOperation, saved["operation_id"])
+            item = row.artifacts[0]
+            attempts = list(inspect.scalars(select(ValidationFact).where(
+                ValidationFact.artifact_id == item["artifact_id"], ValidationFact.kind == "attempt")))
+            entries = [{"target_id": a.target_id, "decision_unit_id": a.target_id,
+                "expected_version": store._current(inspect, item["artifact_id"], a.target_id)["version"],
+                "logical_attempt_id": a.id, "action": "accept", "reason": "Fake supervisor accepts supplied resolution"}
+                for a in attempts]
+        assert len(entries) == 1
+        decisions.record_decisions(context, checkpoint_request=operations.checkpoint(owner, item, ()),
+            operation_id="select-manual-answer", entries=entries)
+        return {"output": "Accepted", "review": operations.admission.status(context.history_scope, context.episode_id)}
+    monkeypatch.setattr(reviewer, "run", select_answer)
+    await operations._execute(saved["operation_id"], "manual-worker", "manual-fixture-trace")
+    db.expire_all()
+    operation = db.get(WorkspaceReviewOperation, saved["operation_id"])
+    assert operation.state == "complete", operation.outcome
+    assert len(requests) == 1
+    assert requests[0].selected_inputs == {"mention": "A"}
+    assert candidate.draft.fields[0]["value"] == {"paper_name": "A", "resolved_id": "EX:1"}
+    envelope = db.get(DomainEnvelopeModel, candidate.envelope_id)
+    assert envelope.envelope_json["extracted_objects"][0]["payload"]["attributes"] == candidate.draft.fields[0]["value"]

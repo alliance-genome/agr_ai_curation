@@ -176,6 +176,9 @@ def attach_episode(
 
         _lock_artifact(db, history_scope, artifact_id, write=True)
         fact = store._fact(db, artifact_id, episode_id, kind="review_episode")
+        from src.lib.validation_history.episodes import is_abandoned
+        if is_abandoned(db, artifact_id, episode_id):
+            raise ReviewStopped("preparation_abandoned")
         if predecessor_id:
             if (
                 renewal_actor_id != history_scope.owner_id
@@ -328,16 +331,9 @@ def lock_episode(db, history_scope, episode_id, *, require_open=True):
     if require_open:
         if store._document_retirement(db, row.artifact_id) is not None:
             raise ReviewStopped("retired")
-        latest = db.scalar(
-            select(ValidationFact.id)
-            .where(
-                ValidationFact.artifact_id == row.artifact_id,
-                ValidationFact.kind == "review_episode",
-            )
-            .order_by(ValidationFact.sequence.desc())
-            .limit(1)
-        )
-        if latest != row.id:
+        from src.lib.validation_history.episodes import latest_effective_episode
+        latest = latest_effective_episode(db, row.artifact_id)
+        if latest is None or latest.id != row.id:
             raise ReviewStopped("superseded")
         if row.state == "complete":
             from src.lib.validation_history.selections import manifest_in_transaction

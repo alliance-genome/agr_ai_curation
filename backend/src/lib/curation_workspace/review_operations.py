@@ -359,153 +359,156 @@ def prepare(operation_id, lease_token):
         scope = store.HistoryScope(
             owner, item["document_id"], item["history_session_id"]
         )
-        with store.SessionLocal() as db:
-            store._artifact(db, item["artifact_id"], scope)
-            episode = db.scalar(
-                select(ValidationFact).where(
-                    ValidationFact.artifact_id == item["artifact_id"],
-                    ValidationFact.operation_id
-                    == "review-episode:" + item["episode_key"],
-                )
+        # Stop uses this same lock. Plans contain no provider execution; once
+        # creation commits, cancellation can always find its durable episode key.
+        with store.SessionLocal.begin() as planning_db:
+            command = planning_db.scalar(
+                select(Operation).where(Operation.id == operation_id).with_for_update()
             )
-            prior = (
-                db.scalar(
+            if command.state != "preparing" or command.lease_token != lease_token:
+                raise admission.ReviewStopped(command.state)
+            with store.SessionLocal() as db:
+                store._artifact(db, item["artifact_id"], scope)
+                episode = db.scalar(
                     select(ValidationFact).where(
                         ValidationFact.artifact_id == item["artifact_id"],
-                        ValidationFact.operation_id == "chat-review-plan:" + episode.id,
+                        ValidationFact.operation_id
+                        == "review-episode:" + item["episode_key"],
                     )
                 )
-                if episode
-                else None
-            )
-            saved = (prior.id, store._content(db, prior)) if prior else None
-        if saved is None:
-            envelope = DomainEnvelope.model_validate(item["envelope"])
-            pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
-            if pack is None:
-                raise store.HistoryConflict("Saved domain pack is unavailable")
-            context = ValidatorRuntimeContext(
-                document_id=scope.document_id,
-                user_id=owner,
-                authenticated_groups=groups,
-                curator_revalidation=item["intents"]
-                if item["origin"] == "curator"
-                else None,
-                review_episode_key=item["episode_key"],
-                review_object_ids=tuple(
-                    intent["object_id"] for intent in item["intents"]
-                ),
-            )
-            # Revalidation of a flow result retains its executable binding
-            # choices rather than widening to the domain's entire catalog.
-            from src.lib.validation_review.validator_adapter import REGISTRY
-
-            with store.SessionLocal() as db:
-                prior_plan = db.scalar(
-                    select(ValidationFact)
-                    .where(
-                        ValidationFact.artifact_id == item["artifact_id"],
-                        ValidationFact.kind == "review_chat_plan",
+                prior = (
+                    db.scalar(
+                        select(ValidationFact).where(
+                            ValidationFact.artifact_id == item["artifact_id"],
+                            ValidationFact.operation_id
+                            == "chat-review-plan:" + episode.id,
+                        )
                     )
-                    .order_by(ValidationFact.sequence.desc())
-                    .limit(1)
-                )
-                registry = (
-                    REGISTRY.validate_python(store._content(db, prior_plan)["registry"])
-                    if prior_plan
+                    if episode
                     else None
                 )
-            plan = prepare_validator_dispatch(
-                envelope, pack, runtime_context=context, registry=registry
-            )
-            if item["origin"] == "curator":
-                from src.lib.validation_review.audit import append_fact
+                saved = (prior.id, store._content(db, prior)) if prior else None
+            if saved is None:
+                envelope = DomainEnvelope.model_validate(item["envelope"])
+                pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+                if pack is None:
+                    raise store.HistoryConflict("Saved domain pack is unavailable")
+                context = ValidatorRuntimeContext(
+                    document_id=scope.document_id,
+                    user_id=owner,
+                    authenticated_groups=groups,
+                    curator_revalidation=item["intents"]
+                    if item["origin"] == "curator"
+                    else None,
+                    review_episode_key=item["episode_key"],
+                    review_object_ids=tuple(
+                        intent["object_id"] for intent in item["intents"]
+                    ),
+                )
+                # Revalidation of a flow result retains its executable binding
+                # choices rather than widening to the domain's entire catalog.
+                from src.lib.validation_review.validator_adapter import REGISTRY
 
-                with store.SessionLocal.begin() as db:
-                    objects = {
-                        key: obj
-                        for obj in plan.envelope.extracted_objects
-                        for key in (obj.object_id, obj.pending_ref_id)
-                        if key is not None
-                    }
-                    request_fact = append_fact(
-                        db,
-                        item["artifact_id"],
-                        operation_id="workspace-request:"
-                        + operation_id
-                        + ":"
-                        + item["artifact_id"],
-                        kind="workspace_revalidation_request",
-                        parent_id=plan.envelope.metadata["review_episode_id"],
-                        body={
-                            "actor": {"type": "curator", "id": owner},
-                            "entries": [
-                                {
-                                    "target_id": objects[intent["object_id"]].metadata[
-                                        "validation_history"
-                                    ]["target_id"],
-                                    "action": "request_revalidation",
-                                    "reason": intent["guidance"]
-                                    or "Curator requested revalidation",
-                                }
-                                for intent in item["intents"]
-                            ],
-                            "operation_id": operation_id,
-                        },
+                with store.SessionLocal() as db:
+                    prior_plan = db.scalar(
+                        select(ValidationFact)
+                        .where(
+                            ValidationFact.artifact_id == item["artifact_id"],
+                            ValidationFact.kind == "review_chat_plan",
+                        )
+                        .order_by(ValidationFact.sequence.desc())
+                        .limit(1)
                     )
-                    plan.envelope.metadata["workspace_review_request"] = request_fact.id
-            plan_ref = save_plan(plan, context=context)
-            episode_id = plan.envelope.metadata["review_episode_id"]
-        else:
-            plan_ref, body = saved
-            episode_id = body["envelope"]["metadata"]["review_episode_id"]
-        with store.SessionLocal() as db:
-            fact = store._fact(db, item["artifact_id"], episode_id)
-            from src.lib.validation_review.record_scope import validation_targets
+                    registry = (
+                        REGISTRY.validate_python(
+                            store._content(db, prior_plan)["registry"]
+                        )
+                        if prior_plan
+                        else None
+                    )
+                plan = prepare_validator_dispatch(
+                    envelope, pack, runtime_context=context, registry=registry
+                )
+                if item["origin"] == "curator":
+                    from src.lib.validation_review.audit import append_fact
 
-            targets = validation_targets(
-                db, item["artifact_id"], store._content(db, fact)
+                    with store.SessionLocal.begin() as db:
+                        objects = {
+                            key: obj
+                            for obj in plan.envelope.extracted_objects
+                            for key in (obj.object_id, obj.pending_ref_id)
+                            if key is not None
+                        }
+                        request_fact = append_fact(
+                            db,
+                            item["artifact_id"],
+                            operation_id="workspace-request:"
+                            + operation_id
+                            + ":"
+                            + item["artifact_id"],
+                            kind="workspace_revalidation_request",
+                            parent_id=plan.envelope.metadata["review_episode_id"],
+                            body={
+                                "actor": {"type": "curator", "id": owner},
+                                "entries": [
+                                    {
+                                        "target_id": objects[
+                                            intent["object_id"]
+                                        ].metadata["validation_history"]["target_id"],
+                                        "action": "request_revalidation",
+                                        "reason": intent["guidance"]
+                                        or "Curator requested revalidation",
+                                    }
+                                    for intent in item["intents"]
+                                ],
+                                "operation_id": operation_id,
+                            },
+                        )
+                        plan.envelope.metadata["workspace_review_request"] = (
+                            request_fact.id
+                        )
+                plan_ref = save_plan(plan, context=context)
+                episode_id = plan.envelope.metadata["review_episode_id"]
+            else:
+                plan_ref, body = saved
+                episode_id = body["envelope"]["metadata"]["review_episode_id"]
+            with store.SessionLocal() as db:
+                fact = store._fact(db, item["artifact_id"], episode_id)
+                from src.lib.validation_review.record_scope import validation_targets
+
+                targets = validation_targets(
+                    db, item["artifact_id"], store._content(db, fact)
+                )
+            total_targets += len(targets)
+            prepared.append(
+                {
+                    **item,
+                    "episode_id": episode_id,
+                    "plan_ref": plan_ref,
+                    "targets": len(targets),
+                }
             )
-        total_targets += len(targets)
-        prepared.append(
-            {
-                **item,
-                "episode_id": episode_id,
-                "plan_ref": plan_ref,
-                "targets": len(targets),
-            }
-        )
-    # Publish episode references before attaching grants, so cancellation can
-    # always find admitted children even if preparation is interrupted.
-    with store.SessionLocal.begin() as db:
-        row = db.scalar(
-            select(Operation).where(Operation.id == operation_id).with_for_update()
-        )
-        if row.state != "preparing" or row.lease_token != lease_token:
-            raise admission.ReviewStopped(row.state)
-        row.artifacts = prepared
+    _save_prepared(operation_id, lease_token, prepared)
     first = prepared[0]
     root_scope = store.HistoryScope(
         owner, first["document_id"], first["history_session_id"]
     )
-    parent = admission.create_scope(
-        root_scope,
-        operation_id="workspace:" + operation_id,
-        kind="workspace_operation",
-        targets=total_targets,
-        episodes=len(prepared),
-    )
+    with store.SessionLocal.begin() as operation_db:
+        command = operation_db.scalar(
+            select(Operation).where(Operation.id == operation_id).with_for_update()
+        )
+        if command.state != "preparing" or command.lease_token != lease_token:
+            raise admission.ReviewStopped(command.state)
+        parent = admission.create_scope(
+            root_scope,
+            operation_id="workspace:" + operation_id,
+            kind="workspace_operation",
+            targets=total_targets,
+            episodes=len(prepared),
+        )
     for item in prepared:
         scope = store.HistoryScope(
             owner, item["document_id"], item["history_session_id"]
-        )
-        child = admission.create_scope(
-            scope,
-            operation_id="workspace:" + operation_id + ":" + item["artifact_id"],
-            kind="document_run",
-            targets=item["targets"],
-            episodes=1,
-            parent_id=parent,
         )
         previous = item["envelope"]["metadata"].get("review_episode_id")
         from src.models.sql.validation_review import ValidationReviewEpisode
@@ -523,6 +526,14 @@ def prepare(operation_id, lease_token):
             )
             if command.state != "preparing" or command.lease_token != lease_token:
                 raise admission.ReviewStopped(command.state)
+            child = admission.create_scope(
+                scope,
+                operation_id="workspace:" + operation_id + ":" + item["artifact_id"],
+                kind="document_run",
+                targets=item["targets"],
+                episodes=1,
+                parent_id=parent,
+            )
             admission.attach_episode(
                 scope,
                 artifact_id=item["artifact_id"],
@@ -544,6 +555,63 @@ def prepare(operation_id, lease_token):
         row.artifacts = prepared
         row.state = "running"
     return owner, groups, prepared
+
+
+def _save_prepared(operation_id, lease_token, prepared):
+    """Persist episode references before grants; ordinary Stop can win here."""
+    with store.SessionLocal.begin() as db:
+        row = db.scalar(
+            select(Operation).where(Operation.id == operation_id).with_for_update()
+        )
+        if row.state != "preparing" or row.lease_token != lease_token:
+            raise admission.ReviewStopped(row.state)
+        row.artifacts = prepared
+
+
+def _abandon_unadmitted(db, row, *, actor, reason):
+    """Keep failed/stopped preparation inspectable without superseding real review.
+
+    The caller holds the operation lock shared with plan creation and attachment.
+    Admitted rounds (including cancelled ones) retain their answers and authority.
+    """
+    from src.models.sql.validation_history import ValidationFact
+    from src.models.sql.validation_review import ValidationReviewEpisode
+    from src.lib.validation_history.selections import _lock_artifact
+    from src.lib.validation_review.audit import append_fact
+
+    abandoned = []
+    for item in sorted(row.artifacts, key=lambda value: value["artifact_id"]):
+        scope = store.HistoryScope(
+            row.owner_id, item["document_id"], item["history_session_id"]
+        )
+        _lock_artifact(db, scope, item["artifact_id"], write=True)
+        episode = db.scalar(
+            select(ValidationFact).where(
+                ValidationFact.artifact_id == item["artifact_id"],
+                ValidationFact.operation_id == "review-episode:" + item["episode_key"],
+            )
+        )
+        if episode is None or db.get(ValidationReviewEpisode, episode.id) is not None:
+            continue
+        from src.lib.validation_history.episodes import is_abandoned
+
+        if is_abandoned(db, item["artifact_id"], episode.id):
+            continue
+        append_fact(
+            db,
+            item["artifact_id"],
+            operation_id="workspace-abandoned:" + row.id + ":" + episode.id,
+            kind="review_episode_abandoned",
+            parent_id=episode.id,
+            body={
+                "operation_id": row.id,
+                "actor": actor,
+                "reason": reason,
+                "object_ids": [intent["object_id"] for intent in item["intents"]],
+            },
+        )
+        abandoned.append(episode.id)
+    return abandoned
 
 
 async def execute(operation_id, lease_token):
@@ -669,6 +737,20 @@ async def _execute(operation_id, lease_token, trace_id):
             select(Operation).where(Operation.id == operation_id).with_for_update()
         )
         if row.state in {"preparing", "running"} and row.lease_token == lease_token:
+            if row.state == "preparing":
+                abandoned = _abandon_unadmitted(
+                    db,
+                    row,
+                    actor={"type": "system", "id": "workspace_review_worker"},
+                    reason="Preparation ended before admission",
+                )
+                if abandoned:
+                    result = {
+                        **result,
+                        "preparation_reason": result.get("reason"),
+                        "reason": "preparation_abandoned",
+                        "message": "Preparation ended before execution. Prior saved answers remain available for curator review.",
+                    }
             row.state, row.outcome, row.lease_until = (
                 state,
                 {**(row.outcome or {}), **result, "trace_id": trace_id},
@@ -793,6 +875,12 @@ def cancel(operation_id, *, owner_id):
         }:
             return response(row)
         row.state = "cancelled"
+        _abandon_unadmitted(
+            db,
+            row,
+            actor={"type": "curator", "id": owner_id},
+            reason="Curator stopped preparation before admission",
+        )
         artifacts = list(row.artifacts)
         result = response(row)
     for item in artifacts:
@@ -826,6 +914,10 @@ def resume(db, operation_id, *, owner_id, groups):
             "Access groups changed; request a new authorized round"
         )
     if row.state == "needs_review":
+        if (row.outcome or {}).get("reason") == "preparation_abandoned":
+            raise store.HistoryConflict(
+                "Preparation was abandoned; inspect saved history or explicitly request a new round"
+            )
         if not row.artifacts:
             raise store.HistoryConflict("No eligible records exist in this round")
         row.state = "queued"

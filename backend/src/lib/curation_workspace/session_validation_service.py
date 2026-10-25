@@ -17,6 +17,7 @@ from src.lib.curation_workspace.adapter_registry import (
 )
 from src.lib.curation_workspace.models import (
     CurationCandidate,
+    CurationDraft,
     CurationReviewSession as ReviewSessionModel,
     DomainEnvelopeModel,
 )
@@ -364,6 +365,12 @@ def _ensure_manual_profile_envelope(db: Session, candidate: CurationCandidate, *
     except HistoryConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _lock_unlinked_manual_candidate(db, candidate.id)
+    with db.no_autoflush:
+        current = db.execute(select(CurationDraft.version, CurationDraft.fields).where(
+            CurationDraft.id == candidate.draft.id,
+        ).with_for_update()).one()
+    if current.version != candidate.draft.version or current.fields != candidate.draft.fields:
+        raise HTTPException(status_code=409, detail="Curator draft changed during source preparation; reload and retry")
     candidate.envelope_id = checkpoint.envelope_id
     candidate.object_id = object_id
     candidate.envelope_revision = checkpoint.revision

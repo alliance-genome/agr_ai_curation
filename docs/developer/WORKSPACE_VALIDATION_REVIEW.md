@@ -42,3 +42,12 @@ single-record and bootstrap rounds cannot be mistaken for that command.
 The workspace page observes active commands even after Details closes. Ambiguous
 HTTP submissions retain their request identity in tab-local session storage until
 acknowledged. Reload/reopen retry therefore does not grant another cycle.
+
+Preparation that stops or fails before admission appends an immutable
+`review_episode_abandoned` fact. Its plan and request stay inspectable, but it no
+longer supersedes the preceding effective review. History reads, manual decisions,
+publication/finalization, curator edits, and dispatch use the same effective-episode
+selector. An abandoned plan cannot later acquire an execution grant. A cancelled
+**admitted** round remains effective because it may contain answers for the curator
+to accept or reject. Preparation and admission serialize with Stop under the
+operation lock; no provider call runs while that lock is held.

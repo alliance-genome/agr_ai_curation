@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from src.lib.validation_history import store
+from src.lib.validation_history.episodes import latest_effective_episode
 from src.lib.validation_review.policy import ReviewLimits
 from src.lib.validation_review.reads import exact_page
 from src.models.sql.validation_history import ValidationFact, ValidationBody
@@ -58,6 +59,7 @@ def history_page(db, candidate_id, *, owner_id, after=0):
         "workspace_revalidation_request",
         "extraction_followup_request",
         "extraction_contribution",
+        "review_episode_abandoned",
         "extraction_source_selection",
         "curator_revalidation_release",
     )
@@ -73,15 +75,8 @@ def history_page(db, candidate_id, *, owner_id, after=0):
             .limit(limit + 1)
         )
     )
-    latest_episode = db.scalar(
-        select(ValidationFact.id)
-        .where(
-            ValidationFact.artifact_id == artifact_id,
-            ValidationFact.kind == "review_episode",
-        )
-        .order_by(ValidationFact.sequence.desc())
-        .limit(1)
-    )
+    effective = latest_effective_episode(db, artifact_id)
+    latest_episode = effective.id if effective is not None else None
     from src.lib.validation_history.selections import _selected_unit
     from src.lib.validation_history.curator_authority import active_overlays
 
@@ -168,6 +163,7 @@ def history_page(db, candidate_id, *, owner_id, after=0):
             or bool(decisions)
             or bool(choices)
             or body.get("object_id") == candidate.object_id
+            or candidate.object_id in body.get("object_ids", [])
             or bool(set(body.get("entry_ids", ())) & targets)
         )
         if fact.kind == "completion":
@@ -283,15 +279,8 @@ def decide(candidate_id, *, owner_id, request, groups):
         targets = record_targets(db, envelope, artifact_id, candidate.object_id)
         if any(entry.decision_unit_id not in targets for entry in request.entries):
             raise store.HistoryAccessError("Decision is outside this workspace record")
-        latest = db.scalar(
-            select(ValidationFact.id)
-            .where(
-                ValidationFact.artifact_id == artifact_id,
-                ValidationFact.kind == "review_episode",
-            )
-            .order_by(ValidationFact.sequence.desc())
-            .limit(1)
-        )
+        effective = latest_effective_episode(db, artifact_id)
+        latest = effective.id if effective is not None else None
         if latest != str(request.episode_id):
             raise store.HistoryConflict(
                 "A new review round has started; refresh before deciding"

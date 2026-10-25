@@ -40,6 +40,7 @@ function ExactDetail({ candidateId, reference }: { candidateId: string; referenc
   </Stack>
 }
 const eventLabels: Record<string, string> = {
+  review_episode_abandoned: 'Preparation stopped before validation',
   attempt: 'Validation requested', completion: 'Validator answer', decision: 'Review decision',
   curator_value: 'Curator edit', curator_revalidation_intent: 'Replacement authorized by curator',
   workspace_revalidation_request: 'Curator requested another round',
@@ -72,7 +73,7 @@ function HistoryItem({ candidateId, entry, episodeId, onChanged, beforeChange }:
   }
   return <Box sx={{ borderBottom: 1, borderColor: 'divider', py: 1 }}>
     <Typography variant="subtitle2">{eventLabels[entry.kind]}</Typography>
-    <Typography variant="caption">{new Date(entry.created_at).toLocaleString()}{entry.actor ? ` · ${entry.actor.type === 'curator' ? 'Curator' : 'Supervisor'}` : ''}</Typography>
+    <Typography variant="caption">{new Date(entry.created_at).toLocaleString()}{entry.actor ? ` · ${entry.actor.type === 'curator' ? 'Curator' : entry.actor.type === 'system' ? 'System' : 'Supervisor'}` : ''}</Typography>
     {entry.decisions.map((decision, index) => <Typography key={index} variant="body2">{decision.action}: {decision.reason}</Typography>)}
     {error && <Alert severity="error">{error}</Alert>}
     {episodeId && entry.choices.length > 0 && <Stack spacing={1}>

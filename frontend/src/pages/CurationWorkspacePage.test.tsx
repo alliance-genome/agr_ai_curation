@@ -30,7 +30,6 @@ const serviceMocks = vi.hoisted(() => ({
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
   updateCurationSession: vi.fn(),
-  validateAllCurationSessionCandidates: vi.fn(),
   waiveCurationValidationFinding: vi.fn(),
   focusGrid: vi.fn(),
   showPdf: vi.fn(),
@@ -67,7 +66,6 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   handoffCurationBenchmarkSnapshot: serviceMocks.handoffCurationBenchmarkSnapshot,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
-  validateAllCurationSessionCandidates: serviceMocks.validateAllCurationSessionCandidates,
   waiveCurationValidationFinding: serviceMocks.waiveCurationValidationFinding,
 }))
 
@@ -576,7 +574,6 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
     serviceMocks.updateCurationSession.mockReset()
-    serviceMocks.validateAllCurationSessionCandidates.mockReset()
     serviceMocks.waiveCurationValidationFinding.mockReset()
     serviceMocks.focusGrid.mockReset()
     serviceMocks.showPdf.mockReset()
@@ -1500,7 +1497,6 @@ describe('CurationWorkspacePage', () => {
       /fields curator validated for Pending candidate/,
     )).toHaveTextContent(/\d+\/\d+/)
     expect(screen.queryByRole('button', { name: /Validating/ })).not.toBeInTheDocument()
-    expect(serviceMocks.validateAllCurationSessionCandidates).not.toHaveBeenCalled()
   })
 
   it('submits selected-candidate rejection through the toolbar decision owner', async () => {

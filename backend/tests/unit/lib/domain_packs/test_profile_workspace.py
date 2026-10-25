@@ -86,10 +86,12 @@ def test_manual_profile_candidate_uses_durable_envelope_and_mapped_validation(ex
         normalized_payload={"object_type": "generic_object", "class_key": "generic:generic_object",
                             "semantic_class": "record", "attributes": {"paper_name": "A"}},
         session=SimpleNamespace(document_id=uuid4(), flow_run_id=None),
-        draft=SimpleNamespace(version=1, fields=[CurationDraftField(field_key="attributes", label="Record",
+        draft=SimpleNamespace(id=uuid4(), version=1, fields=[CurationDraftField(field_key="attributes", label="Record",
             value={"paper_name": "A"}, seed_value={"paper_name": "A"}, field_type="object").model_dump(mode="json")]))
     rows, requests = {}, []
-    db = SimpleNamespace(get=lambda model, key: rows.get(key), flush=lambda: None)
+    from contextlib import nullcontext
+    db = SimpleNamespace(get=lambda model, key: rows.get(key), flush=lambda: None,
+        no_autoflush=nullcontext(), execute=lambda statement: SimpleNamespace(one=lambda: candidate.draft))
 
     def checkpoint(session, request):
         assert session is db

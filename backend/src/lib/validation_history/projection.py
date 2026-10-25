@@ -210,10 +210,8 @@ def read_published_projection_in_transaction(db, scope, reference, *, current=Fa
             or manifest["episode_id"] != reference["episode_id"]):
         raise store.HistoryConflict("Published selection manifest mismatch")
     if current or finalized:
-        latest_episode = db.scalar(select(ValidationFact).where(
-            ValidationFact.artifact_id == artifact_id,
-            ValidationFact.kind == "review_episode",
-        ).order_by(ValidationFact.sequence.desc()).limit(1))
+        from .episodes import latest_effective_episode
+        latest_episode = latest_effective_episode(db, artifact_id)
         if latest_episode is None:
             raise store.HistoryConflict("Published projection has no review episode")
         live = selections.manifest_in_transaction(
@@ -522,9 +520,8 @@ def republish_curator_checkpoint(db, envelope, *, revision, authenticated_groups
         return envelope
     artifact = db.get(ValidationArtifact, ref["artifact_id"])
     scope = store.HistoryScope(artifact.owner_id, artifact.document_id, ref["session_id"])
-    episode = db.scalar(select(ValidationFact).where(
-        ValidationFact.artifact_id == artifact.id, ValidationFact.kind == "review_episode",
-    ).order_by(ValidationFact.sequence.desc()).limit(1))
+    from .episodes import latest_effective_episode
+    episode = latest_effective_episode(db, artifact.id)
     if episode is None:
         return envelope  # No review was invented by the curator's edit.
     manifest = selections.manifest_in_transaction(db, scope, artifact.id, episode_id=episode.id)
@@ -553,9 +550,8 @@ def read_underlying_curator_value(scope, envelope, *, object_id, value_path, aut
         if not any(body["object_id"] == object_id and _overlap(anchored_path(object_refs[body["target_id"]], body["anchor"]), value_path)
                    for _, body in active_overlays(db, artifact_id)):
             return None
-        episode = db.scalar(select(ValidationFact).where(
-            ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_episode",
-        ).order_by(ValidationFact.sequence.desc()).limit(1))
+        from .episodes import latest_effective_episode
+        episode = latest_effective_episode(db, artifact_id)
         if episode is None:
             return {}
         manifest = selections.manifest_in_transaction(db, scope, artifact_id, episode_id=episode.id)

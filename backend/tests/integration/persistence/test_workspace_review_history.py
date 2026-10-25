@@ -779,3 +779,141 @@ def test_resume_reuses_grant_and_saved_plan(scope, scenario, candidate, monkeypa
     with h.SessionLocal() as db:
         episode = db.get(ValidationReviewEpisode, first[2][0]["episode_id"])
         assert (episode.scope_id, episode.allowances, episode.charged) == grant
+
+
+@pytest.mark.parametrize("interruption", ["stop", "failure", "admitted_stop"])
+def test_stop_before_admission_preserves_manual_decision_and_finalization(
+    scope, scenario, candidate, monkeypatch, interruption
+):
+    from src.lib.validation_review import validator_adapter, admission
+    from src.lib.validation_history.episodes import is_abandoned
+    from src.lib.validation_history.projection import read_published_projection
+    from src.models.sql.validation_review import (
+        ValidationReviewEpisode,
+        ValidationReviewScope,
+    )
+    from src.lib.curation_workspace.models import CurationDraft
+    from src.schemas.workspace_review import WorkspaceReviewDecisionRequest
+
+    monkeypatch.setattr(
+        validator_adapter,
+        "binding_contract",
+        lambda match: {"binding_id": match.binding.binding_id},
+    )
+    sid, cid = candidate
+    with h.SessionLocal.begin() as db:
+        prior = operations.submit(
+            db,
+            owner_id=scope.owner_id,
+            session_id=sid,
+            request_id=str(uuid4()),
+            candidate_ids=[cid],
+            guidance=None,
+            groups=[],
+        )
+        row = db.get(WorkspaceReviewOperation, prior["operation_id"])
+        row.state, row.lease_token = "preparing", "prior-lease"
+    _, _, prior_artifacts = operations.prepare(prior["operation_id"], "prior-lease")
+    prior_episode = prior_artifacts[0]["episode_id"]
+    with h.SessionLocal.begin() as db:
+        db.add(
+            CurationDraft(
+                candidate_id=UUID(cid), adapter_key="fixture", fields=[], version=1
+            )
+        )
+        db.get(WorkspaceReviewOperation, prior["operation_id"]).state = "needs_review"
+        run = db.get(ValidationReviewEpisode, prior_episode).scope_id
+        grants_before = db.scalar(
+            select(func.count()).select_from(ValidationReviewScope)
+        )
+        saved = operations.submit(
+            db,
+            owner_id=scope.owner_id,
+            session_id=sid,
+            request_id=str(uuid4()),
+            candidate_ids=[cid],
+            guidance=None,
+            groups=[],
+        )
+        row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+        row.state, row.lease_token = "preparing", "lease"
+    save_prepared = operations._save_prepared
+    abandoned_episode = []
+
+    def stop_between_plan_and_admission(operation_id, lease, prepared):
+        abandoned_episode.append(prepared[0]["episode_id"])
+        if interruption == "failure":
+            raise h.HistoryConflict("A later source changed during preparation")
+        if interruption == "stop":
+            operations.cancel(operation_id, owner_id=scope.owner_id)
+        return save_prepared(operation_id, lease, prepared)
+
+    monkeypatch.setattr(operations, "_save_prepared", stop_between_plan_and_admission)
+    if interruption == "failure":
+        import asyncio
+
+        asyncio.run(operations._execute(saved["operation_id"], "lease", "test-trace"))
+    elif interruption == "stop":
+        with pytest.raises(admission.ReviewStopped):
+            operations.prepare(saved["operation_id"], "lease")
+    else:
+        operations.prepare(saved["operation_id"], "lease")
+        operations.cancel(saved["operation_id"], owner_id=scope.owner_id)
+        prior_episode = abandoned_episode[0]
+    with h.SessionLocal() as db:
+        assert is_abandoned(db, scenario.aid, abandoned_episode[0]) == (
+            interruption != "admitted_stop"
+        )
+        if interruption != "admitted_stop":
+            assert db.get(ValidationReviewEpisode, abandoned_episode[0]) is None
+            assert (
+                db.scalar(select(func.count()).select_from(ValidationReviewScope))
+                == grants_before
+            )
+        else:
+            assert (
+                db.get(ValidationReviewEpisode, abandoned_episode[0]).state
+                == "cancelled"
+            )
+        page = history.history_page(db, cid, owner_id=scope.owner_id)
+        assert page["episode_id"] == prior_episode
+        completion = h._fact(db, scenario.aid, scenario.first)
+        version = h._current(db, scenario.aid, scenario.target)["version"]
+        attempt_id = completion.parent_id
+    result = history.decide(
+        cid,
+        owner_id=scope.owner_id,
+        groups=[],
+        request=WorkspaceReviewDecisionRequest(
+            request_id=uuid4(),
+            episode_id=prior_episode,
+            entries=[
+                {
+                    "target_id": scenario.target,
+                    "decision_unit_id": scenario.target,
+                    "logical_attempt_id": attempt_id,
+                    "expected_version": version,
+                    "action": "accept",
+                    "reason": "Curator confirms the saved answer after cancelling preparation",
+                }
+            ],
+        ),
+    )
+    assert result["ready"]
+    published, manifest = read_published_projection(
+        scope, result["publication"], finalized=True
+    )
+    assert manifest["ready"]
+    assert published.extracted_objects[0].payload["evidence_code_curies"] == [
+        "ECO:VALIDATED"
+    ]
+    if interruption != "admitted_stop":
+        with pytest.raises(admission.ReviewStopped, match="preparation_abandoned"):
+            admission.attach_episode(
+                scope,
+                artifact_id=scenario.aid,
+                episode_id=abandoned_episode[0],
+                scope_id=run,
+            )
+    with h.SessionLocal() as db:
+        assert h._fact(db, scenario.aid, abandoned_episode[0]).kind == "review_episode"

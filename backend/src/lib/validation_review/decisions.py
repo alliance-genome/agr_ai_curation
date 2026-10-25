@@ -70,11 +70,9 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
         if context.actor_type == "curator":
             if context.actor_id != context.history_scope.owner_id:
                 raise store.HistoryAccessError("Curator decisions require the authenticated owner")
-            latest = db.scalar(select(ValidationFact.id).where(
-                ValidationFact.artifact_id == episode.artifact_id,
-                ValidationFact.kind == "review_episode",
-            ).order_by(ValidationFact.sequence.desc()).limit(1))
-            if latest != episode.id:
+            from src.lib.validation_history.episodes import latest_effective_episode
+            latest = latest_effective_episode(db, episode.artifact_id)
+            if latest is None or latest.id != episode.id:
                 raise store.HistoryConflict("A new review round has started; refresh before deciding")
             # Human judgment is not gated by a machine deadline or allowance.
             # Publication still enforces live targets, ownership and exact versions.

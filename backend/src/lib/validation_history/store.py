@@ -501,10 +501,9 @@ def begin_execution_in_transaction(db, scope, artifact_id, *, operation_id, rece
             raise HistoryConflict("Validator source input version is stale")
         if request["review_episode_id"] is not None:
             episode = _fact(db, artifact_id, request["review_episode_id"], kind="review_episode")
-            latest = db.scalar(select(ValidationFact.id).where(
-                ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_episode",
-            ).order_by(ValidationFact.sequence.desc()).limit(1))
-            if episode.id != latest:
+            from .episodes import latest_effective_episode
+            latest = latest_effective_episode(db, artifact_id)
+            if latest is None or episode.id != latest.id:
                 raise HistoryConflict("Validation dispatch belongs to an obsolete review episode")
         _require_active_target(db, artifact_id, request["target_id"])
         # Prerequisites stay within the same artifact; one artifact lock makes
