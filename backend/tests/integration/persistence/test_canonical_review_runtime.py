@@ -35,9 +35,11 @@ def canonical_models(monkeypatch, tmp_path):
     from src.lib.openai_agents.config import build_default_model_retry
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
     validators = []
+    flags = SimpleNamespace(unresolved_b=False)
 
     def configured_validator(*args, **kwargs):
         model = CanonicalValidator()
+        model.unresolved_b = flags.unresolved_b
         validators.append(model)
         agent = Agent(name="Fixture validator", model=model, instructions="Resolve only supplied values.",
                       model_settings=ModelSettings(retry=build_default_model_retry()))
@@ -57,7 +59,7 @@ def canonical_models(monkeypatch, tmp_path):
     try:
         yield SimpleNamespace(model=model, supervisor=supervisor, validators=validators,
                               real_get_agent_by_id=real_get_agent_by_id,
-                              trace_id=trace_id, trace_dir=trace_dir)
+                              trace_id=trace_id, trace_dir=trace_dir, flags=flags)
     finally:
         trace_events.clear_extraction_trace_run()
 
@@ -232,7 +234,7 @@ async def test_canonical_producer_runs_extractor_validator_reviewer_and_current_
 
 
 async def _canonical_producer_scenario(
-    planned, canonical_models, monkeypatch, tmp_path, producer, *, prepare_only=False
+    planned, canonical_models, monkeypatch, tmp_path, producer, *, prepare_only=False, unresolved_b=False
 ):
     from src.lib.openai_agents import runner
     from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
@@ -241,6 +243,9 @@ async def _canonical_producer_scenario(
     from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
     from src.lib.validation_review.chat import ChatReview
     import json
+
+    canonical_models.flags.unresolved_b = unresolved_b
+    selected_values = ["FIRST_A", "eco:B (unresolved)" if unresolved_b else "FIRST_B", "SECOND_C"]
 
     class ChatModel(CanonicalReviewer):
         def __init__(self):
@@ -358,6 +363,7 @@ async def _canonical_producer_scenario(
     tool = _create_streaming_tool(extractor, "ask_fixture_specialist", "Extract fixture records",
                                  "Fixture extractor", propagate_errors=True)
     model = ChatModel()
+    model.unresolved_b = unresolved_b
     supervisor = Agent(name="Supervisor", model=model, instructions="Extract then review.", tools=[tool])
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -490,8 +496,7 @@ async def _canonical_producer_scenario(
             flow_file = db.get(FileOutput, UUID(emitted[0]["details"]["file_id"]))
             assert flow_file.file_metadata["selection_manifests"]
             flow_content = Path(flow_file.file_path).read_text()
-        assert [row["validated"] for row in csv.DictReader(io.StringIO(flow_content))] == [
-            "FIRST_A", "FIRST_B", "SECOND_C"]
+        assert [row["validated"] for row in csv.DictReader(io.StringIO(flow_content))] == selected_values
         assert "FIRST_C" not in flow_content
 
     bundle = build_extraction_result_artifact_bundle(
@@ -502,7 +507,7 @@ async def _canonical_producer_scenario(
         format="csv", row_source="object", columns=[FlowOutputColumnSpec(
             key="validated", field_ref="object.pack.Annotation.evidence_code_curies")]))
     assert projection.selection_manifests
-    assert projection.rows == [{"validated": value} for value in ("FIRST_A", "FIRST_B", "SECOND_C")]
+    assert projection.rows == [{"validated": value} for value in selected_values]
     monkeypatch.setattr("src.lib.file_outputs.storage.get_file_output_storage_path", lambda: tmp_path)
     with agent_request_scope(user_id=item.scope.owner_id,
                              session_id=item.scope.session_id, trace_id=uuid4().hex):
@@ -513,8 +518,21 @@ async def _canonical_producer_scenario(
         content = Path(output.file_path).read_text()
     rows = list(csv.DictReader(io.StringIO(content)))
     assert len(rows) == 3
-    assert [row["validated"] for row in rows] == ["FIRST_A", "FIRST_B", "SECOND_C"]
+    assert [row["validated"] for row in rows] == selected_values
     assert "FIRST_C" not in content
+
+    if unresolved_b:
+        assert "FIRST_B" not in content
+        from src.lib.validation_history.selections import read_manifest
+        history_scope = store.HistoryScope(item.scope.owner_id, item.scope.document_id, reference["history_scope_id"])
+        manifest = read_manifest(history_scope, reference["artifact_id"], episode_id=reference["episode_id"])
+        unresolved = [unit for unit in manifest["units"] if unit["scientific_status"] == "unresolved"]
+        assert len(unresolved) == 1 and unresolved[0]["eligible"]
+        assert unresolved[0]["review"] == "accept"
+        with store.SessionLocal() as db:
+            completion = db.scalar(select(ValidationFact).where(ValidationFact.id == unresolved[0]["selected"]))
+            result = store._content(db, completion)["result"]
+            assert result["status"] == "unresolved" and result["resolved_values"] == {}
 
 
 @pytest.fixture
@@ -953,3 +971,12 @@ async def test_canonical_workspace_command_reviews_fresh_records_and_retains_his
         for candidate_id in candidates:
             assert operations.latest_for_candidate(db, candidate_id, owner_id=item.scope.owner_id)
     assert sum(len(model.calls) for model in canonical_models.validators) == calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["three"], indirect=True)
+async def test_canonical_flow_exports_accepted_unresolved_without_inventing_identifier(
+    planned, canonical_models, monkeypatch, tmp_path
+):
+    await _canonical_producer_scenario(planned, canonical_models, monkeypatch, tmp_path,
+                                       "flow", unresolved_b=True)

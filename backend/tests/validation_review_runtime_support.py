@@ -80,6 +80,7 @@ class HistoryReadingReviewer(FakeResponsesWSModel):
 class CanonicalReviewer(HistoryReadingReviewer):
     """Identical grouped-review/retry judgments for every runtime adapter."""
 
+    unresolved_b = False
     retry_guidance = "Recheck C against the supplied original and explain the previous ambiguity."
 
     def review(self):
@@ -96,7 +97,12 @@ class CanonicalReviewer(HistoryReadingReviewer):
         for unit in packet["manifest"]["units"]:
             attempt, answer = yield from self.latest_answer(packet, unit)
             body = json.dumps(answer)
-            labels = [label for label in "ABC" if f"FIRST_{label}" in body]
+            if self.unresolved_b and answer["result"]["status"] == "unresolved":
+                assert answer["result"]["resolved_values"] == {}
+                assert "Unresolved B" in answer["result"]["explanation"]
+                labels = ["B"]
+            else:
+                labels = [label for label in "ABC" if f"FIRST_{label}" in body]
             assert len(labels) == 1, body
             label = labels[0]
             assert label not in self.initial_answers
@@ -165,6 +171,8 @@ class CanonicalReviewer(HistoryReadingReviewer):
 class CanonicalValidator(FakeResponsesWSModel):
     """Script only the provider reply; retain the real validator finalizer."""
 
+    unresolved_b = False
+
     def _next(self, kwargs):
         self.calls.append(kwargs)
         if len(self.calls) == 2:
@@ -229,5 +237,10 @@ class CanonicalValidator(FakeResponsesWSModel):
             "unresolved_questions": ["Supplied information has an ambiguity"] if label in "BC" and not retry else [],
             "explanation": "Scripted fixture answer based only on the supplied request.",
         }
+        if self.unresolved_b and label == "B":
+            assert not retry
+            result.update(status="unresolved", resolved_values={},
+                          missing_expected_fields=sorted(result_keys),
+                          explanation="Unresolved B: supplied information does not support an identifier.")
         self.answer = result
         return _tool_call("finalize_validator_result", "validator-answer", json.dumps({"result": result}))
