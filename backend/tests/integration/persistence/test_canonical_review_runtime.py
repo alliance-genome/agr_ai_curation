@@ -179,6 +179,47 @@ async def test_canonical_grouped_review_and_reconsideration_use_real_sdk_tools(
                 assert emitted["parent_id"] == fact.parent_id
             assert any(event["event_type"] == "validation_review.review_response" for event in events)
             assert any("Ambiguous C requires reconsideration" in str(event) for event in events)
+            contents = [(event["event_type"], event["output"]["preview"]["content"]) for event in events]
+            packets = [body for kind, body in contents if kind == "validation_review.review_packet"]
+            assert len(packets) == 2
+            latest = next(packet for packet in packets if len([
+                fact for fact in packet["facts"] if fact["kind"] == "attempt"]) == 4)
+            attempts_by_id = {fact.id: fact for fact in attempts}
+            completions_by_id = {fact.id: fact for fact in completions}
+            traced_attempts = {fact["id"]: fact for fact in latest["facts"] if fact["kind"] == "attempt"}
+            traced_completions = {fact["id"]: fact for fact in latest["facts"] if fact["kind"] == "completion"}
+            assert set(traced_attempts) == set(attempts_by_id)
+            assert set(traced_completions) == set(completions_by_id)
+            for fact_id, fact in traced_completions.items():
+                assert fact["parent_id"] == completions_by_id[fact_id].parent_id
+                assert fact["parent_id"] in traced_attempts
+                assert fact["sha256"] == completions_by_id[fact_id].body_sha
+            works = [body["payload"] for kind, body in contents if kind == "validation_review.review_work"]
+            retry_work = [work for work in works if work["followup"] is not None]
+            assert len(retry_work) == 1
+            assert retry_work[0]["followup"]["parent_decision_id"] == model.parent_decision_id
+            assert retry_work[0]["followup"]["instructions"] == model.retry_guidance
+            assert retry_work[0]["invocation"]["attempt_ids"] == [model.final_attempt_id]
+            assert attempts_by_id[model.final_attempt_id].target_id == attempts_by_id[model.initial_answers["C"]].target_id
+            responses = [body for kind, body in contents if kind == "validation_review.review_response"]
+            assert len(responses) == 2
+            rejected = next(body for body in responses if body["response"]["decision_id"] == model.parent_decision_id)
+            identity = rejected["identity"]
+            if isinstance(identity, str):
+                import json
+                identity = json.loads(identity)
+            assert {(entry["logical_attempt_id"], entry["action"]) for entry in identity["entries"]} == {
+                (model.initial_answers["A"], "accept"), (model.initial_answers["B"], "accept"),
+                (model.initial_answers["C"], "reject")}
+            final = next(body for body in responses if body["response"]["ready"])
+            publication = final["response"]["publication"]
+            saved = db.scalar(select(ValidationFact).where(ValidationFact.id == publication["fact_id"]))
+            assert saved.kind == "selected_projection" and saved.body_sha == publication["body_sha256"]
+            manifest = store._content(db, saved)["manifest"]
+            assert manifest["sha256"] == publication["manifest_sha256"]
+            selected_completions = {unit["selected"] for unit in manifest["units"]}
+            assert {completions_by_id[fact_id].parent_id for fact_id in selected_completions} == {
+                model.initial_answers["A"], model.initial_answers["B"], model.final_attempt_id}
 
 
 @pytest.mark.asyncio

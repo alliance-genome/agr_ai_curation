@@ -145,6 +145,25 @@ grouped decisions, idempotent publication and selected prerequisite waves. Fake
 validator callbacks exercise the reusable executor without paid provider replay.
 Unit tests cover provider admission, configuration, locked prompts and tool scope.
 
+`test_canonical_review_runtime.py` composes the real SDK/tool and persistence
+boundaries across chat, direct and saved-profile extraction, configured flow CSV
+attachments, the serial batch worker, and fresh workspace review. Provider replies
+are scripted: these tests prove history, dispatch and publication wiring, not
+scientific quality or actual provider token cost. The trace assertion parses real
+committed events and checks attempt/completion references, rejection/retry parentage
+and exact selected-publication identity against durable history.
+
+Executable settings contracts use `model_settings_contract`, which records SDK
+JSON settings plus a versioned declaration of the actual retry policy. The default
+factory registers that declaration against the unchanged SDK callable; budget and
+backoff are read from the live settings. Change the declaration revision whenever
+policy behavior changes without an already-declared parameter change. Unknown
+callbacks fail explicitly; do not serialize functions with `repr`, infer closure
+contents, or drop the policy from the contract. Resume reconstructs authorized
+code and compares settings; it never executes a policy from saved JSON. Changed
+policy/budget settings can require a fresh review round. Existing historical
+records are not rewritten to claim a policy they never recorded.
+
 ## Integration handoff and calibration
 
 E/F/G must bind their real prompt/tool variants (compact, non-compact, single,
