@@ -118,6 +118,9 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
         kind="extraction_source_selection", target_id=contribution.target_id, parent_id=contribution.id,
         body={"identity": identity, "entry": selected, "evidence": [evidence[key] for key in evidence_ids],
               "relationships": planned["relationships"], "retired_ids": planned["retired_ids"]})
+    from src.lib.validation_history.runtime import reconcile_absent_binding_targets
+    reconcile_absent_binding_targets(db, context.history_scope, artifact_id,
+        updated.extracted_objects, operation_id=operation_id, actor=identity["actor"], reason=reason)
     after_inputs = rebuild_inputs(db, updated)
     changed = source_inputs.update(db, artifact_id, operation_id=operation_id,
                                    before=before_inputs, after=after_inputs, selection_id=selection.id)

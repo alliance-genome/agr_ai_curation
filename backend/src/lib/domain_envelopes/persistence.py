@@ -697,6 +697,12 @@ def _append_history_events_for_row(
                     history_store._append(db, artifact.id,
                         operation_id="curator-addition:" + addition["id"], kind="target",
                         fact_id=addition["id"], parent_id=addition["parent_id"], body=addition["original"])
+            from src.lib.validation_history.runtime import reconcile_absent_binding_targets
+            from src.lib.validation_history.projection import source_envelope_in_transaction
+            source = source_envelope_in_transaction(db, scope, artifact.id, envelope)
+            reconcile_absent_binding_targets(db, scope, artifact.id, source.extracted_objects,
+                operation_id=event_id, actor={"type": "curator", "id": edits["actor_id"]},
+                reason=edits["reason"])
         object_id, field_path = _history_target(event, object_id_by_ref)
         db.add(
             DomainEnvelopeHistory(

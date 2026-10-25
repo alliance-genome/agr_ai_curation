@@ -909,6 +909,27 @@ def test_gene_expression_context_ontology_requests_are_field_scoped():
     }
 
 
+@pytest.mark.parametrize("mention", ["AGRKB:101000000232912", "WBPaper00012345", "A raw citation from the paper"])
+def test_raw_reference_mention_dispatches_without_inventing_identity(mention):
+    envelope = _converted_tmem67_envelope()
+    reference = envelope.extracted_objects[0].payload["single_reference"]
+    reference.clear()
+    reference.update({"mention": mention, "reference_id": None, "curie": None, "title": None})
+    original = copy.deepcopy(envelope.model_dump(mode="json"))
+    registry = DomainPackValidationRegistry.from_domain_pack(
+        load_alliance_domain_pack_registry().get_pack("agr.alliance.gene_expression")
+    )
+    matches = [match for match in registry.match_bindings(envelope)
+               if match.binding.binding_id == "source_reference_validation"]
+    assert len(matches) == 3
+    for match in matches:
+        request = build_domain_validation_request(match).request
+        assert request is not None
+        assert request.selected_inputs["reference_mention"] == mention
+        assert not any(request.selected_inputs.get(key) for key in ("reference_id", "curie", "title"))
+    assert envelope.model_dump(mode="json") == original
+
+
 def test_gene_expression_field_scoped_evidence_quote_bundle_selected_from_nested_metadata():
     envelope = _converted_tmem67_envelope()
     evidence_records = envelope.metadata["extraction_metadata"]["evidence_records"]
@@ -3864,7 +3885,7 @@ def test_curators_cannot_edit_the_paper_wording_the_validation_state_or_the_data
     assert result.envelope.extracted_objects[0].payload == envelope.extracted_objects[0].payload
 
 
-def test_non_pinned_bindings_read_the_paper_wording_and_pinned_bindings_are_unchanged():
+def test_bindings_read_paper_wording_and_reference_contract_is_pinned():
     bindings = {
         binding["binding_id"]: binding
         for binding in _gene_expression_pack().metadata.metadata["validator_bindings"]["active"]
@@ -3922,12 +3943,13 @@ def test_non_pinned_bindings_read_the_paper_wording_and_pinned_bindings_are_unch
         ("experimental_condition_validation", "data_provider_abbreviation"),
     ):
         assert bindings[binding_id]["input_fields"][input_name]["path"] == "data_provider.mention"
-    # Hash-pinned and byte-identical: saved profile mappings pin sha256(binding.raw).
+    # Changing reference input routing intentionally changes the saved capability contract.
+    # Existing profile mappings require the release upgrade/review workflow.
     from src.schemas.generic_extraction_profile import canonical_json
 
     assert hashlib.sha256(
         canonical_json(bindings["source_reference_validation"]).encode()
-    ).hexdigest() == "3f1fe77b42cf5ddd8fb7121c56bd3f66b9473a8aeb14efc359c7a90528742e11"
+    ).hexdigest() == "bb33edbb5cec6deca39ee5b9777aa0e98c9d43f4a9f2bfb2591aa491cd1ad594"
     # No flat top-level scalar is a validator write target.
     expected_paths = [
         path

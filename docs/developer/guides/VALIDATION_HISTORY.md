@@ -130,9 +130,27 @@ python -m src.lib.validation_history.migration --workers-drained --envelope ENVE
 
 The command stops on unsupported or ownerless data, prints successful source IDs,
 and is safe to rerun. It never executes validators. Historical source payloads
-are retained unchanged. Sources without an envelope are first normalized using
+are retained unchanged. An existing source-linked envelope is imported from its
+observed checkpoint after matching document, source owner and adapter scope, without rebuilding
+it through newer converters or changing its original source hash. Sources without
+an envelope are first normalized using
 the existing historical normalizer and then imported with original unavailable.
 No old result is expanded into an invented attempt count or decision.
+
+With explicit approval to retain old-format results rather than convert their
+scientific structure, add `--retain-legacy-results`. Every recognized old
+`objects` envelope, specialized semantic-list output, and validated curation-prep
+summary is reported as `disposition: retained_unchanged` with its source ID and
+reason. Historical preparation-owned checkpoints are also reported explicitly
+when the same owner, document and adapter match and a validated preparation
+reference identifies the exact source UUID or recorded source alias as well as
+the envelope and domain pack; source links are not inferred or reassigned. These rows and their payloads remain untouched; they are not reported as
+converted or approved. With `--all`, existing saved envelopes are still imported independently. A targeted
+`--extraction` exclusion does not import its checkpoint: use `--envelope` explicitly.
+Retain the complete JSON-lines report as release evidence and reconcile every
+exclusion against the pre-import inventory. Current-shaped malformed payloads,
+unknown formats, and ownerless sources still stop the import. This option does not
+restore old converters or create new scientific structure from legacy fields.
 
 There is no review-off switch or old-worker compatibility fallback. Keep the
 series unreleased until H passes. Recovery is forward-only: stop incompatible

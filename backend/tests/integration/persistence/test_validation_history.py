@@ -1643,3 +1643,297 @@ def test_converted_source_evidence_remains_exact_through_validation_history_and_
     anchors = project_evidence_anchor_projections(restored, envelope_revision=1, document_id=scope.document_id)
     assert anchors
     assert 'Fake validator replacement' not in str([a.model_dump() for a in anchors])
+
+
+def test_absent_binding_locations_preserve_source_and_follow_stable_elements(scope):
+    from types import SimpleNamespace
+    from src.lib.validation_history import runtime
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+
+    source = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id="fixture",
+        extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="record",
+            payload={"items": [{"label": "same"}, {"label": "same"}], "null_value": None})])
+    original = source.model_dump(mode="json")
+    captured = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
+        typed=original, envelope=source, provenance={})
+    binding = runtime.bind_artifact(captured,
+        SimpleNamespace(user_id=scope.owner_id, document_id=scope.document_id))
+    obj = captured.extracted_objects[0]
+    before = obj.model_dump(mode="json")
+    match = SimpleNamespace(object_envelope=obj, field_path="items[0].optional.term",
+        binding=SimpleNamespace(binding_id="fixture.optional"))
+    absent = runtime.binding_target(binding, match)
+    assert runtime.binding_target(binding, match) == absent
+    body = h.read_fact(scope, binding.artifact_id, absent)["content"]
+    ids = obj.metadata["validation_history"]["elements"]["items"]
+    assert body["absent_anchor"] == {"target_id": ids[0], "suffix": ["optional", "term"]}
+    assert obj.model_dump(mode="json") == before
+    assert h.read_baseline(scope, binding.artifact_id)["normalized"] == original
+
+    match.field_path = "items[0].other.term"
+    assert runtime.binding_target(binding, match) != absent
+    match.field_path = "null_value"
+    null_target = runtime.binding_target(binding, match)
+    assert "absent_anchor" not in h.read_fact(scope, binding.artifact_id, null_target)["content"]
+    match.field_path = "null_value.term"
+    null_child = runtime.binding_target(binding, match)
+    assert h.read_fact(scope, binding.artifact_id, null_child)["content"]["absent_anchor"] == {
+        "target_id": obj.metadata["validation_history"]["fields"]["null_value"], "suffix": ["term"],
+    }
+    match.field_path = "null_value[0].term"
+    with pytest.raises(h.HistoryConflict):
+        runtime.binding_target(binding, match)
+
+    reordered = runtime.reorder_element_projection(obj, "items", list(reversed(ids)))
+    match.object_envelope = reordered
+    match.field_path = "items[1].optional.term"
+    assert runtime.binding_target(binding, match) == absent
+    match.field_path = "items[2].optional"
+    with pytest.raises(h.HistoryConflict):
+        runtime.binding_target(binding, match)
+    match.field_path = "unrecorded[0].term"
+    with pytest.raises(h.HistoryConflict):
+        runtime.binding_target(binding, match)
+
+    corrupt = obj.model_copy(deep=True)
+    del corrupt.metadata["validation_history"]["fields"]["items[0].label"]
+    match.object_envelope = corrupt
+    match.field_path = "items[0].label"
+    with pytest.raises(h.HistoryConflict):
+        runtime.binding_target(binding, match)
+
+    corrupt = obj.model_copy(deep=True)
+    corrupt.metadata["validation_history"]["fields"]["items[0].label"] = (
+        corrupt.metadata["validation_history"]["fields"]["items[1].label"])
+    match.object_envelope = corrupt
+    with pytest.raises(h.HistoryConflict, match="another parent"):
+        runtime.binding_target(binding, match)
+
+
+def test_absence_recurrence_gets_fresh_identity_without_rewriting_history(scope):
+    from types import SimpleNamespace
+    from src.lib.validation_history import runtime
+    from src.lib.validation_review import source_projection
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+    from src.schemas.validation_followup import ProposedSourceValue
+
+    source = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id="fixture",
+        extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="record",
+            payload={"optional": {}, "sibling": "initial"})])
+    original = source.model_dump(mode="json")
+    captured = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
+        typed=original, envelope=source, provenance={})
+    binding = runtime.bind_artifact(captured,
+        SimpleNamespace(user_id=scope.owner_id, document_id=scope.document_id))
+    obj = captured.extracted_objects[0]
+    match = SimpleNamespace(object_envelope=obj, field_path="optional.term",
+        binding=SimpleNamespace(binding_id="fixture.optional"))
+    first = runtime.binding_target(binding, match)
+
+    def mutate(obj, path, value):
+        operation = uuid4().hex
+        proposal = ProposedSourceValue(field_path=path, value=value,
+                                       evidence_record_ids=[], collection_mappings=[])
+        planned = source_projection.plan(obj.model_dump(mode="json"), [proposal],
+                                         contribution_id=operation)
+        updated = CuratableObjectEnvelope.model_validate(planned["entry"])
+        with h.SessionLocal.begin() as db:
+            for addition in planned["additions"]:
+                h._append(db, binding.artifact_id, operation_id="test-addition:" + addition["id"],
+                    kind="target", body=addition["body"], fact_id=addition["id"],
+                    parent_id=addition["parent_id"])
+            if planned["retired_ids"]:
+                h.apply_decisions_in_transaction(db, scope, binding.artifact_id,
+                    operation_id="test-retire:" + operation,
+                    actor={"type": "agent", "id": "fixture-supervisor"}, entries=[{
+                        "target_id": tid, "expected_version": h._current(db, binding.artifact_id, tid)["version"],
+                        "action": "retire", "reason": "Explicit test source revision",
+                    } for tid in planned["retired_ids"]])
+            runtime.reconcile_absent_binding_targets(db, scope, binding.artifact_id, [updated],
+                operation_id=operation, actor={"type": "agent", "id": "fixture-supervisor"},
+                reason="Explicit test source revision")
+        return updated
+
+    obj = mutate(obj, "sibling", "changed")
+    match.object_envelope = obj
+    assert runtime.binding_target(binding, match) == first
+    obj = mutate(obj, "optional", {"term": "new input"})
+    match.object_envelope = obj
+    present = runtime.binding_target(binding, match)
+    assert present != first
+    with h.SessionLocal() as db:
+        assert not h._current(db, binding.artifact_id, first)["active"]
+    obj = mutate(obj, "optional", {})
+    match.object_envelope = obj
+    second = runtime.binding_target(binding, match)
+    assert second not in {first, present}
+    assert h.read_fact(scope, binding.artifact_id, second)["content"]["retired_predecessor"] == first
+    assert runtime.binding_target(binding, match) == second
+    with h.SessionLocal() as db:
+        assert h._current(db, binding.artifact_id, second)["review"] == "pending"
+        with pytest.raises(h.HistoryConflict, match="Retired"):
+            h._require_active_target(db, binding.artifact_id, first)
+        with pytest.raises(h.HistoryConflict, match="Retired"):
+            h._require_active_target(db, binding.artifact_id, present)
+    assert h.read_baseline(scope, binding.artifact_id)["normalized"] == original
+
+
+@pytest.mark.parametrize("source_adapter", ["fixture", "different-adapter"])
+@pytest.mark.parametrize("historical_alias", [False, True, "session"])
+@pytest.mark.parametrize("source_owner", ["matching", None, "wrong-owner"])
+def test_historical_source_import_uses_saved_checkpoint_not_new_normalization(scope, monkeypatch, source_adapter, historical_alias, source_owner):
+    from uuid import UUID
+    from datetime import datetime, timezone
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord, CurationReviewSession
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+    from src.lib.validation_history.migration import import_historical_extraction
+    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint, load_domain_envelope
+
+    source_id = uuid4()
+    source_payload = {"old_output": "Source wording remains exactly as stored"}
+    envelope = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id="fixture",
+        extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="record",
+            payload={"value": "Observed historical projection"})])
+    saved_source_id = "chat-runtime:" + uuid4().hex if historical_alias else str(source_id)
+    if historical_alias:
+        source_payload.update({"envelope_id": envelope.envelope_id,
+                               "metadata": {"source_extraction_result_id": saved_source_id}})
+    review_session_id = uuid4() if historical_alias == "session" else None
+    if review_session_id:
+        envelope.metadata["source_extraction_result_id"] = saved_source_id
+    with SessionLocal.begin() as db:
+        if review_session_id:
+            db.add(CurationReviewSession(id=review_session_id, adapter_key="fixture",
+                document_id=UUID(scope.document_id), created_by_id=scope.owner_id,
+                prepared_at=datetime.now(timezone.utc)))
+            db.flush()
+        db.add(CurationExtractionResultRecord(id=source_id, document_id=UUID(scope.document_id),
+            agent_key="fixture", adapter_key=source_adapter, user_id=scope.owner_id if source_owner == "matching" else source_owner,
+            source_kind=CurationExtractionSourceKind.CHAT, payload_json=source_payload, extraction_metadata={}))
+        write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(project_key="fixture",
+            envelope=envelope, expected_revision=0, document_id=scope.document_id,
+            adapter_key="fixture", session_id=review_session_id,
+            source_extraction_result_id=None if review_session_id else saved_source_id, source_payload_hash="a" * 64))
+    monkeypatch.setattr("src.lib.curation_workspace.curation_prep_service.ensure_domain_envelope_materialization",
+                        lambda *args, **kwargs: pytest.fail("Must import the known checkpoint"))
+    if source_owner != "matching" or source_adapter != "fixture":
+        with pytest.raises(ValueError, match="matching authorized owner" if source_owner != "matching" else "scope differ"):
+            import_historical_extraction(str(source_id))
+        with SessionLocal() as db:
+            assert load_domain_envelope(db, envelope.envelope_id).model_dump(mode="json") == envelope.model_dump(mode="json")
+        return
+    assert import_historical_extraction(str(source_id))
+    assert not import_historical_extraction(str(source_id))
+    with SessionLocal() as db:
+        assert db.get(CurationExtractionResultRecord, source_id).payload_json == source_payload
+        original = load_domain_envelope(db, envelope.envelope_id, revision=1)
+        assert original.model_dump(mode="json") == envelope.model_dump(mode="json")
+        current = load_domain_envelope(db, envelope.envelope_id)
+    ref = current.metadata["validation_history"]
+    baseline = h.read_baseline(h.HistoryScope(scope.owner_id, scope.document_id, str(review_session_id or saved_source_id)), ref["artifact_id"])
+    assert baseline["typed"] is None
+    assert baseline["normalized"] == envelope.model_dump(mode="json")
+
+
+def test_persisted_curator_source_change_retires_absent_binding_atomically(scope, tmp_path):
+    from types import SimpleNamespace
+    from dataclasses import replace
+    from src.lib.validation_history import runtime
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+    from src.schemas.domain_pack_metadata import DomainPackMetadata
+    from src.lib.domain_packs.registry import LoadedDomainPack
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint, load_domain_envelope
+
+    metadata = DomainPackMetadata.model_validate({"metadata_api_version": "1.0.0", "pack_id": "fixture.absence", "display_name": "Absence",
+        "version": "0.1.0", "object_definitions": [{"object_type": "Record", "display_name": "Record",
+        "fields": [{"field_path": "optional", "field_type": "object", "metadata": {"editable": True}}]}]})
+    pack = LoadedDomainPack(pack_id=metadata.pack_id, display_name=metadata.display_name,
+        version=metadata.version, pack_path=tmp_path, metadata_path=tmp_path / "pack.yaml", metadata=metadata)
+    env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=pack.pack_id,
+        extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="Record", payload={"optional": {}})])
+    original = env.model_dump(mode="json")
+    env = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex, typed=original, envelope=env, provenance={})
+    bound = runtime.bind_artifact(env, SimpleNamespace(user_id=scope.owner_id, document_id=scope.document_id))
+    match = SimpleNamespace(object_envelope=env.extracted_objects[0], field_path="optional.term",
+                            binding=SimpleNamespace(binding_id="fixture.input"))
+    target = runtime.binding_target(bound, match)
+    checkpoint = DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=env,
+        expected_revision=0, document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=str(uuid4()))
+    with SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, checkpoint)
+    for revision, before, value in [(1, {}, {"term": "curator source"}), (2, {"term": "curator source"}, {})]:
+        patch = EnvelopeFieldPatch(envelope_id=env.envelope_id, expected_revision=revision, object_id="one",
+            field_path="optional", before=before, value=value, reason="Explicit source edit")
+        result = apply_curator_field_patch(env, pack, patch, current_revision=revision,
+            actor_id=scope.owner_id, actor_display_name="Curator")
+        assert result.accepted, result.errors
+        with SessionLocal.begin() as db:
+            write_domain_envelope_checkpoint(db, replace(checkpoint, envelope=result.envelope, expected_revision=revision))
+            env = load_domain_envelope(db, env.envelope_id)
+            assert not h._current(db, bound.artifact_id, target)["active"]
+    match.object_envelope = env.extracted_objects[0]
+    fresh = runtime.binding_target(bound, match)
+    assert fresh != target
+    assert h.read_baseline(scope, bound.artifact_id)["normalized"] == original
+    with SessionLocal() as db:
+        assert load_domain_envelope(db, env.envelope_id, revision=1).extracted_objects[0].payload == {"optional": {}}
+        assert load_domain_envelope(db, env.envelope_id, revision=2).extracted_objects[0].payload == {"optional": {"term": "curator source"}}
+
+
+@pytest.mark.parametrize("same_owner", [True, False])
+@pytest.mark.parametrize("same_source", [True, False])
+@pytest.mark.parametrize("same_adapter", [True, False])
+def test_legacy_preparation_owned_source_requires_exact_saved_context(scope, same_owner, same_source, same_adapter):
+    from uuid import UUID
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+    from src.lib.validation_history.migration import retained_extraction_reason
+    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint
+
+    source_id, prep_id = uuid4(), uuid4()
+    envelope = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id="fixture",
+        extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="Record", payload={"term": "original"})])
+    payload = envelope.model_dump(mode="json")
+    with SessionLocal.begin() as db:
+        db.add(CurationExtractionResultRecord(id=source_id, document_id=UUID(scope.document_id),
+            agent_key="extractor", adapter_key="fixture", user_id=scope.owner_id,
+            source_kind=CurationExtractionSourceKind.CHAT, payload_json=payload, extraction_metadata={}))
+        db.add(CurationExtractionResultRecord(id=prep_id, document_id=UUID(scope.document_id),
+            agent_key="curation_prep", adapter_key="fixture" if same_adapter else "other-adapter", user_id=scope.owner_id if same_owner else "other-owner",
+            source_kind=CurationExtractionSourceKind.CHAT, extraction_metadata={}, payload_json={
+                "envelope_refs": [{"envelope_id": envelope.envelope_id, "envelope_revision": 1,
+                    "source_extraction_result_id": str(source_id) if same_source else str(uuid4()), "domain_pack_id": "fixture", "review_row_count": 1}],
+                "review_row_count": 1, "candidates": [], "run_metadata": {"model_name": "fixture"}}))
+        write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(project_key="fixture",
+            envelope=envelope, expected_revision=0, document_id=scope.document_id,
+            adapter_key="fixture", source_extraction_result_id=str(prep_id)))
+    assert retained_extraction_reason(str(source_id)) == ("legacy_preparation_owned_checkpoint" if same_owner and same_source and same_adapter else None)
+    with SessionLocal() as db:
+        assert db.get(CurationExtractionResultRecord, source_id).payload_json == payload
+    if same_owner and same_source and same_adapter:
+        # Exact provenance does not exempt malformed current-shaped data.
+        with SessionLocal.begin() as db:
+            db.get(CurationExtractionResultRecord, source_id).payload_json = {**payload, "extracted_objects": None}
+        with pytest.raises(ValueError):
+            retained_extraction_reason(str(source_id))
+
+
+@pytest.mark.parametrize("source_owner", [None, "unrelated-owner"])
+@pytest.mark.parametrize("operation", ["import", "retain"])
+def test_history_import_and_exclusions_reject_missing_or_wrong_source_owner(scope, source_owner, operation):
+    from uuid import UUID
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
+    from src.lib.validation_history.migration import import_historical_extraction, retained_extraction_reason
+    source_id = uuid4()
+    with SessionLocal.begin() as db:
+        db.add(CurationExtractionResultRecord(id=source_id, document_id=UUID(scope.document_id),
+            agent_key="old_extractor", adapter_key="fixture", user_id=source_owner,
+            source_kind=CurationExtractionSourceKind.CHAT, extraction_metadata={},
+            payload_json={"envelope_id": "old", "domain_pack_id": "fixture", "objects": []}))
+    function = import_historical_extraction if operation == "import" else retained_extraction_reason
+    with pytest.raises(ValueError, match="matching authorized owner"):
+        function(str(source_id))

@@ -23,6 +23,18 @@ def scenario(scope, tmp_path, monkeypatch, request):
     from src.schemas.domain_validator import DomainValidatorResultBase
     from tests.unit.lib.domain_packs.test_validator_dispatch import _multivalued_dispatch_pack, _result_payload
     pack = _multivalued_dispatch_pack(tmp_path)
+    if fixture_mode == "absent":
+        from dataclasses import replace
+        from copy import deepcopy
+
+        raw = deepcopy(pack.metadata.metadata)
+        raw["validator_bindings"]["active"][0]["input_fields"] = {
+            "query": {"source": "literal", "value": "Scripted test request"}}
+        fields = [field.model_copy(update={"metadata": {}})
+                  for field in pack.metadata.object_definitions[0].fields]
+        definition = pack.metadata.object_definitions[0].model_copy(update={"fields": fields})
+        pack = replace(pack, metadata=pack.metadata.model_copy(update={
+            "metadata": raw, "object_definitions": [definition]}))
     if include_support:
         from dataclasses import replace
         from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
@@ -35,7 +47,7 @@ def scenario(scope, tmp_path, monkeypatch, request):
         pack = replace(pack, metadata=pack.metadata.model_copy(update={"object_definitions": [*pack.metadata.object_definitions, supporting]}))
     env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=pack.pack_id,
         extracted_objects=[CuratableObjectEnvelope(object_type="Annotation", pending_ref_id="one",
-            payload={"evidence_code_curies": ["eco:1", "eco:2"] if fixture_mode == "two" else ["eco:1"]})])
+            payload={} if fixture_mode == "absent" else {"evidence_code_curies": ["eco:1", "eco:2"] if fixture_mode == "two" else ["eco:1"]})])
     env = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
         typed=env.model_dump(mode="json"), envelope=env, provenance={})
     aid = env.metadata["validation_history"]["artifact_id"]
@@ -652,3 +664,54 @@ def test_queued_revalidation_cannot_authorize_edit_made_after_click(scope, scena
     completion = x.propose('ECO:NEW_ANSWER')
     x.publish(completion)
     assert x.env.extracted_objects[0].payload['evidence_code_curies'] == ['ECO:AFTER_CLICK']
+
+
+@pytest.mark.parametrize("scenario", ["absent"], indirect=True)
+def test_selected_answer_for_absent_field_does_not_rewrite_original(scope, scenario):
+    x = scenario
+    assert h.read_baseline(scope, x.aid)["normalized"]["extracted_objects"][0]["payload"] == {}
+    assert "evidence_code_curies" not in x.env.extracted_objects[0].metadata["validation_history"]["fields"]
+    assert x.env.extracted_objects[0].payload["evidence_code_curies"] == "ECO:VALIDATED"
+    first_reference = x.env.metadata["selected_projection"]
+    x.episode_fn()
+    unresolved = x.propose(None, status="unresolved")
+    manifest = x.publish(unresolved)
+    assert manifest["ready"]
+    assert "evidence_code_curies" not in x.env.extracted_objects[0].payload
+    assert h.read_fact(scope, x.aid, unresolved)["content"]["result"]["status"] == "unresolved"
+    assert read_published_projection(scope, first_reference)[0].extracted_objects[0].payload["evidence_code_curies"] == "ECO:VALIDATED"
+
+
+@pytest.mark.parametrize("scenario", ["absent"], indirect=True)
+def test_curator_source_edit_after_selected_absent_answer(scope, scenario, monkeypatch):
+    from dataclasses import replace
+    from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint, load_domain_envelope
+    from src.lib.validation_history.projection import source_envelope_in_transaction
+
+    x = scenario
+    old_reference = x.env.metadata["selected_projection"]
+    definition = x.pack.metadata.object_definitions[0]
+    definition = definition.model_copy(update={"fields": [*definition.fields,
+        DomainPackFieldDefinition.model_validate({"field_path": "curator_note", "field_type": "string",
+                                                 "metadata": {"editable": True}})]})
+    pack = replace(x.pack, metadata=x.pack.metadata.model_copy(update={"object_definitions": [definition]}))
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
+    patched = apply_curator_field_patch(x.env, pack, EnvelopeFieldPatch(
+        envelope_id=x.env.envelope_id, expected_revision=x.revision, object_id="one",
+        field_path="curator_note", before=None, value="Curator source note"),
+        current_revision=x.revision, actor_id=scope.owner_id, actor_display_name="Curator")
+    assert patched.accepted, patched.errors
+    with h.SessionLocal.begin() as db:
+        saved = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
+            project_key="fixture", envelope=patched.envelope, expected_revision=x.revision,
+            document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=x.source))
+        current = load_domain_envelope(db, x.env.envelope_id)
+        source = source_envelope_in_transaction(db, scope, x.aid, current)
+        assert source.extracted_objects[0].payload == {"curator_note": "Curator source note"}
+        assert h._current(db, x.aid, x.target)["active"]
+    assert saved.revision == x.revision + 1
+    assert h.read_baseline(scope, x.aid)["normalized"]["extracted_objects"][0]["payload"] == {}
+    assert read_published_projection(scope, old_reference)[0].extracted_objects[0].payload == {
+        "evidence_code_curies": "ECO:VALIDATED"}

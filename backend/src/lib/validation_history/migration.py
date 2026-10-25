@@ -4,7 +4,7 @@ Run only after draining workers. This records observed historical projections;
 it does not infer prevalidation inputs, executions, or supervisor acceptance.
 """
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from src.lib.curation_workspace.models import DomainEnvelopeModel
 from src.lib.domain_envelopes.persistence import (
@@ -104,6 +104,13 @@ def import_historical_envelope(envelope_id: str) -> bool:
         return True
 
 
+def _require_source_owner(db, row):
+    document = db.get(PDFDocument, row.document_id)
+    owner = db.get(User, document.user_id) if document is not None and document.user_id is not None else None
+    if owner is None or row.user_id != owner.auth_sub:
+        raise ValueError("Historical source has no matching authorized owner; manual reconciliation required")
+
+
 def import_historical_extraction(extraction_result_id: str) -> bool:
     """Materialize a known stored source, then import its observed checkpoint.
 
@@ -121,9 +128,104 @@ def import_historical_extraction(extraction_result_id: str) -> bool:
         row = db.get(CurationExtractionResultRecord, UUID(extraction_result_id))
         if row is None:
             raise ValueError("Historical extraction no longer exists")
-        source = _record_to_schema(row)
+        _require_source_owner(db, row)
+        # Import the authoritative saved projection when one already exists.
+        # Re-normalizing its old source against today's converters can change
+        # metadata/hash contracts and must not replace the observed checkpoint.
+        source_match = DomainEnvelopeModel.source_extraction_result_id == str(row.id)
+        payload = row.payload_json
+        metadata = payload.get("metadata") if isinstance(payload, dict) else None
+        alias = metadata.get("source_extraction_result_id") if isinstance(metadata, dict) else None
+        if isinstance(alias, str) and alias and isinstance(payload.get("envelope_id"), str):
+            # Older inline checkpoints explicitly named their chat-runtime source
+            # before the durable extraction UUID existed. Preserve that exact link.
+            source_match = or_(source_match, and_(
+                DomainEnvelopeModel.envelope_id == payload["envelope_id"],
+                or_(DomainEnvelopeModel.source_extraction_result_id == alias,
+                    and_(DomainEnvelopeModel.source_extraction_result_id.is_(None),
+                         DomainEnvelopeModel.envelope_json["metadata"]["source_extraction_result_id"].as_string() == alias))))
+        saved = list(db.scalars(select(DomainEnvelopeModel).where(source_match)))
+        if any(item.document_id != row.document_id or item.adapter_key != row.adapter_key for item in saved):
+            raise ValueError("Historical source and saved envelope scope differ")
+        saved_ids = [item.envelope_id for item in saved]
+        source = _record_to_schema(row) if not saved_ids else None
+    if saved_ids:
+        changed = False
+        for envelope_id in saved_ids:
+            changed = import_historical_envelope(envelope_id) or changed
+        return changed
     ref = ensure_domain_envelope_materialization(source, persist=True)
     return import_historical_envelope(ref.envelope_id)
+
+
+def retained_source_reason(agent_key, payload):
+    """Recognize known old wire shapes, never infer or convert scientific data.
+
+    Current-shaped and unknown/malformed sources are not exclusions: normal
+    validation must still reject them rather than hiding a broken import.
+    """
+    from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+    from src.schemas.curation_prep import CurationPrepAgentOutput
+    from src.schemas.models.domain_envelope_extraction import LEGACY_SEMANTIC_LIST_FIELDS
+
+    if not isinstance(payload, dict) or {"extracted_objects", "curatable_objects"}.intersection(payload):
+        return None
+    if agent_key == CURATION_PREP_AGENT_ID:
+        CurationPrepAgentOutput.model_validate(payload)
+        return "curation_preparation_output"
+    if (isinstance(payload.get("objects"), list)
+            and all(isinstance(payload.get(key), str) for key in ("envelope_id", "domain_pack_id"))):
+        return "legacy_objects_envelope"
+    if (isinstance(payload.get("run_summary"), dict)
+            and isinstance(payload.get("items"), list)
+            and any(isinstance(payload.get(key), list) for key in LEGACY_SEMANTIC_LIST_FIELDS - {"items"})):
+        return "legacy_specialized_output"
+    return None
+
+
+def retained_extraction_reason(extraction_result_id):
+    from uuid import UUID
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord
+    with SessionLocal() as db:
+        row = db.get(CurationExtractionResultRecord, UUID(extraction_result_id))
+        if row is None:
+            raise ValueError("Historical extraction no longer exists")
+        _require_source_owner(db, row)
+        reason = retained_source_reason(row.agent_key, row.payload_json)
+        if reason is not None:
+            return reason
+        # Some old preparation runs owned the checkpoint rather than its source
+        # extraction. Preserve both records, without guessing/reassigning a link;
+        # --all imports the authoritative saved envelope independently below.
+        payload = row.payload_json
+        envelope_id = payload.get("envelope_id") if isinstance(payload, dict) else None
+        saved = db.get(DomainEnvelopeModel, envelope_id) if isinstance(envelope_id, str) else None
+        if saved is None or saved.document_id != row.document_id or saved.adapter_key != row.adapter_key:
+            return None
+        if saved.source_extraction_result_id in {None, str(row.id)}:
+            return None
+        try:
+            preparation_id = UUID(saved.source_extraction_result_id)
+        except ValueError:
+            return None
+        preparation = db.get(CurationExtractionResultRecord, preparation_id)
+        if (preparation is None or preparation.document_id != row.document_id
+                or preparation.user_id != row.user_id or preparation.adapter_key != row.adapter_key):
+            return None
+        from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
+        from src.schemas.curation_prep import CurationPrepAgentOutput
+        if preparation.agent_key != CURATION_PREP_AGENT_ID:
+            return None
+        prepared = CurationPrepAgentOutput.model_validate(preparation.payload_json)
+        source_refs = {str(row.id)}
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict) and isinstance(metadata.get("source_extraction_result_id"), str):
+            source_refs.add(metadata["source_extraction_result_id"])
+        if any(ref.envelope_id == saved.envelope_id and ref.domain_pack_id == saved.domain_pack_key
+               and ref.source_extraction_result_id in source_refs for ref in prepared.envelope_refs):
+            DomainEnvelope.model_validate(payload)
+            return "legacy_preparation_owned_checkpoint"
+        return None
 
 
 def main() -> None:
@@ -137,6 +239,8 @@ def main() -> None:
     targets.add_argument("--extraction", action="append")
     targets.add_argument("--all", action="store_true")
     parser.add_argument("--workers-drained", action="store_true", required=True)
+    parser.add_argument("--retain-legacy-results", action="store_true",
+        help="With explicit operator approval, preserve known legacy outputs/preparation summaries unchanged and report every exclusion")
     args = parser.parse_args()
     if args.all:
         # Take a finite ID inventory after the operator drains writers. Processing
@@ -154,6 +258,12 @@ def main() -> None:
         ("envelope", envelopes, import_historical_envelope),
     ):
         for identity in ids:
+            if kind == "extraction" and args.retain_legacy_results:
+                reason = retained_extraction_reason(identity)
+                if reason is not None:
+                    print(json.dumps({"kind": kind, "id": identity, "imported": False,
+                        "disposition": "retained_unchanged", "reason": reason}), flush=True)
+                    continue
             changed = importer(identity)
             print(
                 json.dumps({"kind": kind, "id": identity, "imported": changed}),
