@@ -154,6 +154,7 @@ from .curation_context_registry import clear_current_turn_curation_context
 from src.lib.prompts.context import (
     clear_prompt_context,
     commit_pending_prompts,
+    fork_prompt_run,
     get_used_prompt_runs,
     get_used_prompts,
 )
@@ -640,6 +641,9 @@ async def _owned_compatible_agent(agent: Agent) -> AsyncIterator[Agent]:
         # Shallow copies retain model subclasses, provider policy and dynamic
         # benchmark route metadata. Agent.clone can recompute model settings and
         # drops non-dataclass attributes. Only this operation's client is replaced.
+        # This is only a client-lifetime copy: no prompt/layer changes or audit
+        # commit occurs here. Validator copies can legitimately be unbound while
+        # several catalog instances share a name; do not resolve that name.
         owned_agent = copy(agent)
         owned_model = copy(model)
         owned_model._client = client
@@ -1613,7 +1617,7 @@ async def _run_agent_with_owned_resources(
 
         # Bind a caller-owned copy before compiling the final provider tool surface.
         agent = _bind_run_state_into_tools(
-            copy(agent),
+            fork_prompt_run(agent, copy(agent)),
             evidence_records=evidence_records,
             builder_workspace=builder_workspace,
         )

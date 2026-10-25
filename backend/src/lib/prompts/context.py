@@ -169,6 +169,30 @@ def _bind_prompt_run_id_to_object(agent: Any, prompt_run_id: str) -> None:
     bind_prompt_run(agent, prompt_run_id)
 
 
+def fork_prompt_run(source_agent: Any, runtime_agent: Any) -> Any:
+    """Give a per-run agent copy its own exact prompt audit identity."""
+    from copy import deepcopy
+
+    if runtime_agent is source_agent:
+        return runtime_agent
+    source_id = _resolve_prompt_run_id(source_agent)
+    pending = _get_pending_runs().copy()
+    source = pending.get(source_id) if source_id else None
+    if source is None:
+        return runtime_agent
+    # Bind a uniquely resolved name before adding another run with that name.
+    # Later copies must keep using this source, never a sibling's runtime layers.
+    bind_prompt_run(source_agent, source_id)
+    runtime_id = f"{source.agent_name}:{uuid.uuid4().hex}"
+    pending[runtime_id] = PromptRun(
+        agent_name=source.agent_name, prompts=list(source.prompts),
+        assembly=deepcopy(source.assembly),
+    )
+    _pending_prompt_runs.set(pending)
+    _append_prompt_run_id_for_agent(source.agent_name, runtime_id)
+    return bind_prompt_run(runtime_agent, runtime_id)
+
+
 def _append_prompt_run_id_for_agent(agent_name: str, prompt_run_id: str) -> None:
     run_ids_by_agent = {
         name: list(run_ids)

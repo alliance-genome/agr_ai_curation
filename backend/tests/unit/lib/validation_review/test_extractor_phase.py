@@ -3,7 +3,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from agents import Agent, function_tool
+from agents import Agent, ModelSettings, function_tool
 
 from src.lib.validation_history.store import HistoryScope
 from src.lib.validation_review import extractor_phase
@@ -24,7 +24,10 @@ async def test_followup_actual_runner_input_and_tools(phase_trace, monkeypatch):
     def dispatch_other_agent() -> str:
         return "not permitted"
 
+    from src.lib.openai_agents.config import build_default_model_retry
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
     agent = Agent(name="Saved extractor", model="gpt-test", instructions="Domain extraction policy",
+                  model_settings=ModelSettings(retry=build_default_model_retry()),
                   tools=[read_section, finalize_extraction, dispatch_other_agent])
     monkeypatch.setattr("src.lib.packages.tool_roles.tool_metadata_by_name", lambda: {
         "read_section": {"paper_source": True},
@@ -48,6 +51,8 @@ async def test_followup_actual_runner_input_and_tools(phase_trace, monkeypatch):
         assert phase_trace.events[-1]['trace_context'] == {'trace_id': 'phase-trace', 'parent_span_id': 'phase-parent'}
         assert configs[-1]['instructions'] == phase.instructions
         assert configs[-1]['tools'] == [tool.name for tool in phase.tools]
+        assert configs[-1]['model_settings']['retry']['policy']['id'] == 'agr.default_model_retry'
+        assert configs[-1]['model_settings']['retry']['max_retries'] == 3
         assert json.loads(input_value) == packet
         assert kwargs["max_turns"] == 17
         assert phase.model == agent.model

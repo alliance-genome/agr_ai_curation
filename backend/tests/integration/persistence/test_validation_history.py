@@ -831,6 +831,7 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
         _result_payload,
     )
 
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
     pack = _loaded_pack(tmp_path)
     source = _envelope()
     source = runtime.capture_extraction(
@@ -847,6 +848,7 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
         assert kwargs["binding"].raw["flow_validator"]["data"]["agent_id"] == "custom-agent"
         from agents import ModelSettings
         from openai.types.shared import Reasoning
+        from src.lib.openai_agents.config import build_default_model_retry
 
         with SessionLocal() as db:
             att = db.scalar(
@@ -862,7 +864,7 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
             SimpleNamespace(
                 instructions="Pinned prompt",
                 tools=[],
-                model_settings=ModelSettings(reasoning=Reasoning(effort="medium")),
+                model_settings=ModelSettings(reasoning=Reasoning(effort="medium"), retry=build_default_model_retry()),
             ),
             model="fixture-model",
             input_payload=frozen,
@@ -918,6 +920,10 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
                 ValidationFact.kind == "runner_receipt",
             )
         )
+    retry = h.read_fact(scope, artifact_id, receipt.id)["content"]["model_settings"]["retry"]
+    assert retry["max_retries"] == 3
+    assert retry["policy"]["id"] == "agr.default_model_retry"
+    assert retry["backoff"]["jitter"] is True
     assert (
         h.read_fact(scope, artifact_id, receipt.id)["content"]["instructions"]
         == "Pinned prompt"

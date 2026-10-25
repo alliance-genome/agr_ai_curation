@@ -94,3 +94,14 @@ def test_followup_and_augmented_validator_configs_preserve_locked_prompt_provena
         assert agent['metadata']['review_phase'] == phase
         assert agent['metadata']['effective_prompt_hash'] == 'phase-hash'
         assert agent['metadata']['layer_manifest']['layers'][0]['locked'] is True
+
+
+def test_retry_policy_contract_is_retained_with_live_settings():
+    settings = {"temperature": 0.2, "retry": {"max_retries": 3,
+        "backoff": {"initial_delay": 0.5, "max_delay": 8.0, "multiplier": 2.0, "jitter": True},
+        "policy": {"id": "agr.default_model_retry", "revision": 1,
+                   "sdk_version": "fixture-sdk", "any": ["network_error", {"http_status": [503]}]}}}
+    observations = [{"type": "EVENT", "name": "validator_config", "metadata": {
+        "agent_config": {"agent_name": "Validator", "model_settings": settings}}}]
+    agents = AgentConfigAnalyzer.extract_agent_configs(observations)["agents"]
+    assert agents[0]["model_settings"] == settings

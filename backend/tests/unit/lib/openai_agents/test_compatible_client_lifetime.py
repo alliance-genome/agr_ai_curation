@@ -247,3 +247,34 @@ async def test_http_responses_owned_but_websocket_lifecycle_untouched(monkeypatc
             assert captured[0].model._client is not client
         else:
             assert captured[0] is agent
+
+
+def test_owned_http_transport_copy_does_not_resolve_ambiguous_prompt_names(completion_server):
+    """Validator runtime copies may share a name; client ownership adds no prompt."""
+    from src.lib.prompts.context import bind_prompt_run, clear_prompt_context, set_pending_prompts
+    from src.lib.domain_packs.validator_dispatch import _copy_agent_for_validator_runtime
+
+    url, requests = completion_server
+
+    async def exercise():
+        clear_prompt_context()
+        try:
+            async with AsyncOpenAI(api_key="synthetic", base_url=url, max_retries=0,
+                                   http_client=DefaultAsyncHttpxClient(timeout=2)) as client:
+                originals = [make_agent(client), make_agent(client)]
+                for agent in originals:
+                    bind_prompt_run(agent, set_pending_prompts(agent.name, []))
+                # The real validator copies retain executable policy but do not
+                # bind prompt IDs. A transport-only copy must not resolve names.
+                runtime_agents = [_copy_agent_for_validator_runtime(agent) for agent in originals]
+                for agent in runtime_agents:
+                    result = await runner.run_agent_with_owned_openai_resources(
+                        agent, "validate", max_turns=1, run_config=RunConfig(tracing_disabled=True))
+                    assert result.final_output == "complete"
+                    assert agent.model._client is client
+                assert not client.is_closed()
+        finally:
+            clear_prompt_context()
+
+    asyncio.run(exercise())
+    assert len(requests) == 2

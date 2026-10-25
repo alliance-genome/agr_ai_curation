@@ -351,13 +351,21 @@ async def test_worker_failure_has_one_sanitized_owner_and_expected_stops_do_not_
 
 
 @pytest.mark.asyncio
-async def test_worker_finishes_real_admission_and_publication_with_fake_models(
-    scope, scenario, candidate, monkeypatch
+@pytest.mark.parametrize("action,caveat", [("accept", False), ("accept", True), ("reject", True)])
+async def test_worker_finishes_real_runner_admission_and_publication_with_fake_models(
+    scope, scenario, candidate, monkeypatch, action, caveat
 ):
     from agents import Agent
+    from agents.tracing import get_trace_provider
+
+    # Keep the real SDK runner while preventing its optional network trace export.
+    # Restore both cached flags through monkeypatch so later tests retain their policy.
+    provider = get_trace_provider()
+    monkeypatch.setattr(provider, "_manual_disabled", True)
+    monkeypatch.setattr(provider, "_disabled", True)
     from unittest.mock import AsyncMock
     from src.lib.curation_workspace.models import CurationDraft
-    from src.lib.validation_review import validator_adapter, decisions, reviewer
+    from src.lib.validation_review import validator_adapter, reviewer
     from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
 
     monkeypatch.setattr(
@@ -375,6 +383,7 @@ async def test_worker_finishes_real_admission_and_publication_with_fake_models(
             lambda request, **kw: {
                 **_result_payload(request, resolved_values={"curie": "ECO:NEW"}),
                 "resolved_objects": [],
+                "unresolved_questions": ["The supplied evidence leaves a caveat"] if caveat else [],
             }
         ),
     )
@@ -384,10 +393,64 @@ async def test_worker_finishes_real_admission_and_publication_with_fake_models(
         lambda: lambda *a, **k: pytest.fail("Unexpected batch"),
     )
 
+    from tests.unit.lib.openai_agents.test_model_request_measurement import (
+        _tool_call, _final,
+    )
+    import json
+
+    monkeypatch.setenv(
+        "AGENT_MODEL_CAPACITY_OVERRIDES_JSON",
+        '{"gpt-test":{"context_window_tokens":1050000,"max_input_tokens":922000,"max_output_tokens":128000}}',
+    )
+    monkeypatch.setattr(
+        "src.lib.openai_agents.context_capacity.NativeCapacityRequest.count",
+        AsyncMock(return_value=1000),
+    )
+
+    from tests.validation_review_runtime_support import HistoryReadingReviewer
+
+    monkeypatch.setenv("VALIDATION_REVIEW_PACKET_BYTES", "2048")
+
+    class ScriptedReviewer(HistoryReadingReviewer):
+        def review(self):
+            reference = yield _tool_call("get_validation_review_packet", "packet", '{"operation_id":"inspect"}')
+            packet = yield from self.read(reference)
+            baseline = yield from self.read(packet["baseline"])
+            assert "eco:1" in json.dumps(baseline)
+            entries = []
+            for unit in packet["manifest"]["units"]:
+                candidates = sorted((fact for fact in packet["facts"]
+                    if fact["kind"] == "attempt" and fact["target_id"] == unit["target_id"]),
+                    key=lambda fact: fact["sequence"], reverse=True)
+                assert candidates
+                attempt = candidates[0]
+                attempt_body = yield from self.read(attempt)
+                assert attempt_body["input"]["review_episode_id"] == packet["episode_id"]
+                completion = next(fact for fact in packet["facts"]
+                    if fact["kind"] == "completion" and fact["parent_id"] == attempt["id"])
+                answer = yield from self.read(completion)
+                assert "ECO:NEW" in json.dumps(answer)
+                assert ("The supplied evidence leaves a caveat" in json.dumps(answer)) is caveat
+                entries.append({
+                    "target_id": unit["target_id"], "decision_unit_id": unit["target_id"],
+                    "expected_version": unit["version"], "logical_attempt_id": attempt["id"],
+                    "extraction_ref": None, "action": action,
+                    "reason": "Scripted supervisor reviewed the original and exact saved answer",
+                })
+            decision = yield _tool_call("record_validation_review", "decide", json.dumps({
+                "operation_id": "decide", "entries": entries,
+            }))
+            assert decision["ready"] is (action == "accept")
+            status = yield _tool_call("get_validation_review_status", "status")
+            assert status["ready"] is (action == "accept")
+            yield _final("Reviewed")
+
+    model = ScriptedReviewer()
+
     def supervisor(**kwargs):
         from src.lib.observability.cost_context import attach_agent_cost_identity
 
-        agent = Agent(name="Supervisor", instructions="Review saved answers.")
+        agent = Agent(name="Supervisor", model=model, instructions="Review saved answers.")
         attach_agent_cost_identity(
             agent,
             {
@@ -430,58 +493,26 @@ async def test_worker_finishes_real_admission_and_publication_with_fake_models(
         row = db.get(WorkspaceReviewOperation, saved["operation_id"])
         row.state, row.lease_token = "preparing", "test-lease"
 
-    async def run(context, agent, **kwargs):
-        assert all(tool.name != "read_section" for tool in agent.tools)
-        with h.SessionLocal() as db:
-            row = db.get(WorkspaceReviewOperation, saved["operation_id"])
-            item = row.artifacts[0]
-            attempts = list(
-                db.scalars(
-                    select(ValidationFact).where(
-                        ValidationFact.artifact_id == scenario.aid,
-                        ValidationFact.kind == "attempt",
-                    )
-                )
-            )
-            attempts = [
-                a
-                for a in attempts
-                if h._content(db, a)["input"]["review_episode_id"] == context.episode_id
-            ]
-            entries = [
-                {
-                    "target_id": a.target_id,
-                    "decision_unit_id": a.target_id,
-                    "expected_version": h._current(db, scenario.aid, a.target_id)[
-                        "version"
-                    ],
-                    "logical_attempt_id": a.id,
-                    "action": "accept",
-                    "reason": "Fake supervisor reviewed the saved answer",
-                }
-                for a in attempts
-            ]
-        decisions.record_decisions(
-            context,
-            checkpoint_request=operations.checkpoint(scope.owner_id, item, ()),
-            operation_id="accept",
-            entries=entries,
-        )
-        return {
-            "output": "Reviewed",
-            "review": operations.admission.status(scope, context.episode_id),
-        }
-
-    monkeypatch.setattr(reviewer, "run", run)
     await operations._execute(saved["operation_id"], "test-lease", "test-trace")
     with h.SessionLocal() as db:
         row = db.get(WorkspaceReviewOperation, saved["operation_id"])
-        assert row.state == "complete", row.outcome
+        assert model.calls, "The real SDK runner must reach the scripted provider"
+        assert len(model.read_bodies) >= 4  # Packet, original, attempt, answer.
+        assert model.read_pages > len(model.read_bodies)  # Complete paginated history.
+        assert row.state == ("complete" if action == "accept" else "needs_review"), row.outcome
+        assert row.outcome["results"][0]["review"]["ready"] is (action == "accept")
         assert row.outcome["trace_id"] == "test-trace"
         envelope = db.get(DomainEnvelopeModel, scenario.env.envelope_id)
         assert envelope.envelope_json["extracted_objects"][0]["payload"][
             "evidence_code_curies"
-        ] == ["ECO:NEW"]
+        ] == (["ECO:NEW"] if action == "accept" else ["ECO:VALIDATED"])
+        responses = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == scenario.aid,
+            ValidationFact.kind == "review_response",
+            ValidationFact.parent_id == row.artifacts[0]["episode_id"],
+        )))
+        assert len(responses) == 1
+        assert {entry["action"] for entry in h._content(db, responses[0])["response"]["applied"]} == {action}
 
 
 def test_uninitialized_manual_record_can_observe_absent_round(scope, candidate):

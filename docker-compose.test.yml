@@ -486,6 +486,8 @@ services:
       dockerfile: backend/Dockerfile.unit-test
     volumes:
       - ./backend:/app/backend
+      # Composed review acceptance parses real events with the shipped analyzer.
+      - ./trace_review:/app/trace_review:ro
       - ./config:/app/config:ro
       - ./config:/runtime/config:ro
       - ./packages:/app/packages:ro

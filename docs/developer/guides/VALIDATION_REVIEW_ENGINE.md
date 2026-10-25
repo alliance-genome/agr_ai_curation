@@ -145,6 +145,54 @@ grouped decisions, idempotent publication and selected prerequisite waves. Fake
 validator callbacks exercise the reusable executor without paid provider replay.
 Unit tests cover provider admission, configuration, locked prompts and tool scope.
 
+`test_canonical_review_runtime.py` composes the real SDK/tool and persistence
+boundaries across chat, direct and saved-profile extraction, configured flow CSV
+attachments, the serial batch worker, and fresh workspace review. Provider replies
+are scripted: these tests prove history, dispatch and publication wiring, not
+scientific quality or actual provider token cost. The trace assertion parses real
+committed events and checks attempt/completion references, rejection/retry parentage
+and exact selected-publication identity against durable history.
+
+Executable settings contracts use `model_settings_contract`, which records SDK
+JSON settings plus a versioned declaration of the actual retry policy. The default
+factory registers that declaration against the unchanged SDK callable; budget and
+backoff are read from the live settings. Change the declaration revision whenever
+policy behavior changes without an already-declared parameter change. Unknown
+callbacks fail explicitly; do not serialize functions with `repr`, infer closure
+contents, or drop the policy from the contract. Resume reconstructs authorized
+code and compares settings; it never executes a policy from saved JSON. Changed
+policy/budget settings can require a fresh review round. Existing historical
+records are not rewritten to claim a policy they never recorded.
+
+## Acceptance coverage map
+
+Producer composition and state-machine contracts are complementary evidence.
+The canonical scenario runs the shared review meaning through regular/direct
+chat, saved-profile extraction, configured flows, serial batch execution and both
+workspace origins. It does not rerun every state-machine permutation in every
+producer. The narrower tests below isolate the identity and failure boundaries;
+run them as part of the final persistence/release gates rather than treating the
+canonical scenario as a substitute.
+
+| Contract | Focused evidence and producer boundary |
+| --- | --- |
+| Dependency waves and changed prerequisites | `test_validation_review.py::test_dependent_wave_waits_for_explicit_review_then_pins_selected_answer`; `test_chat_review_adapter.py::test_dependent_initial_work_reads_selected_prerequisite_only_after_review`; `test_curator_round_reuses_accepted_dependency_until_supervisor_explicitly_reconsiders` in that module covers the workspace adapter. Flow/batch use the same `ValidatorAdapter`; canonical flow/batch prove that wiring. |
+| Shared executions and composite decision groups | `test_validation_history.py::test_shared_execution_and_grouped_cas_is_atomic` and `test_composite_units_and_pinned_prerequisite_selections` verify shared-execution identity, separate decision coverage and stale dependency refusal. Canonical producers verify grouped review through actual tools, not composite-result permutations. |
+| Extraction-only and nonexecuted required validation | `test_validation_history.py::test_extraction_only_selection_cannot_claim_a_later_contribution_as_original`; `test_selected_value_authority.py::test_missing_execution_still_has_review_obligation`, `test_required_validation_cannot_accept_baseline`, and `test_unavailable_required_mapping_cannot_be_hidden_by_extraction_only_acceptance`. |
+| Explicit empty results | `test_flow_lifecycle_execute_flow_sse.py::test_execute_flow_saves_and_replays_finalized_empty_extraction` tests the persisted API path; `test_executor.py::test_flow_preserves_finalized_empty_and_sibling_output` covers attachments and siblings. Empty extraction is not an invented validation attempt. |
+| Accepted unresolved versus successful resolution | `test_canonical_review_runtime.py::test_canonical_flow_exports_accepted_unresolved_without_inventing_identifier` runs real flow-to-CSV with an explicitly unresolved answer and no resolved identifier. `test_selected_value_authority.py::test_unresolved_is_selectable_without_inventing_identity` and `test_curator_selected_authority.py::test_accepted_unresolved_revalidation_withdraws_override_without_claiming_resolution` check scientific state separately from review eligibility. Submission validation remains a separate contract. |
+| Pending inspection and export | Canonical chat-adapter test refuses publication of the same source before review. `test_flow_review_steps.py::test_saved_extraction_remains_pending_until_actual_decisions` and `test_executor.py::test_fresh_flow_extract_inspect_then_next_step` cover saved flow state and inspection ordering. |
+| Curator precedence and record scope | `test_curator_selected_authority.py::test_only_authorized_accepted_revalidation_replaces_exact_curator_version` includes later-edit protection; `test_chat_review_adapter.py::test_workspace_b_round_calls_only_b_and_retains_a_c` checks actual adapter dispatch. Canonical workspace cases execute fresh bootstrap/curator commands through real SDK review. |
+| Exact historical publication | `test_selected_value_authority.py::test_exact_publication_survives_later_selection_and_failed_publication_rolls_back` checks the old published reference and atomic rollback; canonical producers compare selected CSV values and immutable originals. |
+| Transport and prompt identity | `test_compatible_client_lifetime.py` uses real loopback HTTP alongside the websocket provider fakes, including same-named validator runtime copies and client cleanup. |
+
+Paths in the table are under `backend/tests/integration/persistence` unless they
+name `test_flow_lifecycle_execute_flow_sse.py` (integration root),
+`test_executor.py` (unit/lib/flows), or `test_compatible_client_lifetime.py`
+(unit/lib/openai_agents). Historical-reference reconciliation, production-derived
+dev replay, full frontend/backend gates and measured budget/cost policy remain
+release evidence; this map does not assert those tasks passed.
+
 ## Integration handoff and calibration
 
 E/F/G must bind their real prompt/tool variants (compact, non-compact, single,

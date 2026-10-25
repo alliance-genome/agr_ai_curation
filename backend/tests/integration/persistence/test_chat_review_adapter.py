@@ -655,15 +655,22 @@ async def test_reconsideration_uses_saved_binding_and_durable_queued_work(
 
 
 @pytest.mark.asyncio
-async def test_changed_executable_validator_prompt_is_refused_before_provider(
-    planned, monkeypatch
+@pytest.mark.parametrize("drift", ["prompt", "retry_budget", "retry_policy"])
+async def test_changed_executable_validator_contract_is_refused_before_provider(
+    planned, monkeypatch, drift
 ):
     from src.lib.validation_review import scheduling
     from src.lib.validation_review.validator_adapter import pin_validator_agent
 
+    from agents import ModelSettings
+    from src.lib.openai_agents.config import build_default_model_retry
+    from src.lib.openai_agents.model_settings_contract import register_retry_policy
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
     item = planned
     validator = Agent(
-        name="Configured validator", model="gpt-test", instructions="Saved policy"
+        name="Configured validator", model="gpt-test", instructions="Saved policy",
+        model_settings=ModelSettings(retry=build_default_model_retry()),
     )
     calls = []
 
@@ -701,7 +708,14 @@ async def test_changed_executable_validator_prompt_is_refused_before_provider(
         instructions="Check again",
         evidence_refs=[],
     )
-    validator.instructions = "A different unapproved policy"
+    if drift == "prompt":
+        validator.instructions = "A different unapproved policy"
+    elif drift == "retry_budget":
+        validator.model_settings.retry.max_retries = 8
+    else:
+        validator.model_settings.retry.policy = register_retry_policy(
+            lambda ctx: False, {"id": "test.declared-no-retries", "revision": 1}
+        )
     with pytest.raises(admission.ReviewStopped, match="configured_validator_changed"):
         await item.adapter.execute(wid)
     assert len(calls) == 2
