@@ -1,0 +1,17 @@
+{
+  "AgmValidationResult": "44a07dfc89eb6d6c3b3d9b5267018b73f9c15f413665bfc5b17aab6002f3610a",
+  "AlleleResultEnvelope": "d9965b3bf15c1d4c23b37a9fa8a61bf3add975b28b747298d10bef9167b7f988",
+  "ChemicalValidationResult": "900e515ea59dd10cdc9ca97c77afda383b18557bebe09f3f7130715b0e2ab20c",
+  "ControlledVocabularyValidationResult": "a43dd12707444b6da5e4e61ea52eb19e1b14d2de934e4a8ccfd0b4e79608d073",
+  "DataProviderValidationResult": "ab8c2dd0ddaeea3cc41164b83cc4bc46c8a426f84b929875c9b74c56af703294",
+  "DiseaseValidationResult": "ea0f9ad93cba364198296df498db75493d82eab0a7105e7b0d52bf2053904df3",
+  "DomainValidatorResultBase": "3f956bca73635131308b1ac52f17063aa608675bbe95548d29fdd5a7a0fa0116",
+  "ExperimentalConditionValidationResult": "a9ca013de1b994d256a139fc7d1ce2ba730d92455fdf99ddf48b268be95f00ce",
+  "GOAnnotationsResult": "afd12a4ef218301acc776f34e945ce0c33468cd5e7acb7646461b84b02eeca27",
+  "GOTermResultEnvelope": "c01ed2edc64b5c222501ab1a984c988cb371b1ea093889e735311e2ed6f95259",
+  "GeneResultEnvelope": "113b3e671e540fb74b9e0ca388fae1b9ca19c2fed2a001b15e2788fb48954cc2",
+  "OntologyTermValidationResult": "32e8a11afe3cc8f3678fdc549b0cf92068897ceafbebfb7f70bfd06fcf70f986",
+  "OrthologsResult": "3db3016e94aa98ae48b81f05564c6510e2e3a5b43b2e6a3581380544ac7cc0c1",
+  "RGDGOEvidencePolicyValidationResult": "d4bc03b4695d4d8e774a54bd6d824df58c5ea3bebb23527ec98ef8808f09dc0f",
+  "ReferenceValidationResult": "9727ad906f15a088e20f8524868f21438b8564388766c95e832faff9be89e6ef"
+}

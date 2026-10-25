@@ -619,7 +619,8 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
 
 
 def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
-    fake_schema = object()
+    from src.lib.config.schema_discovery import resolve_output_schema
+    canonical_schema = resolve_output_schema("GeneResultEnvelope")
     fake_row = SimpleNamespace(
         id="agent-id",
         agent_key="gene_validation",
@@ -639,7 +640,6 @@ def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
 
     from src.lib.openai_agents import config as agent_config
 
-    monkeypatch.setattr(catalog_service, "_resolve_output_schema", lambda _key: fake_schema)
     monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
     monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
     monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
@@ -662,7 +662,7 @@ def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
 
     built = catalog_service._create_db_agent(fake_row)
 
-    assert built.output_type is fake_schema
+    assert built.output_type is canonical_schema
     assert built.structured_finalization["tool_name"] == "finalize_gene_lookup"
 
 

@@ -2,6 +2,8 @@
 
 from collections.abc import Mapping
 
+from pydantic import ValidationError
+
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.schemas.domain_validator import (
     DomainValidatorResultBase,
@@ -19,7 +21,10 @@ def _registered_schema(key):
         else resolve_output_schema(key)
     )
     if schema is None or not is_domain_validator_result_schema(schema):
-        raise store.HistoryConflict("Validator result schema is unavailable")
+        raise store.HistoryConflict(
+            "Validator result schema is unavailable; "
+            "a new authenticated validation and review round is required"
+        )
     return schema
 
 
@@ -45,5 +50,14 @@ def restore_result_schema(payload, descriptor, *, request):
         raise store.HistoryConflict("Selected validator result schema descriptor is invalid")
     schema = _registered_schema(descriptor["key"])
     if store.canonical(schema.model_json_schema())[0] != descriptor["sha256"]:
-        raise store.HistoryConflict("Selected validator result schema changed")
-    return schema.model_validate(payload, context={"domain_validation_request": request})
+        raise store.HistoryConflict(
+            "Selected validator result schema changed; "
+            "a new authenticated validation and review round is required"
+        )
+    try:
+        return schema.model_validate(payload, context={"domain_validation_request": request})
+    except ValidationError as exc:
+        raise store.HistoryConflict(
+            "Selected validator result no longer satisfies its registered schema; "
+            "a new authenticated validation and review round is required"
+        ) from exc

@@ -293,7 +293,8 @@ def test_curator_overlay_follows_stable_element_through_reorder_and_retirement(s
     with h.SessionLocal.begin() as db:
         assert c.active_overlays(db, aid) == []
 
-def test_profile_curator_revalidation_and_group_authorized_withdrawal(scope, monkeypatch):
+@pytest.mark.parametrize("specialized", [False, True], ids=["base", "gene-result"])
+def test_profile_curator_revalidation_and_group_authorized_withdrawal(scope, monkeypatch, specialized):
     from dataclasses import replace
     from src.lib.domain_packs.input_selectors import build_domain_validation_request
     from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
@@ -332,6 +333,12 @@ def test_profile_curator_revalidation_and_group_authorized_withdrawal(scope, mon
             validator_binding_id=request.validator_binding_id, validator_agent=request.validator_agent,
             target=request.target, resolved_values={"identifier": value}, resolved_objects=[],
             missing_expected_fields=[], candidates=[], lookup_attempts=[], explanation="Reviewed lookup", curator_message=None)
+        if specialized:
+            from src.lib.config.schema_discovery import resolve_output_schema
+            result = resolve_output_schema("GeneResultEnvelope").model_validate({
+                **result.model_dump(mode="json"),
+                "gene_candidates": [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}],
+            })
         runtime.complete_jobs(bound, invocation, [result])
         retain_candidates(source, [ValidatorResultMaterializationInput(match, request, result)], scope=scope)
         with h.SessionLocal() as db:

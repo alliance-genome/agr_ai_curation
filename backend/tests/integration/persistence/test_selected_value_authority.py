@@ -339,6 +339,7 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
     # immutable stored facts. Failed republication must roll back its decision.
     original_content = h._content
     for fault in ("missing", "changed", "unknown"):
+        fault_entries = [{**entries[0], "subject": rejected}]
         def unsupported_recipe(db, fact):
             content = original_content(db, fact)
             if fact.kind != "candidate":
@@ -354,7 +355,7 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
             historical.setattr(h, "_content", unsupported_recipe)
             with pytest.raises(h.HistoryConflict, match="schema"):
                 publish_decisions(scope, checkpoint_request=checkpoint_request, episode_id=ep,
-                    operation_id=uuid4().hex, actor={"type": "agent", "id": "supervisor"}, entries=entries)
+                    operation_id=uuid4().hex, actor={"type": "agent", "id": "supervisor"}, entries=fault_entries)
             assert read_published_projection(scope, published.metadata["selected_projection"],
                                              finalized=True)[1] == published_manifest
         assert s.read_manifest(scope, aid, episode_id=ep) == published_manifest
