@@ -154,18 +154,26 @@ def planned(scope, tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("specialized", [False, True], ids=["base", "gene-result"])
 async def test_real_adapter_retains_candidates_and_replay_never_calls_provider_again(
-    planned, monkeypatch
+    planned, monkeypatch, specialized
 ):
     item = planned
     calls = []
 
     def run(request, binding, **kwargs):
         calls.append(request.request_id)
-        return {
+        payload = {
             **_result_payload(request, resolved_values={"curie": "ECO:correct"}),
             "resolved_objects": [],
         }
+        if specialized:
+            from src.lib.config.schema_discovery import resolve_output_schema
+            from src.lib.domain_packs.validator_dispatch import _ValidatorAgentRunOutput
+            payload["gene_candidates"] = [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}]
+            result = resolve_output_schema("GeneResultEnvelope").model_validate(payload)
+            return _ValidatorAgentRunOutput(raw_output=payload, accepted_result=result)
+        return payload
 
     monkeypatch.setattr(
         "src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
@@ -198,11 +206,26 @@ async def test_real_adapter_retains_candidates_and_replay_never_calls_provider_a
         assert len(completed) == len(candidates) == 2
         assert all(store._content(db, row)["dispatch_context"] is None for row in candidates)
         assert all(store._content(db, row)["state"] == "completed" for row in completed)
+        schema_key = "GeneResultEnvelope" if specialized else "DomainValidatorResultBase"
+        assert all(store._content(db, row)["result_schema"]["key"] == schema_key for row in candidates)
+        if specialized:
+            assert all(store._content(db, row)["result"]["gene_candidates"][0]["symbol"] == "crb"
+                       for row in candidates)
     assert not admission.status(item.scope, item.ep)["ready"]
     assert item.plan.envelope.extracted_objects[0].payload["evidence_code_curies"] == [
         "eco:1",
         "eco:2",
     ]
+    from src.lib.validation_review import decisions
+    result = decisions.record_decisions(
+        decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint_provider(item)(), operation_id="accept-typed-result",
+        entries=entries_for(item, "accept"),
+    )
+    assert result["ready"] is True
+    assert len(result["applied"]) == 2
+    assert all(entry["action"] == "accept" for entry in result["applied"])
+    assert len(calls) == 2
 
 
 def test_saved_match_round_trip_and_agent_substitution_refused(planned):

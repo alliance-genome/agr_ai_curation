@@ -217,7 +217,8 @@ def test_exact_publication_survives_later_selection_and_failed_publication_rolls
         read_published_projection(scope, pending.metadata["selected_projection"])
 
 
-def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, monkeypatch):
+@pytest.mark.parametrize("specialized", [False, True], ids=["base", "gene-result"])
+def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, monkeypatch, specialized):
     from src.lib.validation_history import runtime
     from src.lib.validation_history.candidates import retain_candidates
     from src.lib.validation_history.projection import rebuild_selected_envelope
@@ -227,7 +228,23 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
     from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
     from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
     from src.schemas.domain_validator import DomainValidatorResultBase
+    from src.lib.config.schema_discovery import resolve_output_schema
     from tests.unit.lib.domain_packs.test_validator_dispatch import _multivalued_dispatch_pack, _result_payload
+
+    result_schema = resolve_output_schema("GeneResultEnvelope") if specialized else DomainValidatorResultBase
+    assert result_schema is not None
+    candidate_details = [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}]
+    # The generic materialization fixture tests selected slots independently of
+    # these concrete lookup details, which must survive replay without downcast.
+    from src.lib.domain_packs import materialization
+    real_materialize = materialization.materialize_validator_results_into_envelope
+    replayed_results = []
+
+    def inspect_materialization(envelope, metadata, items, **kwargs):
+        replayed_results.extend(item.original_result for item in items)
+        return real_materialize(envelope, metadata, items, **kwargs)
+
+    monkeypatch.setattr(materialization, "materialize_validator_results_into_envelope", inspect_materialization)
 
     pack = _multivalued_dispatch_pack(tmp_path)
     env = DomainEnvelope(
@@ -256,7 +273,9 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
         invocation = runtime.begin_jobs(captured, [job], operation_id=uuid4().hex, receipt={})
         data = _result_payload(request, resolved_values={"curie": value})
         data["resolved_objects"] = []
-        result = DomainValidatorResultBase.model_validate(data)
+        if specialized:
+            data["gene_candidates"] = candidate_details
+        result = result_schema.model_validate(data)
         runtime.complete_jobs(captured, invocation, [result])
         item = ValidatorResultMaterializationInput(match, request, result)
         retained = retain_candidates(env, [item], scope=scope)
@@ -275,6 +294,12 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
         )
     assert projected.extracted_objects[0].payload["evidence_code_curies"] == ["ECO:ACCEPTED"]
     assert "ECO:REJECTED" not in str(projected.extracted_objects[0].payload)
+    assert replayed_results
+    assert all(type(result) is result_schema for result in replayed_results)
+    if specialized:
+        assert replayed_results[0].gene_candidates[0].gene_id == "FB:FBgn0259685"
+        assert replayed_results[0].gene_candidates[0].symbol == "crb"
+    assert replayed_results[0]._history_ref["fact_id"] == accepted
     from src.lib.validation_history.projection import read_dispatch_source
     reconsideration = read_dispatch_source(captured, projected)
     repeated_match = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(reconsideration)[0]
@@ -310,6 +335,29 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
     assert h.read_baseline(scope, aid)["normalized"]["extracted_objects"][0]["payload"] == {
         "evidence_code_curies": ["eco:1"],
     }
+    # Simulate old/changed recipes at the read boundary, never by rewriting
+    # immutable stored facts. Failed republication must roll back its decision.
+    original_content = h._content
+    for fault in ("missing", "changed", "unknown"):
+        def unsupported_recipe(db, fact):
+            content = original_content(db, fact)
+            if fact.kind != "candidate":
+                return content
+            altered = dict(content)
+            if fault == "missing":
+                altered.pop("result_schema")
+            else:
+                altered["result_schema"] = {**content["result_schema"],
+                    **({"sha256": "0" * 64} if fault == "changed" else {"key": "UnavailableResultEnvelope"})}
+            return altered
+        with monkeypatch.context() as historical:
+            historical.setattr(h, "_content", unsupported_recipe)
+            with pytest.raises(h.HistoryConflict, match="schema"):
+                publish_decisions(scope, checkpoint_request=checkpoint_request, episode_id=ep,
+                    operation_id=uuid4().hex, actor={"type": "agent", "id": "supervisor"}, entries=entries)
+            assert read_published_projection(scope, published.metadata["selected_projection"],
+                                             finalized=True)[1] == published_manifest
+        assert s.read_manifest(scope, aid, episode_id=ep) == published_manifest
 
 
 def test_rejection_does_not_implicitly_revoke_current_value(scope):

@@ -46,7 +46,8 @@ def test_saved_extraction_remains_pending_until_actual_decisions(planned):
 
 
 @pytest.mark.asyncio
-async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(planned, monkeypatch):
+@pytest.mark.parametrize("selection", ["automatic", "replaced", "supplemental"])
+async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(planned, monkeypatch, selection):
     from datetime import datetime, timezone
     from agents import Agent
     from src.lib.validation_review.flow import FlowReview
@@ -64,13 +65,17 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     supervisor = Agent(name="Configured Flow Supervisor", model="test", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     step = flow_steps.claim(item.scope, run_id=run_id, node_id="extract", contract={"extractor": "saved"})
-    groups = [{"state": "automatic", "binding_id": match.binding.binding_id} for match in item.plan.matches[:1]]
+    groups = [{"state": selection, "binding_id": match.binding.binding_id,
+               **({"validator_node_id": "chosen-validator"} if selection != "automatic" else {})}
+              for match in item.plan.matches[:1]]
+    nodes = {"chosen-validator": {"id": "chosen-validator", "data": {"agent_id": "gene"}}}
     parent_scope = admission.create_scope(item.scope, operation_id="batch:" + run_id,
         kind="discovered_batch", targets=0, episodes=0)
     flow = FlowReview(owner_id=item.scope.owner_id, document_id=item.scope.document_id,
         session_id=item.scope.session_id, turn_id=run_id, supervisor=supervisor,
         authenticated_groups=(), user_request="Extract evidence", flow_run_id=run_id,
         step_id=step["step_id"], node_id="extract", validation_groups=groups, parent_scope_id=parent_scope,
+        configured_nodes=nodes,
         execution_context={"captured_at": datetime.now(timezone.utc).isoformat(), "source_kind": "flow",
             "flow_id": "fixture", "step_id": "extract", "agent_key": "fixture", "executed_query": "Extract evidence", "document": None})
     source_scope = store.HistoryScope(item.scope.owner_id, item.scope.document_id, uuid4().hex)
@@ -82,7 +87,16 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     calls = []
     def run(request, binding, **kwargs):
         calls.append(request.request_id)
-        return {**_result_payload(request, resolved_values={"curie": "ECO:chosen"}), "resolved_objects": []}
+        if selection != "automatic":
+            assert binding.raw["flow_validator"] == {"node_id": "chosen-validator", "data": nodes["chosen-validator"]["data"]}
+        payload = {**_result_payload(request, resolved_values={"curie": "ECO:chosen"}), "resolved_objects": []}
+        if selection != "automatic":
+            from src.lib.config.schema_discovery import resolve_output_schema
+            from src.lib.domain_packs.validator_dispatch import _ValidatorAgentRunOutput
+            payload["gene_candidates"] = [{"gene_id": "FB:FBgn0259685", "symbol": "crb"}]
+            return _ValidatorAgentRunOutput(raw_output=payload,
+                accepted_result=resolve_output_schema("GeneResultEnvelope").model_validate(payload))
+        return payload
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner",
                         lambda: lambda *args, **kwargs: pytest.fail("Unexpected batch"))
@@ -113,6 +127,12 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     monkeypatch.setattr(flow, "review_result", review)
     result = await flow.finish_review()
     assert result.extracted_objects[0].payload["evidence_code_curies"] == ["ECO:chosen", "ECO:chosen"]
+    # Curator checkpoint publication rebuilds from the saved flow execution too,
+    # after the request-local configured flow registry has gone away.
+    from src.lib.validation_history.projection import republish_curator_checkpoint
+    with store.SessionLocal.begin() as db:
+        refreshed = republish_curator_checkpoint(db, result, revision=99, authenticated_groups=())
+    assert refreshed.extracted_objects[0].payload == result.extracted_objects[0].payload
     assert len(calls) == 2
     with store.SessionLocal() as db:
         row = db.get(FlowReviewStep, step["step_id"])

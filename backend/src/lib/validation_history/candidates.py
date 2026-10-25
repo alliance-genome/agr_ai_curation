@@ -4,6 +4,7 @@ from copy import deepcopy
 from src.lib.domain_packs.materialization import ValidatorResultMaterializationResult
 from src.lib.domain_packs.validator_result_records import retain_validator_original
 from . import store
+from .result_schema import capture_result_schema
 
 
 def validate_candidate_request(frozen, actual):
@@ -46,6 +47,7 @@ def _record_recipe(scope, artifact_id, item, source_envelope_revision):
                 })[0],
                 "request": actual,
                 "result": item.result.model_dump(mode="json"),
+                "result_schema": capture_result_schema(item.result),
                 "history_ref": deepcopy(reference),
                 "source_envelope_revision": source_envelope_revision,
                 "dispatch_context": deepcopy(item.dispatch_context),
