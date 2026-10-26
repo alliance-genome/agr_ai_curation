@@ -473,9 +473,18 @@ class ValidatorAdapter:
 
         semaphore = asyncio.Semaphore(get_max_parallel_validators())
 
+        stopping = False
+
         async def run(wid):
+            nonlocal stopping
             async with semaphore:
-                return await self.execute(wid)
+                if stopping:
+                    return {"state": "not_started", "work_id": wid}
+                try:
+                    return await self.execute(wid)
+                except BaseException:
+                    stopping = True
+                    raise
 
         # A reviewer may have queued reconsideration just before disconnecting.
         # Recover all episode work, not only the initial scheduling operations.
@@ -495,7 +504,17 @@ class ValidatorAdapter:
                 )
 
         work_ids = await asyncio.to_thread(pending_work)
-        return await asyncio.gather(*(run(wid) for wid in work_ids))
+        # Do not orphan running to_thread validators when a sibling fails.
+        # Outer cancellation still propagates promptly for explicit curator Stop;
+        # the existing adapter retains answers from threads that finish later.
+        results = await asyncio.gather(*(run(wid) for wid in work_ids), return_exceptions=True)
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            from .stops import review_stop
+
+            fatal = [error for error in errors if review_stop(error) is None]
+            raise (fatal or errors)[0]
+        return results
 
     async def execute(self, work_id):
         from . import work

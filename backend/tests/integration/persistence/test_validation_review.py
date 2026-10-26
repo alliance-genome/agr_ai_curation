@@ -1487,3 +1487,79 @@ def test_curator_decision_is_independent_of_machine_allowance(scope, scenario, s
     assert result['ready']
     with h.SessionLocal() as db:
         assert db.get(ValidationReviewEpisode, x.episode).charged == charged
+
+
+def live_provider(scope, ep, *, count, ceiling=128000, pool="initial_tokens"):
+    wid = queue(scope, ep)
+    claimed = w.claim(scope, wid)
+    assert claimed is not None
+    w.mark_submitted(scope, wid, claimed["lease_token"])
+    rid = a.reserve(scope, ep, operation_id="provider:" + uuid4().hex,
+                    charges={pool: count + ceiling},
+                    request={"input_tokens": count, "work_id": wid})
+    return rid, wid
+
+
+def test_calibration_capacity_reclaims_only_live_output_holds(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_TOKENS_PER_TARGET", "750000")
+    _, ep, _ = admitted(scope)
+    for total in (15727, 15339, 15857, 17387, 15331):
+        rid = a.reserve(scope, ep, operation_id="provider:" + uuid4().hex,
+                        charges={"initial_tokens": total}, request={})
+        a.reconcile(scope, ep, rid, actual={"initial_tokens": total})
+    holds = [live_provider(scope, ep, count=count) for count in (15914, 16398, 18758, 15901)]
+    kwargs = dict(operation_id="provider:waiting", charges={"initial_tokens": 144292},
+                  request={"input_tokens": 16292})
+    with pytest.raises(a.ReviewStopped) as stopped:
+        a.reserve(scope, ep, **kwargs)
+    assert stopped.value.temporary
+    a.reconcile(scope, ep, holds[0][0], actual={"initial_tokens": 16326})
+    rid = a.reserve(scope, ep, **kwargs)
+    assert a.reserve(scope, ep, **kwargs) == rid
+
+
+@pytest.mark.parametrize("unavailable", ["uncertain", "expired", "no_work", "tool", "input_floor"])
+def test_unavailable_holds_are_not_temporary_capacity(scope, unavailable):
+    _, ep, _ = admitted(scope)
+    if unavailable in {"no_work", "tool"}:
+        prefix = "tool:" if unavailable == "tool" else "provider:"
+        wid = queue(scope, ep)
+        claimed = w.claim(scope, wid)
+        assert claimed is not None
+        w.mark_submitted(scope, wid, claimed["lease_token"])
+        request = {"input_tokens": 10000}
+        if unavailable == "tool":
+            request["work_id"] = wid
+        rid = a.reserve(scope, ep, operation_id=prefix + uuid4().hex,
+                        charges={"initial_tokens": 138000}, request=request)
+    else:
+        rid, wid = live_provider(scope, ep, count=10000, ceiling=128000)
+        if unavailable == "uncertain":
+            a.reconcile(scope, ep, rid, actual=None)
+        elif unavailable == "expired":
+            expire(wid)
+    # Even a live hold cannot release its already counted input.
+    amount = 145000 if unavailable == "input_floor" else 20000
+    with pytest.raises(a.ReviewStopped) as stopped:
+        a.reserve(scope, ep, operation_id="provider:blocked",
+                  charges={"initial_tokens": amount}, request={})
+    assert not stopped.value.temporary
+
+
+def test_temporary_capacity_checks_shared_parent_and_other_resources(scope, monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setenv("VALIDATION_REVIEW_TOKENS_PER_TARGET", "150000")
+    parent = a.create_scope(scope, operation_id=uuid4().hex, kind="workspace_operation", targets=2, episodes=2)
+    _, ep1, _ = admitted(scope, parent=parent)
+    other = replace(scope, session_id=uuid4().hex)
+    _, ep2, _ = admitted(other, parent=parent)
+    # Reconsideration credits are shared by the parent, not additive per child.
+    rid, _ = live_provider(scope, ep1, count=10000, ceiling=2190000, pool="reconsideration_tokens")
+    with pytest.raises(a.ReviewStopped) as stopped:
+        a.reserve(other, ep2, operation_id="provider:other", charges={"reconsideration_tokens": 300000}, request={})
+    assert stopped.value.temporary
+    with pytest.raises(a.ReviewStopped) as stopped:
+        a.reserve(other, ep2, operation_id="provider:other", charges={"reconsideration_tokens": 300000, "reviewer_turns": 1000}, request={})
+    assert not stopped.value.temporary
+    a.reconcile(scope, ep1, rid, actual={"reconsideration_tokens": 10000})
+    a.reserve(other, ep2, operation_id="provider:boundary", charges={"reconsideration_tokens": 2390000}, request={})

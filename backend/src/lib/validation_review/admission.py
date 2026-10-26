@@ -16,6 +16,7 @@ from src.models.sql.validation_review import (
     ValidationReviewCoverage as Coverage,
     ValidationReviewEpisode as Episode,
     ValidationReviewReservation as Reservation,
+    ValidationReviewWork as Work,
 )
 from .policy import ReviewLimits
 from .record_scope import review_ready, review_blockers
@@ -24,9 +25,10 @@ from .record_scope import review_ready, review_blockers
 class ReviewStopped(store.HistoryConflict):
     """Expected pending outcome, not a scientific verdict or Sentry error."""
 
-    def __init__(self, reason, *, resource=None):
+    def __init__(self, reason, *, resource=None, temporary=False):
         self.reason = reason
         self.resource = resource
+        self.temporary = temporary
         super().__init__(reason)
 
 
@@ -381,6 +383,44 @@ def _allowances(db, row):
     return allowances
 
 
+
+def _reclaimable_provider_tokens(db, row, resource):
+    """Only live provider output holds can shrink; counted input remains charged.
+
+    The caller holds the shared scope locks used by reservation and settlement.
+    Tool/attempt reservations and uncertain or abandoned work cannot free space.
+    """
+    if resource not in {"initial_tokens", "reviewer_tokens", "reconsideration_tokens"}:
+        return 0
+    query = (
+        select(Reservation)
+        .join(Episode, Episode.id == Reservation.episode_id)
+        .join(Work, Work.id == Reservation.request["work_id"].astext)
+        .where(
+            Reservation.state == "reserved",
+            Reservation.operation_id.startswith("provider:"),
+            Work.episode_id == Reservation.episode_id,
+            Work.state == "submitted",
+            Work.lease_until > now(),
+            Episode.state == "open",
+        )
+    )
+    if isinstance(row, Episode):
+        query = query.where(Reservation.episode_id == row.id)
+    else:
+        # Supported hierarchy is root batch/workspace -> document -> episode.
+        query = query.where(Episode.scope_id.in_(
+            select(Scope.id).where((Scope.id == row.id) | (Scope.parent_id == row.id))
+        ))
+    total = 0
+    for reservation in db.scalars(query):
+        count = reservation.request.get("input_tokens")
+        charge = reservation.charges.get(resource, 0)
+        if type(count) is int and count >= 0 and type(charge) is int:
+            total += max(0, charge - count)
+    return total
+
+
 def reserve_in_transaction(
     db, history_scope, episode_id, *, operation_id, charges, request, start_work=True
 ):
@@ -398,12 +438,21 @@ def reserve_in_transaction(
         if existing.request != request or existing.charges != charges:
             raise store.HistoryConflict("Admission operation conflict")
         return existing
+    temporary_resource = None
     for row in [*chain, episode]:
+        allowances = _allowances(db, row)
         for key, amount in charges.items():
-            if key not in _allowances(db, row):
+            if key not in allowances:
                 raise ValueError("Unknown review budget resource")
-            if row.charged.get(key, 0) + amount > _allowances(db, row)[key]:
-                raise ReviewStopped("budget_exhausted", resource=key)
+            required = row.charged.get(key, 0) + amount
+            if required > allowances[key]:
+                reclaimable = _reclaimable_provider_tokens(db, row, key)
+                if required - reclaimable > allowances[key]:
+                    raise ReviewStopped("budget_exhausted", resource=key)
+                temporary_resource = key
+    if temporary_resource is not None:
+        # Check every ancestor/resource before declaring this a temporary hold.
+        raise ReviewStopped("budget_exhausted", resource=temporary_resource, temporary=True)
     for row in [*chain, episode]:
         for key, amount in charges.items():
             before, limit = row.charged.get(key, 0), _allowances(db, row)[key]

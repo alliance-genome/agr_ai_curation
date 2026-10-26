@@ -168,3 +168,44 @@ async def test_capacity_incompatibility_is_expected_before_send(setup, monkeypat
     ):
         await admit()
     reserve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_temporary_capacity_wait_reuses_count_and_unsent_identity(setup, monkeypatch):
+    budget, request, reserve, _ = setup
+    reserve.side_effect = [
+        ReviewStopped("budget_exhausted", resource="reviewer_tokens", temporary=True),
+        "reservation",
+    ]
+    sleep = AsyncMock()
+    monkeypatch.setattr(p.asyncio, "sleep", sleep)
+    with p.budget_scope(budget):
+        settings, reservation = await admit()
+    assert settings.max_tokens == 128000
+    request.count.assert_awaited_once()
+    assert reserve.call_count == 2
+    assert reserve.call_args_list[0] == reserve.call_args_list[1]
+    sleep.assert_awaited_once_with(1)
+    assert budget.execution.provider_admitted
+
+
+@pytest.mark.asyncio
+async def test_stop_during_capacity_wait_does_not_admit(setup, monkeypatch):
+    budget, _, reserve, _ = setup
+    reserve.side_effect = [ReviewStopped("budget_exhausted", temporary=True), ReviewStopped("cancelled")]
+    monkeypatch.setattr(p.asyncio, "sleep", AsyncMock())
+    with p.budget_scope(budget), pytest.raises(ReviewStopped, match="cancelled"):
+        await admit()
+    assert not budget.execution.provider_admitted
+
+
+@pytest.mark.asyncio
+async def test_capacity_wait_uses_existing_deadline(setup):
+    import asyncio
+    budget, _, reserve, _ = setup
+    reserve.side_effect = ReviewStopped("budget_exhausted", temporary=True)
+    budget.execution.deadline = asyncio.get_running_loop().time() + 0.02
+    with p.budget_scope(budget), pytest.raises(TimeoutError):
+        await admit()
+    assert not budget.execution.provider_admitted
+    assert reserve.call_count == 1
