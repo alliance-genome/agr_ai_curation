@@ -141,6 +141,14 @@ ranges with exact SHA and continuation offset; concatenate all content pages.
 separate total-data cap and never truncates the stored body. General reviewer tool allowances and the fixed deadline still apply during an
 active review; provider usage is metered without a cumulative token ceiling.
 
+Manifest units expose their decision-unit metadata before selection. Pending
+answer blockers carry exact `attempt_ref` and `completion_ref` fact IDs/SHAs;
+unfinished execution carries only `attempt_ref`. These references follow the
+existing episode/retained-review coverage and do not choose an answer or change
+readiness. They let the supervisor navigate directly to the request and answer
+without joining the full audit index itself. Previously pinned packets remain
+immutable; a new packet reflects the current state and these reference fields.
+
 `get_validation_record_source(target_id)` pins one original normalized record and
 its attached supporting evidence. Object, nested field/element and binding targets
 resolve to the same object source reference; they cannot select another owner or
@@ -155,6 +163,14 @@ The supervisor chooses which records and answers are relevant. The full immutabl
 baseline, typed source when available, and other history remain accessible when
 needed. Per-record access does not remove old validation findings, summarize away
 evidence, choose scientific relevance in code, or grant paper-reading powers.
+The locked review protocol encourages incremental assessment and recording of
+supported decisions. Runtime compaction manages working context; the supervisor
+must not invent a context allowance from anticipated transcript growth. It can
+switch an unnecessary broad read to complete scoped source views while retaining
+access to the full baseline. Partial reads never establish absence or completeness,
+and details needed after compaction must be recovered through exact saved references.
+Actual runtime admission, deadline and capacity stops still apply. This does not
+add automatic review restarts or override a scientific needs-review judgment.
 
 Changes to this locked protocol or the generated review-tool contract invalidate
 previously frozen supervisor snapshots. Before executing an unstarted benchmark

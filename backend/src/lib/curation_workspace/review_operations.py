@@ -694,7 +694,7 @@ async def _execute(operation_id, lease_token, trace_id):
                 agent,
                 input=json.dumps(
                     {
-                        "instruction": "Review this saved workspace round. Read its origin, exact saved history and any curator request/guidance. Review the answers and record explicit decisions. Preserve later curator edits.",
+                        "instruction": "Review this saved workspace round. Read its origin, exact saved history relevant to the requested targets and any curator request/guidance. Review the answers and record explicit decisions. Preserve later curator edits.",
                         "origin": item["origin"],
                         "episode_id": item["episode_id"],
                     }

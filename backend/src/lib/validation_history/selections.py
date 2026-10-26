@@ -190,6 +190,7 @@ def _selected_unit(db, scope, artifact_id, target_id):
         unit["reason"] = "retired"
         return unit
     if state["selected"] is None:
+        unit["decision_unit"] = store._content(db, target).get("decision_unit")
         return unit
     if state["selected"] == "curator":
         if not store._has_curator_subject(db, artifact_id, target_id):
@@ -274,10 +275,10 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         recorded_episode = attempt_body["input"].get("review_episode_id")
         for target_id in attempt_body["coverage"]:
             if recorded_episode in {episode.id, retained.get(target_id)} and recorded_episode is not None:
-                attempts_by_target.setdefault(target_id, []).append(attempt.id)
+                attempts_by_target.setdefault(target_id, []).append(attempt)
             elif recorded_episode is None and attempt.sequence > episode.sequence:
-                attempts_by_target.setdefault(target_id, []).append(attempt.id)
-    completions = {fact.parent_id: fact.id for fact in db.scalars(select(ValidationFact).where(
+                attempts_by_target.setdefault(target_id, []).append(attempt)
+    completions = {fact.parent_id: fact for fact in db.scalars(select(ValidationFact).where(
         ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "completion",
     ))}
     reviewed_answers = {}
@@ -315,12 +316,16 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         # A new answer requires an explicit disposition even if an older one
         # remains selected. Automatic reconsideration stays within this episode;
         # later human renewal creates a linked episode without resetting parent quotas.
-        for attempt_id in attempts_by_target.get(unit["target_id"], ()):
-            completion_id = completions.get(attempt_id)
-            if completion_id is None and (unit["target_id"], attempt_id) not in unit_reviewed_answers:
-                blockers.append({"target_id": unit["target_id"], "code": "execution_pending"})
-            elif completion_id is not None and (unit["target_id"], completion_id) not in unit_reviewed_answers:
-                blockers.append({"target_id": unit["target_id"], "code": "answer_review_pending"})
+        for attempt in attempts_by_target.get(unit["target_id"], ()):
+            completion = completions.get(attempt.id)
+            attempt_ref = {"fact_id": attempt.id, "sha256": attempt.body_sha}
+            if completion is None and (unit["target_id"], attempt.id) not in unit_reviewed_answers:
+                blockers.append({"target_id": unit["target_id"], "code": "execution_pending",
+                                 "attempt_ref": attempt_ref})
+            elif completion is not None and (unit["target_id"], completion.id) not in unit_reviewed_answers:
+                blockers.append({"target_id": unit["target_id"], "code": "answer_review_pending",
+                                 "attempt_ref": attempt_ref,
+                                 "completion_ref": {"fact_id": completion.id, "sha256": completion.body_sha}})
     from src.lib.validation_review.record_scope import allowed_units
     review_targets = allowed_units(episode_body)
     review_blockers = [item for item in blockers if item["target_id"] is None or item["target_id"] in review_targets]

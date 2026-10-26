@@ -1040,3 +1040,57 @@ async def test_canonical_flow_exports_accepted_unresolved_without_inventing_iden
 ):
     await _canonical_producer_scenario(planned, canonical_models, monkeypatch, tmp_path,
                                        "flow", unresolved_b=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('planned', ['three'], indirect=True)
+async def test_scoped_reviewer_records_each_answer_without_full_baseline(planned, canonical_models):
+    import json
+    from tests.validation_review_runtime_support import HistoryReadingReviewer, _tool_call
+    from tests.unit.lib.openai_agents.test_model_request_measurement import _final
+    from src.lib.validation_history import selections
+
+    class ScopedReviewer(HistoryReadingReviewer):
+        def review(self):
+            reference = yield _tool_call('get_validation_review_packet', 'packet',
+                                         '{"operation_id":"scoped-initial"}')
+            packet = yield from self.read(reference)
+            for index, unit in enumerate(packet['manifest']['units']):
+                # Non-composite bindings legitimately have no separate field group.
+                assert 'decision_unit' in unit
+                source_ref = yield _tool_call('get_validation_record_source', f'source-{index}',
+                                             json.dumps({'target_id': unit['target_id']}))
+                source = yield from self.read(source_ref)
+                assert source['record']['payload']['evidence_code_curies']
+                pending = [b for b in packet['manifest']['blockers']
+                           if b['target_id'] == unit['target_id'] and b['code'] == 'answer_review_pending']
+                assert len(pending) == 1
+                link = pending[0]
+                request = yield from self.read(link['attempt_ref'])
+                answer = yield from self.read(link['completion_ref'])
+                assert unit['target_id'] in request['coverage']
+                assert answer['state'] == 'completed'
+                entry = CanonicalReviewer.entry(unit, {'id': link['attempt_ref']['fact_id']}, 'accept')
+                yield _tool_call('record_validation_review', f'decide-{index}',
+                    json.dumps({'operation_id': f'scoped-decision-{index}', 'entries': [entry]}))
+            yield _final('Requested answers reviewed.')
+
+    item = planned
+    checkpoint = checkpoint_provider(item)
+    await item.adapter.initial()
+    model = ScopedReviewer()
+    context = ReviewContext(item.scope, item.ep, 'supervisor.validation_review')
+    supervisor = canonical_models.supervisor.clone(model=model)
+    agent = reviewer.create_supervisor_phase(context, supervisor=supervisor,
+        checkpoint_provider=checkpoint, authenticated_groups=[], execute_work=item.adapter.execute,
+        advance_work=lambda: item.adapter.advance(checkpoint),
+        prepare_inputs=lambda: item.adapter.prepare_inputs(checkpoint), refresh_inputs=item.adapter.refresh_inputs)
+    before = store.read_baseline(item.scope, item.aid)
+    result = await reviewer.run(context, agent, input='Assess the requested saved answers incrementally.',
+                                run_config=RunConfig(tracing_disabled=True))
+    assert result['review']['ready']
+    assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)['ready']
+    assert len(canonical_models.validators) == 3
+    assert store.read_baseline(item.scope, item.aid) == before
+    assert len([b for b in model.read_bodies if b.get('representation') == 'normalized_source_record']) == 3
+    assert not any('normalized' in b and 'typed' in b for b in model.read_bodies)

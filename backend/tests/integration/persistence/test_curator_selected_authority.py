@@ -144,6 +144,16 @@ def test_revalidation_intent_cannot_impersonate_another_curator(scope, scenario)
 
 
 def test_real_curator_patch_republishes_atomically_and_withdraws_without_losing_source(scope, tmp_path, monkeypatch):
+    current_unit = s._selected_unit
+
+    def pre_navigation_unit(*args, **kwargs):
+        # Simulate a publication written before pending-answer navigation metadata.
+        # Baseline and curator selections never carried validator unit metadata.
+        unit = current_unit(*args, **kwargs)
+        if unit["selected"] in ("baseline", "curator"):
+            unit.pop("decision_unit", None)
+        return unit
+
     from dataclasses import replace
     from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
     from src.lib.domain_packs.registry import LoadedDomainPack
@@ -171,10 +181,13 @@ def test_real_curator_patch_republishes_atomically_and_withdraws_without_losing_
         "obligations": [{"target_id": root, "mode": "extraction_only"}]})
     checkpoint = DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=env, expected_revision=0,
         document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=uuid4())
-    env, _, _ = publish_decisions(scope, checkpoint_request=checkpoint, episode_id=ep,
-        operation_id=uuid4().hex, actor={"type": "agent", "id": "supervisor"},
-        entries=[{"target_id": root, "expected_version": 0, "action": "accept", "subject": "baseline", "reason": "explicit extraction choice"}])
+    with monkeypatch.context() as legacy_writer:
+        legacy_writer.setattr(s, "_selected_unit", pre_navigation_unit)
+        env, _, _ = publish_decisions(scope, checkpoint_request=checkpoint, episode_id=ep,
+            operation_id=uuid4().hex, actor={"type": "agent", "id": "supervisor"},
+            entries=[{"target_id": root, "expected_version": 0, "action": "accept", "subject": "baseline", "reason": "explicit extraction choice"}])
     baseline_ref = env.metadata["selected_projection"]
+    assert read_published_projection(scope, baseline_ref, finalized=True)[1]["ready"]
     patch = EnvelopeFieldPatch(envelope_id=env.envelope_id, expected_revision=1, object_id="one",
         field_path="subject.primary_external_id", operation=EnvelopeFieldPatchOperation.REPLACE_IDENTITY,
         before={"primary_external_id": "G:1", "gene_symbol": "original"},
@@ -183,9 +196,11 @@ def test_real_curator_patch_republishes_atomically_and_withdraws_without_losing_
         actor_id=scope.owner_id, actor_display_name="Curator")
     assert edited.accepted, edited.errors
     assert edited.envelope.extracted_objects[0].metadata["validation_history"] == env.extracted_objects[0].metadata["validation_history"]
-    with h.SessionLocal.begin() as db:
-        write_domain_envelope_checkpoint(db, replace(checkpoint, envelope=edited.envelope, expected_revision=1))
-        current = DomainEnvelope.model_validate(db.get(DomainEnvelopeModel, env.envelope_id).envelope_json)
+    with monkeypatch.context() as legacy_writer:
+        legacy_writer.setattr(s, "_selected_unit", pre_navigation_unit)
+        with h.SessionLocal.begin() as db:
+            write_domain_envelope_checkpoint(db, replace(checkpoint, envelope=edited.envelope, expected_revision=1))
+            current = DomainEnvelope.model_validate(db.get(DomainEnvelopeModel, env.envelope_id).envelope_json)
     selected, manifest = read_published_projection(scope, current.metadata["selected_projection"], finalized=True)
     assert manifest["ready"]
     assert selected.extracted_objects[0].payload["subject"]["gene_symbol"] == "curator"
