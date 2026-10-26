@@ -182,3 +182,41 @@ def test_pending_answer_references_read_exact_historical_facts_without_baseline(
     # A pinned old packet is immutable, even after the state changes.
     assert reads.snapshot(scope, ep, operation_id='answer-reference') == packet_ref
     assert json.loads(reads.read(scope, ep, **packet_ref)['content']) == packet
+
+
+def test_pre_navigation_curator_authored_publication_remains_finalizable(scope, monkeypatch):
+    from src.lib.validation_history import selections
+    from src.lib.validation_history.projection import pin_publication_in_transaction, read_published_projection
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+
+    env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id='fixture',
+        extracted_objects=[CuratableObjectEnvelope(object_id='one', object_type='Annotation', payload={})])
+    aid = h.capture_baseline(scope, producer_id=uuid4().hex, subject_kind='curator_authored',
+        typed=env.model_dump(mode='json'), normalized=env.model_dump(mode='json'), provenance={})
+    tid = h.register_target(scope, aid, identity='curator-object',
+        original={'object_ref': 'one', 'origin': {'kind': 'curator_authored'}})
+    ep = selections.start_episode(scope, aid, episode={'episode_id': uuid4().hex,
+        'reason': 'Curator authored record', 'obligations': [{'target_id': tid, 'mode': 'curator'}]})
+    current_unit = selections._selected_unit
+
+    def pre_navigation_unit(*args, **kwargs):
+        unit = current_unit(*args, **kwargs)
+        if unit['selected'] == 'curator':
+            unit.pop('decision_unit', None)
+        return unit
+
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(selections, '_selected_unit', pre_navigation_unit)
+        with h.SessionLocal.begin() as db:
+            selections.decide_episode_in_transaction(db, scope, aid, episode_id=ep,
+                operation_id=uuid4().hex, actor={'type': 'curator', 'id': scope.owner_id},
+                entries=[{'target_id': tid, 'expected_version': 0, 'action': 'accept',
+                          'subject': 'curator', 'reason': 'Explicit curator decision'}])
+            manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
+            assert manifest['ready'] and manifest['units'][0]['selected'] == 'curator'
+            env = env.model_copy(update={'metadata': {'validation_history': {'artifact_id': aid}}})
+            published = pin_publication_in_transaction(db, scope, aid,
+                operation_id=uuid4().hex, manifest=manifest, envelope=env)
+    _, actual = read_published_projection(scope, published.metadata['selected_projection'], finalized=True)
+    assert actual == manifest and actual['units'][0]['selected'] == 'curator'
+    assert 'decision_unit' not in actual['units'][0]
