@@ -1088,3 +1088,48 @@ async def test_curator_round_reuses_accepted_dependency_until_supervisor_explici
         refresh_inputs=adapter.refresh_inputs, rebind_receipt=adapter.rebind_receipt)
     await adapter.execute(wid)
     assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["three"], indirect=True)
+@pytest.mark.parametrize("fatal", [False, True])
+async def test_initial_drains_started_threads_and_leaves_queued_work(planned, monkeypatch, fatal):
+    import asyncio
+    import threading
+    from src.lib.validation_review.admission import ReviewStopped
+
+    monkeypatch.setattr("src.lib.openai_agents.config.get_max_parallel_validators", lambda: 2)
+    started, release = threading.Event(), threading.Event()
+    refused = asyncio.Event()
+    calls = []
+
+    def slow_worker():
+        started.set()
+        assert release.wait(10)
+        if fatal:
+            raise RuntimeError("fatal sibling")
+        return {"state": "completed"}
+
+    async def execute(wid):
+        calls.append(wid)
+        if len(calls) == 1:
+            assert await asyncio.to_thread(started.wait, 5)
+            refused.set()
+            raise ReviewStopped("budget_exhausted")
+        return await asyncio.to_thread(slow_worker)
+
+    monkeypatch.setattr(planned.adapter, "execute", execute)
+    task = asyncio.create_task(planned.adapter.initial())
+    try:
+        await asyncio.wait_for(refused.wait(), 5)
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(RuntimeError if fatal else ReviewStopped, match="fatal sibling" if fatal else "budget_exhausted"):
+            await task
+        assert len(calls) == 2
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

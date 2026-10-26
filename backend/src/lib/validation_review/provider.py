@@ -181,20 +181,27 @@ async def admit_model(
     )
     if budget.reviewer and agent_id == budget.reviewer_agent_id:
         charges["reviewer_turns"] = 1
-    rid = await asyncio.to_thread(
-        admission.reserve,
-        budget.scope,
-        budget.episode_id,
-        operation_id="provider:" + str(uuid4()),
-        charges=charges,
-        request={
-            "work_id": budget.work_id,
-            "model": request.effective_model,
-            "input_tokens": count,
-            "output_ceiling": ceiling,
-            "transport": transport,
-        },
-    )
+    operation_id = "provider:" + str(uuid4())
+    request_details = {
+        "work_id": budget.work_id,
+        "model": request.effective_model,
+        "input_tokens": count,
+        "output_ceiling": ceiling,
+        "transport": transport,
+    }
+    while True:
+        try:
+            rid = await asyncio.to_thread(
+                admission.reserve, budget.scope, budget.episode_id,
+                operation_id=operation_id, charges=charges, request=request_details,
+            )
+            break
+        except admission.ReviewStopped as error:
+            if not error.temporary:
+                raise
+            # Internal capacity polling; the existing episode deadline bounds
+            # waiting. Every retry rechecks access, Stop and all ancestor quotas.
+            await guarded_await(asyncio.sleep(1))
     budget.execution.provider_admitted = True
     return settings, (budget, rid, charges)
 
