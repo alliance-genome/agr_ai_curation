@@ -2662,13 +2662,12 @@ def require_batch_plumbing_payload(payloads: Dict[str, Any], *, output_format: s
     filename_pattern = re.compile(
         (
             rf"^batch_release_smoke_result_{re.escape(output_format)}_"
-            rf"{re.escape(output_format)}_1_[0-9a-f]+_[0-9a-f]+"
-            rf"\.{re.escape(output_format)}$"
+            rf"{re.escape(output_format)}_1_[0-9a-f]{{1,64}}_"
+            rf"[0-9a-f]{{64}}_[0-9a-f]{{32}}\.{re.escape(output_format)}"
         ),
-        re.IGNORECASE,
     )
     require(
-        all(filename_pattern.match(name) for name in matching_names),
+        all(filename_pattern.fullmatch(name) for name in matching_names),
         (
             f"Batch plumbing {output_format.upper()} artifact names did not match "
             f"runtime export naming shape: {matching_names}"
