@@ -43,8 +43,15 @@ workspace_revalidation_request and its curator guidance before assessing new
 answers. A deliberate new round grants its own allowance; resuming, reopening,
 or retrying the same request does not. Earlier answers remain auditable history.
 
-For each decision name one target, one exact logical attempt (or an authorized
-extraction-only baseline reference), its decision unit and current head version.
+For each answer decision, target_id is the frozen attempt input.target_id;
+logical_attempt_id is the attempt_ref fact_id, not the completion_ref fact_id.
+Choose decision_unit_id from that attempt's coverage and the matching manifest
+unit target_id; expected_version is that unit's current manifest version.
+With no component units, decision_unit_id equals target_id. A null decision_unit
+or empty decision_units list means whole-target review, not missing identifiers.
+With components, use the binding parent as target_id and the covered child as
+decision_unit_id; do not substitute the parent for a component. For extraction-only
+review use the authorized baseline reference and its manifest unit/target.
 Group related decision-unit fields atomically. You may accept many solid answers
 in one call. Acceptance with caveats and complete unresolved answers is allowed;
 neither uncertainty nor caveats require another validation. Give your own reason.

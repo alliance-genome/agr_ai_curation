@@ -270,3 +270,22 @@ def test_review_usage_summary_remains_visible_without_exposing_nested_secrets():
     summary = _redact_value({"provider_usage": {"reported_tokens": {"initial_tokens": 17123, "api_token": "private"}}})
     assert summary["provider_usage"]["reported_tokens"]["initial_tokens"] == 17123
     assert summary["provider_usage"]["reported_tokens"]["api_token"] != "private"
+
+
+def test_model_facing_decision_contract_explains_whole_target_and_component_ids():
+    from src.lib.validation_review.tools import runtime_tool_contract
+    from src.lib.validation_review.protocol import REVIEW_PROTOCOL
+
+    tool = next(t for t in runtime_tool_contract() if t["name"] == "record_validation_review")
+    schema = tool["parameters"]
+    entry_ref = schema["properties"]["entries"]["items"]["$ref"]
+    entry = schema["$defs"][entry_ref.rsplit("/", 1)[1]]["properties"]
+    assert "input.target_id" in entry["target_id"]["description"]
+    unit_description = entry["decision_unit_id"]["description"]
+    for text in ("coverage", "decision_unit_id equals target_id", "whole-target", "covered child"):
+        assert text in unit_description
+    assert "manifest" in entry["expected_version"]["description"]
+    assert "not its completion_ref" in entry["logical_attempt_id"]["description"]
+    for text in ("decision_unit_id equals target_id", "not missing", "covered child"):
+        assert text in tool["description"]
+        assert text in REVIEW_PROTOCOL

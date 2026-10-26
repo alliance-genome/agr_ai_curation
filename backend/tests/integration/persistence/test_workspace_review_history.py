@@ -351,6 +351,7 @@ async def test_worker_failure_has_one_sanitized_owner_and_expected_stops_do_not_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [False, "historical"], indirect=True)
 @pytest.mark.parametrize("action,caveat", [("accept", False), ("accept", True), ("reject", True)])
 async def test_worker_finishes_real_runner_admission_and_publication_with_fake_models(
     scope, scenario, candidate, monkeypatch, action, caveat
@@ -435,8 +436,16 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
                 answer = yield from self.read(completion)
                 assert "ECO:NEW" in json.dumps(answer)
                 assert ("The supplied evidence leaves a caveat" in json.dumps(answer)) is caveat
+                # Derive routing from the frozen request/coverage, exactly as the
+                # model-facing contract explains; null descriptors are not absent IDs.
+                assert unit["decision_unit"] is None
+                assert attempt_body["input"]["decision_units"] == []
+                binding_target = attempt_body["input"]["target_id"]
+                assert attempt_body["coverage"] == [binding_target]
+                decision_unit = attempt_body["coverage"][0]
+                assert decision_unit == unit["target_id"]
                 entries.append({
-                    "target_id": unit["target_id"], "decision_unit_id": unit["target_id"],
+                    "target_id": binding_target, "decision_unit_id": decision_unit,
                     "expected_version": unit["version"], "logical_attempt_id": attempt["id"],
                     "extraction_ref": None, "action": action,
                     "reason": "Scripted supervisor reviewed the original and exact saved answer",
@@ -475,6 +484,19 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
         "src.lib.validation_review.audit.report_operational_failure", unexpected
     )
     sid, cid = candidate
+    # Establish a real admitted, zero-decision predecessor, as in the historical
+    # acceptance failure. The fixture's initial declaration alone is not admission.
+    with h.SessionLocal.begin() as db:
+        prior_command = operations.submit(
+            db, owner_id=scope.owner_id, session_id=sid, request_id=str(uuid4()),
+            candidate_ids=[cid], guidance="Prior round", groups=[],
+        )
+        prior_operation = db.get(WorkspaceReviewOperation, prior_command["operation_id"])
+        prior_operation.state, prior_operation.lease_token = "preparing", "prior-lease"
+    prior_prepared = operations.prepare(prior_command["operation_id"], "prior-lease")
+    prior_episode = prior_prepared[2][0]["episode_id"]
+    with h.SessionLocal.begin() as db:
+        db.get(WorkspaceReviewOperation, prior_command["operation_id"]).state = "needs_review"
     with h.SessionLocal.begin() as db:
         db.add(
             CurationDraft(
@@ -497,9 +519,21 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
         row = db.get(WorkspaceReviewOperation, saved["operation_id"])
         row.state, row.lease_token = "preparing", "test-lease"
 
+    with h.SessionLocal() as db:
+        prior_facts = [(fact.id, fact.body_sha, fact.parent_id) for fact in db.scalars(
+            select(ValidationFact).where(ValidationFact.artifact_id == scenario.aid)
+            .order_by(ValidationFact.sequence))]
+
     await operations._execute(saved["operation_id"], "test-lease", "test-trace")
     with h.SessionLocal() as db:
+        from src.models.sql.validation_review import ValidationReviewEpisode
         row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+        episode = db.get(ValidationReviewEpisode, row.artifacts[0]["episode_id"])
+        assert episode.predecessor_id == prior_episode
+        current_facts = [(fact.id, fact.body_sha, fact.parent_id) for fact in db.scalars(
+            select(ValidationFact).where(ValidationFact.artifact_id == scenario.aid)
+            .order_by(ValidationFact.sequence))]
+        assert current_facts[:len(prior_facts)] == prior_facts
         assert model.calls, "The real SDK runner must reach the scripted provider"
         assert len(model.read_bodies) >= 4  # Packet, original, attempt, answer.
         assert model.read_pages > len(model.read_bodies)  # Complete paginated history.
