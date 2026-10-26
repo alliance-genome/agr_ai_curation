@@ -426,6 +426,21 @@ items and earlier validator answers remain auditable; retired items are not dele
 Affected validator inputs receive new version pins; unchanged siblings remain current.
 Curator edits have authority and cannot be silently overwritten by source selection.
 
+A compound identity can live at the object root or inside a nested value. Its
+internal root address is empty; external field-edit paths must still name a field.
+Scoped revalidation authorizes the complete declared identity, including unchanged
+identifier/name members, rather than all fields below its container or only the
+changed leaves. Membership comes from the exact edit event and immutable checkpoint
+identity audit. Match the unique audit for the event's patch within that revision's
+appended audits: one save can edit several identities, and client patch IDs can
+repeat across revisions. Missing or ambiguous historical evidence fails explicitly; no
+current package definition or inferred value similarity replaces that evidence.
+Only a fresh accepted matching validation can release the specifically authorized
+override version; unrelated fields, rejected/incomplete answers and later curator
+edits retain their authority. Mirror writes remain part of the source identity's
+atomic edit. Copied mirror values do not establish authority to revalidate their source.
+Saving, withdrawing or restoring an identity does not itself dispatch validation.
+
 Selected-source assessment uses the same saved binding and attempt ledger.
 Merge/split successors inherit predecessor attempt depth. Episode retry pools can
 use the existing document allowance, but every charge also reaches the unchanged

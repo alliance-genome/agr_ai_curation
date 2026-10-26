@@ -7,7 +7,7 @@ from . import projection, selections, store
 
 def _value(payload, path):
     value = payload
-    for part in parse_field_path(path):
+    for part in parse_field_path(path) if path != "" else []:
         value = value[part]
     return value
 
@@ -29,7 +29,7 @@ def resolve_curator_identity(scope, *, envelope, object_id, value_path, identity
     elif action == "withdraw_override":
         if reference is not None:
             raise store.HistoryConflict("Withdrawal cannot choose an arbitrary historical value")
-        underlying = projection.read_underlying_curator_value(scope, envelope, object_id=object_id, value_path=value_path, authenticated_groups=authenticated_groups)
+        underlying = projection.read_underlying_curator_value(scope, envelope, object_id=object_id, value_path=value_path, identity_keys=identity_keys, authenticated_groups=authenticated_groups)
         if underlying is not None:
             return result(underlying)
         reference = projection.latest_publication_reference(scope, artifact_id)

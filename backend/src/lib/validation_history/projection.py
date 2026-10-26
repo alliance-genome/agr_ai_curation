@@ -544,17 +544,18 @@ def republish_curator_checkpoint(db, envelope, *, revision, authenticated_groups
         manifest=manifest, envelope=projected, envelope_revision=revision)
 
 
-def read_underlying_curator_value(scope, envelope, *, object_id, value_path, authenticated_groups=()):
+def read_underlying_curator_value(scope, envelope, *, object_id, value_path, identity_keys, authenticated_groups=()):
     """Resolve the current selected value without replaying curator overlays."""
     from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
     from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
     from .curator_authority import active_overlays, _overlap, anchored_path, rebind_output_path
+    member_paths = [f"{value_path}.{key}" if value_path else key for key in identity_keys]
     artifact_id = envelope.metadata["validation_history"]["artifact_id"]
     with store.SessionLocal.begin() as db:
         selections._lock_artifact(db, scope, artifact_id)
         object_refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
                        for obj in envelope.extracted_objects}
-        if not any(body["object_id"] == object_id and _overlap(anchored_path(object_refs[body["target_id"]], body["anchor"]), value_path)
+        if not any(body["object_id"] == object_id and any(_overlap(anchored_path(object_refs[body["target_id"]], body["anchor"]), member) for member in member_paths)
                    for _, body in active_overlays(db, artifact_id)):
             return None
         from .episodes import latest_effective_episode
@@ -582,7 +583,7 @@ def read_underlying_curator_value(scope, envelope, *, object_id, value_path, aut
                 current_target_path = anchored_path(original_obj.metadata["validation_history"],
                     {"target_id": binding_fact.parent_id, "suffix": []}) if binding.get("object_target") == root else ""
                 if binding.get("object_target") == root and any(
-                    slot in allowed and isinstance(path, str) and _overlap(rebind_output_path(path, request["target"].get("field_path"), current_target_path), value_path)
+                    slot in allowed and isinstance(path, str) and any(_overlap(rebind_output_path(path, request["target"].get("field_path"), current_target_path), member) for member in member_paths)
                     for slot, path in destinations.items()):
                     eligible = True
                 if original_obj.metadata.get("selected_contribution", {}).get("completion_id") == unit["selected"]:
@@ -602,7 +603,7 @@ def read_underlying_curator_value(scope, envelope, *, object_id, value_path, aut
         from src.schemas.domain_envelope import parse_field_path
         value = obj.payload
         try:
-            for part in parse_field_path(value_path):
+            for part in parse_field_path(value_path) if value_path != "" else []:
                 value = value[part]
         except (KeyError, IndexError, TypeError):
             return {}
