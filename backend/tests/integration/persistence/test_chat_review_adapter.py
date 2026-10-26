@@ -41,8 +41,11 @@ def planned(scope, tmp_path, monkeypatch, request):
     monkeypatch.setattr(
         "src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False)
     )
+    fixture_options = getattr(request, "param", None)
+    fixture_shape = fixture_options.get("shape") if isinstance(fixture_options, dict) else fixture_options
+    admit_initial = fixture_options.get("admitted", True) if isinstance(fixture_options, dict) else True
     pack = _multivalued_dispatch_pack(tmp_path)
-    if getattr(request, "param", None) == "dependent":
+    if fixture_shape == "dependent":
         from copy import deepcopy
 
         raw = deepcopy(pack.metadata.metadata)
@@ -57,13 +60,13 @@ def planned(scope, tmp_path, monkeypatch, request):
         pack = replace(
             pack, metadata=pack.metadata.model_copy(update={"metadata": raw})
         )
-    if getattr(request, "param", None) == "nested":
+    if fixture_shape == "nested":
         from src.lib.domain_packs.loader import load_domain_pack_metadata
         text = pack.metadata_path.read_text().replace("evidence_code_curies", "genes.aliases")
         text = text.replace("    fields:\n", "    fields:\n      - field_path: genes\n        field_type: string\n        metadata:\n          multivalued: true\n")
         pack.metadata_path.write_text(text)
         pack = replace(pack, metadata=load_domain_pack_metadata(pack.metadata_path))
-    if getattr(request, "param", None) == "absent":
+    if fixture_shape == "absent":
         from copy import deepcopy
         raw = deepcopy(pack.metadata.metadata)
         binding = raw["validator_bindings"]["active"][0]
@@ -76,7 +79,7 @@ def planned(scope, tmp_path, monkeypatch, request):
         pack = replace(pack, metadata=pack.metadata.model_copy(update={
             "metadata": raw, "object_definitions": [definition]}))
     groups = ()
-    if getattr(request, "param", None) == "authorized":
+    if fixture_shape == "authorized":
         from copy import deepcopy
 
         raw = deepcopy(pack.metadata.metadata)
@@ -97,17 +100,17 @@ def planned(scope, tmp_path, monkeypatch, request):
                 object_type="Annotation",
                 pending_ref_id="one",
                 payload=({"genes": [{"aliases": ["eco:1", "eco:2"]}]}
-                         if getattr(request, "param", None) == "nested"
+                         if fixture_shape == "nested"
                          else {"evidence_code_curies": ["eco:1", "eco:2"]}),
             )
         ],
     )
-    if getattr(request, "param", None) == "absent":
+    if fixture_shape == "absent":
         env.extracted_objects[0].payload = {"optional": {}}
-    if getattr(request, "param", None) == "three":
+    if fixture_shape == "three":
         env.extracted_objects = [CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=name,
             payload={"evidence_code_curies": ["eco:" + name]}) for name in "ABC"]
-    if getattr(request, "param", None) == "evidence":
+    if fixture_shape == "evidence":
         env.extracted_objects[0].evidence_record_ids = ["original-evidence"]
         env.metadata["evidence_records"] = [{"evidence_record_id": "original-evidence",
             "document_id": scope.document_id, "verified_quote": "Original quoted evidence"}]
@@ -139,17 +142,18 @@ def planned(scope, tmp_path, monkeypatch, request):
     plan_ref = save_plan(plan, context=context)
     aid = plan.history_binding.artifact_id
     ep = plan.envelope.metadata["review_episode_id"]
-    sid = admission.create_scope(
-        scope,
-        operation_id=uuid4().hex,
-        kind="discovered_document_run",
-        targets=0,
-        episodes=0,
-    )
-    admission.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
+    if admit_initial:
+        sid = admission.create_scope(
+            scope,
+            operation_id=uuid4().hex,
+            kind="discovered_document_run",
+            targets=0,
+            episodes=0,
+        )
+        admission.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
     adapter = ValidatorAdapter(scope, aid, ep, plan_ref, authenticated_groups=groups)
     return SimpleNamespace(
-        plan=plan, adapter=adapter, aid=aid, ep=ep, scope=scope, pack=pack
+        plan=plan, adapter=adapter, aid=aid, ep=ep, scope=scope, pack=pack, source_envelope=env
     )
 
 

@@ -435,13 +435,23 @@ def declare_envelope_episode(binding, envelope, matches, *, episode_key=None, re
     obligations = list({item["target_id"]: item for item in obligations}.values())
     from .curator_authority import record_revalidation_intent_in_transaction, revalidation_intents
     with store.SessionLocal.begin() as db:
+        _lock_artifact(db, binding.scope, binding.artifact_id, write=True)
+        own_episode = db.scalar(select(ValidationFact).where(
+            ValidationFact.artifact_id == binding.artifact_id,
+            ValidationFact.operation_id == "review-episode:" + episode_key,
+        )) if episode_key is not None else None
         scoped = {}
         if review_object_ids is not None:
             from src.lib.validation_review.record_scope import compile_matches, retained_coverage
             requested, allowed = compile_matches(binding, matches, set(review_object_ids))
             roots = {obj.metadata["validation_history"]["target_id"] for obj in source.extracted_objects
                      if obj.object_id in review_object_ids or obj.pending_ref_id in review_object_ids}
-            ids, retained = retained_coverage(db, binding.artifact_id, envelope.metadata.get("review_episode_id"),
+            from .episodes import latest_effective_episode
+            previous = latest_effective_episode(
+                db, binding.artifact_id,
+                before_sequence=own_episode.sequence if own_episode is not None else None,
+            )
+            ids, retained = retained_coverage(db, binding.artifact_id, previous.id if previous is not None else None,
                 obligations, requested, allowed, roots)
             scoped = {"review_target_ids": ids, "retained_episode_ids": retained}
         episode_id = start_episode_in_transaction(db, binding.scope, binding.artifact_id, episode={

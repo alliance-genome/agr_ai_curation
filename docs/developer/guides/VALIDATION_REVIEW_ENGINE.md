@@ -459,3 +459,19 @@ Retiring the cumulative token fields changes the frozen benchmark review contrac
 Existing frozen supervisor benchmark sources must be explicitly repinned before
 replay; they are rejected by contract comparison rather than silently adopting
 the new policy. The migration does not edit those scientific snapshots.
+
+### Incomplete-round lineage
+
+An explicit workspace revalidation derives prior review coverage from immutable
+history, not the envelope publication pointer. A review that records no decisions
+may never publish an envelope, but it still remains part of the review history.
+Coverage can reference older historical episodes without runtime admission; a
+new runtime round separately links to its last admitted predecessor. Neither
+relationship creates acceptance or changes selected scientific values.
+
+Preparation uses the new episode fact sequence as its recovery boundary, including
+abandonment and admission facts. Later facts cannot change that round’s derived
+predecessor on retry. An already admitted round retains its recorded predecessor,
+policy, charges and deadline when resumed. Only an explicit curator request may
+create a new round after an admitted review; automatic bootstrap cannot claim
+curator renewal.
