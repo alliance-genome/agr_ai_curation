@@ -145,6 +145,12 @@ baseline, typed source when available, and other history remain accessible when
 needed. Per-record access does not remove old validation findings, summarize away
 evidence, choose scientific relevance in code, or grant paper-reading powers.
 
+Changes to this locked protocol or the generated review-tool contract invalidate
+previously frozen supervisor snapshots. Before executing an unstarted benchmark
+or calibration case on an upgraded runtime, freeze its supervisor contract again
+through the normal staging path. Keep completed runs and their usage receipts;
+do not weaken exact-contract checks or replay completed work to refresh a pin.
+
 ## Observability and validation
 
 Committed `validation_review.*` facts are emitted to the existing extraction

@@ -13,7 +13,7 @@ get_validation_record_source for relevant original records and attached evidence
 especially when reviewing a subset of a large artifact. A complete baseline read
 can be more appropriate for a small source or when you need most of its records;
 choose based on the evidence needed and remaining tool/context budgets. Then
-then inspect relevant validator answers, caveats and decisions by their references.
+inspect relevant validator answers, caveats and decisions by their references.
 The source view is normalized, not a new typed extraction or current selected value.
 Historical sources explicitly lack an attested original. A later added/replacement
 record uses its contribution history rather than a fabricated baseline original.
