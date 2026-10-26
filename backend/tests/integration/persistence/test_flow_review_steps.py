@@ -76,6 +76,8 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
         authenticated_groups=(), user_request="Extract evidence", flow_run_id=run_id,
         step_id=step["step_id"], node_id="extract", validation_groups=groups, parent_scope_id=parent_scope,
         configured_nodes=nodes,
+        step_provenance={"flow_id": "fixture", "flow_name": "Fixture flow", "step": 1,
+                         "agent_name": "Fixture extractor", "tool_name": "extract"},
         execution_context={"captured_at": datetime.now(timezone.utc).isoformat(), "source_kind": "flow",
             "flow_id": "fixture", "step_id": "extract", "agent_key": "fixture", "executed_query": "Extract evidence", "document": None})
     source_scope = store.HistoryScope(item.scope.owner_id, item.scope.document_id, uuid4().hex)
@@ -103,9 +105,13 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     # The fixture domain pack has no production adapter; preserve its exact source
     # when constructing the checkpoint, using the same persisted-row loader.
     from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
-    await flow.receive(env, item.pack, agent_key="fixture", adapter_key="fixture", tool_name="extract",
+    await flow.receive(env, item.pack, agent_key="fixture", adapter_key="fixture", tool_name="specialist-label",
+        source_metadata={"flow_id": "untrusted", "flow_name": "untrusted", "step": 99,
+                         "agent_name": "untrusted", "tool_name": "untrusted", "execution_context": {}},
         execution_receipt=None, context=ValidatorRuntimeContext(user_id=item.scope.owner_id,
             document_id=item.scope.document_id, authenticated_groups=()))
+    assert all(flow.record.metadata[key] == value for key, value in flow.step_provenance.items())
+    assert flow.record.metadata["execution_context"] == flow.execution_context
     assert len(calls) == 2
     from src.models.sql.validation_review import ValidationReviewScope
     with store.SessionLocal() as db:
@@ -316,12 +322,33 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
     else:
         with pytest.raises(admission.ReviewStopped, match='flow_review_pending'):
             await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        original_record = state['pending_review'].record.model_dump(mode='json')
+        original_flow_name = flow.name
+        flow.name = 'Renamed after first capture'
         assert state['next_tool_index'] == 0 and not state['completed_steps']
         assert 'step order is strict' in (await tools[1].on_invoke_tool(context, json.dumps({'query': 'next'}))).lower()
         with pytest.raises(admission.ReviewStopped, match='flow_step_already_submitted'):
             await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
         assert calls == ['extract', 'validate', 'validate', 'review']
         pending = state['pending_review']
+        assert pending.record.model_dump(mode='json') == original_record
+        assert pending.record.metadata['flow_name'] == original_flow_name
         with store.SessionLocal() as db:
             saved = db.get(FlowReviewStep, pending.step_id)
             assert saved.state == 'review_pending' and saved.artifact_id
+
+    if accept not in ('extractor_turns', 'extractor_timeout'):
+        from sqlalchemy import select
+        from src.lib.curation_workspace.models import CurationExtractionResultRecord
+        from src.lib.curation_workspace.extraction_results import _canonical_payload_hash
+        with store.SessionLocal() as db:
+            rows = list(db.scalars(select(CurationExtractionResultRecord).where(
+                CurationExtractionResultRecord.flow_run_id == run_id)))
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.extraction_metadata['flow_id'] == str(flow.id)
+            assert row.extraction_metadata['flow_name'] == (original_flow_name if accept is False else flow.name)
+            assert row.extraction_metadata['step'] == 1
+            assert row.extraction_metadata['agent_name'] == _metadata_from_registry('gene')['display_name']
+            assert row.extraction_metadata['tool_name'] == 'ask_gene_specialist'
+            assert row.extraction_metadata['payload_hash'] == _canonical_payload_hash(row.payload_json)

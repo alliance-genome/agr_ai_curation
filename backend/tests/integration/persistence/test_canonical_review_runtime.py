@@ -462,6 +462,39 @@ async def _canonical_producer_scenario(
         with store.SessionLocal() as db:
             records = [_record_to_schema(row) for row in db.scalars(select(CurationExtractionResultRecord).where(
                 CurationExtractionResultRecord.flow_run_id == run_id))]
+            from src.lib.flows.evidence_export import (
+                FlowEvidenceExportFormat, FlowRunEvidenceExportPermissionError,
+                build_flow_evidence_export_artifact, resolve_authorized_flow_run_extraction_results,
+            )
+            authorized = resolve_authorized_flow_run_extraction_results(
+                db=db, flow_run_id=run_id, user_id=item.scope.owner_id)
+            with pytest.raises(FlowRunEvidenceExportPermissionError):
+                resolve_authorized_flow_run_extraction_results(
+                    db=db, flow_run_id=run_id, user_id="another-owner")
+        import csv
+        import io
+        for export_format in FlowEvidenceExportFormat:
+            artifact = build_flow_evidence_export_artifact(
+                flow_run_id=run_id, extraction_results=authorized, export_format=export_format)
+            assert artifact.record_count > 0
+            if export_format is FlowEvidenceExportFormat.JSON:
+                exported = json.loads(artifact.payload_text)
+                assert exported["flow_name"] == flow.name
+                assert exported["total_evidence_records"] == artifact.record_count
+                assert len(exported["steps"]) == 1
+                step = exported["steps"][0]
+                assert step["step"] == 1
+                assert step["agent_id"] == records[0].agent_key
+                assert step["agent_name"] == "Fixture extractor"
+                assert step["tool_name"] == "ask_gene_specialist"
+                rows = step["evidence_records"]
+            else:
+                rows = list(csv.DictReader(io.StringIO(artifact.payload_text), delimiter=export_format.delimiter))
+                assert rows
+                assert {row["step_number"] for row in rows} == {"1"}
+                assert {row["agent_id"] for row in rows} == {records[0].agent_key}
+            assert all(row["verified_quote"] == chunk["text"] for row in rows)
+        assert records[0].metadata["persistence_phase"] == "inline_validated_extraction"
     assert len(records) == 1
     assert all(f"eco:{label}" in json.dumps(records[0].payload_json) for label in "ABC")
     reference = records[0].metadata["flow_review" if producer == "flow" else "chat_review"]
@@ -684,6 +717,19 @@ async def test_canonical_batch_processes_two_documents_serially_without_replay(
         records = list(db.scalars(select(CurationExtractionResultRecord).where(
             CurationExtractionResultRecord.flow_run_id == str(batch_id))))
         assert len(records) == 2
+        from src.lib.flows.evidence_export import (
+            FlowEvidenceExportFormat, build_flow_evidence_export_artifact,
+            resolve_authorized_flow_run_extraction_results,
+        )
+        authorized = resolve_authorized_flow_run_extraction_results(
+            db=db, flow_run_id=str(batch_id), user_id=planned.scope.owner_id)
+        assert {str(record.document_id) for record in authorized} == set(document_ids)
+        exported = json.loads(build_flow_evidence_export_artifact(
+            flow_run_id=str(batch_id), extraction_results=authorized,
+            export_format=FlowEvidenceExportFormat.JSON).payload_text)
+        assert exported['flow_name'] == 'Canonical two-document review'
+        assert len(exported['steps']) == 2
+        assert all(step['step'] == 1 and step['evidence_count'] > 0 for step in exported['steps'])
         for record in records:
             assert all(f"eco:{label}" in json.dumps(record.payload_json) for label in "ABC")
             reference = record.extraction_metadata["flow_review"]

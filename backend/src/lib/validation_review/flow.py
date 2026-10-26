@@ -15,6 +15,8 @@ from .validator_adapter import ValidatorAdapter, save_plan
 
 @dataclass
 class FlowReview(ChatReview):
+    # Required executor snapshot: available even if initial review stops early.
+    step_provenance: dict = field(kw_only=True)
     flow_run_id: str = ""
     step_id: str = ""
     node_id: str = ""
@@ -56,11 +58,12 @@ class FlowReview(ChatReview):
                "operation_turn_id": self.turn_id, "step_id": self.step_id}
         saved = await asyncio.to_thread(persist_inline_validated_extraction_result,
             payload_json=plan.envelope.model_dump(mode="json"), execution_receipt=execution_receipt,
-            document_id=self.document_id, agent_key=agent_key, adapter_key=adapter_key, tool_name=tool_name,
+            document_id=self.document_id, agent_key=agent_key, adapter_key=adapter_key,
+            tool_name=self.step_provenance["tool_name"],
             source_kind=CurationExtractionSourceKind.FLOW, origin_session_id=self.session_id,
             user_id=self.owner_id, trace_id=trace_id, flow_run_id=self.flow_run_id,
             builder_finalization=builder_finalization,
-            metadata={**(source_metadata or {}), "flow_review": ref, "flow_step_key": self.node_id,
+            metadata={**(source_metadata or {}), **self.step_provenance, "flow_review": ref, "flow_step_key": self.node_id,
                       "execution_context": self.execution_context})
         scope_id = await asyncio.to_thread(self.operation_scope, binding.scope)
         await asyncio.to_thread(admission.attach_episode, binding.scope, artifact_id=binding.artifact_id,
