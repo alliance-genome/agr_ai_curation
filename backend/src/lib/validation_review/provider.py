@@ -21,6 +21,7 @@ class _ExecutionState:
     deadline: float | None = None
     clock_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     provider_admitted: bool = False
+    capture_owner_active: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,9 +53,13 @@ def budget_scope(budget):
     }:
         raise ValueError("Unknown review token pool")
     token = ACTIVE_BUDGET.set(budget)
+    previous_owner = budget.execution.capture_owner_active
+    budget.execution.capture_owner_active = True
     try:
         yield
     finally:
+        # Copied task/thread contexts must not suppress reports after the owner exits.
+        budget.execution.capture_owner_active = previous_owner
         ACTIVE_BUDGET.reset(token)
 
 
@@ -90,8 +95,16 @@ async def guarded_await(awaitable):
         if hasattr(awaitable, "close"):
             awaitable.close()
         raise
-    async with asyncio.timeout(timeout):
-        return await awaitable
+    deadline = asyncio.timeout(timeout)
+    try:
+        async with deadline:
+            return await awaitable
+    except TimeoutError as error:
+        # Distinguish our deadline from a provider timeout for error reporting.
+        # Keep the existing review outcome classification unchanged.
+        if deadline.expired():
+            error._review_deadline_expired = True
+        raise
 
 
 async def admit_model(

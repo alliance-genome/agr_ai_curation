@@ -86,6 +86,19 @@ error logs without storing curator or document content. Explicit
 exception-reporting helpers mark their companion log record so the promoted-log
 path does not create a duplicate event.
 
+The Agents SDK can capture a review outcome before the application owner
+classifies it. While a trusted review owner is live, `before_send` defers the
+SDK's `openai_agents` error captures to that owner. Ordinary review stops create
+no error event; genuine failures use the sanitized application reporter.
+Provider timeouts retain SDK reporting because existing review outcome
+classification treats all timeouts as expiry; only a timeout marked by the
+review's own deadline is suppressed. This change does not revise that outcome
+classification.
+Other mechanisms, unowned SDK failures and captures from child contexts after
+the owner exits remain reportable. Discarded child-task failures are reported
+during drain; transparent SDK `UserError` wrappers retain reporting identity.
+This does not alter admission, decisions, Langfuse evidence or span status.
+
 Expected successful liveness, readiness, PDF-extraction-health, document-status,
 and batch-status polling transactions are dropped after completion. A failed
 transaction on the same route is retained. This keeps operational polling from

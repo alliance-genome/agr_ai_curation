@@ -1839,12 +1839,48 @@ def _structured_error_detail(hint: Mapping[str, Any] | None) -> dict[str, Any] |
     return detail
 
 
+def _is_review_owned_sdk_capture(event: Mapping[str, Any], hint: Mapping[str, Any] | None) -> bool:
+    """The live review owner classifies and reports SDK failures exactly once.
+
+    Only the synchronous SDK capture within a trusted review scope is covered.
+    Other reporters remain observable; genuine failures use the review owner
+    rather than a premature SDK event before the owner classifies the result.
+    """
+    exception = event.get("exception")
+    values = exception.get("values") if isinstance(exception, Mapping) else None
+    if not isinstance(values, list) or not values or not isinstance(values[-1], Mapping):
+        return False
+    mechanism = values[-1].get("mechanism")
+    if not isinstance(mechanism, Mapping) or mechanism.get("type") != "openai_agents":
+        return False
+    exc_info = (hint or {}).get("exc_info")
+    if not isinstance(exc_info, tuple) or len(exc_info) < 2 or not isinstance(exc_info[1], Exception):
+        return False
+    # Import only on this SDK path. An early-startup/import failure must retain
+    # the original event, never make before_send raise and lose that failure.
+    try:
+        from src.lib.validation_review.provider import ACTIVE_BUDGET
+        from src.lib.validation_review.stops import review_stop
+
+        budget = ACTIVE_BUDGET.get()
+        stop = review_stop(exc_info[1])
+        # Existing owner classification treats all timeouts as expiry. Only our
+        # own deadline is quiet; retain SDK reporting of provider timeouts.
+        if isinstance(stop, TimeoutError) and not getattr(stop, "_review_deadline_expired", False):
+            return False
+        return budget is not None and budget.execution.capture_owner_active
+    except Exception:
+        return False
+
+
 def before_send(
     event: dict[str, Any],
     hint: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Redact error events before Sentry upload."""
 
+    if _is_review_owned_sdk_capture(event, hint):
+        return None
     if _is_known_httpcore_closed_loop_cleanup(event):
         return None
     if _reports_already_captured_exception(hint):
