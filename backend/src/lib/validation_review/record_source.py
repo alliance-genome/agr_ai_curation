@@ -2,9 +2,11 @@
 
 from copy import deepcopy
 
+from sqlalchemy import select
+
 from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
 from src.lib.validation_history import store
-from src.models.sql.validation_history import ValidationBody
+from src.models.sql.validation_history import ValidationBody, ValidationFact
 from .admission import lock_episode
 from .audit import append_fact
 
@@ -33,10 +35,20 @@ def snapshot(scope, episode_id, *, target_id):
         episode, _ = lock_episode(db, scope, episode_id, require_open=False)
         artifact = store._artifact(db, episode.artifact_id, scope)
         target, original = _object_target(db, artifact.id, target_id)
-        if not store._has_baseline_subject(db, artifact.id, target.id):
+        if not all(store._has_baseline_subject(db, artifact.id, identity)
+                   for identity in (target_id, target.id)):
             raise store.HistoryConflict(
                 "Record has no baseline original; inspect its exact source contribution history"
             )
+        operation_id = "review-record-source:" + artifact.baseline_sha + ":" + target.id
+        existing = db.scalar(select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact.id,
+            ValidationFact.operation_id == operation_id,
+        ))
+        if existing is not None:
+            if existing.kind != "review_record_source" or existing.target_id != target.id:
+                raise store.HistoryConflict("Source record reference identity conflict")
+            return {"fact_id": existing.id, "sha256": existing.body_sha}
         baseline = db.get(ValidationBody, artifact.baseline_sha).content
         normalized = baseline["normalized"]
         matches = [item for item in normalized["extracted_objects"]
@@ -53,7 +65,7 @@ def snapshot(scope, episode_id, *, target_id):
             evidence.append(record)
         fact = append_fact(
             db, artifact.id,
-            operation_id="review-record-source:" + artifact.baseline_sha + ":" + target.id,
+            operation_id=operation_id,
             kind="review_record_source", target_id=target.id,
             body={
                 "artifact_id": artifact.id,

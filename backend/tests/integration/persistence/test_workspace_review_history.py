@@ -419,6 +419,10 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
             assert "eco:1" in json.dumps(baseline)
             entries = []
             for unit in packet["manifest"]["units"]:
+                source_ref = yield _tool_call("get_validation_record_source", f"source-{len(self.calls)}",
+                                             json.dumps({"target_id": unit["target_id"]}))
+                source = yield from self.read(source_ref)
+                assert source["record"] in baseline["normalized"]["extracted_objects"]
                 candidates = sorted((fact for fact in packet["facts"]
                     if fact["kind"] == "attempt" and fact["target_id"] == unit["target_id"]),
                     key=lambda fact: fact["sequence"], reverse=True)

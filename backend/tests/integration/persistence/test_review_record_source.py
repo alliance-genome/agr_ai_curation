@@ -105,9 +105,33 @@ def test_missing_or_ambiguous_evidence_is_not_invented(scope, evidence, error):
 
 
 def test_contribution_target_cannot_masquerade_as_baseline_original(scope):
-    _, ep, obj, _, _, _, _ = setup_record(scope, origin={"kind": "extractor_contribution", "baseline_target": False})
+    _, ep, obj, _, _, _, _ = setup_record(scope, origin={"kind": "extraction_contribution", "baseline_target": False})
     with pytest.raises(h.HistoryConflict, match="no baseline original"):
         record_source.snapshot(scope, ep, target_id=obj)
+
+
+def test_added_nested_field_cannot_return_its_parents_original_as_its_own(scope):
+    aid, ep, obj, _, _, _, _ = setup_record(scope)
+    field = h.register_target(scope, aid, identity="new-field", parent_target_id=obj,
+        original={"initial_path": "new_field", "value": "later", "object_target": obj,
+                  "origin": {"kind": "extraction_contribution", "contribution_id": "new", "predecessor_ids": []}})
+    with pytest.raises(h.HistoryConflict, match="no baseline original"):
+        record_source.snapshot(scope, ep, target_id=field)
+    # Explicitly asking for the parent's original remains valid.
+    assert record_source.snapshot(scope, ep, target_id=obj)["sha256"]
+
+
+def test_repeated_source_reference_does_not_repeat_committed_audit_event(scope, monkeypatch):
+    from src.lib.openai_agents import extraction_trace_events
+
+    events = []
+    monkeypatch.setattr(extraction_trace_events, "write_extraction_trace_event",
+                        lambda **kwargs: events.append(kwargs))
+    _, ep, obj, field, binding, _, _ = setup_record(scope)
+    events.clear()
+    refs = [record_source.snapshot(scope, ep, target_id=t) for t in (obj, field, binding, obj)]
+    assert all(r == refs[0] for r in refs)
+    assert [e["event_type"] for e in events] == ["validation_review.review_record_source"]
 
 
 def test_retired_original_remains_readable_without_reactivation(scope):
