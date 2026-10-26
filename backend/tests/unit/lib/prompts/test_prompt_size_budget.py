@@ -10,9 +10,10 @@ CORE_GENERATED_BUDGET = 2500
 # ALL-1445 adds locked curator authority, selected-record scope, and retained
 # sibling/dependency review coverage. ALL-1446 adds adaptive exact source reads,
 # original/contribution provenance, and complete-page evidence rules. The
-# measured contract is 5463 chars; keep the ceiling close to that reviewed text.
+# incremental source/answer navigation and runtime compaction guidance bring the
+# measured contract to 6242 chars; keep the ceiling close to that reviewed text.
 # This is a source-growth regression ceiling, not a runtime truncation limit.
-AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 5500}
+AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 6300}
 
 
 def test_core_generated_within_budget_for_all_agents():
