@@ -457,7 +457,7 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     # Canonical object rows carrying an evidence-record reference pass.
     smoke.require_batch_plumbing_payload(
         {
-            "batch_release_smoke_result_json_json_1_6b19876eca52_237f04d60ef132a9ef5eb3c77acab378.json": [
+            "batch_release_smoke_result_json_json_1_6b19876eca52_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb_237f04d60ef132a9ef5eb3c77acab378.json": [
                 {"item": "crb", "evidence_record_ids": ["evidence-abc123"]}
             ]
         },
@@ -497,7 +497,7 @@ def test_require_batch_plumbing_payload_requires_canonical_object_rows():
     with pytest.raises(smoke.SmokeFailure, match="evidence-record reference"):
         smoke.require_batch_plumbing_payload(
             {
-                "batch_release_smoke_result_json_json_1_6b19876eca52_237f04d60ef132a9ef5eb3c77acab378.json": [
+                "batch_release_smoke_result_json_json_1_6b19876eca52_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb_237f04d60ef132a9ef5eb3c77acab378.json": [
                     {"item": "crb", "evidence_record_ids": []}
                 ]
             },
@@ -1665,3 +1665,67 @@ def test_explicit_model_missing_from_catalog_fails_before_chat(monkeypatch):
             chat_timeout_seconds=5.0, checks=[],
         )
     assert urls == ["http://example.test/api/agent-studio/models"]
+
+
+@pytest.mark.parametrize("output_format", ["json", "csv", "tsv"])
+def test_batch_plumbing_accepts_storage_generated_versioned_names(tmp_path, output_format):
+    import csv
+    import io
+    from src.lib.file_outputs.storage import FileOutputStorageService
+
+    rows = [{"item": "crb", "evidence_record_ids": "evidence-abc123"}]
+    if output_format == "json":
+        content = json.dumps(rows)
+    else:
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]),
+                                delimiter="," if output_format == "csv" else "\t")
+        writer.writeheader()
+        writer.writerows(rows)
+        content = output.getvalue()
+    path, _, _, _ = FileOutputStorageService(base_path=tmp_path).save_output(
+        trace_id="a" * 32,
+        session_id="batch-smoke-storage-contract",
+        content=content,
+        file_type=output_format,
+        descriptor=f"batch_release_smoke_result_{output_format}_{output_format}_1_6b19876eca52",
+        stable_filename=True,
+        content_version="b" * 64,
+    )
+    if output_format == "json":
+        parsed = json.loads(path.read_text())
+    else:
+        parsed = list(csv.DictReader(io.StringIO(path.read_text()),
+                                    delimiter="," if output_format == "csv" else "\t"))
+    _load_smoke_module().require_batch_plumbing_payload({path.name: parsed}, output_format=output_format)
+
+
+@pytest.mark.parametrize("suffix", [
+    "a" * 32,  # Old filename: missing content version.
+    "b" * 63 + "_" + "a" * 32,
+    "b" * 65 + "_" + "a" * 32,
+    "B" * 64 + "_" + "a" * 32,
+    "g" * 64 + "_" + "a" * 32,
+    "b" * 64 + "_" + "a" * 31,
+    "b" * 64 + "_" + "a" * 33,
+    "b" * 64 + "_" + "a" * 32 + "_extra",
+])
+def test_batch_plumbing_rejects_malformed_versioned_names(suffix):
+    smoke = _load_smoke_module()
+    name = f"batch_release_smoke_result_json_json_1_6b19876eca52_{suffix}.json"
+    with pytest.raises(smoke.SmokeFailure, match="runtime export naming shape"):
+        smoke.require_batch_plumbing_payload(
+            {name: [{"item": "crb", "evidence_record_ids": ["evidence-abc123"]}]},
+            output_format="json",
+        )
+
+
+def test_batch_plumbing_rejects_one_invalid_name_among_valid_artifacts():
+    smoke = _load_smoke_module()
+    rows = [{"item": "crb", "evidence_record_ids": ["evidence-abc123"]}]
+    prefix = "batch_release_smoke_result_json_json_1_6b19876eca52_"
+    with pytest.raises(smoke.SmokeFailure, match="runtime export naming shape"):
+        smoke.require_batch_plumbing_payload(
+            {prefix + "b" * 64 + "_" + "a" * 32 + ".json": rows,
+             prefix + "a" * 32 + ".json": rows}, output_format="json",
+        )
