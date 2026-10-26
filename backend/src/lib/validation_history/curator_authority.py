@@ -27,8 +27,13 @@ def _path(parts):
     return result
 
 
+def _parts(path):
+    """Internal value containers may name the object root; public paths stay strict."""
+    return [] if path == "" else parse_field_path(path)
+
+
 def anchor_for_path(refs, path):
-    parts = parse_field_path(path)
+    parts = _parts(path)
     for length in range(len(parts), 0, -1):
         prefix = _path(parts[:length])
         target = refs["fields"].get(prefix)
@@ -146,6 +151,77 @@ def _record_patch_unit(db, scope, artifact_id, *, event_id, actor_id, body):
         body={**deepcopy(body), "actor_id": actor_id}).id
 
 
+def _atomic_identity_anchors(db, artifact_id, body, checkpoints):
+    """Read full identity membership from the exact immutable edit audit.
+
+    Payload diffs omit unchanged members. Checkpoint-local audit append identity
+    also avoids trusting a client-supplied patch_id to be globally unique.
+    """
+    from src.lib.curation_workspace.models import DomainEnvelopeHistory
+    from src.lib.domain_envelopes.persistence import load_domain_envelope, DomainEnvelopePersistenceError
+    from src.lib.domain_packs.resolvable_values import CURATOR_OVERRIDE_METADATA_KEY
+    from src.models.sql.validation_history import ValidationArtifact, ValidationBody
+
+    artifact = db.get(ValidationArtifact, artifact_id)
+    baseline = db.get(ValidationBody, artifact.baseline_sha).content["normalized"]
+    envelope_id = baseline["envelope_id"]
+    event = db.get(DomainEnvelopeHistory, (envelope_id, body.get("source_event_id")))
+    if event is None or event.actor_id != artifact.owner_id:
+        raise store.HistoryConflict("Atomic curator identity has no exact owned edit event")
+    details = event.event_json["details"]
+    recorded = details.get("curator_value")
+    if recorded is None or any(recorded.get(key) != body[key]
+                               for key in ("target_id", "object_id", "value_path", "anchor")):
+        raise store.HistoryConflict("Atomic curator identity event does not match its fact")
+
+    def checkpoint(revision):
+        key = (envelope_id, revision)
+        if key not in checkpoints:
+            try:
+                checkpoints[key] = load_domain_envelope(db, envelope_id, revision=revision)
+            except DomainEnvelopePersistenceError as error:
+                raise store.HistoryConflict("Atomic curator identity checkpoint is unavailable") from error
+        return checkpoints[key]
+
+    envelope = checkpoint(event.envelope_revision)
+    if envelope.metadata["validation_history"]["artifact_id"] != artifact_id:
+        raise store.HistoryConflict("Atomic curator identity checkpoint belongs to another artifact")
+    indexed = [item for item in envelope.history if item.event_id == event.event_id]
+    if len(indexed) != 1 or indexed[0].model_dump(mode="json") != event.event_json:
+        raise store.HistoryConflict("Atomic curator identity event does not match its checkpoint")
+
+    def object_at(saved):
+        objects = [obj for obj in saved.extracted_objects
+                   if body["object_id"] in {obj.object_id, obj.pending_ref_id}]
+        if len(objects) != 1:
+            raise store.HistoryConflict("Atomic curator identity object is absent from its checkpoint")
+        return objects[0]
+
+    obj = object_at(envelope)
+    if obj.metadata["validation_history"]["target_id"] != body["target_id"]:
+        raise store.HistoryConflict("Atomic curator identity object target changed")
+    previous = object_at(checkpoint(event.envelope_revision - 1))
+    audits = obj.metadata.get(CURATOR_OVERRIDE_METADATA_KEY, [])
+    old_audits = previous.metadata.get(CURATOR_OVERRIDE_METADATA_KEY, [])
+    if audits[:len(old_audits)] != old_audits:
+        raise store.HistoryConflict("Atomic curator identity audit prefix changed")
+    # Draft materialization can edit distinct identities and checkpoint them once.
+    # Other audits in this suffix are valid; this event still needs one exact match.
+    matching = [audit for audit in audits[len(old_audits):]
+                if details.get("patch_id") and audit.get("patch_id") == details["patch_id"]
+                and audit.get("field_path") == details.get("field_path")
+                and audit.get("value_path") == body["value_path"]
+                and audit.get("actor_id") == event.actor_id]
+    if len(matching) != 1:
+        raise store.HistoryConflict("Atomic curator identity has no unique appended identity audit")
+    audit = matching[0]
+    if not isinstance(audit.get("identity"), dict) or not audit["identity"]:
+        raise store.HistoryConflict("Atomic curator identity has no exact complete identity audit")
+    prefix = body["value_path"] + "." if body["value_path"] else ""
+    return [anchor_for_path(obj.metadata["validation_history"], prefix + member)
+            for member in audit["identity"]]
+
+
 def record_revalidation_intent(binding, *, envelope, episode_id, object_id, field_paths, actor_id, guidance=None):
     """Called only for an explicit authenticated revalidation request."""
     with store.SessionLocal.begin() as db:
@@ -165,11 +241,19 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
     store._fact(db, binding.artifact_id, episode_id, kind="review_episode")
     refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
             for obj in envelope.extracted_objects}
+    checkpoints = {}
     def current_path(body):
         return anchored_path(refs[body["target_id"]], body["anchor"])
     def requested(body):
         if body["object_id"] == object_id:
-            return not field_paths or any(_overlap(current_path(body), path) if body.get("atomic") else _covers(path, current_path(body)) for path in field_paths)
+            if not field_paths:
+                return True
+            if body.get("atomic"):
+                members = _atomic_identity_anchors(db, binding.artifact_id, body, checkpoints)
+                return any(_anchor_covers(db, binding.artifact_id,
+                    anchor_for_path(refs[body["target_id"]], path), member, atomic=True)
+                    for path in field_paths for member in members)
+            return any(_covers(path, current_path(body)) for path in field_paths)
         contributor = body.get("contributor_completion_id")
         if contributor is None:
             return False
@@ -210,12 +294,12 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
 
 
 def _covers(parent, child):
-    a, b = tuple(parse_field_path(parent)), tuple(parse_field_path(child))
+    a, b = tuple(_parts(parent)), tuple(_parts(child))
     return b[:len(a)] == a
 
 
 def _overlap(left, right):
-    a, b = tuple(parse_field_path(left)), tuple(parse_field_path(right))
+    a, b = tuple(_parts(left)), tuple(_parts(right))
     return a[:len(b)] == b or b[:len(a)] == a
 
 
@@ -243,6 +327,7 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
     from .selections import manifest_in_transaction
     current_units = manifest_in_transaction(db, scope, artifact_id, episode_id=episode_id)["units"]
     released = set()
+    checkpoints = {}
     for entry in accepted_entries:
         if entry["action"] != "accept" or entry.get("subject") in {None, "baseline", "curator"}:
             continue
@@ -275,7 +360,10 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
                                  else [*request["expected_result_fields"], *(request.get("optional_result_fields") or {})])}
                 whole_result = set(request["expected_result_fields"]) | set(request.get("optional_result_fields") or {})
                 same_contributor = old_input["target_id"] == frozen["target_id"] and whole_result <= selected_slots
-            if same_contributor or (same_source and any(_anchor_covers(db, artifact_id, destination, body["anchor"], atomic=body.get("atomic", False)) for destination in destinations)):
+            members = (_atomic_identity_anchors(db, artifact_id, body, checkpoints)
+                       if same_source and body.get("atomic") else [body["anchor"]])
+            if same_contributor or (same_source and any(_anchor_covers(db, artifact_id, destination, member,
+                    atomic=body.get("atomic", False)) for destination in destinations for member in members)):
                 released.add(fact.id)
     if released:
         store._append(db, artifact_id, operation_id="curator-release:" + operation_id,
