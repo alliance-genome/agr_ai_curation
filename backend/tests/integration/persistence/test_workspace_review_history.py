@@ -1008,3 +1008,228 @@ async def test_partial_admission_failure_closes_admitted_children(scope, scenari
         for item in row.artifacts:
             assert db.scalar(select(func.count()).select_from(ValidationFact).where(
                 ValidationFact.artifact_id == item["artifact_id"], ValidationFact.kind == "attempt")) == attempts_before[item["artifact_id"]]
+
+
+@pytest.mark.parametrize("publication_pointer", ["stale", "absent"])
+def test_new_round_links_last_admitted_review_without_publication(
+    scope, scenario, candidate, monkeypatch, publication_pointer
+):
+    """A zero-decision round is history even when no envelope was published."""
+    from copy import deepcopy
+    from src.lib.validation_review import validator_adapter
+    from src.models.sql.validation_review import ValidationReviewEpisode
+
+    monkeypatch.setattr(
+        validator_adapter, "binding_contract",
+        lambda match: {"binding_id": match.binding.binding_id},
+    )
+    sid, cid = candidate
+    with h.SessionLocal.begin() as db:
+        row = db.get(DomainEnvelopeModel, scenario.env.envelope_id)
+        if publication_pointer == "absent":
+            envelope = deepcopy(row.envelope_json)
+            envelope["metadata"].pop("review_episode_id", None)
+            row.envelope_json = envelope
+        envelope_before = deepcopy(row.envelope_json)
+
+    def prepare_round():
+        with h.SessionLocal.begin() as db:
+            saved = operations.submit(
+                db, owner_id=scope.owner_id, session_id=sid,
+                request_id=str(uuid4()), candidate_ids=[cid],
+                guidance="Explicit curator revalidation", groups=[],
+            )
+            row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+            row.state, row.lease_token = "preparing", "lineage-lease"
+        prepared = operations.prepare(saved["operation_id"], "lineage-lease")
+        with h.SessionLocal.begin() as db:
+            db.get(WorkspaceReviewOperation, saved["operation_id"]).state = "needs_review"
+        return saved, prepared
+
+    first, first_prepared = prepare_round()
+    prior_id = first_prepared[2][0]["episode_id"]
+    with h.SessionLocal.begin() as db:
+        from datetime import timedelta
+        prior = db.get(ValidationReviewEpisode, prior_id)
+        prior.started_at = datetime.now(timezone.utc) - timedelta(seconds=prior.policy["deadline_seconds"] + 1)
+        prior_state = (prior.scope_id, deepcopy(prior.charged), prior.started_at, deepcopy(prior.policy))
+    second, second_prepared = prepare_round()
+    current_id = second_prepared[2][0]["episode_id"]
+    assert current_id != prior_id
+    with h.SessionLocal() as db:
+        current = db.get(ValidationReviewEpisode, current_id)
+        assert current.predecessor_id == prior_id
+        prior = db.get(ValidationReviewEpisode, prior_id)
+        assert (prior.scope_id, prior.charged, prior.started_at, prior.policy) == prior_state
+        assert current.scope_id != prior.scope_id
+        assert db.get(DomainEnvelopeModel, scenario.env.envelope_id).envelope_json == envelope_before
+        admission_fact = db.scalar(select(ValidationFact).where(
+            ValidationFact.artifact_id == scenario.aid,
+            ValidationFact.operation_id == "review-admission:" + current_id,
+        ))
+        body = h._content(db, admission_fact)
+        assert body["predecessor_id"] == prior_id
+        assert body["curator_round"] is True
+        assert body["renewal"]["actor_id"] == scope.owner_id
+
+    # Recovery reuses the saved admission rather than deriving itself or a newer
+    # episode as predecessor. This includes old admissions whose parent is null.
+    for saved, prepared in ((first, first_prepared), (second, second_prepared)):
+        with h.SessionLocal.begin() as db:
+            operations.resume(db, saved["operation_id"], owner_id=scope.owner_id, groups=[])
+            row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+            row.state = "preparing"
+        assert operations.prepare(saved["operation_id"], "lineage-lease") == prepared
+    with h.SessionLocal() as db:
+        prior = db.get(ValidationReviewEpisode, prior_id)
+        assert prior.predecessor_id is None
+        assert (prior.scope_id, prior.charged, prior.started_at, prior.policy) == prior_state
+
+
+def test_scoped_declaration_retains_unadmitted_history_without_publication_pointer(scope, scenario):
+    from src.lib.validation_history import selections
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+    from src.models.sql.validation_review import ValidationReviewEpisode
+
+    envelope = scenario.env.model_copy(deep=True)
+    previous = envelope.metadata.pop("review_episode_id")
+    matches = DomainPackValidationRegistry.from_domain_pack(scenario.pack).match_bindings(envelope)
+    with h.SessionLocal() as db:
+        assert db.get(ValidationReviewEpisode, previous) is None
+    episode_key = str(uuid4())
+    result = selections.declare_envelope_episode(
+        scenario.bound, envelope, matches, episode_key=episode_key, review_object_ids=(),
+    )
+    current = result.metadata["review_episode_id"]
+    manifest = selections.read_manifest(scope, scenario.aid, episode_id=current)
+    assert manifest["ready"]
+    with h.SessionLocal() as db:
+        content = h._content(db, h._fact(db, scenario.aid, current))
+        assert content["retained_episode_ids"][scenario.target] == previous
+    # Re-declaration uses the sequence boundary, not its own newly created fact.
+    repeated = selections.declare_envelope_episode(
+        scenario.bound, envelope, matches, episode_key=episode_key, review_object_ids=(),
+    )
+    assert repeated.metadata["review_episode_id"] == current
+
+
+def test_history_predecessor_ignores_abandonment_after_declaration(scope, scenario):
+    from src.lib.validation_history import selections
+    from src.lib.validation_history.episodes import latest_effective_episode
+    from src.lib.validation_review.audit import append_fact
+
+    previous = scenario.env.metadata["review_episode_id"]
+    with h.SessionLocal() as db:
+        body = h._content(db, h._fact(db, scenario.aid, previous))
+    current = selections.start_episode(scope, scenario.aid, episode={
+        "episode_id": str(uuid4()), "reason": "Recovery boundary",
+        "obligations": body["obligations"],
+    })
+    with h.SessionLocal.begin() as db:
+        boundary = h._fact(db, scenario.aid, current).sequence
+        append_fact(db, scenario.aid, operation_id="late-abandon:" + previous,
+                    kind="review_episode_abandoned", parent_id=previous,
+                    body={"reason": "Preparation cancelled later"})
+    with h.SessionLocal() as db:
+        resolved = latest_effective_episode(db, scenario.aid, before_sequence=boundary)
+        assert resolved.id == previous
+
+
+@pytest.mark.parametrize("declaration_order", ["earlier", "later"])
+def test_late_admission_cannot_change_predecessor_on_preparation_retry(scope, scenario, declaration_order):
+    from src.lib.validation_history import selections
+    from src.lib.validation_review import admission
+    from src.lib.validation_review.record_scope import validation_targets
+
+    with h.SessionLocal() as db:
+        original = h._content(db, h._fact(db, scenario.aid, scenario.env.metadata["review_episode_id"]))
+    def declare(reason):
+        return selections.start_episode(scope, scenario.aid, episode={
+            "episode_id": str(uuid4()), "reason": reason,
+            "obligations": original["obligations"],
+        })
+    if declaration_order == "earlier":
+        earlier, current = declare("Competing round"), declare("Recovery boundary")
+    else:
+        current, earlier = declare("Recovery boundary"), declare("Competing round")
+    with h.SessionLocal.begin() as db:
+        assert admission.predecessor_for_episode(db, scope, scenario.aid, current) is None
+        targets = validation_targets(db, scenario.aid, original)
+    run = admission.create_scope(scope, operation_id="late-admission:" + earlier,
+                                 kind="document_run", targets=len(targets), episodes=1)
+    admission.attach_episode(scope, artifact_id=scenario.aid, episode_id=earlier, scope_id=run)
+    with h.SessionLocal.begin() as db:
+        with pytest.raises(h.HistoryConflict, match="Another review admission changed"):
+            admission.predecessor_for_episode(db, scope, scenario.aid, current)
+    parent = admission.create_scope(scope, operation_id="workspace:" + current,
+        kind="workspace_operation", targets=len(targets), episodes=1)
+    child = admission.create_scope(scope, operation_id="workspace-child:" + current,
+        kind="document_run", targets=len(targets), episodes=1, parent_id=parent)
+    with pytest.raises(h.HistoryConflict, match="Another review admission changed"):
+        admission.attach_episode(scope, artifact_id=scenario.aid, episode_id=current, scope_id=child)
+
+
+def test_stale_published_admitted_round_does_not_hide_intervening_empty_round(
+    scope, scenario, candidate, monkeypatch
+):
+    from copy import deepcopy
+    from src.lib.validation_review import validator_adapter
+    from src.models.sql.validation_review import ValidationReviewEpisode
+
+    monkeypatch.setattr(validator_adapter, "binding_contract",
+                        lambda match: {"binding_id": match.binding.binding_id})
+    sid, cid = candidate
+    episodes = []
+    for index in range(3):
+        with h.SessionLocal.begin() as db:
+            saved = operations.submit(db, owner_id=scope.owner_id, session_id=sid,
+                request_id=str(uuid4()), candidate_ids=[cid], guidance=None, groups=[])
+            command = db.get(WorkspaceReviewOperation, saved["operation_id"])
+            command.state, command.lease_token = "preparing", "stale-pointer"
+        _, _, prepared = operations.prepare(saved["operation_id"], "stale-pointer")
+        episodes.append(prepared[0]["episode_id"])
+        with h.SessionLocal.begin() as db:
+            db.get(WorkspaceReviewOperation, saved["operation_id"]).state = "needs_review"
+            if index == 0:
+                # Fixture publication points at an admitted R1. R2 makes no
+                # publication; R3 must still link to R2, never skip back to R1.
+                row = db.get(DomainEnvelopeModel, scenario.env.envelope_id)
+                envelope = deepcopy(row.envelope_json)
+                envelope["metadata"]["review_episode_id"] = episodes[0]
+                row.envelope_json = envelope
+    with h.SessionLocal() as db:
+        assert db.get(ValidationReviewEpisode, episodes[1]).predecessor_id == episodes[0]
+        assert db.get(ValidationReviewEpisode, episodes[2]).predecessor_id == episodes[1]
+        assert db.get(DomainEnvelopeModel, scenario.env.envelope_id).envelope_json == envelope
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_cannot_renew_an_existing_admitted_review(scope, scenario, candidate, monkeypatch):
+    from src.lib.validation_review import validator_adapter
+    from src.lib.validation_history.episodes import is_abandoned
+    from src.models.sql.validation_review import ValidationReviewEpisode
+
+    monkeypatch.setattr(validator_adapter, "binding_contract",
+                        lambda match: {"binding_id": match.binding.binding_id})
+    sid, cid = candidate
+    def submit(origin):
+        with h.SessionLocal.begin() as db:
+            saved = operations.submit(db, owner_id=scope.owner_id, session_id=sid,
+                request_id=str(uuid4()), candidate_ids=[cid], guidance=None, groups=[], origin=origin)
+            row = db.get(WorkspaceReviewOperation, saved["operation_id"])
+            row.state, row.lease_token = "preparing", "bootstrap-check"
+        return saved["operation_id"]
+    prior = submit("curator")
+    _, _, prepared = operations.prepare(prior, "bootstrap-check")
+    with h.SessionLocal.begin() as db:
+        db.get(WorkspaceReviewOperation, prior).state = "needs_review"
+    current = submit("bootstrap")
+    await operations._execute(current, "bootstrap-check", "bootstrap-guard-test")
+    with h.SessionLocal() as db:
+        row = db.get(WorkspaceReviewOperation, current)
+        assert row.state == "needs_review"
+        assert row.outcome["reason"] == "preparation_abandoned"
+        episode_id = row.artifacts[0]["episode_id"]
+        assert db.get(ValidationReviewEpisode, episode_id) is None
+        assert is_abandoned(db, scenario.aid, episode_id)
+        assert db.get(ValidationReviewEpisode, prepared[0]["episode_id"]) is not None

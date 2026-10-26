@@ -193,6 +193,12 @@ def attach_episode(
         if curator_round and (not predecessor_id or len(chain) != 2
                               or chain[0].kind != "workspace_operation"):
             raise store.HistoryConflict("A new curator round requires a workspace operation and predecessor")
+        if chain[0].kind == "workspace_operation":
+            expected_predecessor = predecessor_for_episode(
+                db, history_scope, artifact_id, episode_id
+            )
+            if predecessor_id != expected_predecessor:
+                raise store.HistoryConflict("Review predecessor changed during preparation")
         existing = db.get(Episode, episode_id)
         if existing:
             if (existing.artifact_id, existing.scope_id, existing.predecessor_id) != (
@@ -312,6 +318,55 @@ def attach_episode(
             },
         )
         return row.id
+
+
+def predecessor_for_episode(db, history_scope, artifact_id, episode_id):
+    """Resolve renewal from admitted history, never selected-value publication.
+
+    A saved admission owns its identity on resume. Before admission, the new
+    immutable episode's sequence bounds history so retries cannot parent
+    themselves or acquire a predecessor admitted after their declaration.
+    """
+    from sqlalchemy.orm import aliased
+    from src.lib.validation_history.selections import _lock_artifact
+
+    _lock_artifact(db, history_scope, artifact_id, write=True)
+    own_fact = store._fact(db, artifact_id, episode_id, kind="review_episode")
+    existing = db.get(Episode, episode_id)
+    if existing is not None:
+        if existing.artifact_id != artifact_id:
+            raise store.HistoryConflict("Episode belongs to another artifact")
+        return existing.predecessor_id
+    prior = aliased(ValidationFact)
+    admitted = aliased(ValidationFact)
+    abandoned = select(ValidationFact.parent_id).where(
+        ValidationFact.artifact_id == artifact_id,
+        ValidationFact.kind == "review_episode_abandoned",
+        ValidationFact.sequence < own_fact.sequence,
+        ValidationFact.parent_id.is_not(None),
+    )
+    late_admission = db.scalar(
+        select(prior.id)
+        .join(admitted, (admitted.artifact_id == prior.artifact_id)
+              & (admitted.parent_id == prior.id)
+              & (admitted.kind == "review_admission"))
+        .where(prior.artifact_id == artifact_id, prior.kind == "review_episode",
+               prior.id != episode_id, admitted.sequence > own_fact.sequence,
+               prior.id.not_in(abandoned)).limit(1)
+    )
+    if late_admission is not None:
+        raise store.HistoryConflict("Another review admission changed during preparation")
+    return db.scalar(
+        select(prior.id)
+        .join(admitted, (admitted.artifact_id == prior.artifact_id)
+              & (admitted.parent_id == prior.id)
+              & (admitted.kind == "review_admission"))
+        .join(Episode, (Episode.id == prior.id) & (Episode.artifact_id == artifact_id))
+        .where(prior.artifact_id == artifact_id, prior.kind == "review_episode",
+               prior.sequence < own_fact.sequence, admitted.sequence < own_fact.sequence,
+               prior.id.not_in(abandoned))
+        .order_by(prior.sequence.desc()).limit(1)
+    )
 
 
 def lock_episode(db, history_scope, episode_id, *, require_open=True):

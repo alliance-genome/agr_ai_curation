@@ -510,15 +510,6 @@ def prepare(operation_id, lease_token):
         scope = store.HistoryScope(
             owner, item["document_id"], item["history_session_id"]
         )
-        previous = item["envelope"]["metadata"].get("review_episode_id")
-        from src.models.sql.validation_review import ValidationReviewEpisode
-
-        with store.SessionLocal() as db:
-            predecessor = (
-                previous
-                if previous and db.get(ValidationReviewEpisode, previous) is not None
-                else None
-            )
         # Serialize attachment with Stop. No provider runs under this lock.
         with store.SessionLocal.begin() as operation_db:
             command = operation_db.scalar(
@@ -526,6 +517,17 @@ def prepare(operation_id, lease_token):
             )
             if command.state != "preparing" or command.lease_token != lease_token:
                 raise admission.ReviewStopped(command.state)
+            from src.models.sql.validation_review import ValidationReviewEpisode
+
+            with store.SessionLocal.begin() as db:
+                already_admitted = db.get(ValidationReviewEpisode, item["episode_id"]) is not None
+                predecessor = admission.predecessor_for_episode(
+                    db, scope, item["artifact_id"], item["episode_id"]
+                )
+            if not already_admitted and predecessor is not None and item["origin"] != "curator":
+                raise store.HistoryConflict(
+                    "Another review round requires an explicit curator request"
+                )
             child = admission.create_scope(
                 scope,
                 operation_id="workspace:" + operation_id + ":" + item["artifact_id"],

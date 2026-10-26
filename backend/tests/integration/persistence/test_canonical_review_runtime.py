@@ -944,8 +944,10 @@ async def test_canonical_saved_profile_uses_pinned_agent_and_real_generic_builde
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("planned", ["three"], indirect=True)
-@pytest.mark.parametrize("origin", ["bootstrap", "curator"])
+@pytest.mark.parametrize("origin,planned", [
+    ("bootstrap", {"shape": "three", "admitted": False}),
+    ("curator", "three"),
+], indirect=["planned"])
 async def test_canonical_workspace_command_reviews_fresh_records_and_retains_history(
     planned, canonical_models, monkeypatch, origin
 ):
@@ -982,8 +984,8 @@ async def test_canonical_workspace_command_reviews_fresh_records_and_retains_his
         db.flush()
         sid = str(session.id)
         written = write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
-            project_key="fixture", envelope=item.plan.envelope, expected_revision=0,
-            document_id=item.scope.document_id, session_id=sid, adapter_key="fixture"))
+            project_key="fixture", envelope=item.source_envelope if origin == "bootstrap" else item.plan.envelope,
+            expected_revision=0, document_id=item.scope.document_id, session_id=sid, adapter_key="fixture"))
         candidates = []
         for obj in item.plan.envelope.extracted_objects:
             candidate = CurationCandidate(session=session, adapter_key="fixture",
