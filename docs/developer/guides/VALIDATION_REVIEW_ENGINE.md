@@ -130,6 +130,21 @@ ranges with exact SHA and continuation offset; concatenate all content pages.
 separate total-data cap and never truncates the stored body. General reviewer tool
 and token budgets still apply to requests made during an active review.
 
+`get_validation_record_source(target_id)` pins one original normalized record and
+its attached supporting evidence. Object, nested field/element and binding targets
+resolve to the same object source reference; they cannot select another owner or
+artifact. Read the returned fact through `read_validation_history`, including all
+continuation pages. The view records the baseline SHA, object-target SHA, source
+document, provenance digest and explicit historical/original-availability status.
+It is not a current selected value, validator answer or reconstructed typed source.
+Later contributions without a baseline original must be inspected through their
+exact contribution facts. Retired original records remain readable for audit.
+
+The supervisor chooses which records and answers are relevant. The full immutable
+baseline, typed source when available, and other history remain accessible when
+needed. Per-record access does not remove old validation findings, summarize away
+evidence, choose scientific relevance in code, or grant paper-reading powers.
+
 ## Observability and validation
 
 Committed `validation_review.*` facts are emitted to the existing extraction

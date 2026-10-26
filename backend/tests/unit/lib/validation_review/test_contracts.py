@@ -34,7 +34,7 @@ def test_tool_schema_cannot_choose_actor_episode_or_validator():
         "reviewer",
     )
     tools = create_tools(context, checkpoint_provider=Mock())
-    assert len(tools) == 5
+    assert len(tools) == 6
     for tool in tools:
         fields = tool.params_json_schema["properties"]
         assert not {
@@ -57,6 +57,28 @@ def test_locked_review_protocol_is_separate_from_editable_policy():
     definition = get_agent_definition("validation_reviewer")
     assert definition is not None
     assert REVIEW_PROTOCOL.strip() in _build_core_generated_content(definition)
+
+
+@pytest.mark.asyncio
+async def test_record_source_tool_binds_server_scope_and_episode(monkeypatch):
+    from agents.tool_context import ToolContext
+    from src.lib.validation_review import record_source
+
+    context = ReviewContext(
+        HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+        "episode", "reviewer",
+    )
+    snapshot = Mock(return_value={"fact_id": "exact-source", "sha256": "digest"})
+    monkeypatch.setattr(record_source, "snapshot", snapshot)
+    tool = next(t for t in create_tools(context, checkpoint_provider=Mock())
+                if t.name == "get_validation_record_source")
+    result = await tool.on_invoke_tool(
+        ToolContext(context=None, tool_name=tool.name, tool_call_id="read-source",
+                    tool_arguments='{"target_id":"record"}'),
+        '{"target_id":"record"}',
+    )
+    assert result == {"fact_id": "exact-source", "sha256": "digest"}
+    snapshot.assert_called_once_with(context.history_scope, "episode", target_id="record")
 
 
 def test_sentry_reports_only_sanitized_error_once(monkeypatch):
@@ -232,7 +254,7 @@ async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection
     extraction, selection, assessment = AsyncMock(), AsyncMock(), AsyncMock(return_value={"state": "completed"})
     tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
         request_extraction=extraction, select_source=selection, assess_source=assessment)}
-    assert len(tools) == 8
+    assert len(tools) == 9
     for tool in tools.values():
         assert not {"actor_id", "episode_id", "validator_agent", "receipt", "scope_id", "extractor_agent"}.intersection(
             tool.params_json_schema["properties"])
