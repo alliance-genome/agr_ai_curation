@@ -93,6 +93,25 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
 
     @function_tool(failure_error_function=None)
     @_recoverable_tool
+    async def get_validation_record_source(target_id: str) -> dict:
+        """Reference one original record and all its attached supporting evidence.
+
+        Supply an object, field, element or binding target from the review packet.
+        Read the returned exact fact with read_validation_history. This is the
+        saved normalized source, not current selected values or a new validation.
+        Historical records explicitly lack an attested original. Added/replacement
+        records have contribution history instead of a fabricated baseline original.
+        Full baseline and other history remain available when your assessment needs
+        them; this tool neither reads the paper nor chooses relevant records for you.
+        """
+        from .record_source import snapshot
+
+        return await asyncio.to_thread(
+            snapshot, context.history_scope, context.episode_id, target_id=target_id
+        )
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
     async def read_validation_history(
         fact_id: str, sha256: str, offset: int = 0
     ) -> dict:
@@ -239,6 +258,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
 
     result = [
         get_validation_review_packet,
+        get_validation_record_source,
         read_validation_history,
         record_validation_review,
         request_validation_reconsideration,
