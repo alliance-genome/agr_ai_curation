@@ -1,4 +1,5 @@
 """Atomic selected-source changes retain baseline and stale only affected inputs."""
+import json
 from copy import deepcopy
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from tests.integration.persistence.test_chat_review_adapter import planned as pl
 from tests.integration.persistence.test_extraction_followup_admission import request_args
 
 
-def retained_proposal(item, *, merge=False):
+def retained_proposal(item, *, merge=False, transport=False):
     args = request_args(item)
     entry = item.plan.envelope.extracted_objects[0]
     refs = entry.metadata["validation_history"]
@@ -33,18 +34,28 @@ def retained_proposal(item, *, merge=False):
             "collection_mappings": [{"collection_path": "evidence_code_curies",
                 "source_collection_id": refs["fields"]["evidence_code_curies"], "items": relationships,
                 "retired_item_ids": [], "retirement_reason": ""}]}]}]}
+    if transport:
+        from src.schemas.validation_followup import TargetedFollowupTransport
+        proposed = result["entries"][0]["proposed_values"][0]
+        proposed["value_json"] = json.dumps(proposed.pop("value"))
+        result = TargetedFollowupTransport.model_validate(result).decode()
     result = extraction_results.retain(item.scope, wid, claim["lease_token"], result, evidence_records=[])
     work.finish(item.scope, wid, claim["lease_token"], outcome=result)
     return context, result["contributions"][0]
 
 
-def test_explicit_selection_changes_only_affected_input_and_rejects_stale_dispatch(planned):
+@pytest.mark.parametrize("transport", [False, True])
+def test_explicit_selection_changes_only_affected_input_and_rejects_stale_dispatch(planned, transport):
     item = planned
     original = store.read_baseline(item.scope, item.aid)
     requests = deepcopy(item.adapter.plan["initial_requests"])
     invocation = store.begin_execution(item.scope, item.aid, operation_id=uuid4().hex,
         receipt={"fixture": True}, requests=requests)
-    context, ref = retained_proposal(item)
+    context, ref = retained_proposal(item, transport=transport)
+    retained = store.read_fact(item.scope, item.aid, ref["fact_id"])["content"]["proposal"]
+    assert retained["proposed_values"][0]["value"] == ["eco:new", "eco:2"]
+    assert "value_json" not in retained["proposed_values"][0]
+    assert store.read_baseline(item.scope, item.aid) == original
 
     def inputs(db, envelope):
         result = {}
@@ -327,7 +338,14 @@ async def test_source_publication_retires_absence_coverage_and_rejects_late_answ
         "evidence_record_ids": [], "proposed_values": [{"field_path": "optional",
             "value": {"term": "new extracted wording"}, "evidence_record_ids": [],
             "collection_mappings": []}]}]}
-    retained = extraction_results.retain(item.scope, wid, claim["lease_token"], proposal, evidence_records=[])
+    from src.schemas.validation_followup import TargetedFollowupTransport
+    proposed = proposal["entries"][0]["proposed_values"][0]
+    proposed["value_json"] = json.dumps(proposed.pop("value"))
+    decoded = TargetedFollowupTransport.model_validate(proposal).decode()
+    retained = extraction_results.retain(item.scope, wid, claim["lease_token"], decoded, evidence_records=[])
+    stored = store.read_fact(item.scope, item.aid, retained["contributions"][0]["fact_id"])["content"]["proposal"]
+    assert stored["proposed_values"][0]["value"] == {"term": "new extracted wording"}
+    assert "value_json" not in stored["proposed_values"][0]
     work.finish(item.scope, wid, claim["lease_token"], outcome=retained)
     checkpoint = checkpoint_provider(item)
     with store.SessionLocal() as db:

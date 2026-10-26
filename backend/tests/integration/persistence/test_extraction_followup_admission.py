@@ -265,3 +265,41 @@ async def test_followup_reads_real_paper_tools_and_retains_exact_new_evidence(pl
     assert saved['origin'] == 'followup'
     assert saved['record']['verified_quote'] == chunk['text']
     assert saved['record']['chunk_id'] == chunk['id']
+
+
+@pytest.mark.asyncio
+async def test_malformed_followup_transport_reports_once_without_sensitive_value(planned, monkeypatch):
+    from types import SimpleNamespace
+    from agents import Agent
+    from src.lib.validation_review import extraction_execution, extractor_phase
+
+    item = planned
+    original = store.read_baseline(item.scope, item.aid)
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    agent = Agent(name="Saved extractor", model="test", instructions="Saved policy")
+    args = request_args(item)
+    args["receipt"] = {"contract": extractor_phase.contract(agent, max_turns=17)}
+    wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, "supervisor"), **args)
+    reports = []
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception",
+                        lambda error, **kw: reports.append(error) or True)
+
+    async def provider(*args_, **kwargs):
+        return SimpleNamespace(final_output={"entries": [{"entry_id": args["entry_ids"][0],
+            "outcome": "proposed_correction", "assessment": "Clarification", "remaining_uncertainty": "",
+            "evidence_record_ids": [], "proposed_values": [{"field_path": "organism",
+                "value_json": "PRIVATE_PAPER secret-token", "evidence_record_ids": [],
+                "collection_mappings": []}]}]})
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_with_owned_openai_resources", provider)
+    with pytest.raises(ValueError, match="one valid finite JSON value"):
+        await extraction_execution.execute(item.scope, wid, resolve_agent=lambda _: agent)
+    assert len(reports) == 1
+    assert "PRIVATE" not in str(reports[0]) and "secret-token" not in str(reports[0])
+    assert reports[0].__cause__ is None and reports[0].__context__ is None
+    assert store.read_baseline(item.scope, item.aid) == original
+    with store.SessionLocal() as db:
+        assert db.get(ValidationReviewWork, wid).state == "uncertain"
+        assert db.scalar(select(ValidationFact).where(ValidationFact.artifact_id == item.aid,
+            ValidationFact.kind == "extraction_contribution")) is None
+    assert (await extraction_execution.execute(item.scope, wid,
+        resolve_agent=lambda _: pytest.fail("Must not replay malformed output")))["state"] == "not_claimed"
