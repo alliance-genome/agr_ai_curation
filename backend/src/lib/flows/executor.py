@@ -2268,6 +2268,21 @@ def get_all_agent_tools(
             from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
             review_token = None
             try:
+                validation_schedule = validation_schedule_from_node_data(node_data)
+                validation_schedule_metadata = (
+                    {"validation_schedule": validation_schedule}
+                    if any(validation_schedule.values()) else {}
+                )
+                step_provenance = {
+                    "tool_name": tool_name,
+                    "flow_id": str(flow.id),
+                    "flow_name": flow.name,
+                    "step": step_number,
+                    "agent_name": agent_name,
+                    "execution_context": execution_context.model_dump(mode="json"),
+                    **({"document_name": document_name} if document_name else {}),
+                    **validation_schedule_metadata,
+                }
                 if candidate_expected_from:
                     from src.lib.validation_history.store import HistoryScope
                     from src.lib.validation_review import flow_steps
@@ -2284,6 +2299,7 @@ def get_all_agent_tools(
                         session_id=session_id, turn_id=flow_run_id, supervisor=execution_state["supervisor"],
                         authenticated_groups=tuple(active_groups or ()), user_request=resolved_query,
                         flow_run_id=flow_run_id, step_id=claim["step_id"], node_id=node_id,
+                        step_provenance=deepcopy(step_provenance),
                         validation_groups=effective_validation_groups, configured_nodes=_flow_node_by_id(flow),
                         execution_context=execution_context.model_dump(mode="json"),
                         parent_scope_id=execution_state.get("review_parent_scope_id"))
@@ -2381,12 +2397,6 @@ def get_all_agent_tools(
                     internal_event_cursor,
                     tool_name="finalize_and_save",
                 )
-            validation_schedule = validation_schedule_from_node_data(node_data)
-            validation_schedule_metadata = (
-                {"validation_schedule": validation_schedule}
-                if any(validation_schedule.values())
-                else {}
-            )
             candidate_started_at = time.monotonic()
             candidate, step_evidence_metadata = (
                 build_extraction_envelope_candidate_with_evidence(
@@ -2395,16 +2405,7 @@ def get_all_agent_tools(
                     execution_receipt=execution_receipt,
                     conversation_summary=flow_conversation_summary,
                     adapter_key=curation_adapter_key,
-                    metadata={
-                        "tool_name": tool_name,
-                        "flow_id": str(flow.id),
-                        "flow_name": flow.name,
-                        "step": step_number,
-                        "agent_name": agent_name,
-                        "execution_context": execution_context.model_dump(mode="json"),
-                        **({"document_name": document_name} if document_name else {}),
-                        **validation_schedule_metadata,
-                    },
+                    metadata=deepcopy(step_provenance),
                 )
             )
             if flow_review is not None and flow_review.record is not None and candidate is not None:
