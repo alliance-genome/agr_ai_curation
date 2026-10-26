@@ -1229,8 +1229,6 @@ class MeasuredModel(Model):
         elif getattr(self._agent, "run_history_unavailable_reason", None):
             measurement["context_view"] = {"enabled": False, "reason": self._agent.run_history_unavailable_reason}
         enforce_and_announce(measurement)
-        from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
-        measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
         return measurement
 
     def _observe_tool_surface(self, measurement: dict[str, Any], response: Any) -> None:
@@ -1253,9 +1251,7 @@ class MeasuredModel(Model):
         from .context_capacity import NativeCapacityRequest
         from .context_compaction import native_compaction_settings
         from .model_context_view import ContextRecoveryError
-        from src.lib.validation_review.provider import ACTIVE_BUDGET
-        if ACTIVE_BUDGET.get() is None:
-            settings = native_compaction_settings(self._inner, settings, provider_hint=self._provider_hint)
+        settings = native_compaction_settings(self._inner, settings, provider_hint=self._provider_hint)
         if self._context_policy is None or describe_model(self._inner, provider_hint=self._provider_hint)[:2] != ("openai", "responses"):
             return input, settings
         if previous_response_id or conversation_id:
@@ -1264,10 +1260,16 @@ class MeasuredModel(Model):
             from .model_context_view import HistoryStorageUnavailable
             raise HistoryStorageUnavailable("Exact context could not be saved; stopping before compaction can discard its working copy.")
         async def compact(items, *, model, instructions):
+            from src.lib.validation_review.provider import ACTIVE_BUDGET
+            client = self._inner._get_client()
+            if ACTIVE_BUDGET.get() is not None:
+                # One durable registration must represent one HTTP attempt,
+                # including when generation uses WebSocket. Never hide retries.
+                client = client.with_options(max_retries=0)
             return await call_measured_direct_request(
                 surface="context_compaction", provider="openai", api="responses.compact",
                 kwargs={"model": model, "input": items, "instructions": instructions},
-                call=self._inner._get_client().responses.compact,
+                call=client.responses.compact,
             )
         request = NativeCapacityRequest(self._inner, settings, instructions=instructions, tools=tools,
             output_schema=output_schema, handoffs=handoffs, previous_response_id=previous_response_id,
@@ -1309,11 +1311,6 @@ class MeasuredModel(Model):
             model_settings, tools, handoffs
         )
         from src.lib.validation_review.provider import admit_model, guarded_await
-        model_settings, review_reservation = await admit_model(
-            self._inner, model_settings, instructions=system_instructions, input=input,
-            tools=tools, output_schema=output_schema, handoffs=handoffs,
-            previous_response_id=previous_response_id, conversation_id=conversation_id,
-            prompt=prompt, provider_hint=self._provider_hint, agent=self._agent)
         measurement = self._measure(
             system_instructions,
             input,
@@ -1326,12 +1323,18 @@ class MeasuredModel(Model):
             prompt,
             prompt_cache_tool_surface,
         )
+        model_settings, review_reservation = await admit_model(
+            self._inner, model_settings, instructions=system_instructions, input=input,
+            tools=tools, output_schema=output_schema, handoffs=handoffs,
+            previous_response_id=previous_response_id, conversation_id=conversation_id,
+            prompt=prompt, provider_hint=self._provider_hint, agent=self._agent)
         measurement["_review_reservation"] = review_reservation
         if review_reservation is not None:
             measurement["review_reservation_id"] = review_reservation[1]
             measurement["review_episode_id"] = review_reservation[0].episode_id
         try:
-            from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
+            from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope, reserve_runtime_request
+            measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
             with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                 response = await guarded_await(self._inner.get_response(
                     system_instructions,
@@ -1387,11 +1390,6 @@ class MeasuredModel(Model):
             model_settings, tools, handoffs
         )
         from src.lib.validation_review.provider import admit_model, guarded_await
-        model_settings, review_reservation = await admit_model(
-            self._inner, model_settings, instructions=system_instructions, input=input,
-            tools=tools, output_schema=output_schema, handoffs=handoffs,
-            previous_response_id=previous_response_id, conversation_id=conversation_id,
-            prompt=prompt, provider_hint=self._provider_hint, agent=self._agent)
         measurement = self._measure(
             system_instructions,
             input,
@@ -1404,6 +1402,11 @@ class MeasuredModel(Model):
             prompt,
             prompt_cache_tool_surface,
         )
+        model_settings, review_reservation = await admit_model(
+            self._inner, model_settings, instructions=system_instructions, input=input,
+            tools=tools, output_schema=output_schema, handoffs=handoffs,
+            previous_response_id=previous_response_id, conversation_id=conversation_id,
+            prompt=prompt, provider_hint=self._provider_hint, agent=self._agent)
         measurement["_review_reservation"] = review_reservation
         if review_reservation is not None:
             measurement["review_reservation_id"] = review_reservation[1]
@@ -1422,8 +1425,9 @@ class MeasuredModel(Model):
         )
         terminal_response: Any = None
         terminal_type: str | None = None
-        from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope
+        from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope, reserve_runtime_request
         try:
+            measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
             # The adapter opens this attempt's tracing span on its first step.
             with model_request_scope(_span_identity(measurement)), runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                 event = await guarded_await(anext(stream, _STREAM_END))
@@ -1631,8 +1635,6 @@ def measure_direct_request(
             measurement["model_visible"]["json_chars"]
         )
     enforce_and_announce(measurement)
-    from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
-    measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
     return measurement
 
 
@@ -1691,22 +1693,31 @@ async def call_measured_direct_request(
 ) -> Any:
     """Measure, enforce, send and record one direct client request."""
 
-    from src.lib.validation_review.provider import guard_direct_request
-    guard_direct_request()
+    from src.lib.validation_review.provider import guard_direct_request, register_provider_call, guarded_await
+    guard_direct_request(provider=provider, api=api)
     measurement = measure_direct_request(
         surface=surface,
         provider=provider,
         api=api,
         kwargs=kwargs,
     )
+    review_reservation = await register_provider_call(operation=api, model=str(kwargs.get("model", "unknown")))
+    measurement["_review_reservation"] = review_reservation
+    if review_reservation is not None:
+        measurement["review_reservation_id"] = review_reservation[1]
+        measurement["review_episode_id"] = review_reservation[0].episode_id
     try:
-        response = (await _call_direct_compaction_with_telemetry(call, kwargs, measurement)
-            if api == "responses.compact" else await call(**kwargs))
+        from src.lib.cost_ledger.runtime_writes import reserve_runtime_request
+        measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
+        response = await guarded_await(
+            _call_direct_compaction_with_telemetry(call, kwargs, measurement)
+            if api == "responses.compact" else call(**kwargs)
+        )
     except BaseException as exc:
-        record_outcome(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
+        await _record_outcome_async(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
         raise
     _observe_service_tier(measurement, response)
-    record_outcome(
+    await _record_outcome_async(
         measurement,
         outcome="completed",
         usage=usage_from_provider_payload(getattr(response, "usage", None)),

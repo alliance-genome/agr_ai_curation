@@ -7,20 +7,15 @@ from src.lib.validation_review.decisions import ReviewContext
 from src.lib.validation_history.store import HistoryScope
 
 
-def test_pooled_32_target_defaults_and_nondefault_warnings(monkeypatch):
+def test_structural_limits_remain_but_token_pools_are_retired(monkeypatch):
     policy = ReviewLimits.configured()
-    pools = policy.allowances(targets=32, episodes=1, extras=16)
-    assert [
-        pools[key]
-        for key in ("initial_tokens", "reconsideration_tokens", "reviewer_tokens")
-    ] == [4800000, 2400000, 1000000]
-    monkeypatch.setenv("VALIDATION_REVIEW_TOKENS_PER_TARGET", "200000")
+    allowances = policy.allowances(targets=32, episodes=1, extras=16)
+    assert allowances == {"extra_attempts": 16, "reviewer_turns": 64, "reviewer_tools": 256}
+    assert policy.attempts_per_target == policy.extraction_attempts_per_entry == 2
+    monkeypatch.setenv("VALIDATION_REVIEW_TOKENS_PER_TARGET", "1")
     monkeypatch.setenv("VALIDATION_REVIEW_WARNING_PERCENT", "65")
     changed = ReviewLimits.configured()
-    assert (
-        changed.allowances(targets=32, episodes=1, extras=16)["initial_tokens"]
-        == 6400000
-    )
+    assert changed.allowances(targets=32, episodes=1, extras=16) == allowances
     assert changed.warning_percent == 65
     monkeypatch.setenv("VALIDATION_REVIEW_CRITICAL_PERCENT", "60")
     with pytest.raises(ValueError):
@@ -104,6 +99,7 @@ def test_review_budget_counts_are_not_redacted_as_secrets():
         "reviewer_tokens",
         "initial_tokens",
         "reconsideration_tokens",
+        "reported_tokens",
         "tokens_per_target",
         "tokens_per_extra",
     ):
@@ -267,3 +263,10 @@ async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection
     assessment.assert_awaited_once_with(**arguments)
     with pytest.raises(ValueError, match="must be wired together"):
         create_tools(context, checkpoint_provider=Mock(), request_extraction=extraction, select_source=selection)
+
+
+def test_review_usage_summary_remains_visible_without_exposing_nested_secrets():
+    from src.lib.openai_agents.extraction_trace_events import _redact_value
+    summary = _redact_value({"provider_usage": {"reported_tokens": {"initial_tokens": 17123, "api_token": "private"}}})
+    assert summary["provider_usage"]["reported_tokens"]["initial_tokens"] == 17123
+    assert summary["provider_usage"]["reported_tokens"]["api_token"] != "private"

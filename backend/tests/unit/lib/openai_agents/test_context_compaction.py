@@ -179,7 +179,8 @@ def test_compaction_progress_does_not_expose_encrypted_content():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["http", "websocket"])
 @pytest.mark.parametrize("streamed", [False, True])
-async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_sixty_four_turns(history, monkeypatch, transport, streamed):
+@pytest.mark.parametrize("under_review", [False, True])
+async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_sixty_four_turns(history, monkeypatch, transport, streamed, under_review):
     """Use the real SDK serializers and transport loops, with local responses only."""
     import httpx
     from src.lib.openai_agents import model_request_measurement as measurement
@@ -187,6 +188,18 @@ async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_six
     measurement.install_model_request_measurement()
     monkeypatch.setattr(measurement, "_publish", lambda value: None)
     sent, writes = [], []
+    from contextlib import nullcontext
+    from src.lib.validation_review import provider as review
+    from src.lib.validation_history.store import HistoryScope
+    settlements, admissions = [], []
+    def reserve(*args, **kwargs):
+        admissions.append(kwargs)
+        return str(len(admissions))
+    monkeypatch.setattr(review.admission, "reserve", reserve)
+    monkeypatch.setattr(review.admission, "reconcile", lambda *a, **kw: settlements.append(kw["actual"]))
+    monkeypatch.setattr(review, "remaining_seconds", lambda _: 1800)
+    budget = review.ExecutionBudget(HistoryScope("owner", "11111111-1111-1111-1111-111111111111", "session"), "episode", "initial_tokens", False)
+
 
     @function_tool
     def save_once(number: int) -> dict:
@@ -210,7 +223,7 @@ async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_six
             output.append(final_message().model_dump())
         return {"id": f"resp-{number}", "object": "response", "created_at": 0, "model": "gpt-6-astra",
                 "status": "completed", "output": output, "parallel_tool_calls": True, "tools": [], "tool_choice": "auto",
-                "usage": {"input_tokens": 1000, "output_tokens": 30, "total_tokens": 1030,
+                "usage": {"input_tokens": 20000, "output_tokens": 30, "total_tokens": 20030,
                           "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}
 
     def http_reply(request):
@@ -233,25 +246,33 @@ async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_six
         async def close(self, **kwargs):
             pass
 
-    async with AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(http_reply))) as client:
+    async with AsyncOpenAI(api_key="fixture", max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(http_reply))) as client:
         kind = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
         model = kind(model="gpt-6-astra", openai_client=client)
         if transport == "websocket":
             monkeypatch.setattr(model, "_open_websocket_connection", AsyncMock(return_value=Socket()))
         agent = Agent(name="wire fixture", model=model, tools=[save_once], model_settings=ModelSettings(store=False))
         config = run_config_with_history(RunConfig(tracing_disabled=True), history)
-        if streamed:
-            result = Runner.run_streamed(agent, "Preserve all findings", run_config=config, max_turns=get_max_turns())
-            async for _ in result.stream_events():
-                pass
-        else:
-            result = await Runner.run(agent, "Preserve all findings", run_config=config, max_turns=get_max_turns())
+        with review.budget_scope(budget) if under_review else nullcontext():
+            if streamed:
+                result = Runner.run_streamed(agent, "Preserve all findings", run_config=config, max_turns=get_max_turns())
+                async for _ in result.stream_events():
+                    pass
+            else:
+                result = await Runner.run(agent, "Preserve all findings", run_config=config, max_turns=get_max_turns())
         assert result.final_output == "done"
         assert writes == list(range(1, 70))
         assert len(history.native_compaction_keys) == 3
         for number in (21, 41, 61):
             assert sent[number - 1]["input"][0]["encrypted_content"] == f"opaque-{number - 1}"
         await model.close()
+
+    if under_review:
+        assert len(admissions) == len(settlements) == 70
+        assert all(item["charges"] == {"initial_tokens": 0} for item in admissions)
+        assert sum(item["initial_tokens"] for item in settlements) == 70 * 20030
+    else:
+        assert admissions == settlements == []
 
 
 @pytest.mark.asyncio

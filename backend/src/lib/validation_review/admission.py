@@ -6,7 +6,7 @@ Immutable validation facts retain operation history alongside mutable quota inde
 
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from sqlalchemy import select
+from sqlalchemy import select, func, cast, BigInteger
 from sqlalchemy.dialects.postgresql import insert
 from src.lib.validation_history import store
 from .audit import append_fact
@@ -16,19 +16,17 @@ from src.models.sql.validation_review import (
     ValidationReviewCoverage as Coverage,
     ValidationReviewEpisode as Episode,
     ValidationReviewReservation as Reservation,
-    ValidationReviewWork as Work,
 )
-from .policy import ReviewLimits
+from .policy import ReviewLimits, TOKEN_USAGE_BUCKETS
 from .record_scope import review_ready, review_blockers
 
 
 class ReviewStopped(store.HistoryConflict):
     """Expected pending outcome, not a scientific verdict or Sentry error."""
 
-    def __init__(self, reason, *, resource=None, temporary=False):
+    def __init__(self, reason, *, resource=None):
         self.reason = reason
         self.resource = resource
-        self.temporary = temporary
         super().__init__(reason)
 
 
@@ -379,46 +377,12 @@ def _allowances(db, row):
                           else Coverage.scope_id.in_(select(Scope.id).where(Scope.parent_id == row.id)))
         for credits in db.scalars(select(Coverage.allowances).where(coverage_scope)):
             for key, value in credits.items():
-                allowances[key] += value
+                # Historical coverage facts are immutable. Retired token credits
+                # remain evidence, but are no longer scientific-work quotas.
+                if key not in TOKEN_USAGE_BUCKETS:
+                    allowances[key] += value
     return allowances
 
-
-
-def _reclaimable_provider_tokens(db, row, resource):
-    """Only live provider output holds can shrink; counted input remains charged.
-
-    The caller holds the shared scope locks used by reservation and settlement.
-    Tool/attempt reservations and uncertain or abandoned work cannot free space.
-    """
-    if resource not in {"initial_tokens", "reviewer_tokens", "reconsideration_tokens"}:
-        return 0
-    query = (
-        select(Reservation)
-        .join(Episode, Episode.id == Reservation.episode_id)
-        .join(Work, Work.id == Reservation.request["work_id"].astext)
-        .where(
-            Reservation.state == "reserved",
-            Reservation.operation_id.startswith("provider:"),
-            Work.episode_id == Reservation.episode_id,
-            Work.state == "submitted",
-            Work.lease_until > now(),
-            Episode.state == "open",
-        )
-    )
-    if isinstance(row, Episode):
-        query = query.where(Reservation.episode_id == row.id)
-    else:
-        # Supported hierarchy is root batch/workspace -> document -> episode.
-        query = query.where(Episode.scope_id.in_(
-            select(Scope.id).where((Scope.id == row.id) | (Scope.parent_id == row.id))
-        ))
-    total = 0
-    for reservation in db.scalars(query):
-        count = reservation.request.get("input_tokens")
-        charge = reservation.charges.get(resource, 0)
-        if type(count) is int and count >= 0 and type(charge) is int:
-            total += max(0, charge - count)
-    return total
 
 
 def reserve_in_transaction(
@@ -438,23 +402,22 @@ def reserve_in_transaction(
         if existing.request != request or existing.charges != charges:
             raise store.HistoryConflict("Admission operation conflict")
         return existing
-    temporary_resource = None
     for row in [*chain, episode]:
         allowances = _allowances(db, row)
         for key, amount in charges.items():
+            if key in TOKEN_USAGE_BUCKETS:
+                if amount != 0:
+                    raise ValueError("Provider tokens are metered after completion, not reserved")
+                continue
             if key not in allowances:
                 raise ValueError("Unknown review budget resource")
             required = row.charged.get(key, 0) + amount
             if required > allowances[key]:
-                reclaimable = _reclaimable_provider_tokens(db, row, key)
-                if required - reclaimable > allowances[key]:
-                    raise ReviewStopped("budget_exhausted", resource=key)
-                temporary_resource = key
-    if temporary_resource is not None:
-        # Check every ancestor/resource before declaring this a temporary hold.
-        raise ReviewStopped("budget_exhausted", resource=temporary_resource, temporary=True)
+                raise ReviewStopped("budget_exhausted", resource=key)
     for row in [*chain, episode]:
         for key, amount in charges.items():
+            if key in TOKEN_USAGE_BUCKETS:
+                continue
             before, limit = row.charged.get(key, 0), _allowances(db, row)[key]
             for threshold in (
                 episode.policy["warning_percent"],
@@ -545,7 +508,11 @@ def reconcile(history_scope, episode_id, reservation_id, *, actual):
                         for key, value in actual.items()
                     },
                 }
-        if actual is not None and any(actual[key] > row.charges[key] for key in actual):
+        if actual is not None and any(
+            actual[key] > row.charges[key]
+            for key in actual
+            if key not in TOKEN_USAGE_BUCKETS
+        ):
             # Keep real usage even when a provider violates its reserved ceiling.
             episode.state = "provider_budget_overrun"
         row.state, row.actual = state, actual
@@ -557,6 +524,31 @@ def reconcile(history_scope, episode_id, reservation_id, *, actual):
             parent_id=episode.id,
             body={"reservation_id": reservation_id, "state": state, "actual": actual},
         )
+
+
+def provider_usage(db, row):
+    """Reported usage is distinct from both quotas and unknown provider outcomes."""
+    keys = sorted(TOKEN_USAGE_BUCKETS)
+    query = select(
+        *[func.coalesce(func.sum(cast(Reservation.actual[key].astext, BigInteger))
+             .filter(Reservation.state == "settled"), 0).label(key) for key in keys],
+        func.count().filter(Reservation.state == "uncertain").label("uncertain"),
+        func.count().filter(Reservation.state.notin_(["settled", "uncertain"])).label("pending"),
+    ).select_from(Reservation).where(Reservation.operation_id.like("provider:%"))
+    if isinstance(row, Episode):
+        query = query.where(Reservation.episode_id == row.id)
+    else:
+        query = query.join(Episode, Episode.id == Reservation.episode_id).where(
+            Episode.scope_id.in_(select(Scope.id).where(
+                (Scope.id == row.id) | (Scope.parent_id == row.id)
+            ))
+        )
+    totals = db.execute(query).mappings().one()
+    # PostgreSQL SUM(bigint) returns numeric; expose exact JSON integers.
+    tokens = {key: int(totals[key]) for key in keys}
+    pending, uncertain = totals["pending"], totals["uncertain"]
+    return {"reported_tokens": tokens, "pending_calls": pending, "uncertain_calls": uncertain,
+            "complete": pending == 0 and uncertain == 0}
 
 
 def status(history_scope, episode_id):
@@ -578,7 +570,8 @@ def status(history_scope, episode_id):
                 k: max(0, v - row.charged.get(k, 0))
                 for k, v in _allowances(db, row).items()
             }
-            budgets.append({"scope_id": row.id, "remaining": remaining})
+            budgets.append({"scope_id": row.id, "remaining": remaining,
+                            "provider_usage": provider_usage(db, row)})
             for key, limit in _allowances(db, row).items():
                 consumed = row.charged.get(key, 0)
                 if (

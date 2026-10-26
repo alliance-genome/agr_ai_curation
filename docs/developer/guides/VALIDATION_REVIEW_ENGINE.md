@@ -60,8 +60,7 @@ activation requires representative calibration and cost-policy approval in ALL-1
 
 Tool input and compare-and-set conflicts return structured, atomically unapplied
 results for the reviewer to correct. Per-target retry limits do not stop unrelated
-review decisions. Episode-wide deadline, tool, turn and token stops still stop the
-run. The supervisor's final prose cannot override ledger readiness.
+review decisions. Episode-wide deadline, tool and turn stops still stop the run. The supervisor's final prose cannot override ledger readiness.
 
 ## Unknown completion and recovery
 
@@ -88,35 +87,47 @@ not an unknown scientific answer. Once any provider call is admitted, ambiguous
 stops retain reservations and unknown outcomes. Scientific disagreement, unresolved answers,
 exhaustion and operational uncertainty are distinct from acceptance.
 
-## Hard admission and supported transports
+## Context capacity and actual usage
 
-The measured SDK model seam reserves exact input tokens plus the existing allowed
-output ceiling before generation, explicitly sends that ceiling, and reconciles
-actual input+output usage (including cached/resent input). Missing usage retains the
-full reservation. Provider retries are individual reservations, not new scientific
-attempts. Optional cost-ledger reporting is not the enforcement mechanism.
+Ordinary review work does not have a cumulative token completion ceiling and does
+not reserve a model's hypothetical maximum output. The shared context-capacity
+path checks actual request fit, preserves full archived source history, and uses
+native or standalone OpenAI compaction as needed. The compaction threshold is a
+context-management trigger, not a maximum request size or lifetime token budget.
+Provider output settings are unchanged by review accounting.
 
-Native OpenAI Responses requests are supported with official exact input counting.
+Each outgoing provider operation is registered durably, then its reported input
+and output tokens are aggregated once across its episode and parent scopes.
+Native Responses usage and standalone compaction both pass through measurement.
+Usage without a terminal report stays explicitly uncertain; it is not reported as
+zero cost. Status exposes reported tokens, pending calls and uncertain calls
+separately from remaining structural quotas. Compaction never resets usage,
+semantic attempts, deadlines or scientific history. Provider usage is not itself
+a dollar amount; any explicit operator spending policy is separate.
+
 The pinned WebSocket adapter does not replay a frame after sending begins. HTTP
-clients must have internal retries disabled; SDK retries remain measured. Hosted
-tools, stored provider context/prompt templates, uncountable providers, and native
-or direct compaction with no enforceable output ceiling stop explicitly. No
-character estimate is presented as hard admission, and no permanent WebSocket
-transport switch is introduced. Nested review-related model calls inherit the
-same token pool; only the named reviewer consumes reviewer-turn allowances. A
-reviewer budget requires an explicit `reviewer_agent_id`. Deadline checks cache the
-fixed deadline locally instead of locking the batch row for each streamed delta;
-quota admission/settlement runs off the event loop.
+clients must have internal retries disabled; SDK retries are separately measured.
+Only the named reviewer consumes reviewer-turn allowances. Standalone compaction
+does not consume a semantic attempt or reviewer turn, but retains review ownership,
+cancellation and the fixed deadline. Unsupported direct request shapes remain
+explicit errors. No transport downgrade is introduced.
+
+Migration e3f7a9b1c2d4 requires drained review workers. It archives complete original
+scope/episode rows in an immutable transition table before retiring only token
+policy/allowance fields. Existing charges, reservations, coverage facts, attempt
+counts, deadlines and scientific history remain intact. It neither resumes
+uncertain work nor grants another round. Existing old provider reservations can
+still reconcile their actual usage. Historical token coverage credits are retained
+as evidence and no longer interpreted as quotas.
 
 ## Limits and exact reads
 
-All `VALIDATION_REVIEW_*` settings are documented in `.env.example` and forwarded
-to backend, benchmark worker and test services. Defaults: 2 attempts/target,
-16 extras/document operation, 64/batch, 64 reviewer calls, 256 review tools,
-1800 seconds, 1M reviewer tokens, initial pool 150k × trusted targets and
-reconsideration pool 150k × allowed extras; warnings at 75%/90%. Pools allow uneven
-per-target usage. They are ceilings, not spending goals. Extractor/formatter
-limits are unchanged.
+Structural settings remain documented in `.env.example` and forwarded to backend,
+benchmark worker and tests: 2 attempts/target, 2 extraction attempts per entry,
+16 extra attempts/document operation, 64/batch, 64 reviewer calls, 256 review
+tools and 1800 seconds. Structural quota warnings remain at 75%/90%. The former
+reviewer/initial/reconsideration token ceiling settings are retired. Explicit
+curator renewal preserves previous history. Extractor/formatter limits are unchanged.
 
 Protocol transport defaults are 8000 reason/instruction characters, 100 decision
 entries, 100 evidence references and 64KiB serialized history pages. Oversized
@@ -127,8 +138,8 @@ Packets pin original extraction, complete fact references, decisions, prerequisi
 and budget snapshots. `read_validation_history` returns canonical ASCII JSON byte
 ranges with exact SHA and continuation offset; concatenate all content pages.
 `fact_id=baseline` reads the bound artifact's immutable original. Paging has no
-separate total-data cap and never truncates the stored body. General reviewer tool
-and token budgets still apply to requests made during an active review.
+separate total-data cap and never truncates the stored body. General reviewer tool allowances and the fixed deadline still apply during an
+active review; provider usage is metered without a cumulative token ceiling.
 
 `get_validation_record_source(target_id)` pins one original normalized record and
 its attached supporting evidence. Object, nested field/element and binding targets
@@ -364,8 +375,8 @@ new instructions and attempt state. A scoped history reader supplies exact paged
 bodies when needed. Validators retain supplied-context-only tools. Follow-up
 extractors retain only their configured paper tools and that history reader;
 full builders, finalizers and arbitrary agent dispatch are unavailable. Follow-up
-uses the existing reviewer token pool, while its child budget does not consume
-reviewer-turn counts. Existing deadlines and saved extractor max-turn settings apply.
+usage is recorded in the reviewer token category without a token ceiling; its
+child budget does not consume reviewer-turn counts. Existing deadlines and saved extractor max-turn settings apply.
 Original evidence stays read-only in supplied history. The follow-up workspace
 contains only newly recorded evidence, collected from verified paper-tool outputs
 before immutable contributions are retained. Both specialist phases log their actual
@@ -427,3 +438,8 @@ a truncated preview. Unexpected operational failures have one sanitized Sentry
 owner; scientific uncertainty, no-new-information, and expected budget stops do
 not create failure alerts. Source text and raw provider exceptions must not be
 added to Sentry messages.
+
+Retiring the cumulative token fields changes the frozen benchmark review contract.
+Existing frozen supervisor benchmark sources must be explicitly repinned before
+replay; they are rejected by contract comparison rather than silently adopting
+the new policy. The migration does not edit those scientific snapshots.
