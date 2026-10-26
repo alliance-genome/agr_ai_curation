@@ -6,7 +6,7 @@ from pydantic_core import to_jsonable_python
 
 from src.lib.openai_agents.model_settings_contract import ModelSettingsContractError, model_settings_contract
 from src.lib.validation_history import store
-from src.schemas.validation_followup import TargetedFollowupResult
+from src.schemas.validation_followup import TargetedFollowupTransport
 from .protocol import TARGETED_EXTRACTION_PROTOCOL
 from .specialist_context import create_history_reader
 
@@ -89,7 +89,7 @@ def create_phase(agent, *, scope, artifact_id, packet, packet_bytes, evidence_re
         "instructions. Retain your domain-specific extraction policy.\n"
         + TARGETED_EXTRACTION_PROTOCOL)
     phase = agent.clone(name=agent.name + " Targeted Follow-up", instructions=instructions,
-        tools=[*paper_tools, history_reader], handoffs=[], output_type=TargetedFollowupResult,
+        tools=[*paper_tools, history_reader], handoffs=[], output_type=TargetedFollowupTransport,
         output_guardrails=[], tool_use_behavior="run_llm_again")
     # A full extractor may force its builder finalizer. This phase uses the
     # structured proposal contract and cannot call that full-extraction tool.
@@ -113,4 +113,4 @@ async def invoke(agent, *, scope, artifact_id, packet, packet_bytes, max_turns, 
     emit_phase(phase)
     result = await run_agent_with_owned_openai_resources(
         phase, input_value=json.dumps(packet, ensure_ascii=True, sort_keys=True), max_turns=max_turns)
-    return TargetedFollowupResult.model_validate(result.final_output)
+    return TargetedFollowupTransport.model_validate(result.final_output).decode()

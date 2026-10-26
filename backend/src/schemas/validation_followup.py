@@ -1,5 +1,7 @@
 """Targeted extractor proposals, distinct from source replacement or validation."""
 
+import json
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -98,3 +100,68 @@ class TargetedFollowupResult(FollowupContract):
         if len(identifiers) != len(set(identifiers)):
             raise ValueError("Each authorized entry requires one outcome")
         return self
+
+
+class ProposedSourceValueTransport(FollowupContract):
+    """Provider wire format; arbitrary domain values are decoded only at ingress."""
+
+    field_path: str = Field(min_length=1)
+    value_json: str = Field(description=(
+        'One complete JSON value, encoded as text. For a string the text must include '
+        'JSON quotes, e.g. "gene A"; for an object use {"name":"gene A"}; '
+        'for a list use ["gene A",null,2]; booleans use true or false. '
+        'Preserve the complete proposed value and its native types. '
+        'No prose, Markdown fences, duplicate object keys, NaN or Infinity.'
+    ))
+    evidence_record_ids: list[str]
+    collection_mappings: list[ProposedCollectionMapping]
+
+
+class FollowupEntryTransport(FollowupContract):
+    entry_id: str = Field(min_length=1)
+    outcome: Literal[
+        "additional_information", "proposed_correction", "contradictory_findings",
+        "no_new_information", "unresolved",
+    ]
+    assessment: str = Field(min_length=1)
+    remaining_uncertainty: str
+    proposed_values: list[ProposedSourceValueTransport]
+    evidence_record_ids: list[str]
+
+
+def _decode_proposed_value(encoded: str):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate JSON object key")
+            result[key] = value
+        return result
+
+    def finite_float(value):
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError("Nonfinite JSON number")
+        return parsed
+
+    def reject_constant(_value):
+        raise ValueError("Nonfinite JSON constant")
+
+    try:
+        return json.loads(encoded, object_pairs_hook=unique_object,
+                          parse_float=finite_float, parse_constant=reject_constant)
+    except ValueError:
+        # Do not include curator text, object keys or JSONDecodeError.doc in reports.
+        raise ValueError("Targeted follow-up value_json must contain one valid finite JSON value with unique object keys") from None
+
+
+class TargetedFollowupTransport(FollowupContract):
+    entries: list[FollowupEntryTransport] = Field(min_length=1)
+
+    def decode(self) -> TargetedFollowupResult:
+        """Convert provider encoding once; stored scientific values stay native."""
+        result = self.model_dump(mode="json")
+        for entry in result["entries"]:
+            for proposed in entry["proposed_values"]:
+                proposed["value"] = _decode_proposed_value(proposed.pop("value_json"))
+        return TargetedFollowupResult.model_validate(result)

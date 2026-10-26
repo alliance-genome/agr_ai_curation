@@ -398,6 +398,15 @@ contains only newly recorded evidence, collected from verified paper-tool output
 before immutable contributions are retained. Both specialist phases log their actual
 prompt/tool configuration and bind an application-owned prompt manifest for TraceReview.
 
+The targeted provider output uses a separate strict transport schema. Arbitrary
+proposed values travel as `value_json`, containing one complete JSON value (including
+JSON quotes for strings). The phase decodes this once into native values before
+retaining contributions. Duplicate keys, malformed JSON and nonfinite numbers fail
+explicitly through the existing operational-error owner; no legacy shape or text
+fallback is accepted. Stored proposals and scientific values keep their canonical
+shape. The encoding instructions live in the output schema, leaving the saved
+extractor's pinned follow-up protocol unchanged.
+
 Contributions are immutable proposals. The supervisor explicitly selects fields
 and evidence before they affect current values. Collections require explicit
 retain/revise/merge/split/add/retire relationships from the extractor. The runtime

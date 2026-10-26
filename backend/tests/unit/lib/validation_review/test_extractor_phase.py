@@ -41,6 +41,12 @@ async def test_followup_actual_runner_input_and_tools(phase_trace, monkeypatch):
     answer = {"entries": [{"entry_id": "entry", "outcome": "no_new_information",
         "assessment": "The paper does not clarify this mention.", "remaining_uncertainty": "Organism unknown",
         "proposed_values": [], "evidence_record_ids": []}]}
+    answer["entries"][0].update(outcome="proposed_correction", proposed_values=[{
+        "field_path": "organism", "value": {"name": "Drosophila melanogaster", "notes": [None, "Methods"]},
+        "evidence_record_ids": [], "collection_mappings": []}])
+    wire_answer = json.loads(json.dumps(answer))
+    proposed = wire_answer["entries"][0]["proposed_values"][0]
+    proposed["value_json"] = json.dumps(proposed.pop("value"))
     seen = []
     configs = phase_trace.configs
 
@@ -61,7 +67,7 @@ async def test_followup_actual_runner_input_and_tools(phase_trace, monkeypatch):
         assert {tool.name for tool in phase.tools} == {"read_section", "read_supplied_history"}
         assert TARGETED_EXTRACTION_PROTOCOL in phase.instructions
         assert "Domain extraction policy" in phase.instructions
-        return SimpleNamespace(final_output=answer)
+        return SimpleNamespace(final_output=wire_answer)
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_with_owned_openai_resources", run)
     result = await extractor_phase.invoke(agent,
