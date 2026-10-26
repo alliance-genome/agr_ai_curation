@@ -7,7 +7,11 @@ import pytest
 
 from src.lib.validation_history import store as h
 from src.lib.validation_review import admission, reads, record_source
-from tests.integration.persistence.test_validation_history import scope, migrated, decision
+from tests.integration.persistence.test_validation_history import (
+    scope as scope,
+    migrated as migrated,
+    decision,
+)
 from tests.integration.persistence.test_selected_value_authority import episode
 
 
