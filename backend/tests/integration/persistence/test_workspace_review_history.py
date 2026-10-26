@@ -1135,21 +1135,23 @@ def test_history_predecessor_ignores_abandonment_after_declaration(scope, scenar
         assert resolved.id == previous
 
 
-def test_late_admission_cannot_change_predecessor_on_preparation_retry(scope, scenario):
+@pytest.mark.parametrize("declaration_order", ["earlier", "later"])
+def test_late_admission_cannot_change_predecessor_on_preparation_retry(scope, scenario, declaration_order):
     from src.lib.validation_history import selections
     from src.lib.validation_review import admission
     from src.lib.validation_review.record_scope import validation_targets
 
     with h.SessionLocal() as db:
         original = h._content(db, h._fact(db, scenario.aid, scenario.env.metadata["review_episode_id"]))
-    earlier = selections.start_episode(scope, scenario.aid, episode={
-        "episode_id": str(uuid4()), "reason": "Declared before admission",
-        "obligations": original["obligations"],
-    })
-    current = selections.start_episode(scope, scenario.aid, episode={
-        "episode_id": str(uuid4()), "reason": "New round recovery boundary",
-        "obligations": original["obligations"],
-    })
+    def declare(reason):
+        return selections.start_episode(scope, scenario.aid, episode={
+            "episode_id": str(uuid4()), "reason": reason,
+            "obligations": original["obligations"],
+        })
+    if declaration_order == "earlier":
+        earlier, current = declare("Competing round"), declare("Recovery boundary")
+    else:
+        current, earlier = declare("Recovery boundary"), declare("Competing round")
     with h.SessionLocal.begin() as db:
         assert admission.predecessor_for_episode(db, scope, scenario.aid, current) is None
         targets = validation_targets(db, scenario.aid, original)
@@ -1157,8 +1159,14 @@ def test_late_admission_cannot_change_predecessor_on_preparation_retry(scope, sc
                                  kind="document_run", targets=len(targets), episodes=1)
     admission.attach_episode(scope, artifact_id=scenario.aid, episode_id=earlier, scope_id=run)
     with h.SessionLocal.begin() as db:
-        with pytest.raises(h.HistoryConflict, match="Earlier review admission changed"):
+        with pytest.raises(h.HistoryConflict, match="Another review admission changed"):
             admission.predecessor_for_episode(db, scope, scenario.aid, current)
+    parent = admission.create_scope(scope, operation_id="workspace:" + current,
+        kind="workspace_operation", targets=len(targets), episodes=1)
+    child = admission.create_scope(scope, operation_id="workspace-child:" + current,
+        kind="document_run", targets=len(targets), episodes=1, parent_id=parent)
+    with pytest.raises(h.HistoryConflict, match="Another review admission changed"):
+        admission.attach_episode(scope, artifact_id=scenario.aid, episode_id=current, scope_id=child)
 
 
 def test_stale_published_admitted_round_does_not_hide_intervening_empty_round(

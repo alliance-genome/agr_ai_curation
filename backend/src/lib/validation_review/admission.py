@@ -351,11 +351,11 @@ def predecessor_for_episode(db, history_scope, artifact_id, episode_id):
               & (admitted.parent_id == prior.id)
               & (admitted.kind == "review_admission"))
         .where(prior.artifact_id == artifact_id, prior.kind == "review_episode",
-               prior.sequence < own_fact.sequence, admitted.sequence > own_fact.sequence,
+               prior.id != episode_id, admitted.sequence > own_fact.sequence,
                prior.id.not_in(abandoned)).limit(1)
     )
     if late_admission is not None:
-        raise store.HistoryConflict("Earlier review admission changed during preparation")
+        raise store.HistoryConflict("Another review admission changed during preparation")
     return db.scalar(
         select(prior.id)
         .join(admitted, (admitted.artifact_id == prior.artifact_id)
