@@ -141,7 +141,15 @@ ranges with exact SHA and continuation offset; concatenate all content pages.
 separate total-data cap and never truncates the stored body. General reviewer tool allowances and the fixed deadline still apply during an
 active review; provider usage is metered without a cumulative token ceiling.
 
-Manifest units expose their decision-unit metadata before selection. Pending
+Manifest units expose their decision-unit metadata before selection. A null
+`decision_unit` or empty configured `decision_units` means whole-target review:
+use the frozen attempt's `input.target_id` for both `target_id` and
+`decision_unit_id`. For component bindings, keep the binding parent as `target_id`
+and select the child `decision_unit_id` from the attempt's `coverage`. The manifest
+unit's `target_id` identifies that unit and its `version` supplies `expected_version`.
+`logical_attempt_id` is the attempt reference's fact ID, not the completion's ID.
+These identifiers route an explicit scientific decision; they never choose its action.
+Pending
 answer blockers carry exact `attempt_ref` and `completion_ref` fact IDs/SHAs;
 unfinished execution carries only `attempt_ref`. These references follow the
 existing episode/retained-review coverage and do not choose an answer or change

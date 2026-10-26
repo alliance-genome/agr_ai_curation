@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy import select
 from src.lib.validation_history import store
 from .audit import append_fact
@@ -25,12 +25,26 @@ class ReviewContext:
 
 class ReviewEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    target_id: StrictStr
-    decision_unit_id: StrictStr
-    expected_version: StrictInt
+    target_id: StrictStr = Field(description=(
+        "Binding target: use the frozen attempt input.target_id for an answer; "
+        "for extraction-only review use the authorized source target."
+    ))
+    decision_unit_id: StrictStr = Field(description=(
+        "Reviewed unit: use an ID from the frozen attempt coverage and its manifest "
+        "unit target_id. With no component units, decision_unit_id equals target_id: "
+        "decision_unit: null and decision_units: [] mean whole-target review, not "
+        "missing IDs. With components, use the covered child ID, not the parent. "
+        "For extraction-only review use the authorized manifest unit target_id."
+    ))
+    expected_version: StrictInt = Field(description=(
+        "Current version of this decision unit in the manifest, not selection_generation."
+    ))
     action: Literal["accept", "reject", "defer", "acknowledge_failure", "revoke"]
     reason: StrictStr
-    logical_attempt_id: StrictStr | None = None
+    logical_attempt_id: StrictStr | None = Field(default=None, description=(
+        "Exact attempt_ref fact_id for the answer, not its completion_ref fact_id. "
+        "Name exactly one attempt or authorized extraction_ref except for revoke."
+    ))
     extraction_ref: StrictStr | None = None
 
 

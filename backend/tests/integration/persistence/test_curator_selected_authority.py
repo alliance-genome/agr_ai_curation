@@ -23,6 +23,15 @@ def scenario(scope, tmp_path, monkeypatch, request):
     from src.schemas.domain_validator import DomainValidatorResultBase
     from tests.unit.lib.domain_packs.test_validator_dispatch import _multivalued_dispatch_pack, _result_payload
     pack = _multivalued_dispatch_pack(tmp_path)
+    if fixture_mode == "component":
+        from dataclasses import replace
+        from copy import deepcopy
+
+        raw = deepcopy(pack.metadata.metadata)
+        raw["validator_bindings"]["active"][0]["decision_units"] = [
+            {"key": "identity", "fields": ["curie"]}
+        ]
+        pack = replace(pack, metadata=pack.metadata.model_copy(update={"metadata": raw}))
     if fixture_mode == "absent":
         from dataclasses import replace
         from copy import deepcopy
@@ -49,7 +58,9 @@ def scenario(scope, tmp_path, monkeypatch, request):
         extracted_objects=[CuratableObjectEnvelope(object_type="Annotation", pending_ref_id="one",
             payload={} if fixture_mode == "absent" else {"evidence_code_curies": ["eco:1", "eco:2"] if fixture_mode == "two" else ["eco:1"]})])
     env = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
-        typed=env.model_dump(mode="json"), envelope=env, provenance={})
+        typed=None if fixture_mode == "historical" else env.model_dump(mode="json"),
+        envelope=env, provenance={"original_extraction_available": False} if fixture_mode == "historical" else {},
+        subject_kind="historical" if fixture_mode == "historical" else "extracted")
     aid = env.metadata["validation_history"]["artifact_id"]
     bound = runtime.CapturedArtifact(scope, aid)
     matches = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(env)
@@ -102,8 +113,9 @@ def scenario(scope, tmp_path, monkeypatch, request):
 
     state.episode_fn, state.propose, state.publish, state.edit = episode, propose, publish, edit
     episode()
-    state.first = propose("ECO:VALIDATED")
-    publish(state.first)
+    if fixture_mode != "component":
+        state.first = propose("ECO:VALIDATED")
+        publish(state.first)
     return state
 
 

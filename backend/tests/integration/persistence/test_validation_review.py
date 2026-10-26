@@ -1534,3 +1534,42 @@ def test_speculative_token_charges_rejected_but_structural_quotas_enforced(scope
     with pytest.raises(a.ReviewStopped) as stopped:
         a.reserve(scope, ep, operation_id="provider:turns", charges={"initial_tokens": 0, "reviewer_turns": 65}, request={"usage_metered": True})
     assert stopped.value.resource == "reviewer_turns"
+
+
+@pytest.mark.parametrize("scenario", ["component"], indirect=True)
+def test_public_component_decision_uses_parent_target_and_covered_child(scope, scenario):
+    """Follow the provider-facing identity instructions through real publication."""
+    from src.lib.validation_review.decisions import ReviewContext, record_decisions
+    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+    from src.lib.validation_history.projection import read_published_projection
+
+    x = scenario
+    sid = a.create_scope(scope, operation_id=uuid4().hex, kind="document_run",
+                         targets=1, episodes=1)
+    a.attach_episode(scope, artifact_id=x.aid, episode_id=x.episode, scope_id=sid)
+    completion = x.propose("ECO:VALIDATED")
+    answer = h.read_fact(scope, x.aid, completion)
+    attempt = h.read_fact(scope, x.aid, answer["parent_id"])
+    parent = attempt["content"]["input"]["target_id"]
+    child, = attempt["content"]["coverage"]
+    assert parent == x.target and child != parent
+    with h.SessionLocal() as db:
+        version = h._current(db, x.aid, child)["version"]
+    checkpoint = DomainEnvelopeCheckpointRequest(
+        project_key="fixture", envelope=x.env, expected_revision=x.revision,
+        document_id=scope.document_id, adapter_key="fixture",
+        source_extraction_result_id=x.source,
+    )
+    context = ReviewContext(scope, x.episode, "supervisor")
+    entry = dict(target_id=parent, decision_unit_id=child,
+                 logical_attempt_id=attempt["id"], expected_version=version,
+                 action="accept", reason="The component answer resolves this identity")
+    with pytest.raises(h.HistoryConflict, match="Answer is outside this episode/target/unit"):
+        record_decisions(context, checkpoint_request=checkpoint,
+                         operation_id="incorrect-parent", entries=[{**entry, "decision_unit_id": parent}])
+    result = record_decisions(context, checkpoint_request=checkpoint,
+                              operation_id="correct-child", entries=[entry])
+    assert result["applied"] == [{"decision_unit_id": child, "action": "accept"}]
+    assert result["ready"]
+    projected, _ = read_published_projection(scope, result["publication"], finalized=True)
+    assert projected.extracted_objects[0].payload["evidence_code_curies"] == ["ECO:VALIDATED"]
