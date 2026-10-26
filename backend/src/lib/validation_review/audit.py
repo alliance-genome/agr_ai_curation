@@ -9,8 +9,20 @@ def report_operational_failure(error):
     """One sanitized owner; expected review stops and scientific outcomes never call this."""
     from src.lib.observability.runtime import report_runtime_exception
 
-    if getattr(error, "_ai_curation_sentry_captured", False):
-        return
+    from agents import UserError
+
+    original = error
+    seen = set()
+    while isinstance(error, BaseException) and id(error) not in seen:
+        seen.add(id(error))
+        if getattr(error, "_ai_curation_sentry_captured", False):
+            return
+        # SDK tool wrappers carry the same fault; a new failure during handling
+        # is a separate report even when its cause was already captured.
+        if not isinstance(error, UserError):
+            break
+        error = error.__cause__ or error.__context__
+    error = original
     try:
         raise RuntimeError(
             "Validation review operational failure (" + type(error).__name__ + ")"

@@ -187,6 +187,7 @@ async def _while_owned(awaitable, scope, work_id, token, lease_seconds):
 
     task = asyncio.ensure_future(awaitable)
     heartbeat = asyncio.create_task(pulse())
+    propagated_error = None
     try:
         done, _ = await asyncio.wait(
             {task, heartbeat}, return_when=asyncio.FIRST_COMPLETED
@@ -194,8 +195,27 @@ async def _while_owned(awaitable, scope, work_id, token, lease_seconds):
         if heartbeat in done:
             await heartbeat
         return await task
+    except BaseException as error:
+        propagated_error = error
+        raise
     finally:
         for pending in (task, heartbeat):
             if not pending.done():
                 pending.cancel()
-        await asyncio.gather(task, heartbeat, return_exceptions=True)
+        try:
+            await asyncio.gather(task, heartbeat, return_exceptions=True)
+        finally:
+            # A heartbeat stop or parent cancellation can win while the worker
+            # independently fails. Draining must not discard that real fault.
+            from .audit import report_operational_failure
+            from .stops import review_stop
+
+            for child in (task, heartbeat):
+                if child.done() and not child.cancelled():
+                    error = child.exception()
+                    if (
+                        isinstance(error, Exception)
+                        and error is not propagated_error
+                        and review_stop(error) is None
+                    ):
+                        report_operational_failure(error)
