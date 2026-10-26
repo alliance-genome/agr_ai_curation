@@ -146,3 +146,77 @@ def test_retired_original_remains_readable_without_reactivation(scope):
     with h.SessionLocal() as db:
         with pytest.raises(h.HistoryConflict):
             h._require_active_target(db, aid, obj)
+
+
+def test_pending_answer_references_read_exact_historical_facts_without_baseline(scope):
+    from src.lib.validation_history import selections
+    from tests.integration.persistence.test_validation_history import attempt
+    from tests.integration.persistence.test_selected_value_authority import review
+
+    aid, ep, _, _, binding, record, _ = setup_record(scope, historical=True)
+    original = h.read_baseline(scope, aid)
+    attempt_id = attempt(scope, aid, binding, key=uuid4().hex)
+    pending = selections.read_manifest(scope, aid, episode_id=ep)
+    blocker = next(b for b in pending['blockers'] if b['code'] == 'execution_pending')
+    assert blocker['attempt_ref']['fact_id'] == attempt_id
+    assert 'completion_ref' not in blocker
+    request = json.loads(reads.read(scope, ep, **blocker['attempt_ref'])['content'])
+    assert request['coverage'] == [binding]
+    completion_id = h.complete_attempt(scope, aid, attempt_id, state='completed',
+        result={'status': 'unresolved', 'value': None}, diagnostics={})
+    packet_ref = reads.snapshot(scope, ep, operation_id='answer-reference')
+    packet = json.loads(reads.read(scope, ep, **packet_ref)['content'])
+    blocker = next(b for b in packet['manifest']['blockers'] if b['code'] == 'answer_review_pending')
+    assert blocker['attempt_ref']['fact_id'] == attempt_id
+    assert blocker['completion_ref']['fact_id'] == completion_id
+    answer = json.loads(reads.read(scope, ep, **blocker['completion_ref'])['content'])
+    assert answer['result'] == {'status': 'unresolved', 'value': None}
+    source_ref = record_source.snapshot(scope, ep, target_id=blocker['target_id'])
+    source = json.loads(reads.read(scope, ep, **source_ref)['content'])
+    assert source['record'] == record and source['original_available'] is False
+    # The fixture supervisor accepts this exact unresolved answer. Code verifies
+    # references/persistence, never whether its scientific assessment is correct.
+    review(scope, aid, ep, binding, completion_id)
+    assert selections.read_manifest(scope, aid, episode_id=ep)['ready']
+    assert h.read_baseline(scope, aid) == original
+    # A pinned old packet is immutable, even after the state changes.
+    assert reads.snapshot(scope, ep, operation_id='answer-reference') == packet_ref
+    assert json.loads(reads.read(scope, ep, **packet_ref)['content']) == packet
+
+
+def test_pre_navigation_curator_authored_publication_remains_finalizable(scope, monkeypatch):
+    from src.lib.validation_history import selections
+    from src.lib.validation_history.projection import pin_publication_in_transaction, read_published_projection
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+
+    env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id='fixture',
+        extracted_objects=[CuratableObjectEnvelope(object_id='one', object_type='Annotation', payload={})])
+    aid = h.capture_baseline(scope, producer_id=uuid4().hex, subject_kind='curator_authored',
+        typed=env.model_dump(mode='json'), normalized=env.model_dump(mode='json'), provenance={})
+    tid = h.register_target(scope, aid, identity='curator-object',
+        original={'object_ref': 'one', 'origin': {'kind': 'curator_authored'}})
+    ep = selections.start_episode(scope, aid, episode={'episode_id': uuid4().hex,
+        'reason': 'Curator authored record', 'obligations': [{'target_id': tid, 'mode': 'curator'}]})
+    current_unit = selections._selected_unit
+
+    def pre_navigation_unit(*args, **kwargs):
+        unit = current_unit(*args, **kwargs)
+        if unit['selected'] == 'curator':
+            unit.pop('decision_unit', None)
+        return unit
+
+    with monkeypatch.context() as old_writer:
+        old_writer.setattr(selections, '_selected_unit', pre_navigation_unit)
+        with h.SessionLocal.begin() as db:
+            selections.decide_episode_in_transaction(db, scope, aid, episode_id=ep,
+                operation_id=uuid4().hex, actor={'type': 'curator', 'id': scope.owner_id},
+                entries=[{'target_id': tid, 'expected_version': 0, 'action': 'accept',
+                          'subject': 'curator', 'reason': 'Explicit curator decision'}])
+            manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
+            assert manifest['ready'] and manifest['units'][0]['selected'] == 'curator'
+            env = env.model_copy(update={'metadata': {'validation_history': {'artifact_id': aid}}})
+            published = pin_publication_in_transaction(db, scope, aid,
+                operation_id=uuid4().hex, manifest=manifest, envelope=env)
+    _, actual = read_published_projection(scope, published.metadata['selected_projection'], finalized=True)
+    assert actual == manifest and actual['units'][0]['selected'] == 'curator'
+    assert 'decision_unit' not in actual['units'][0]

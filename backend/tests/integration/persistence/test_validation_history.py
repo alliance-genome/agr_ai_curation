@@ -1083,6 +1083,12 @@ def test_composite_units_and_pinned_prerequisite_selections(scope):
     frozen = h.read_fact(scope, aid, att)["content"]
     first, second = frozen["coverage"]
     assert frozen["budget_scope_id"]
+    from src.lib.validation_history import selections
+    with h.SessionLocal() as db:
+        for target_id, definition in zip(frozen["coverage"], request["decision_units"]):
+            unit = selections._selected_unit(db, scope, aid, target_id)
+            assert unit["decision_unit"] == definition
+            assert unit["selected"] is None and unit["reason"] == "unreviewed"
     answer = h.complete_attempt(
         scope,
         aid,
