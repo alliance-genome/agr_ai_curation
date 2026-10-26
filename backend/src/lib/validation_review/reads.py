@@ -9,7 +9,8 @@ from src.lib.validation_history import store
 from .audit import append_fact
 from src.lib.validation_history.selections import manifest_in_transaction
 from src.models.sql.validation_history import ValidationFact, ValidationBody
-from .admission import lock_episode, _allowances
+from .admission import lock_episode, _allowances, provider_usage
+from .policy import TOKEN_USAGE_BUCKETS
 
 
 def status_reference(scope, episode_id):
@@ -76,7 +77,8 @@ def snapshot(scope, episode_id, *, operation_id):
             "budgets": [
                 {
                     "scope_id": row.id,
-                    "charged": row.charged,
+                    "charged": {key: value for key, value in row.charged.items() if key not in TOKEN_USAGE_BUCKETS},
+                    "provider_usage": provider_usage(db, row),
                     "allowances": _allowances(db, row),
                 }
                 for row in [*chain, ep]

@@ -158,3 +158,15 @@ class WorkspaceReviewOperation(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (UniqueConstraint("owner_id", "request_id", name="uq_workspace_review_request"),)
+
+
+class ValidationReviewPolicyTransition(Base):
+    """Immutable pre-migration policies; historical grants are never erased."""
+    __tablename__ = "validation_review_policy_transitions"
+    source_table: Mapped[str] = mapped_column(String, primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    migration_revision: Mapped[str] = mapped_column(String, nullable=False)
+    original_record: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

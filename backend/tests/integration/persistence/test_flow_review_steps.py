@@ -117,7 +117,8 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     with store.SessionLocal() as db:
         parent = db.get(ValidationReviewScope, parent_scope)
         credited = admission._allowances(db, parent)
-        assert credited["initial_tokens"] == 2 * parent.contract["policy"]["tokens_per_target"]
+        assert "initial_tokens" not in credited
+        assert "tokens_per_target" not in parent.contract["policy"]
         assert credited["extra_attempts"] == 64
     ref = flow.reference(flow.record)
     assert flow.record.source_kind.value == "flow"
@@ -161,7 +162,7 @@ def test_discovered_batch_credits_are_shared_and_never_refill(planned):
         child_row = db.get(ValidationReviewScope, child)
         assert admission._allowances(db, parent_row)["extra_attempts"] == 64
         assert admission._allowances(db, child_row)["extra_attempts"] == 16
-        assert admission._allowances(db, parent_row)["initial_tokens"] == 0
+        assert "initial_tokens" not in admission._allowances(db, parent_row)
 
 
 @pytest.mark.asyncio

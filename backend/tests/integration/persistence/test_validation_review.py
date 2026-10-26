@@ -89,16 +89,17 @@ def test_scope_retry_freezes_policy_across_config_change(scope, monkeypatch):
     )
 
 
-def test_unknown_usage_retains_charge_then_reconciles_once(scope):
+def test_unknown_usage_is_visible_then_reconciles_once(scope):
     _, ep, _ = admitted(scope)
-    rid = a.reserve(
-        scope, ep, operation_id="call", charges={"reviewer_tokens": 1000}, request={}
-    )
+    rid = a.reserve(scope, ep, operation_id="provider:call", charges={"reviewer_tokens": 0},
+                    request={"usage_metered": True})
     a.reconcile(scope, ep, rid, actual=None)
-    assert a.status(scope, ep)["budgets"][-1]["remaining"]["reviewer_tokens"] == 999000
+    usage = a.status(scope, ep)["budgets"][-1]["provider_usage"]
+    assert usage["uncertain_calls"] == 1 and not usage["complete"]
     a.reconcile(scope, ep, rid, actual={"reviewer_tokens": 200})
     a.reconcile(scope, ep, rid, actual={"reviewer_tokens": 200})
-    assert a.status(scope, ep)["budgets"][-1]["remaining"]["reviewer_tokens"] == 999800
+    usage = a.status(scope, ep)["budgets"][-1]["provider_usage"]
+    assert usage["reported_tokens"]["reviewer_tokens"] == 200 and usage["complete"]
     with pytest.raises(h.HistoryConflict):
         a.reconcile(scope, ep, rid, actual={"reviewer_tokens": 100})
 
@@ -106,9 +107,9 @@ def test_unknown_usage_retains_charge_then_reconciles_once(scope):
 def test_overrun_is_retained_and_stops_new_work(scope):
     _, ep, _ = admitted(scope)
     rid = a.reserve(
-        scope, ep, operation_id="call", charges={"reviewer_tokens": 10}, request={}
+        scope, ep, operation_id="call", charges={"reviewer_tools": 10}, request={}
     )
-    a.reconcile(scope, ep, rid, actual={"reviewer_tokens": 11})
+    a.reconcile(scope, ep, rid, actual={"reviewer_tools": 11})
     assert a.status(scope, ep)["state"] == "provider_budget_overrun"
     with pytest.raises(a.ReviewStopped):
         queue(scope, ep)
@@ -1034,12 +1035,12 @@ def test_warning_thresholds_are_durable_and_idempotent(scope):
     from src.models.sql.validation_history import ValidationFact
 
     aid, ep, _ = admitted(scope)
-    for op, count in (("warning", 750000), ("critical", 150000)):
+    for op, count in (("warning", 192), ("critical", 39)):
         a.reserve(
-            scope, ep, operation_id=op, charges={"reviewer_tokens": count}, request={}
+            scope, ep, operation_id=op, charges={"reviewer_tools": count}, request={}
         )
         a.reserve(
-            scope, ep, operation_id=op, charges={"reviewer_tokens": count}, request={}
+            scope, ep, operation_id=op, charges={"reviewer_tools": count}, request={}
         )
     with h.SessionLocal() as db:
         facts = list(
@@ -1124,7 +1125,8 @@ async def test_real_runner_factory_tools_and_measured_seam_with_fake_provider(
     budget = a.status(scope, ep)["budgets"][-1]["remaining"]
     assert budget["reviewer_turns"] == 64 - calls
     assert budget["reviewer_tools"] == max(0, tool_limit - 2)
-    assert budget["reviewer_tokens"] == 1000000 - calls * 1280
+    assert "reviewer_tokens" not in budget
+    assert a.status(scope, ep)["budgets"][-1]["provider_usage"]["reported_tokens"]["reviewer_tokens"] == calls * 1280
     assert not result["review"]["ready"]
     a.cancel(scope, ep, actor_id=scope.owner_id, reason="Done reviewing")
     stopped = await reviewer.run(
@@ -1188,9 +1190,6 @@ def test_32_target_run_shares_16_extra_allowance_across_two_episodes(scope):
             request={},
         )
     remaining = a.status(scope, episodes[1])["budgets"][0]["remaining"]
-    assert remaining["initial_tokens"] == 4800000
-    assert remaining["reconsideration_tokens"] == 2400000
-    assert remaining["reviewer_tokens"] == 2000000
     assert remaining["extra_attempts"] == 0
 
 
@@ -1403,8 +1402,6 @@ def test_discovered_coverage_preserves_shared_extra_cap_and_frozen_policy(scope,
         assert db.get(ValidationReviewScope, sid).contract["allowances"]["extra_attempts"] == 16
     remaining = a.status(scope, episodes[-1])["budgets"][0]["remaining"]
     assert remaining["extra_attempts"] == 0
-    assert remaining["initial_tokens"] == 17 * 150000
-    assert remaining["reviewer_tokens"] == 17 * 1000000
 
 
 def test_curator_can_grant_new_bounded_round_without_erasing_usage(scope):
@@ -1427,14 +1424,15 @@ def test_curator_can_grant_new_bounded_round_without_erasing_usage(scope):
                 renewal_actor_id=scope.owner_id, renewal_reason='Curator requested another round',
                 curator_round=True)
     assert a.attach_episode(scope, **args) == new
-    a.reserve(scope, new, operation_id='new-call', charges={'reviewer_tokens': 100}, request={})
+    rid = a.reserve(scope, new, operation_id='provider:new-call', charges={'reviewer_tokens': 0}, request={'usage_metered': True})
+    a.reconcile(scope, new, rid, actual={'reviewer_tokens': 100})
     assert a.attach_episode(scope, **args) == new
     with h.SessionLocal() as db:
         assert db.get(ValidationReviewEpisode, old).charged == old_charges
         assert db.get(ValidationReviewEpisode, new).charged == {'reviewer_tokens': 100}
         assert db.get(ValidationReviewScope, child).charged == {'reviewer_tokens': 100}
     with pytest.raises(a.ReviewStopped, match='superseded'):
-        a.reserve(scope, old, operation_id='late-call', charges={'reviewer_tokens': 1}, request={})
+        a.reserve(scope, old, operation_id='late-call', charges={'reviewer_tokens': 0}, request={'usage_metered': True})
 
 
 def test_fresh_round_requires_explicit_curator_and_workspace_parent(scope):
@@ -1489,77 +1487,50 @@ def test_curator_decision_is_independent_of_machine_allowance(scope, scenario, s
         assert db.get(ValidationReviewEpisode, x.episode).charged == charged
 
 
-def live_provider(scope, ep, *, count, ceiling=128000, pool="initial_tokens"):
-    wid = queue(scope, ep)
-    claimed = w.claim(scope, wid)
-    assert claimed is not None
-    w.mark_submitted(scope, wid, claimed["lease_token"])
+def metered_call(scope, ep, amount, pool="initial_tokens"):
     rid = a.reserve(scope, ep, operation_id="provider:" + uuid4().hex,
-                    charges={pool: count + ceiling},
-                    request={"input_tokens": count, "work_id": wid})
-    return rid, wid
+                    charges={pool: 0}, request={"usage_metered": True})
+    a.reconcile(scope, ep, rid, actual={pool: amount})
+    return rid
 
 
-def test_calibration_capacity_reclaims_only_live_output_holds(scope, monkeypatch):
-    monkeypatch.setenv("VALIDATION_REVIEW_TOKENS_PER_TARGET", "750000")
+def test_three_calls_and_long_work_cross_retired_token_allowances(scope):
     _, ep, _ = admitted(scope)
-    for total in (15727, 15339, 15857, 17387, 15331):
-        rid = a.reserve(scope, ep, operation_id="provider:" + uuid4().hex,
-                        charges={"initial_tokens": total}, request={})
-        a.reconcile(scope, ep, rid, actual={"initial_tokens": total})
-    holds = [live_provider(scope, ep, count=count) for count in (15914, 16398, 18758, 15901)]
-    kwargs = dict(operation_id="provider:waiting", charges={"initial_tokens": 144292},
-                  request={"input_tokens": 16292})
-    with pytest.raises(a.ReviewStopped) as stopped:
-        a.reserve(scope, ep, **kwargs)
-    assert stopped.value.temporary
-    a.reconcile(scope, ep, holds[0][0], actual={"initial_tokens": 16326})
-    rid = a.reserve(scope, ep, **kwargs)
-    assert a.reserve(scope, ep, **kwargs) == rid
+    total = 0
+    for amount in [8379, 8744, 9050, 200000, 1000000]:
+        metered_call(scope, ep, amount)
+        total += amount
+        result = a.status(scope, ep)
+        assert result["state"] == "pending"
+        assert result["warnings"] == []
+        for row in result["budgets"]:
+            assert "initial_tokens" not in row["remaining"]
+            assert row["provider_usage"]["reported_tokens"]["initial_tokens"] == total
+    assert total > 1000000
 
 
-@pytest.mark.parametrize("unavailable", ["uncertain", "expired", "no_work", "tool", "input_floor"])
-def test_unavailable_holds_are_not_temporary_capacity(scope, unavailable):
-    _, ep, _ = admitted(scope)
-    if unavailable in {"no_work", "tool"}:
-        prefix = "tool:" if unavailable == "tool" else "provider:"
-        wid = queue(scope, ep)
-        claimed = w.claim(scope, wid)
-        assert claimed is not None
-        w.mark_submitted(scope, wid, claimed["lease_token"])
-        request = {"input_tokens": 10000}
-        if unavailable == "tool":
-            request["work_id"] = wid
-        rid = a.reserve(scope, ep, operation_id=prefix + uuid4().hex,
-                        charges={"initial_tokens": 138000}, request=request)
-    else:
-        rid, wid = live_provider(scope, ep, count=10000, ceiling=128000)
-        if unavailable == "uncertain":
-            a.reconcile(scope, ep, rid, actual=None)
-        elif unavailable == "expired":
-            expire(wid)
-    # Even a live hold cannot release its already counted input.
-    amount = 145000 if unavailable == "input_floor" else 20000
-    with pytest.raises(a.ReviewStopped) as stopped:
-        a.reserve(scope, ep, operation_id="provider:blocked",
-                  charges={"initial_tokens": amount}, request={})
-    assert not stopped.value.temporary
-
-
-def test_temporary_capacity_checks_shared_parent_and_other_resources(scope, monkeypatch):
+def test_concurrent_actual_usage_settles_once_across_parent_and_children(scope):
     from dataclasses import replace
-    monkeypatch.setenv("VALIDATION_REVIEW_TOKENS_PER_TARGET", "150000")
     parent = a.create_scope(scope, operation_id=uuid4().hex, kind="workspace_operation", targets=2, episodes=2)
     _, ep1, _ = admitted(scope, parent=parent)
     other = replace(scope, session_id=uuid4().hex)
     _, ep2, _ = admitted(other, parent=parent)
-    # Reconsideration credits are shared by the parent, not additive per child.
-    rid, _ = live_provider(scope, ep1, count=10000, ceiling=2190000, pool="reconsideration_tokens")
+    def run(pair):
+        context, ep = pair
+        rid = metered_call(context, ep, 200000)
+        a.reconcile(context, ep, rid, actual={"initial_tokens": 200000})
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(run, [(scope, ep1), (other, ep2)]))
+    for context, ep in [(scope, ep1), (other, ep2)]:
+        budgets = a.status(context, ep)["budgets"]
+        assert budgets[0]["provider_usage"]["reported_tokens"]["initial_tokens"] == 400000
+        assert budgets[-1]["provider_usage"]["reported_tokens"]["initial_tokens"] == 200000
+
+
+def test_speculative_token_charges_rejected_but_structural_quotas_enforced(scope):
+    _, ep, _ = admitted(scope)
+    with pytest.raises(ValueError, match="not reserved"):
+        a.reserve(scope, ep, operation_id="provider:bad", charges={"initial_tokens": 128000}, request={})
     with pytest.raises(a.ReviewStopped) as stopped:
-        a.reserve(other, ep2, operation_id="provider:other", charges={"reconsideration_tokens": 300000}, request={})
-    assert stopped.value.temporary
-    with pytest.raises(a.ReviewStopped) as stopped:
-        a.reserve(other, ep2, operation_id="provider:other", charges={"reconsideration_tokens": 300000, "reviewer_turns": 1000}, request={})
-    assert not stopped.value.temporary
-    a.reconcile(scope, ep1, rid, actual={"reconsideration_tokens": 10000})
-    a.reserve(other, ep2, operation_id="provider:boundary", charges={"reconsideration_tokens": 2390000}, request={})
+        a.reserve(scope, ep, operation_id="provider:turns", charges={"initial_tokens": 0, "reviewer_turns": 65}, request={"usage_metered": True})
+    assert stopped.value.resource == "reviewer_turns"

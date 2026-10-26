@@ -174,7 +174,7 @@ def _is_secret_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
     if normalized in {"tokens", "token_count", "estimated_tokens", "output_reserve_tokens",
         "input_tokens_before", "input_tokens_after", "token_count_requests", "token_count_duration_ms",
-        "initial_tokens", "reconsideration_tokens", "reviewer_tokens", "tokens_per_target", "tokens_per_extra"}:
+        "initial_tokens", "reconsideration_tokens", "reviewer_tokens", "tokens_per_target", "tokens_per_extra", "reported_tokens"}:
         return False
     if any(
         normalized == f"{prefix}_tokens"

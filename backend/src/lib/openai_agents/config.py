@@ -3862,8 +3862,7 @@ def get_validation_review_limits() -> dict[str, int]:
         "attempts_per_target": 2, "extraction_attempts_per_entry": 2,
         "extra_per_run": 16, "extra_per_batch": 64,
         "reviewer_turns": 64, "reviewer_tools": 256, "deadline_seconds": 1800,
-        "reviewer_tokens": 1_000_000, "tokens_per_target": 150_000,
-        "tokens_per_extra": 150_000, "warning_percent": 75, "critical_percent": 90,
+        "warning_percent": 75, "critical_percent": 90,
         "instruction_chars": 8000, "decision_entries": 100, "evidence_refs": 100,
         "packet_bytes": 65536, "lease_seconds": 60,
     }

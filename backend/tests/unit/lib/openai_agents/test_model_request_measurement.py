@@ -1494,3 +1494,103 @@ async def test_standalone_compaction_reserves_benchmark_budget_and_records_exact
     assert checkpoints[0][1] == spans[0][1]["model_request_id"]
     assert checkpoints[1] == ("completed", 123, 17)
     assert spans[0][0].span_data.usage["input_tokens_details"]["cached_tokens"] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+async def test_standalone_compaction_under_review_records_usage_or_uncertainty(monkeypatch, published, fails):
+    from src.lib.validation_review import provider as review
+    from src.lib.validation_history.store import HistoryScope
+    calls, settlements, admissions = [], [], []
+    def reserve(*args, **kwargs):
+        admissions.append(kwargs)
+        return "compaction-call"
+    monkeypatch.setattr(review.admission, "reserve", reserve)
+    monkeypatch.setattr(review.admission, "reconcile", lambda *a, **kw: settlements.append(kw["actual"]))
+    monkeypatch.setattr(review, "remaining_seconds", lambda _: 30)
+    async def compact(**kwargs):
+        calls.append(kwargs)
+        if fails:
+            raise RuntimeError("transport uncertain")
+        return SimpleNamespace(id="compact-1", model="gpt-test", usage=ResponseUsage(
+            input_tokens=300000, output_tokens=10000, total_tokens=310000,
+            input_tokens_details=ResponseInputTokensDetails(cached_tokens=0),
+            output_tokens_details=ResponseOutputTokensDetails(reasoning_tokens=0)))
+    budget = review.ExecutionBudget(HistoryScope("owner", "11111111-1111-1111-1111-111111111111", "session"), "episode", "initial_tokens", False)
+    with review.budget_scope(budget):
+        if fails:
+            with pytest.raises(RuntimeError, match="transport uncertain"):
+                await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
+                    kwargs={"model": "gpt-test", "input": []}, call=compact)
+        else:
+            await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
+                kwargs={"model": "gpt-test", "input": []}, call=compact)
+    assert len(calls) == len(admissions) == 1
+    assert admissions[0]["charges"] == {"initial_tokens": 0}
+    assert settlements == ([None] if fails else [{"initial_tokens": 310000}])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["response", "stream", "compact"])
+async def test_review_admission_rejection_never_registers_runtime_cost(monkeypatch, surface):
+    from unittest.mock import Mock
+    from src.lib.validation_review import provider as review
+    from src.lib.validation_history.store import HistoryScope
+    from src.lib.cost_ledger import runtime_writes
+    runtime_reserve = Mock(side_effect=AssertionError("Unsent request must not create a pending cost row"))
+    monkeypatch.setattr(runtime_writes, "reserve_runtime_request", runtime_reserve)
+    monkeypatch.setattr(review.admission, "reserve", Mock(side_effect=review.admission.ReviewStopped("cancelled")))
+    budget = review.ExecutionBudget(HistoryScope("owner", "11111111-1111-1111-1111-111111111111", "session"), "episode", "initial_tokens", False)
+    model = FakeResponsesWSModel([_final()])
+    measured = measurement_module.MeasuredModel(model, agent=None, provider_hint="openai")
+    async def compact(**kwargs):
+        pytest.fail("Rejected compaction must not be dispatched")
+    with review.budget_scope(budget), pytest.raises(review.admission.ReviewStopped, match="cancelled"):
+        if surface == "compact":
+            await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
+                kwargs={"model": "gpt-test", "input": []}, call=compact)
+        elif surface == "stream":
+            async for _ in measured.stream_response("policy", "input", ModelSettings(), [], None, [], None):
+                pytest.fail("Rejected stream produced an event")
+        else:
+            await measured.get_response("policy", "input", ModelSettings(), [], None, [], None)
+    runtime_reserve.assert_not_called()
+    assert not model.calls
+
+
+@pytest.mark.asyncio
+async def test_review_compaction_on_websocket_client_never_hides_http_retries(monkeypatch, published):
+    import httpx
+    from openai import InternalServerError
+    from src.lib.validation_review import provider as review
+    from src.lib.validation_history.store import HistoryScope
+    calls, settlements = [], []
+    def handle(request):
+        calls.append(request)
+        # A retry would succeed and incorrectly erase the first uncertain call.
+        if len(calls) == 1:
+            return httpx.Response(500, json={"error": {"message": "retryable", "type": "server_error"}})
+        return httpx.Response(200, json={"id": "compact-retry", "object": "response.compaction", "created_at": 0,
+            "output": [], "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+                "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}})
+    client = AsyncOpenAI(api_key="test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
+    assert client.max_retries > 0
+    model = OpenAIResponsesWSModel(model="gpt-test", openai_client=client)
+    async def prepare(request, items, settings):
+        await request.compact(items)
+        pytest.fail("First compaction failure must propagate")
+    measured = measurement_module.MeasuredModel(model, agent=None, provider_hint="openai",
+        context_policy=SimpleNamespace(prepare=prepare))
+    monkeypatch.setattr(review.admission, "reserve", lambda *a, **kw: "compact-attempt")
+    monkeypatch.setattr(review.admission, "reconcile", lambda *a, **kw: settlements.append(kw["actual"]))
+    monkeypatch.setattr(review, "remaining_seconds", lambda _: 30)
+    budget = review.ExecutionBudget(HistoryScope("owner", "11111111-1111-1111-1111-111111111111", "session"), "episode", "initial_tokens", False)
+    try:
+        with review.budget_scope(budget), pytest.raises(InternalServerError):
+            await measured._prepare_context("policy", "paper", ModelSettings(), [], None, [], None, None, None)
+        assert len(calls) == 1
+        assert settlements == [None]
+        assert client.max_retries > 0  # The shared client's configuration stays intact.
+        assert published[-1]["provider_usage"]["status"] == "not_reported"
+    finally:
+        await client.close()
