@@ -2107,6 +2107,10 @@ def decide_candidate(
             ),
         )
 
+    from .record_retirement_service import require_active_candidate_for_write
+    require_active_candidate_for_write(db, candidate)
+    db.refresh(session, attribute_names=["candidates"])
+
     now = datetime.now(timezone.utc)
     previous_candidate_status = candidate.status
     previous_session_status = session.status
@@ -2353,7 +2357,8 @@ def _next_pending_candidate_id(
     for offset in range(1, candidate_count):
         next_index = (current_index + offset) % candidate_count
         candidate_row = ordered_candidates[next_index]
-        if candidate_row.status == CurationCandidateStatus.PENDING:
+        if (candidate_row.status == CurationCandidateStatus.PENDING
+                and not candidate_row.candidate_metadata.get("record_retired", False)):
             return candidate_row.id
 
     return None

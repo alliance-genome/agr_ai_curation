@@ -10,7 +10,8 @@ def records(db, artifact_id):
             ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target")
             .order_by(ValidationFact.sequence)):
         original = store._content(db, target)
-        if "object_ref" not in original:
+        if ("object_ref" not in original
+                or original.get("origin", {}).get("kind") == "validator_contribution"):
             continue
         state = store._current(db, artifact_id, target.id)
         result.append({"target_id": target.id, "object_id": original["object_ref"],

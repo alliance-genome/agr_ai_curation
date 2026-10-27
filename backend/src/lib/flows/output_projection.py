@@ -2981,13 +2981,13 @@ def validate_projection_plan(
 
     errors: list[str] = []
     warnings: list[str] = list(bundle.warnings)
+    if plan.selection_mode == "selected_fields":
+        from src.lib.flows.selected_export import selected_export_errors
+        errors.extend(selected_export_errors(bundle, plan))
     if _retired_source_snapshot(bundle, plan):
         if len({column.key for column in plan.columns}) != len(plan.columns):
             errors.append("Projection column keys must be unique")
         return errors, warnings, list(plan.columns)
-    if plan.selection_mode == "selected_fields":
-        from src.lib.flows.selected_export import selected_export_errors
-        errors.extend(selected_export_errors(bundle, plan))
     all_rows = bundle.rows_for_source(plan.row_source)
     rows = _rows_for_plan(bundle, plan)
     if plan.format == "tsv" and plan.row_source == "artifact":
@@ -3896,6 +3896,13 @@ def finalize_output_projection(
             counts is not None and counts["active"] == 0 and counts["retired"] > 0
             for counts in verified_counts))
     if all_retired:
+        if plan.selection_mode == "selected_fields":
+            from src.lib.flows.selected_export import selected_export_errors
+            errors = selected_export_errors(bundle, plan)
+            if errors:
+                raise ValueError("; ".join(errors))
+        if len({column.key for column in plan.columns}) != len(plan.columns):
+            raise ValueError("Projection column keys must be unique")
         requested_nodes = {source.node_id for source in plan.selected_sources}
         if (not requested_nodes.issubset({artifact.node_id for artifact in selected_artifacts})
                 or not set(plan.source_keys).issubset({artifact.source_key for artifact in selected_artifacts})

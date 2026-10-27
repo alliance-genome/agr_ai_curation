@@ -204,6 +204,14 @@ async def test_workspace_history_survives_retirement_and_restore(planned, opened
         if opened_before:
             candidate = db.scalar(select(CurationCandidate).where(CurationCandidate.session_id == sid))
             assert candidate.candidate_metadata["record_retired"]
+            from fastapi import HTTPException
+            from src.lib.curation_workspace.session_mutation_service import decide_candidate
+            from src.schemas.curation_workspace import CurationCandidateDecisionRequest
+            with pytest.raises(HTTPException) as retired_error:
+                decide_candidate(db, candidate.id,
+                    CurationCandidateDecisionRequest(session_id=str(sid), candidate_id=str(candidate.id), action="accept"),
+                    {"sub": item.scope.owner_id})
+            assert retired_error.value.status_code == 409
             assert db.get(CurationReviewSession, sid).total_candidates == 0
     result = restore(item.plan.envelope.envelope_id, owner_id=item.scope.owner_id, groups=(),
         request=WorkspaceRecordRestoreRequest(request_id=uuid4(), target_id=UUID(target),
@@ -478,3 +486,64 @@ async def test_retirement_changed_surviving_input_reaches_validator_with_history
         selection_id=result["decision_id"], target_ids=[target], instructions="Recheck using changed context")
     assert outcome["state"] == "completed"
     assert contexts[0]["context"]["specialist_context"]["supervisor_request"]["instructions"] == "Recheck using changed context"
+
+
+@pytest.mark.asyncio
+async def test_historical_validator_generated_objects_do_not_inflate_retirement_counts(planned):
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    from src.lib.validation_history.record_lifecycle import counts
+    item = planned
+    context, ref, _ = proposal(item)
+    with store.SessionLocal.begin() as db:
+        store._append(db, item.aid, operation_id="old-derived-object", kind="target", body={
+            "object_ref": "historical-derived", "payload": {"value": "old"},
+            "origin": {"kind": "validator_contribution", "completion_id": "historical-completion"}})
+        assert counts(db, item.aid, [])["active"] == 1
+        digest = selections.source_state_digest(db, item.aid)
+    result = await item.adapter.select_source(context, checkpoint_provider(item), operation_id="retire-last-original",
+        contribution_ref=ref, retirement_decision="approve", expected_source_sha=digest, reason="Outside task")
+    assert result["publication"]["ready"]
+    assert checkpoint_provider(item)().envelope.metadata["record_counts"] == {"active": 0, "retired": 1, "pending": 0}
+
+
+@pytest.mark.asyncio
+async def test_curator_acceptance_serializes_before_concurrent_retirement(planned):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from uuid import UUID
+    from datetime import datetime, timezone
+    from src.lib.curation_workspace.models import CurationReviewSession, CurationCandidate, DomainEnvelopeModel, CurationDraft
+    from src.lib.curation_workspace.session_mutation_service import decide_candidate
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
+    from src.schemas.curation_workspace import CurationCandidateDecisionRequest, CurationCandidateSource
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    item = planned
+    context, ref, target = proposal(item)
+    checkpoint = checkpoint_provider(item)
+    with store.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, checkpoint())
+        session = CurationReviewSession(adapter_key="fixture", document_id=UUID(item.scope.document_id), created_by_id=item.scope.owner_id, prepared_at=datetime.now(timezone.utc))
+        db.add(session)
+        db.flush()
+        row = db.get(DomainEnvelopeModel, item.plan.envelope.envelope_id)
+        row.session_id = session.id
+        candidate = CurationCandidate(session_id=session.id, adapter_key="fixture", source=CurationCandidateSource.EXTRACTED,
+            envelope_id=row.envelope_id, object_id="one", envelope_revision=row.revision)
+        db.add(candidate)
+        db.flush()
+        db.add(CurationDraft(candidate_id=candidate.id, adapter_key="fixture", fields=[]))
+        db.flush()
+        sid, cid = session.id, candidate.id
+        digest = selections.source_state_digest(db, item.aid)
+    arguments = dict(operation_id="racing-retirement", contribution_ref=ref,
+        retirement_decision="approve", expected_source_sha=digest, reason="Outside task")
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with store.SessionLocal.begin() as db:
+            decide_candidate(db, cid, CurationCandidateDecisionRequest(session_id=str(sid), candidate_id=str(cid),
+                action="accept", advance_queue=False), {"sub": item.scope.owner_id})
+            future = executor.submit(item.adapter._select_source, context, checkpoint, arguments)
+            with pytest.raises(TimeoutError):
+                future.result(timeout=0.1)  # Curator transaction still owns the shared artifact lock.
+        with pytest.raises(store.HistoryConflict, match="Curator row decision"):
+            future.result(timeout=10)
+    with store.SessionLocal() as db:
+        assert store._current(db, item.aid, target)["active"]

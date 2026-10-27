@@ -97,3 +97,19 @@ def materialize_restored_candidate(db, envelope, revision, target_id, *, groups)
     prepared = _prepared_candidate_input_from_review_row(review, adapter_key=session.adapter_key,
         prep_extraction_result_id=None, prep_output=None, candidate_index=max(orders, default=-1) + 1)
     _persist_prepared_candidates(db, session, [prepared], prepared_at=datetime.now(timezone.utc))
+
+
+def require_active_candidate_for_write(db, candidate):
+    """Serialize curator cache mutations with lifecycle publication, then re-read."""
+    from fastapi import HTTPException
+    from src.lib.domain_envelopes.persistence import lock_projection_artifact
+    if candidate.envelope_id is not None:
+        row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+        if row is None:
+            raise HTTPException(status_code=409, detail="Candidate envelope is unavailable")
+        history = row.envelope_json.get("metadata", {}).get("validation_history")
+        if history is not None:
+            lock_projection_artifact(db, history["artifact_id"])
+            db.refresh(candidate)
+    if candidate.candidate_metadata.get("record_retired", False):
+        raise HTTPException(status_code=409, detail="This record is retired. Restore it from history before editing or validating.")

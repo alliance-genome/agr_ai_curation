@@ -92,8 +92,8 @@ def _load_candidate_for_write(
                 f"{normalized_session_id}"
             ),
         )
-    if candidate.candidate_metadata.get("record_retired", False):
-        raise HTTPException(status_code=409, detail="This record is retired. Restore it from history before editing or validating.")
+    from .record_retirement_service import require_active_candidate_for_write
+    require_active_candidate_for_write(db, candidate)
     if candidate.draft is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
