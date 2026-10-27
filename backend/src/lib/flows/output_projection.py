@@ -2970,7 +2970,8 @@ def _retired_source_snapshot(bundle, plan):
         and ids.issubset({item.extraction_result_id for item in artifacts})
         and all(item.is_canonical_curation_data and item.selected_projection is not None
                 and item.record_counts is not None and item.record_counts["active"] == 0
-                and item.record_counts["retired"] > 0 for item in artifacts))
+                and item.record_counts["retired"] > 0 and not item.rows_by_source.get("object", [])
+                for item in artifacts))
 
 
 def validate_projection_plan(
@@ -3879,6 +3880,7 @@ def finalize_output_projection(
             if not source_ids and not source_keys
             or artifact.extraction_result_id in source_ids or artifact.source_key in source_keys]
     verified_counts = []
+    verified_empty = []
     for artifact in selected_artifacts:
         if not artifact.is_canonical_curation_data:
             continue
@@ -3891,8 +3893,9 @@ def finalize_output_projection(
             artifact.selected_projection, finalized=True,
         )
         verified_counts.append(verified_envelope.metadata.get("record_counts"))
+        verified_empty.append(not verified_envelope.extracted_objects)
     all_retired = (len(verified_counts) == len(selected_artifacts)
-        and bool(verified_counts) and all(
+        and bool(verified_counts) and all(verified_empty) and all(
             counts is not None and counts["active"] == 0 and counts["retired"] > 0
             for counts in verified_counts))
     if all_retired:

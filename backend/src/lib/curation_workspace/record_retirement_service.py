@@ -110,6 +110,7 @@ def require_active_candidate_for_write(db, candidate):
         history = row.envelope_json.get("metadata", {}).get("validation_history")
         if history is not None:
             lock_projection_artifact(db, history["artifact_id"])
+            db.refresh(row)
             db.refresh(candidate)
     if candidate.candidate_metadata.get("record_retired", False):
         raise HTTPException(status_code=409, detail="This record is retired. Restore it from history before editing or validating.")

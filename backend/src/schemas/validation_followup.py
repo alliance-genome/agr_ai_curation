@@ -125,9 +125,6 @@ class TargetedFollowupSubmission(FollowupContract, Generic[EntryT]):
             raise ValueError("Each authorized entry requires one outcome")
         return self
 
-class TargetedFollowupResult(TargetedFollowupSubmission[FollowupEntryResult]):
-    """Structurally selectable entries, including explicit retirement proposals."""
-
 class ProposedSourceValueTransport(FollowupContract):
     """Provider wire format; arbitrary domain values are decoded only at ingress."""
 

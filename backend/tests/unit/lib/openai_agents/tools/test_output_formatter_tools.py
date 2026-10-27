@@ -206,7 +206,7 @@ def published_formatter_sources(monkeypatch):
         return bundle
     monkeypatch.setattr(sys.modules[__name__], "build_flow_output_artifact_bundle", published)
     monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
-                        lambda *args, **kwargs: (SimpleNamespace(metadata={}), {"ready": True}))
+                        lambda *args, **kwargs: (SimpleNamespace(metadata={}, extracted_objects=[]), {"ready": True}))
 
 
 def _bundle() -> FlowOutputArtifactBundle:
@@ -1466,7 +1466,7 @@ async def test_all_retired_source_saves_an_explicit_empty_file(monkeypatch):
             review_session_id="session", selected_projection={"fact_id": "publication"}, record_counts=counts,
             rows_by_source={"object": []})])
     monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
-                        lambda *args, **kwargs: (SimpleNamespace(metadata={"record_counts": counts}), {"ready": True}))
+                        lambda *args, **kwargs: (SimpleNamespace(metadata={"record_counts": counts}, extracted_objects=[]), {"ready": True}))
     saved = []
     async def save(output_format, projection, filename_hint, formatter_agent_id):
         saved.append(projection)

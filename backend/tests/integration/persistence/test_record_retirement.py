@@ -547,3 +547,71 @@ async def test_curator_acceptance_serializes_before_concurrent_retirement(planne
             future.result(timeout=10)
     with store.SessionLocal() as db:
         assert store._current(db, item.aid, target)["active"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["three"], indirect=True)
+async def test_decision_refreshes_sibling_retired_while_workspace_was_loaded(planned, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from datetime import datetime, timezone
+    from uuid import UUID
+    from src.lib.curation_workspace import record_retirement_service as service
+    from src.lib.curation_workspace.models import CurationReviewSession, CurationCandidate, CurationDraft, DomainEnvelopeModel
+    from src.lib.curation_workspace.session_mutation_service import decide_candidate
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+    from src.schemas.curation_workspace import CurationCandidateDecisionRequest, CurationCandidateSource
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    item = planned
+    context, ref, _ = proposal(item)
+    checkpoint = checkpoint_provider(item)
+    monkeypatch.setattr("src.lib.domain_packs.materialization._registered_materializer_for",
+        lambda _: DomainPackMetadataReviewRowMaterializer(item.pack.metadata))
+    with store.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, checkpoint())
+        session = CurationReviewSession(adapter_key="fixture", document_id=UUID(item.scope.document_id),
+            created_by_id=item.scope.owner_id, prepared_at=datetime.now(timezone.utc))
+        db.add(session)
+        db.flush()
+        row = db.get(DomainEnvelopeModel, item.plan.envelope.envelope_id)
+        row.session_id = session.id
+        ids = []
+        for order, name in enumerate("AB"):
+            candidate = CurationCandidate(session_id=session.id, adapter_key="fixture", source=CurationCandidateSource.EXTRACTED,
+                envelope_id=row.envelope_id, object_id=name, order=order, envelope_revision=row.revision)
+            db.add(candidate)
+            db.flush()
+            db.add(CurationDraft(candidate_id=candidate.id, adapter_key="fixture", fields=[]))
+            ids.append(candidate.id)
+        sid = session.id
+        digest = selections.source_state_digest(db, item.aid)
+    from dataclasses import replace
+    original_checkpoint = checkpoint
+    def checkpoint():
+        return replace(original_checkpoint(), session_id=sid)
+    loaded, retired = Event(), Event()
+    original_guard = service.require_active_candidate_for_write
+    def guard(db, candidate):
+        loaded.set()
+        assert retired.wait(10)
+        return original_guard(db, candidate)
+    monkeypatch.setattr(service, "require_active_candidate_for_write", guard)
+    def accept_sibling():
+        with store.SessionLocal.begin() as db:
+            decide_candidate(db, ids[1], CurationCandidateDecisionRequest(session_id=str(sid), candidate_id=str(ids[1]),
+                action="accept", advance_queue=True), {"sub": item.scope.owner_id})
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(accept_sibling)
+        try:
+            assert loaded.wait(10)
+            await item.adapter.select_source(context, checkpoint, operation_id="retire-loaded-sibling",
+                contribution_ref=ref, retirement_decision="approve", expected_source_sha=digest, reason="Outside task")
+        finally:
+            retired.set()
+        future.result(timeout=10)
+    with store.SessionLocal() as db:
+        session = db.get(CurationReviewSession, sid)
+        assert session.total_candidates == 1
+        assert session.pending_candidates == 0
+        assert session.current_candidate_id != ids[0]

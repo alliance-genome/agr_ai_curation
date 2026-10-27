@@ -2109,7 +2109,9 @@ def decide_candidate(
 
     from .record_retirement_service import require_active_candidate_for_write
     require_active_candidate_for_write(db, candidate)
-    db.refresh(session, attribute_names=["candidates"])
+    db.refresh(session)
+    db.scalars(select(CurationCandidate).where(CurationCandidate.session_id == session.id)
+        .execution_options(populate_existing=True)).all()
 
     now = datetime.now(timezone.utc)
     previous_candidate_status = candidate.status
