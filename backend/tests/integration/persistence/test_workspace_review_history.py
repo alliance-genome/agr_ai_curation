@@ -1049,6 +1049,8 @@ def test_new_round_links_last_admitted_review_without_publication(
     scope, scenario, candidate, monkeypatch, publication_pointer
 ):
     """A zero-decision round is history even when no envelope was published."""
+    # Exercise an explicitly capped old round; new scopes are uncapped by default.
+    monkeypatch.setenv("VALIDATION_REVIEW_DEADLINE_SECONDS", "1800")
     from copy import deepcopy
     from src.lib.validation_review import validator_adapter
     from src.models.sql.validation_review import ValidationReviewEpisode
