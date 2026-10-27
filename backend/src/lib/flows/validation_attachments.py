@@ -479,14 +479,10 @@ def _resolved_validation_groups(
     groups: list[FlowValidationAttachmentGroup] = []
 
     for selection in selections:
-        if selection.state != "active":
+        if selection.state != "active" or not selection.validator_binding_id:
             continue
 
-        sidecar_group = (
-            sidecar_by_binding_id.get(selection.validator_binding_id)
-            if selection.validator_binding_id
-            else None
-        )
+        sidecar_group = sidecar_by_binding_id.get(selection.validator_binding_id)
         if sidecar_group is not None and not selection.enabled:
             raise FlowValidationAttachmentError(
                 "validation attachment binding "

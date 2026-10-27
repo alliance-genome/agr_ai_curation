@@ -45,6 +45,20 @@ def planned(scope, tmp_path, monkeypatch, request):
     fixture_shape = fixture_options.get("shape") if isinstance(fixture_options, dict) else fixture_options
     admit_initial = fixture_options.get("admitted", True) if isinstance(fixture_options, dict) else True
     pack = _multivalued_dispatch_pack(tmp_path)
+    if fixture_shape == "nested-selector":
+        from copy import deepcopy
+        raw = deepcopy(pack.metadata.metadata)
+        raw["validator_bindings"]["active"][0]["custom_profile_reuse"] = {
+            "enabled": True,
+            "inputs": {"evidence": {
+                "value_schema": {"kind": "string"},
+                "context_selector": {"source": "envelope_metadata", "path": "evidence_note"},
+            }},
+            "outputs": {"identifier": {"value_schema": {"kind": "string"}, "result_path": "curie"}},
+            "policy": {"unresolved_default": "informational", "unresolved_allowed": ["informational"],
+                       "readiness_default": False, "readiness_allowed": [False]},
+        }
+        pack = replace(pack, metadata=pack.metadata.model_copy(update={"metadata": raw}))
     if fixture_shape == "dependent":
         from copy import deepcopy
 
@@ -158,6 +172,7 @@ def planned(scope, tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("planned", [None, "nested-selector"], indirect=True)
 @pytest.mark.parametrize("specialized", [False, True], ids=["base", "gene-result"])
 async def test_real_adapter_retains_candidates_and_replay_never_calls_provider_again(
     planned, monkeypatch, specialized
