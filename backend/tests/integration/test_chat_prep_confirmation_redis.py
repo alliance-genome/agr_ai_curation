@@ -14,6 +14,7 @@ import pytest
 from redis.asyncio import Redis
 
 from src.lib.curation_workspace import chat_prep_confirmation as prep
+from src.lib.curation_workspace.curation_prep_service import CurationPrepScopeSummary
 from src.schemas.curation_workspace import CurationExtractionResultRecord, CurationExtractionSourceKind
 
 
@@ -31,7 +32,7 @@ async def test_two_workers_cannot_consume_the_same_scope_confirmation(monkeypatc
     monkeypatch.setattr(prep, "get_redis", AsyncMock(return_value=redis))
     monkeypatch.setattr(prep, "list_extraction_results", lambda **kwargs: [record])
     monkeypatch.setattr(prep, "summarize_curation_prep_scope", lambda selected:
-                        SimpleNamespace(candidate_count=4, adapter_keys=["allele"]))
+                        CurationPrepScopeSummary(candidate_count=4, adapter_keys=["allele"]))
     monkeypatch.setattr(prep, "latest_assistant_trace_for_session", lambda **kwargs: "preview")
     run = AsyncMock(return_value=SimpleNamespace(review_row_count=4,
                     run_metadata=SimpleNamespace(warnings=[], processing_notes=[])))
