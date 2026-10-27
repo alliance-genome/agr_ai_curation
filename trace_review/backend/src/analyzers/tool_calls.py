@@ -848,6 +848,8 @@ class ToolCallAnalyzer:
             )
             tc["domain_envelope"] = DomainEnvelopeTraceAnalyzer.compact(domain_summary)
 
+        from .extraction_followup import annotate
+        annotate(tool_calls)
         annotate_compact_validator_calls(tool_calls)
 
         # Detect duplicates

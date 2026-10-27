@@ -765,3 +765,22 @@ async def test_run_chat_curation_prep_allows_explicit_adapter_subset(monkeypatch
 
     assert result.adapter_keys == ["gene"]
     assert captured["scope_confirmation"].adapter_keys == ["gene"]
+
+
+@pytest.mark.asyncio
+async def test_all_retired_chat_can_preview_and_prepare_history(monkeypatch):
+    from unittest.mock import AsyncMock
+    from src.lib.curation_workspace.curation_prep_service import CurationPrepScopeSummary
+    monkeypatch.setattr(module, "list_extraction_results", lambda **kw: [_make_extraction_result()])
+    monkeypatch.setattr(module, "summarize_curation_prep_scope", lambda *a, **kw:
+        CurationPrepScopeSummary(candidate_count=0, retired_record_count=2, adapter_keys=["gene"]))
+    preview = module.build_chat_curation_prep_preview(session_id="session-1", user_id="user-1", db=object())
+    assert preview.ready
+    assert preview.preparable_candidate_count == 0
+    assert "retired" in preview.summary_text
+    run = AsyncMock(return_value=_make_prep_output(candidate_count=0))
+    monkeypatch.setattr(module, "run_curation_prep", run)
+    response = await module.run_chat_curation_prep(CurationPrepChatRunRequest(session_id="session-1"),
+        user_id="user-1", db=object())
+    assert response.candidate_count == 0
+    run.assert_awaited_once()

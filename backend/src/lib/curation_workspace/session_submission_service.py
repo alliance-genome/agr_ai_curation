@@ -1276,6 +1276,8 @@ def _candidate_submission_readiness(
 
     blocking_reasons: list[str] = []
     warnings: list[str] = []
+    if candidate.candidate_metadata.get("record_retired", False):
+        blocking_reasons.append("Record is retired and excluded from current results.")
 
     receipt = candidate.execution_receipt
     if (receipt is not None
@@ -2526,7 +2528,10 @@ def submission_preview(
             requested_target_key=request.target_key,
         )
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
-    target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
+    target_candidate_ids = request.candidate_ids or [
+        candidate_id for candidate_id, candidate in candidate_map.items()
+        if not candidate.candidate_metadata.get("record_retired", False)
+    ]
     domain_context = _build_domain_envelope_submission_context(
         db=db, user_id=actor_user_id(actor_claims),
         candidates=candidate_map,
@@ -2643,7 +2648,10 @@ def execute_submission(
 
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
-    target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
+    target_candidate_ids = request.candidate_ids or [
+        candidate_id for candidate_id, candidate in candidate_map.items()
+        if not candidate.candidate_metadata.get("record_retired", False)
+    ]
     domain_context = _build_domain_envelope_submission_context(
         db=db, user_id=actor_user_id(actor_claims),
         candidates=candidate_map,

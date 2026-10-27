@@ -628,6 +628,8 @@ def _projection_plan_from_tool_payload(
 
 
 def _is_intentional_empty_projection(projection: FlowOutputProjectionResult) -> bool:
+    if projection.empty_reason == "all_records_retired":
+        return True
     accounting = projection.export_accounting
     return bool(accounting and accounting.candidate_row_count > 0
                 and accounting.rows_removed_by_filters > 0)

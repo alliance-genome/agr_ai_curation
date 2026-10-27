@@ -88,3 +88,14 @@ export function decideValidation(candidateId: string, episodeId: string, choices
 export function fetchActiveReviewOperations(sessionId: string, signal?: AbortSignal) {
   return read<ReviewOperation[]>(`/api/curation-workspace/sessions/${encodeURIComponent(sessionId)}/review-operations`, signal)
 }
+
+
+export function restoreRecord(envelopeId: string, targetId: string, version: number, reason: string, requestId: string) {
+  return command<unknown>(`envelopes/${encodeURIComponent(envelopeId)}/restore-record`, {
+    target_id: targetId, expected_version: version, reason, request_id: requestId,
+  })
+}
+export function fetchRecordHistory(envelopeId: string, reference: { fact_id: string; sha256: string }, offset: number) {
+  const query = new URLSearchParams({ sha256: reference.sha256, offset: String(offset) })
+  return read<HistoryDetail>(`/api/curation-workspace/envelopes/${encodeURIComponent(envelopeId)}/record-history/${encodeURIComponent(reference.fact_id)}?${query}`)
+}

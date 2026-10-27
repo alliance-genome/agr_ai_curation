@@ -61,7 +61,11 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
     if not descendants.intersection(allowed_units(episode_body)):
         raise store.HistoryAccessError("Source contribution is outside the requested record scope")
     body = store._content(db, contribution)
+    if body.get("selectable") is False:
+        raise store.HistoryConflict("Contribution has an unresolved structural failure")
     proposal = FollowupEntryResult.model_validate(body["proposal"])
+    if proposal.outcome == "propose_retirement":
+        raise store.HistoryConflict("Use the explicit record retirement decision tool")
     offered = {item.field_path: item for item in proposal.proposed_values}
     if (not field_paths and not evidence_ids or len(field_paths) != len(set(field_paths))
             or len(evidence_ids) != len(set(evidence_ids)) or not set(field_paths).issubset(offered)):

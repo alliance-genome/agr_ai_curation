@@ -61,7 +61,7 @@ def context(monkeypatch):
     monkeypatch.setattr(prep, "list_extraction_results", load)
     monkeypatch.setattr(prep, "latest_assistant_trace_for_session", lambda **kwargs: "preview-turn")
     monkeypatch.setattr(prep, "summarize_curation_prep_scope", lambda selected: SimpleNamespace(
-        candidate_count=sum(r.candidate_count for r in selected), adapter_keys=["allele"],
+        candidate_count=sum(r.candidate_count for r in selected), retired_record_count=0, adapter_keys=["allele"],
     ))
     run = AsyncMock(return_value=SimpleNamespace(
         review_row_count=14, run_metadata=SimpleNamespace(warnings=[], processing_notes=[]),
@@ -256,3 +256,21 @@ async def test_expected_confirmation_rejections_remain_quiet(context, monkeypatc
     context.run.assert_not_called()
     report.assert_not_called()
     assert not caplog.records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retired", [0, 14])
+async def test_zero_active_confirmation_requires_canonical_retirement(context, monkeypatch, retired):
+    monkeypatch.setattr(prep, "summarize_curation_prep_scope", lambda selected: SimpleNamespace(
+        candidate_count=0, retired_record_count=retired, adapter_keys=["allele"] if retired else []))
+    preview = await call(expected_candidate_count=0)
+    if not retired:
+        assert preview["status"] == "scope_confirmation_required"
+        context.run.assert_not_called()
+        return
+    assert preview["status"] == "confirmation_required"
+    context.run.return_value.review_row_count = 0
+    result = await call("confirm", expected_candidate_count=0, authoritative_user_request="Yes")
+    assert result["status"] == "prepared"
+    assert result["candidate_count"] == 0
+    context.run.assert_awaited_once()

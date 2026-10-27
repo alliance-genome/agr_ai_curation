@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from .tool_calls import ToolCallAnalyzer
+from .extraction_followup import FACTS as FOLLOWUP_FACTS
 
 ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v1"
 EVENT_SCHEMA_VERSION = "extraction_trace_event.v1"
@@ -1029,6 +1030,11 @@ class ExtractionTimelineAnalyzer:
                 "event_count": sum(count for kind, count in counts.items() if kind.startswith("validation_review.")),
                 "events": [item for item in timeline if str(item.get("event_type", "")).startswith("validation_review.")],
                 "note": "Committed review operations only. Exact bodies are pinned by artifact/fact ID and SHA; scientific decisions are not inferred from execution completion.",
+            },
+            "extraction_followup": {
+                "events": [item for item in timeline if item.get("event_type") in
+                           {"validation_review." + kind for kind in FOLLOWUP_FACTS}],
+                "note": "Extractor proposals and supervisor/curator dispositions are separate immutable facts; proposals do not change current results.",
             },
             "workspace_validation_review": {
                 "events": [item for item in timeline if str(item.get("event_type", "")) in {

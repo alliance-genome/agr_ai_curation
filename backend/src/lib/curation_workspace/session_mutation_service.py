@@ -2038,7 +2038,8 @@ def delete_candidate(
     session.last_worked_at = now
     session.updated_at = now
     session.session_version += 1
-    _apply_candidate_progress_counts(session, remaining_candidates)
+    _apply_candidate_progress_counts(session, [item for item in remaining_candidates
+        if not item.candidate_metadata.get("record_retired", False)])
 
     action_log_row = SessionActionLogModel(
         session_id=session.id,
@@ -2141,7 +2142,8 @@ def decide_candidate(
     candidate.last_reviewed_at = now
     candidate.updated_at = now
 
-    _apply_candidate_progress_counts(session, session.candidates)
+    _apply_candidate_progress_counts(session, [item for item in session.candidates
+        if not item.candidate_metadata.get("record_retired", False)])
 
     action_log_row = SessionActionLogModel(
         session_id=session.id,

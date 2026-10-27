@@ -108,3 +108,31 @@ def test_actual_phase_responses_schema_is_typed_and_old_any_fails(phase_trace):
     old_wire = Converter.get_response_format(AgentOutputSchema(TargetedFollowupResult))
     with pytest.raises(AssertionError, match="Untyped schema node"):
         assert_closed_typed_schema(old_wire["format"]["schema"])
+
+
+def test_whole_record_retirement_is_distinct_from_field_replacement():
+    from pydantic import ValidationError
+    from src.schemas.validation_followup import FollowupEntryResult
+    payload = transport_payload('[]')
+    entry = payload["entries"][0]
+    entry.update(outcome="propose_retirement", proposed_values=[])
+    decoded = TargetedFollowupTransport.model_validate(payload).decode()
+    assert FollowupEntryResult.model_validate(decoded.entries[0].model_dump()).outcome == "propose_retirement"
+    entry["proposed_values"] = transport_payload('[]')["entries"][0]["proposed_values"]
+    decoded = TargetedFollowupTransport.model_validate(payload).decode()
+    with pytest.raises(ValidationError, match="no field replacements"):
+        FollowupEntryResult.model_validate(decoded.entries[0].model_dump())
+
+
+def test_incident_shape_is_retained_for_ingress_but_never_valid_selection():
+    from pydantic import ValidationError
+    from src.schemas.validation_followup import FollowupEntryResult
+    payload = transport_payload('[]')
+    proposed = payload["entries"][0]["proposed_values"][0]
+    proposed["field_path"] = "entries"
+    proposed["collection_mappings"] = [{"collection_path": "entries", "source_collection_id": None,
+        "items": [], "retired_item_ids": ["entry"], "retirement_reason": "Outside task scope"}]
+    decoded = TargetedFollowupTransport.model_validate(payload).decode()
+    assert decoded.entries[0].assessment == payload["entries"][0]["assessment"]
+    with pytest.raises(ValidationError, match="new collection cannot refer to old items"):
+        FollowupEntryResult.model_validate(decoded.entries[0].model_dump())

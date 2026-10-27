@@ -4193,6 +4193,8 @@ def test_waive_validation_finding_accepts_projected_id_for_idless_finding(
     tmp_path,
     monkeypatch,
 ):
+    # This test supplies a synthetic publication and has no durable ledger.
+    monkeypatch.setattr("src.lib.curation_workspace.record_retirement_service.listing", lambda *args: [])
     seeded = _create_domain_envelope_submission_session(
         db_session,
         tmp_path=tmp_path,

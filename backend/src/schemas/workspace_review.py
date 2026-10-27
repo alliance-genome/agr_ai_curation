@@ -17,3 +17,11 @@ class WorkspaceReviewDecisionRequest(BaseModel):
     request_id: UUID
     episode_id: UUID
     entries: list[ReviewEntry]
+
+
+class WorkspaceRecordRestoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    target_id: UUID
+    expected_version: int = Field(ge=0)
+    reason: str = Field(min_length=1)

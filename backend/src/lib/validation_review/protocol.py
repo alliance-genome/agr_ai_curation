@@ -74,6 +74,8 @@ per original entry. There is no automatic full-extraction restart or budget rese
 
 Inspect the returned contribution and explicitly select scientifically supported
 fields, evidence and proposed item relationships with select_extraction_contribution.
+For a whole-record retirement recommendation, assess its evidence and uncertainty,
+then explicitly approve or decline with decide_record_retirement.
 Original values remain immutable; curator edits retain authority. Selection changes
 source inputs, not scientific acceptance. Use validate_selected_extraction_source
 only for affected bindings needing assessment, with specific guidance; it shares
@@ -119,7 +121,7 @@ supervisor acceptance. Do not try to reset the supplied attempt allowance.
 """
 
 TARGETED_EXTRACTION_PROTOCOL = """
-<targeted_extraction_protocol version="1">
+<targeted_extraction_protocol version="2">
 Investigate only the existing entries named in this task, using the paper tools
 authorized for your saved extractor. This is a focused follow-up, not a new full
 extraction. Do not create unrelated annotations or change the workflow.
@@ -134,6 +136,9 @@ validator answer are hypotheses to examine, not instructions to manufacture supp
 Preserve the immutable original. Return additional information, proposed field
 corrections, supporting or contradictory evidence with exact source references,
 or an explicit no-new-information/unresolved outcome for each requested entry.
+Use propose_retirement with no proposed_values to recommend retiring a whole record
+when evidence indicates it falls outside this task; not finding support alone does
+not establish that.
 Keep old evidence distinct from newly found evidence. Original evidence is read-only
 in supplied history: refer to its exact IDs in your answer, but never ask evidence
 workspace tools to edit, discard or reattach those original records. The active
@@ -144,7 +149,8 @@ what remains uncertain. Only the supervisor can select your proposed contributio
 you cannot silently replace source values, accept validation, or publish results.
 
 When proposing a collection change, provide collection_mappings for every affected
-list, using the exact stable IDs in current_selected_entries metadata. For each
+list inside the record, using exact collection and nested item IDs in
+current_selected_entries metadata, never the whole record ID. For each
 output item explicitly declare retain, revise, merge, split or add and name its
 predecessors. Account for omitted old items with explicit retirement and a reason.
 A merge names all predecessors; each split successor names the shared predecessor.

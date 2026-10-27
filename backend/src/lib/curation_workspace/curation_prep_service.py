@@ -79,6 +79,7 @@ class CurationPrepScopeSummary:
     """Evidence-backed prep availability for a requested extraction scope."""
 
     candidate_count: int = 0
+    retired_record_count: int = 0
     adapter_keys: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -299,6 +300,7 @@ def summarize_curation_prep_scope(
         return CurationPrepScopeSummary()
 
     total_candidate_count = 0
+    total_retired_count = 0
     preparable_adapter_keys: list[str] = []
     warnings: list[str] = []
 
@@ -324,12 +326,14 @@ def summarize_curation_prep_scope(
             for envelope_ref in materialization_result.envelope_refs
         )
         warnings.extend(materialization_result.warnings)
-        if candidate_count > 0:
+        if candidate_count > 0 or any(ref.retired_record_count for ref in materialization_result.envelope_refs):
             preparable_adapter_keys.append(adapter_key)
             total_candidate_count += candidate_count
+            total_retired_count += sum(ref.retired_record_count for ref in materialization_result.envelope_refs)
 
     return CurationPrepScopeSummary(
         candidate_count=total_candidate_count,
+        retired_record_count=total_retired_count,
         adapter_keys=preparable_adapter_keys,
         warnings=_dedupe_strings(warnings),
     )
@@ -370,7 +374,7 @@ def _materialize_extraction_results_to_envelope_refs(
                 f"materialized as a domain envelope review source: {exc}"
             )
             continue
-        if envelope_ref.review_row_count <= 0:
+        if envelope_ref.review_row_count <= 0 and envelope_ref.retired_record_count == 0:
             skipped_unmappable += max(int(extraction_result.candidate_count), 1)
             warnings.append(
                 "Skipped extraction result "
@@ -421,7 +425,9 @@ def ensure_domain_envelope_materialization(
         selected = latest_publication_reference(scope, ref["artifact_id"])
         if selected is None:
             raise SelectionNotReady("Chat validation review is pending")
-        read_published_projection(scope, selected, finalized=True)
+        selected_envelope, _ = read_published_projection(scope, selected, finalized=True)
+        if not persist:
+            envelope = selected_envelope
     materializer = _review_row_materializer_for_extraction_result(
         extraction_result,
         domain_pack_id=envelope.domain_pack_id,
@@ -435,6 +441,7 @@ def ensure_domain_envelope_materialization(
             source_extraction_result_id=extraction_result.extraction_result_id,
             domain_pack_id=envelope.domain_pack_id,
             review_row_count=len(review_rows),
+            retired_record_count=envelope.metadata.get("record_counts", {}).get("retired", 0),
         )
 
     owns_session = db is None
@@ -494,6 +501,7 @@ def ensure_domain_envelope_materialization(
             source_extraction_result_id=extraction_result.extraction_result_id,
             domain_pack_id=persisted_envelope.domain_pack_id,
             review_row_count=len(review_rows),
+            retired_record_count=persisted_envelope.metadata.get("record_counts", {}).get("retired", 0),
         )
         if owns_session:
             session.commit()

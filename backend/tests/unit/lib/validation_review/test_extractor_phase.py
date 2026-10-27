@@ -116,3 +116,26 @@ def test_resumed_extractor_reconstructs_original_context_and_reauthorizes(monkey
     rebuilt = adapter.resolve_agent(receipt)
     assert extractor_phase.contract(rebuilt, max_turns=17) == pinned
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_old_contract_stops_before_admission_and_provider(monkeypatch):
+    from unittest.mock import Mock, AsyncMock
+    from src.lib.validation_review.extractor_adapter import ExtractorAdapter
+    from src.lib.validation_review.decisions import ReviewContext
+    from src.lib.validation_review.admission import ReviewStopped
+    from src.lib.validation_review import extraction_scheduling, extraction_execution
+
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"), "episode", "supervisor")
+    monkeypatch.setattr("src.lib.validation_history.store.read_baseline", lambda *a: {"provenance": {
+        "agent_key": "saved", "extractor_contract": {"followup_protocol": "previous protocol"}}})
+    checkpoint, schedule, execute = Mock(), Mock(), AsyncMock()
+    monkeypatch.setattr(extraction_scheduling, "request", schedule)
+    monkeypatch.setattr(extraction_execution, "execute", execute)
+    adapter = ExtractorAdapter(context, "artifact", authenticated_groups=(), checkpoint_provider=checkpoint)
+    with pytest.raises(ReviewStopped, match="fresh_extraction_required"):
+        await adapter.request(operation_id="followup", parent_decision_id="decision",
+                              entry_ids=["record"], instructions="Look again")
+    checkpoint.assert_not_called()
+    schedule.assert_not_called()
+    execute.assert_not_awaited()

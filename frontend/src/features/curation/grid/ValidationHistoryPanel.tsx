@@ -45,6 +45,7 @@ const eventLabels: Record<string, string> = {
   curator_value: 'Curator edit', curator_revalidation_intent: 'Replacement authorized by curator',
   workspace_revalidation_request: 'Curator requested another round',
   extraction_followup_request: 'More evidence requested', extraction_contribution: 'Extractor follow-up',
+  record_retirement_decision: 'Record retirement decision',
   extraction_source_selection: 'Follow-up evidence selected', curator_revalidation_release: 'Accepted answer applied',
 }
 

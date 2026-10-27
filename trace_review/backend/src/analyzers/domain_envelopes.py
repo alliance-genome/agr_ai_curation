@@ -130,6 +130,7 @@ class DomainEnvelopeTraceAnalyzer:
         """Return a small form suitable for trace metadata and summary cards."""
         summary_counts = dict(summary.get("summary") or {})
         return {
+            "followup_history": list(summary.get("followup_history") or []),
             "found": bool(summary.get("found")),
             "summary": summary_counts,
             "envelope_ids": list(summary.get("envelope_ids") or []),
@@ -163,6 +164,7 @@ class DomainEnvelopeTraceAnalyzer:
     @staticmethod
     def _empty_summary() -> dict[str, Any]:
         return {
+            "followup_history": [],
             "found": False,
             "summary": {},
             "envelope_ids": [],
@@ -224,6 +226,10 @@ class DomainEnvelopeTraceAnalyzer:
         payload: Mapping[str, Any],
         source_path: str,
     ) -> None:
+        from .extraction_followup import FACTS
+        if payload.get("kind") in FACTS and payload.get("fact_id") and payload.get("sha256"):
+            cls._add_detail(accumulator, "followup_history", (payload["fact_id"], payload["sha256"]),
+                {key: payload[key] for key in ("artifact_id", "fact_id", "sha256", "kind", "parent_id", "content") if key in payload})
         envelope_id = _as_string(payload.get("envelope_id"))
         object_id, pending_ref_id, object_type = cls._object_reference(payload)
         finding_id = _as_string(payload.get("finding_id"))
@@ -1102,6 +1108,7 @@ class DomainEnvelopeTraceAnalyzer:
         accumulator["found"] = any(
             accumulator[key]
             for key in (
+                "followup_history",
                 "envelope_ids",
                 "objects",
                 "validation_findings",

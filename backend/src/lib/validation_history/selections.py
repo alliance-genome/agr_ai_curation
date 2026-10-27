@@ -41,11 +41,13 @@ def effective_episode(db, episode):
         ValidationFact.parent_id == episode.id,
         ValidationFact.kind == "review_coverage_revision").order_by(ValidationFact.sequence.desc()).limit(1))
     if extension is not None:
-        revised = store._content(db, extension)["obligations"]
+        revision = store._content(db, extension)
+        revised = revision["obligations"]
         if body.get("review_target_ids") is not None:
             old = {item["target_id"] for item in body["obligations"]}
             current = {item["target_id"] for item in revised}
-            body["review_target_ids"] = sorted((set(body["review_target_ids"]) & current) | (current - old))
+            body["review_target_ids"] = revision.get("review_target_ids",
+                sorted((set(body["review_target_ids"]) & current) | (current - old)))
         body["obligations"] = revised
     return body
 
@@ -55,8 +57,14 @@ def revise_coverage_in_transaction(db, scope, artifact_id, *, episode_id, source
     from src.schemas.validation_history import ReviewObligation
     _lock_artifact(db, scope, artifact_id, write=True)
     episode = store._fact(db, artifact_id, episode_id, kind="review_episode")
-    selection = store._fact(db, artifact_id, source_selection_id, kind="extraction_source_selection")
-    current = effective_episode(db, episode)["obligations"]
+    selection = store._fact(db, artifact_id, source_selection_id)
+    if selection.kind not in {"extraction_source_selection", "record_retirement_decision", "record_restoration"}:
+        raise store.HistoryConflict("Coverage requires an authorized source decision")
+    if (selection.kind == "record_retirement_decision"
+            and store._content(db, selection)["identity"]["decision"] != "approve"):
+        raise store.HistoryConflict("Declining retirement cannot revise coverage")
+    effective = effective_episode(db, episode)
+    current = effective["obligations"]
     proposed = [ReviewObligation.model_validate(item).model_dump(mode="json") for item in obligations]
     if len({item["target_id"] for item in proposed}) != len(proposed):
         raise store.HistoryConflict("Revised coverage repeats a target")
@@ -73,9 +81,17 @@ def revise_coverage_in_transaction(db, scope, artifact_id, *, episode_id, source
         store._require_active_target(db, artifact_id, target.id)
         if item["mode"] == "validation" and store._content(db, target).get("binding_id") != item["binding_id"]:
             raise store.HistoryConflict("Revised obligation differs from its saved binding")
+    revision_scope = {}
+    if effective.get("review_target_ids") is not None:
+        old_ids = {item["target_id"] for item in current}
+        targets = (set(effective["review_target_ids"]) & new_ids) | (new_ids - old_ids)
+        if selection.kind == "record_restoration":
+            targets.update(item["target_id"] for item in proposed
+                if selection.target_id in store._target_lineage(db, artifact_id, item["target_id"]))
+        revision_scope["review_target_ids"] = sorted(targets)
     return store._append(db, artifact_id, operation_id="review-coverage:" + selection.id,
         kind="review_coverage_revision", parent_id=episode.id,
-        body={"source_selection_id": selection.id, "obligations": proposed}).id
+        body={"source_selection_id": selection.id, "obligations": proposed, **revision_scope}).id
 
 
 def start_episode_in_transaction(db, scope, artifact_id, *, episode):

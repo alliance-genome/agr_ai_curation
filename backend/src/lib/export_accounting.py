@@ -123,6 +123,7 @@ def projection_summary(result: Any) -> dict[str, Any]:
     column_limit = get_output_tool_catalog_page_size()
     return {
         "format": result.format,
+        "empty_reason": result.empty_reason,
         "row_source": result.row_source,
         "columns": headers[:column_limit],
         "column_count": len(headers),

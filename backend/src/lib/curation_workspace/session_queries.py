@@ -650,8 +650,12 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
 
     session = sessions[0]
     document_map, user_map = _session_context_maps(db, [session])
-    candidate_payloads = [_candidate_payload(candidate) for candidate in session.candidates]
+    candidate_payloads = [_candidate_payload(candidate) for candidate in session.candidates
+                          if not candidate.candidate_metadata.get("record_retired", False)]
+    from .record_retirement_service import listing
+    retired = listing(db, session.id)
     workspace = CurationWorkspacePayload(
+        retired_records=retired,
         session=_session_detail(db, session, document_map, user_map),
         entity_tags=[
             _entity_tag_payload(candidate)

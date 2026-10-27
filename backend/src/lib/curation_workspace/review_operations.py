@@ -76,12 +76,13 @@ def submit(
         return response(previous)
     if not candidates:
         candidates = [
-            str(value)
+            str(value.id)
             for value in db.scalars(
-                select(CurationCandidate.id).where(
+                select(CurationCandidate).where(
                     CurationCandidate.session_id == UUID(session_id)
                 )
             )
+            if not value.candidate_metadata.get("record_retired", False)
         ]
     if not candidates:
         raise store.HistoryConflict("No records are available for revalidation")
@@ -134,6 +135,8 @@ def submit(
                 }
             )
             continue
+        if candidate.candidate_metadata.get("record_retired", False):
+            raise store.HistoryConflict("Restore retired records before revalidation")
         if str(candidate.session_id) != session_id:
             raise store.HistoryAccessError("Candidate belongs to another workspace")
         store._require_live_artifact(db, artifact_id)

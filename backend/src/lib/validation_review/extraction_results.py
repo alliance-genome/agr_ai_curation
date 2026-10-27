@@ -1,10 +1,11 @@
 """Retain extractor proposals without changing source or selected validator values."""
 from sqlalchemy import select
+from pydantic import ValidationError
 
 from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
 from src.lib.validation_history import store
 from src.models.sql.validation_review import ValidationReviewWork as Work
-from src.schemas.validation_followup import TargetedFollowupResult
+from src.schemas.validation_followup import TargetedFollowupSubmission, FollowupEntryResult
 from . import admission
 from .audit import append_fact
 from .specialist_context import reference
@@ -18,7 +19,8 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
     not authorize publication or another provider call. Exact duplicate delivery
     is idempotent; competing answers with the same invocation identity conflict.
     """
-    result = TargetedFollowupResult.model_validate(result)
+    result = TargetedFollowupSubmission.model_validate(
+        result.model_dump(mode="json") if hasattr(result, "model_dump") else result)
     with store.SessionLocal.begin() as db:
         row = db.get(Work, work_id)
         if row is None:
@@ -43,18 +45,32 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
         references = []
         for item in result.entries:
             source_entry = supplied["current_selected_entries"][item.entry_id]
-            relationships = {
-                value.field_path: validate_item_relationships(source_entry, value)
-                for value in item.proposed_values
-            }
+            relationships, evidence = {}, []
+            # A shape-valid but unusable entry remains auditable. Its siblings
+            # can still be reviewed; no correction call or scientific judgment
+            # is made by this structural boundary.
+            failure = None
+            validated = None
+            try:
+                validated = FollowupEntryResult.model_validate(item.model_dump(mode="json"))
+            except ValidationError:
+                failure = "invalid_proposal_structure"
+            if validated is not None:
+                try:
+                    relationships = {
+                        value.field_path: validate_item_relationships(source_entry, value)
+                        for value in validated.proposed_values
+                    }
+                except (store.HistoryConflict, store.HistoryAccessError):
+                    failure = "invalid_item_relationships"
             ids = set(item.evidence_record_ids)
             for value in item.proposed_values:
                 ids.update(value.evidence_record_ids)
-            evidence = []
             for identity in sorted(ids):
                 record, error = snapshot.resolve(identity)
                 if error:
-                    raise store.HistoryConflict("Follow-up evidence is " + error)
+                    failure = "invalid_evidence_reference"
+                    continue
                 evidence.append({"origin": "original" if identity in old_ids else "followup",
                                  "record": record})
             fact = append_fact(db, ep.artifact_id,
@@ -64,6 +80,7 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
                       "extractor_receipt": row.payload["receipt"],
                       "context_ref": row.payload["specialist_input"]["history"]["records"][0],
                       "proposal": item.model_dump(mode="json"), "evidence": evidence,
-                      "item_relationships": relationships})
+                      "item_relationships": relationships,
+                      "selectable": failure is None, "structural_failure": failure})
             references.append(reference(fact))
         return {"contributions": references}
