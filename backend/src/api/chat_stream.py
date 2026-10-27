@@ -551,7 +551,7 @@ async def chat_endpoint(
                 _, error_message = _persist_failure_notice(
                     session_id=session_id, user_id=user_id, turn_id=turn_id,
                     user_message=effective_user_message,
-                    message="The request ended before completion. You can restore it and try again later.",
+                    message="The request ended before completion. You can send the request again later.",
                     partial_response=full_response, trace_id=trace_id, document_id=document_id,
                     persisted_extraction_refs=persisted_extraction_refs,
                     flow_terminal_events=flow_terminal_events,
@@ -898,7 +898,7 @@ async def chat_stream_endpoint(
                     persisted_extraction_refs.append(persisted_ref)
 
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
-                    interrupted_message = "The request was stopped. You can restore it and try again later."
+                    interrupted_message = "The request was stopped. You can send the request again later."
                     logger.info(
                         "Chat stream cancelled for session %s",
                         current_session_id,
@@ -1302,7 +1302,7 @@ async def chat_stream_endpoint(
             terminal_type, incomplete_message = _persist_failure_notice(
                 session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
                 user_message=prepared_turn.effective_user_message,
-                message="The request ended before completion. You can restore it and try again later.",
+                message="The request ended before completion. You can send the request again later.",
                 partial_response=full_response, trace_id=trace_id, document_id=document_id,
                 persisted_extraction_refs=persisted_extraction_refs,
             )
@@ -1345,7 +1345,7 @@ async def chat_stream_endpoint(
             terminal_type, interruption_notice = _persist_failure_notice(
                 session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
                 user_message=prepared_turn.effective_user_message,
-                message="The connection was interrupted before the request finished. You can restore it and try again later.",
+                message="The connection was interrupted before the request finished. You can send the request again later.",
                 partial_response=full_response, trace_id=trace_id, document_id=document_id,
                 persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted",
             )
