@@ -13,9 +13,9 @@ class ReviewLimits:
     extraction_attempts_per_entry: int
     extra_per_run: int
     extra_per_batch: int
-    reviewer_turns: int
-    reviewer_tools: int
-    deadline_seconds: int
+    reviewer_turns: int | None
+    reviewer_tools: int | None
+    deadline_seconds: int | None
     warning_percent: int
     critical_percent: int
     instruction_chars: int
@@ -36,6 +36,6 @@ class ReviewLimits:
             raise ValueError("Budget cardinalities must be nonnegative")
         return {
             "extra_attempts": extras,
-            "reviewer_turns": episodes * self.reviewer_turns,
-            "reviewer_tools": episodes * self.reviewer_tools,
+            "reviewer_turns": None if self.reviewer_turns is None else episodes * self.reviewer_turns,
+            "reviewer_tools": None if self.reviewer_tools is None else episodes * self.reviewer_tools,
         }

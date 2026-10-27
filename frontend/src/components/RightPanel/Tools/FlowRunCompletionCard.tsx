@@ -139,9 +139,10 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
   // flows persist candidates first and intentionally create the session on click.
   const reviewReady = run.status === 'completed'
     && (hasAuthoritativeReviewSession || canBootstrapReviewSession)
+  const reviewStopped = ['review_pending', 'review_exhausted', 'interrupted'].includes(run.status)
   const statusColor = run.status === 'completed'
     ? theme.palette.success.main
-    : theme.palette.error.main
+    : reviewStopped ? theme.palette.warning.main : theme.palette.error.main
   const statusChip = useMemo(() => {
     if (run.status === 'completed') {
       return {
@@ -154,7 +155,9 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
     return {
       color: statusColor,
       icon: <ErrorOutlineRoundedIcon sx={{ fontSize: '1rem' }} />,
-      label: 'Failed',
+      label: run.status === 'review_pending' ? 'Review pending'
+        : run.status === 'review_exhausted' ? 'Review limit reached'
+        : run.status === 'interrupted' ? 'Interrupted' : 'Failed',
     }
   }, [run.status, statusColor])
 

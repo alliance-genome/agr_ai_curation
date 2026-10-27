@@ -71,7 +71,9 @@ export function mapFlowFinishedEvent(
       ? event.review_session_ids.filter((value): value is string => typeof value === 'string')
       : [],
     status,
-    failureReason: typeof event.failure_reason === 'string' && event.failure_reason.length > 0
+    failureReason: typeof event.review_reason === 'string' && event.review_reason.length > 0
+      ? event.review_reason
+      : typeof event.failure_reason === 'string' && event.failure_reason.length > 0
       ? event.failure_reason
       : null,
     totalEvidenceRecords,

@@ -217,6 +217,10 @@ export default function InteractiveHorizontalCurationGrid({
       candidate,
       editorPack: getCurationAdapterEditorPack(candidate.adapter_key),
       field,
+      unresolvedAssessments: (candidate.validation_summary_projections ?? []).flatMap((summary) =>
+        summary.findings.filter((finding) => (finding.field_path === canonicalPath ||
+          finding.field_path?.startsWith(`${canonicalPath}[`) || finding.field_path?.startsWith(`${canonicalPath}.`)) &&
+          finding.code === 'validation_review.assessment_unresolved' && finding.finding_status === 'open')),
     }
   }, [candidates, editingTarget])
 
@@ -451,13 +455,14 @@ export default function InteractiveHorizontalCurationGrid({
         autosaveWarning={autosave.warning}
         editorPack={selectedEditor?.editorPack ?? null}
         field={selectedEditor?.field ?? null}
+        unresolvedAssessments={selectedEditor?.unresolvedAssessments ?? []}
         isSaving={autosave.isSaving}
-        onSave={async (value) => {
+        onSave={async (value, confirmUnresolved) => {
           if (!selectedEditor || selectedEditor.field.read_only) {
             throw new Error('Horizontal grid editor change requires an editable field')
           }
           const { field } = selectedEditor
-          autosave.queueFieldChange({ field_key: field.field_key, value })
+          autosave.queueFieldChange({ field_key: field.field_key, value, ...(confirmUnresolved ? { confirm_unresolved: true } : {}) })
           const saved = await autosave.flush()
           if (saved) {
             setEditingTarget(null)

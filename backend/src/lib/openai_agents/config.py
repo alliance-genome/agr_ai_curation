@@ -3856,12 +3856,11 @@ def get_connections_health_snapshot_ttl_seconds() -> float:
     return value
 
 
-def get_validation_review_limits() -> dict[str, int]:
-    """Provisional development/staging review policy (ALL-1442); frozen per scope."""
+def get_validation_review_limits() -> dict[str, int | None]:
+    """Frozen scientific policy and optional, explicit operator review caps."""
     defaults = {
         "attempts_per_target": 2, "extraction_attempts_per_entry": 2,
         "extra_per_run": 16, "extra_per_batch": 64,
-        "reviewer_turns": 64, "reviewer_tools": 256, "deadline_seconds": 1800,
         "warning_percent": 75, "critical_percent": 90,
         "instruction_chars": 8000, "decision_entries": 100, "evidence_refs": 100,
         "packet_bytes": 65536, "lease_seconds": 60,
@@ -3870,6 +3869,13 @@ def get_validation_review_limits() -> dict[str, int]:
               for key, value in defaults.items()}
     if any(value <= 0 for value in limits.values()):
         raise ValueError("Validation review limits must be positive")
+    for key in ("reviewer_turns", "reviewer_tools", "deadline_seconds"):
+        name = "VALIDATION_REVIEW_" + key.upper()
+        raw = _get_env(name, "").strip()
+        cap = int(raw) if raw else None
+        if cap is not None and cap <= 0:
+            raise ValueError(f"{name} must be empty (uncapped) or a positive integer")
+        limits[key] = cap
     if not limits["warning_percent"] < limits["critical_percent"] <= 100:
         raise ValueError("Review warning percentages must be ordered and at most 100")
     return limits

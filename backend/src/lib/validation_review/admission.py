@@ -416,7 +416,7 @@ def lock_episode(db, history_scope, episode_id, *, require_open=True):
                 )
         if row.state != "open":
             raise ReviewStopped(row.state)
-        if row.started_at and now() >= row.started_at + timedelta(
+        if row.policy["deadline_seconds"] is not None and row.started_at and now() >= row.started_at + timedelta(
             seconds=row.policy["deadline_seconds"]
         ):
             raise ReviewStopped("expired")
@@ -435,9 +435,26 @@ def _allowances(db, row):
                 # Historical coverage facts are immutable. Retired token credits
                 # remain evidence, but are no longer scientific-work quotas.
                 if key not in TOKEN_USAGE_BUCKETS:
-                    allowances[key] += value
+                    allowances[key] = (None if allowances[key] is None or value is None
+                                       else allowances[key] + value)
     return allowances
 
+
+
+def remaining_reviewer_turns(db, history_scope, episode_id):
+    """The SDK and durable admission share every enclosing operator cap."""
+    episode, chain = lock_episode(db, history_scope, episode_id)
+    remaining = []
+    for row in [*chain, episode]:
+        cap = _allowances(db, row)["reviewer_turns"]
+        if cap is not None:
+            remaining.append(cap - row.charged.get("reviewer_turns", 0))
+    if not remaining:
+        return None
+    turns = min(remaining)
+    if turns <= 0:
+        raise ReviewStopped("budget_exhausted", resource="reviewer_turns")
+    return turns
 
 
 def reserve_in_transaction(
@@ -467,7 +484,7 @@ def reserve_in_transaction(
             if key not in allowances:
                 raise ValueError("Unknown review budget resource")
             required = row.charged.get(key, 0) + amount
-            if required > allowances[key]:
+            if allowances[key] is not None and required > allowances[key]:
                 raise ReviewStopped("budget_exhausted", resource=key)
     for row in [*chain, episode]:
         for key, amount in charges.items():
@@ -622,7 +639,7 @@ def status(history_scope, episode_id):
         budgets, warnings = [], []
         for row in [*chain, episode]:
             remaining = {
-                k: max(0, v - row.charged.get(k, 0))
+                k: None if v is None else max(0, v - row.charged.get(k, 0))
                 for k, v in _allowances(db, row).items()
             }
             budgets.append({"scope_id": row.id, "remaining": remaining,

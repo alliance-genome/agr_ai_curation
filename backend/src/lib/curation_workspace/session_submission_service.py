@@ -821,6 +821,9 @@ def _validation_finding_blockers(
 
 
 def _finding_blocks_readiness(finding: ValidationFinding) -> bool:
+    from src.lib.validation_history.assessments import FINDING_CODE
+    if finding.code == FINDING_CODE:
+        return True
     details = finding.details or {}
     validation_metadata = details.get("validation_metadata")
     if not isinstance(validation_metadata, Mapping):

@@ -75,7 +75,7 @@ function countBlockingValidationIssues(
     return 0
   }
 
-  return counts.ambiguous + counts.not_found + counts.invalid_format + counts.conflict
+  return counts.ambiguous + counts.not_found + counts.invalid_format + counts.conflict + counts.unresolved
 }
 
 function formatValidationSummary(
@@ -91,6 +91,7 @@ function formatValidationSummary(
     `${counts.ambiguous} ambiguous`,
     `${counts.not_found} unresolved`,
     `${counts.conflict} conflicting`,
+    `${counts.unresolved} uncertain`,
   ].join(' • ')
 }
 

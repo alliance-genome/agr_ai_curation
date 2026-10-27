@@ -182,13 +182,14 @@ def _child_paths(paths: FindingPaths, child: Sequence[PathToken]) -> FindingPath
     )
 
 
-def _pairs_text(value: Mapping[str, Any], paths: FindingPaths, marked: bool) -> str:
+def _pairs_text(value: Mapping[str, Any], paths: FindingPaths, marked: bool, empty_paths: FindingPaths = frozenset()) -> str:
     parts = []
     for key, item in value.items():
-        if _is_empty(item):
+        item_empty = _child_paths(empty_paths, (key,))
+        if _is_empty(item) and not item_empty:
             continue
         item_paths = frozenset(path[1:] for path in paths if path[0] == key)
-        text = _render(item, None, item_paths, nested=True, marked=marked)
+        text = _render(item, None, item_paths, nested=True, marked=marked, empty_paths=item_empty)
         if text:
             parts.append(f"{key}: {text}")
     return LIST_SEPARATOR.join(parts)
@@ -196,6 +197,7 @@ def _pairs_text(value: Mapping[str, Any], paths: FindingPaths, marked: bool) -> 
 
 def _compose_text(
     value: Mapping[str, Any], spec: Mapping[str, Any], keyed: FindingPaths, whole: bool, marked: bool,
+    empty_paths: FindingPaths = frozenset(),
 ) -> str:
     separator = str(spec.get("separator") or LIST_SEPARATOR)
     entries = []
@@ -225,10 +227,11 @@ def _compose_text(
                 finding for finding in unnamed
                 if any(relative_finding_path(finding, leaf) is not None for leaf in leaves)
             )
-            text = _mapping_text(value, child_spec, named, marked)
+            text = _mapping_text(value, child_spec, named, marked, empty_paths)
         else:
             own = _child_paths(keyed, tokens)
-            text = _render(_child(value, path), child_spec, own, nested=True, marked=marked)
+            text = _render(_child(value, path), child_spec, own, nested=True, marked=marked,
+                           empty_paths=_child_paths(empty_paths, tokens))
         if text:
             parts.append(text)
             unplaced -= named
@@ -240,6 +243,7 @@ def _compose_text(
 
 def _mapping_text(
     value: Mapping[str, Any], spec: Mapping[str, Any] | None, paths: FindingPaths, marked: bool,
+    empty_paths: FindingPaths = frozenset(),
 ) -> str:
     # Findings that name a key place their marker on that part; any other
     # finding on this value (the value itself, or an index into a mapping)
@@ -247,7 +251,7 @@ def _mapping_text(
     keyed = frozenset(path for path in paths if path and isinstance(path[0], str))
     whole = paths != keyed
     if spec and spec.get("compose"):
-        return _compose_text(value, spec, keyed, whole, marked)
+        return _compose_text(value, spec, keyed, whole, marked, empty_paths)
     unresolved = bool(paths)
     # A declared resolvable value, or a value stored with the contract state;
     # a mapping that merely holds a ``mention`` key is read like any other.
@@ -285,7 +289,7 @@ def _mapping_text(
         identifier = _first(value, GENERIC_ID_KEYS)
         if label or identifier:
             return _labeled(label, identifier, unresolved and marked)
-    text = _pairs_text(value, keyed, marked)
+    text = _pairs_text(value, keyed, marked, empty_paths)
     unplaced = whole or any(path[0] not in present for path in keyed)
     return f"{text} ({UNRESOLVED})" if marked and unplaced and text else text
 
@@ -331,6 +335,7 @@ def display_text(
     spec: Mapping[str, Any] | None = None,
     *,
     unresolved: bool | Collection[tuple[PathToken, ...]] = False,
+    empty_unresolved: bool | Collection[tuple[PathToken, ...]] = False,
     marked: bool = True,
     nested: bool = False,
 ) -> str:
@@ -338,6 +343,8 @@ def display_text(
 
     ``unresolved`` is True for the whole value, or the open finding paths
     relative to the value; each marker lands on the part a finding names.
+    ``empty_unresolved`` names explicit assessment paths allowed to mark an
+    empty plain value; structural findings keep their existing missing display.
     ``marked=False`` gives the value's text without any unresolved marker
     (for keys such as map_value lookups, or a template that marks itself).
     ``nested=True`` reads a value that is one item of a list (a split column
@@ -345,14 +352,16 @@ def display_text(
     inside the whole cell.
     """
 
-    return _render(value, spec, _finding_paths(unresolved), nested=nested, marked=marked)
+    return _render(value, spec, _finding_paths(unresolved), nested=nested, marked=marked,
+                   empty_paths=_finding_paths(empty_unresolved))
 
 
 def _render(
     value: Any, spec: Mapping[str, Any] | None, paths: FindingPaths, *, nested: bool, marked: bool,
+    empty_paths: FindingPaths = frozenset(),
 ) -> str:
     if _is_empty(value):
-        return ""
+        return "UNRESOLVED" if marked and empty_paths else ""
     if isinstance(value, (list, tuple)):
         # An index names one element; a key, or an index past the end, applies
         # to every element so no finding is dropped.
@@ -366,7 +375,8 @@ def _render(
             item_paths = spread | frozenset(
                 path[1:] for path in paths if path and path[0] == index
             )
-            text = _render(item, spec, item_paths, nested=True, marked=marked)
+            text = _render(item, spec, item_paths, nested=True, marked=marked,
+                           empty_paths=_child_paths(empty_paths, (index,)))
             if text:
                 parts.append(text)
         if nested:
@@ -378,7 +388,7 @@ def _render(
             separator = LIST_SEPARATOR
         return separator.join(parts)
     if isinstance(value, Mapping):
-        return _mapping_text(value, spec, paths, marked)
+        return _mapping_text(value, spec, paths, marked, empty_paths)
     text = _scalar_text(value)
     if spec and spec.get("value_labels"):
         # A controlled-vocabulary leaf (e.g. a lookup outcome) reads in plain words;

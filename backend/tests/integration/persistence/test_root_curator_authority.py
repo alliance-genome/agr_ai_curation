@@ -349,7 +349,7 @@ def test_draft_save_two_identities_in_one_checkpoint_preserves_separate_authorit
         db.add(CurationDraft(candidate_id=candidate.id, adapter_key="fixture", version=1, fields=[], draft_metadata={}))
         db.flush()
         service._materialize_candidate_draft_changes_into_envelope(db, candidate,
-            draft_fields=fields, changed_field_keys=[field.field_key for field in fields],
+            draft_fields=fields, changed_field_keys=[field.field_key for field in fields], confirmed_field_keys=set(),
             actor_claims={"sub": scope.owner_id, "name": "Curator", "groups": []},
             updated_at=datetime.now(timezone.utc))
         current = load_domain_envelope(db, x.env.envelope_id)

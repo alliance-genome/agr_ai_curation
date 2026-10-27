@@ -192,7 +192,7 @@ function buildResponse({
           ambiguous: 0,
           not_found: 0,
           invalid_format: invalidCount,
-          conflict: 0,
+          conflict: 0, unresolved: 0,
           skipped: 1,
           overridden: 0,
         },

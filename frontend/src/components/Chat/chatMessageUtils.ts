@@ -287,7 +287,7 @@ export function getAssistantStatusNotice(message: Message): {
     case 'turn_failed':
       return {
         tone: 'error',
-        text: message.terminalMessage ?? 'The request did not finish. Any visible response may be incomplete. You can restore your request to review it before trying again later.',
+        text: message.terminalMessage ?? 'The request did not finish. Any visible response may be incomplete.',
       }
     case 'turn_save_failed':
       if (message.rescueState === 'pending') {
@@ -322,7 +322,7 @@ export function getTerminalTurnDefaultMessage(
     case 'turn_interrupted':
       return 'The response was interrupted before it could be saved.'
     case 'turn_failed':
-      return 'The request did not finish. Any visible response may be incomplete. You can restore your request to review it before trying again later.'
+      return 'The request did not finish. Any visible response may be incomplete.'
     case 'turn_save_failed':
       return 'The response completed, but it could not be saved to chat history.'
     case 'session_gone':

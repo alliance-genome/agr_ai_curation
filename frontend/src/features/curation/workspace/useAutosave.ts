@@ -66,6 +66,7 @@ interface PendingEnvelopeFieldPatch {
   expectedRevision: number
   before: unknown
   value: unknown
+  confirmUnresolved?: boolean
 }
 
 interface PendingEnvelopeAutosave {
@@ -218,6 +219,7 @@ function envelopePatchesToDraftFieldChanges(
   return fieldPatches.map((fieldPatch) => ({
     field_key: fieldPatch.fieldKey,
     value: fieldPatch.value,
+    confirm_unresolved: fieldPatch.confirmUnresolved,
   }))
 }
 
@@ -264,6 +266,7 @@ function buildEnvelopeFieldPatch(args: {
     expectedRevision: args.expectedRevision,
     before: field.value ?? null,
     value,
+    confirmUnresolved: args.fieldChange.confirm_unresolved,
   }
 }
 
@@ -783,6 +786,7 @@ export function useAutosave(
             operation: 'replace',
             before: fieldPatch.before ?? null,
             value: fieldPatch.value ?? null,
+            ...(fieldPatch.confirmUnresolved ? { confirm_unresolved: true } : {}),
           }
 
           const response = await patchCurationEnvelopeField(request, {

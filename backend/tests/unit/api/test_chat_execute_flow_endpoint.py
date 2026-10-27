@@ -3509,7 +3509,7 @@ def test_flow_provider_failure_description_handles_context_and_cycles(error_type
     message, provider = chat._flow_execution_error_message(wrapper)
     assert provider == "openai"
     assert "private" not in message
-    assert ("try again later" in message) == (error_type == "server_error")
+    assert ("send the request again later" in message) == (error_type == "server_error")
     cyclic = RuntimeError("private cycle")
     cyclic.__cause__ = cyclic
     assert chat._flow_execution_error_message(cyclic) == (
@@ -3643,3 +3643,33 @@ def test_flow_rejects_unavailable_document_before_stream(monkeypatch, status):
     with pytest.raises(HTTPException) as caught:
         asyncio.run(chat.execute_flow_endpoint(request=chat.ExecuteFlowRequest(flow_id=flow_id, session_id="deny", document_id=uuid4()), db=_DummyDB(flow=flow), user={"sub": "auth-sub", "cognito:groups": []}))
     assert caught.value.status_code == status and not calls["register"]
+
+
+@pytest.mark.parametrize("status", ["review_pending", "review_exhausted", "interrupted"])
+def test_execute_flow_persists_review_stop_without_reporting_server_failure(monkeypatch, status):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-review-stop")
+    flow = SimpleNamespace(id=flow_id, user_id=7, is_active=True, visibility="private",
+        project_id=None, shared_at=None, name="Review fixture", execution_count=0,
+        last_executed_at=None, flow_definition={})
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    reports = []
+    monkeypatch.setattr(chat, "report_runtime_exception", lambda *args, **kwargs: reports.append(kwargs))
+
+    async def execute(**kwargs):
+        yield {"type": "FLOW_FINISHED", "data": {"status": status,
+            "flow_id": str(flow_id), "flow_name": flow.name, "flow_run_id": "stopped-run",
+            "review_reason": "PRIVATE_review_reason", "review_details": {"episode_id": "exact"},
+            "output_status": "none", "total_evidence_records": 0}}
+    _patch_chat_impl(monkeypatch, "execute_flow", execute)
+    response = asyncio.run(chat.execute_flow_endpoint(request=request, db=_DummyDB(flow=flow),
+        user={"sub": "auth-sub", "cognito:groups": []}))
+    events = asyncio.run(_consume_stream(response))
+    terminal = next(event for event in events if event["type"] == "FLOW_FINISHED")
+    assert terminal["status"] == status and terminal["review_reason"] == "PRIVATE_review_reason"
+    assert not any(event["type"] == "RUN_ERROR" for event in events)
+    assert reports == []
+    summaries = [message for messages in calls["repository"].messages.values() for message in messages
+                 if message.message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE]
+    assert len(summaries) == 1
+    assert summaries[0].payload_json["status"] == status

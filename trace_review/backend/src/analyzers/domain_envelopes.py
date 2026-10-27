@@ -748,6 +748,7 @@ class DomainEnvelopeTraceAnalyzer:
             "object_type": object_type,
             "field_path": field_path,
             "validation_result_ref": _short_value(original_ref),
+            "review_assessment": dict(details["review_assessment"]) if isinstance(details, Mapping) and isinstance(details.get("review_assessment"), Mapping) else None,
             "machine_review": _as_string(details.get("machine_review")) if isinstance(details, Mapping) else None,
             "selected_value": details.get("selected_value") if isinstance(details, Mapping) else None,
             "original_available": (isinstance(original_ref, str) and original_refs is not None

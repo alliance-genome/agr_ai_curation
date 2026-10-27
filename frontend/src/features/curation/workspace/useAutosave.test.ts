@@ -423,6 +423,19 @@ describe('useAutosave', () => {
     expect(result.current.autosave.warning).toBeNull()
   })
 
+  it('sends explicit confirmation even when the envelope field value is unchanged', async () => {
+    const workspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValue(buildEnvelopePatchResponse({
+      workspace, value: 'BRCA1', before: 'BRCA1', previousRevision: 7, envelopeRevision: 8,
+    }))
+    const { result } = renderHook(() => useAutosave({ debounceMs: 10 }), { wrapper: createWrapper(workspace) })
+    act(() => result.current.queueFieldChange({ field_key: 'gene_symbol', value: 'BRCA1', confirm_unresolved: true }))
+    await act(async () => { await result.current.flush() })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith(expect.objectContaining({
+      before: 'BRCA1', value: 'BRCA1', confirm_unresolved: true, expected_revision: 7,
+    }), expect.anything())
+  })
+
   it('patches envelope-backed fields by object id, field path, revision, and before value', async () => {
     const envelopeWorkspace = buildEnvelopeWorkspace()
 

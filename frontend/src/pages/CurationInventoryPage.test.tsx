@@ -112,7 +112,7 @@ describe('CurationInventoryPage', () => {
             ambiguous: 1,
             not_found: 1,
             invalid_format: 0,
-            conflict: 0,
+            conflict: 0, unresolved: 0,
             skipped: 1,
             overridden: 0,
           },

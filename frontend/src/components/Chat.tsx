@@ -70,8 +70,6 @@ function Chat(props: ChatProps) {
         chatCssVariables={chatCssVariables}
         sessionId={controller.propSessionId}
         onCopyMessage={controller.handleCopyMessage}
-        onRestoreRequest={controller.handleRestoreRequest}
-        canRestoreRequest={controller.canRestoreRequest}
         onFeedbackClick={controller.handleFeedbackClick}
         onOpenCurationWorkspace={controller.handleOpenCurationWorkspace}
         onReviewAndCurateOpened={controller.handleReviewAndCurateOpened}

@@ -1730,30 +1730,6 @@ describe('Chat turn reconciliation', () => {
     mockChatFetch()
   })
 
-  it('restores the original request as an editable draft without replaying it or replacing another draft', async () => {
-    const sendMessage = vi.fn()
-    renderChat({
-      sendMessage,
-      restoredTranscript: {
-        sessionId: 'session-1',
-        messages: [
-          { role: 'user', content: 'Extract β expression with supporting quotes.', timestamp: '2026-10-13T20:00:00Z', id: 'original-request' },
-          { role: 'assistant', content: 'The AI service is busy. Try later.', timestamp: '2026-10-13T20:01:00Z', id: 'failure-notice' },
-        ],
-      },
-    })
-    const restore = await screen.findByRole('button', { name: 'Restore request' })
-    fireEvent.click(restore)
-    const composer = screen.getByPlaceholderText('Type your message...')
-    expect(composer).toHaveValue('Extract β expression with supporting quotes.')
-    expect(sendMessage).not.toHaveBeenCalled()
-    expect(restore).toBeDisabled()
-    fireEvent.change(composer, { target: { value: 'My new draft' } })
-    fireEvent.click(restore)
-    expect(composer).toHaveValue('My new draft')
-    expect(sendMessage).not.toHaveBeenCalled()
-  })
-
   it('shows a partial flow outcome rather than hiding the finished progress notice', async () => {
     renderChat({ events: [
       { type: 'FLOW_STARTED', session_id: 'session-1', timestamp: '2026-10-13T20:00:00Z', flow_name: 'Expression flow', total_steps: 3 },

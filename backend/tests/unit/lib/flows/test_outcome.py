@@ -387,3 +387,32 @@ def test_partial_output_notice_is_durable_and_identical_on_replay(chat_output):
     assert text == outcome.final_user_visible_text
     if chat_output:
         assert text.endswith("Exact saved table.")
+
+
+@pytest.mark.parametrize("status", ["review_pending", "review_exhausted", "interrupted"])
+def test_review_stop_retains_reason_and_durable_files_without_success_or_failure(status):
+    outcome = FlowRunOutcome()
+    file_event = {"type": "FILE_READY", "details": {"file_id": "saved"}}
+    terminal = {"type": "FLOW_FINISHED", "status": status, "review_reason": "reviewer_turns_exhausted",
+                "review_details": {"episode_id": "exact"}, "output_status": "none"}
+    outcome.observe(file_event)
+    outcome.observe({"type": "RUN_FINISHED", "response": "Not finalized"})
+    outcome.observe({"type": "CURATION_HANDOFF_READY"})
+    outcome.observe(terminal)
+    assert outcome.status == status
+    assert outcome.stop_reason == "reviewer_turns_exhausted"
+    assert outcome.failure_type is None and outcome.failure_reason is None
+    assert outcome.final_user_visible_text is None
+    assert outcome.events_for_persistence() == [file_event, terminal]
+    assert outcome.publishable_terminal_events() == []
+    outcome.mark_persisted(transcript=True)
+    assert outcome.publishable_terminal_events() == [file_event, terminal]
+
+
+@pytest.mark.parametrize("event_type", ["RUN_ERROR", "FLOW_ERROR"])
+def test_review_stop_cannot_mask_an_actual_runtime_error(event_type):
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": event_type, "message": "Provider unavailable", "error_type": "ProviderError"})
+    outcome.observe({"type": "FLOW_FINISHED", "status": "review_pending", "review_reason": "pending"})
+    assert outcome.status == "failed"
+    assert outcome.failure_type == "ProviderError"

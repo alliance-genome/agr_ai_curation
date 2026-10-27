@@ -308,6 +308,7 @@ function CurationWorkspacePageContent({
           + validation.counts.not_found
           + validation.counts.invalid_format
           + validation.counts.conflict
+          + validation.counts.unresolved
         summary.stale += validation.stale_field_keys.length
       }
       return summary

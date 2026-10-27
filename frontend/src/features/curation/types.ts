@@ -258,6 +258,7 @@ export interface CurationValidationCounts {
   not_found: number
   invalid_format: number
   conflict: number
+  unresolved: number
   skipped: number
   overridden: number
 }
@@ -793,6 +794,7 @@ export interface CurationSessionUpdateResponse {
 
 export interface CurationDraftFieldChange {
   field_key: string
+  confirm_unresolved?: boolean
   value?: unknown | null
   revert_to_seed?: boolean
 }
@@ -822,6 +824,7 @@ export interface CurationEnvelopeFieldPatchRequest {
   field_path: string
   operation: CurationEnvelopeFieldPatchOperation
   before?: unknown | null
+  confirm_unresolved?: boolean
   value?: unknown | null
   reason?: string | null
   patch_id?: string | null

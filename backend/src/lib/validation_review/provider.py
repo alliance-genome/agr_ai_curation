@@ -19,6 +19,7 @@ from src.lib.validation_history import store
 @dataclass
 class _ExecutionState:
     deadline: float | None = None
+    clock_initialized: bool = False
     clock_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     provider_admitted: bool = False
     capture_owner_active: bool = False
@@ -66,6 +67,8 @@ def budget_scope(budget):
 def remaining_seconds(budget):
     with store.SessionLocal.begin() as db:
         ep, _ = admission.lock_episode(db, budget.scope, budget.episode_id)
+        if ep.policy["deadline_seconds"] is None:
+            return None
         if ep.started_at is None:
             return ep.policy["deadline_seconds"]
         return max(
@@ -87,10 +90,13 @@ async def guarded_await(awaitable):
         # streaming deltas never take scope/artifact write locks. Admission at
         # each model/tool and the executor heartbeat still observe cancellation.
         async with budget.execution.clock_lock:
-            if budget.execution.deadline is None:
+            if not budget.execution.clock_initialized:
                 seconds = await asyncio.to_thread(remaining_seconds, budget)
-                budget.execution.deadline = asyncio.get_running_loop().time() + seconds
-        timeout = max(0, budget.execution.deadline - asyncio.get_running_loop().time())
+                if seconds is not None:
+                    budget.execution.deadline = asyncio.get_running_loop().time() + seconds
+                budget.execution.clock_initialized = True
+        timeout = (None if budget.execution.deadline is None else
+                   max(0, budget.execution.deadline - asyncio.get_running_loop().time()))
     except BaseException:
         if hasattr(awaitable, "close"):
             awaitable.close()

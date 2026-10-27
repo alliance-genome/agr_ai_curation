@@ -850,6 +850,8 @@ class ToolCallAnalyzer:
 
         from .extraction_followup import annotate
         annotate(tool_calls)
+        from .review_assessments import annotate_review_assessments
+        annotate_review_assessments(tool_calls)
         annotate_compact_validator_calls(tool_calls)
 
         # Detect duplicates

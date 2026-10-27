@@ -413,6 +413,8 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
     # Replaying a recipe derives values, not a second execution/history event.
     # Immutable attempts and publication facts already record both operations.
     working = working.model_copy(update={"history": deepcopy(envelope.history)})
+    from .assessments import project_assessments
+    working = project_assessments(db, artifact_id, working, manifest)
     projected = apply_overlays(db, artifact_id, working) if apply_curator else working
     if profile_context is not None:
         for obj in projected.extracted_objects:
@@ -440,6 +442,16 @@ def publish_decisions_in_transaction(db, scope, *, checkpoint_request, episode_i
     envelope = checkpoint_request.envelope
     artifact_id = envelope.metadata["validation_history"]["artifact_id"]
     selections._lock_artifact(db, scope, artifact_id, write=True)
+    pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if pack is None:
+        raise store.HistoryConflict("Selected projection domain pack is unavailable")
+    profile = resolve_envelope_profile_validation(
+        envelope, pack, db=db, user_id=scope.owner_id,
+        active_group_ids=checkpoint_request.authenticated_groups or (),
+    )
+    from .assessments import bind_assessments
+    entries = bind_assessments(db, scope, artifact_id, envelope, entries,
+                              domain_pack=pack, profile_context=profile)
     selections.decide_episode_in_transaction(
         db, scope, artifact_id, episode_id=episode_id,
         operation_id=operation_id, actor=actor, entries=entries,
@@ -448,13 +460,6 @@ def publish_decisions_in_transaction(db, scope, *, checkpoint_request, episode_i
     release_accepted_overlays(db, scope, artifact_id, episode_id=episode_id,
                              operation_id=operation_id, accepted_entries=entries)
     manifest = selections.manifest_in_transaction(db, scope, artifact_id, episode_id=episode_id)
-    pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
-    if pack is None:
-        raise store.HistoryConflict("Selected projection domain pack is unavailable")
-    profile = resolve_envelope_profile_validation(
-        envelope, pack, db=db, user_id=scope.owner_id,
-        active_group_ids=checkpoint_request.authenticated_groups or (),
-    )
     projected = rebuild_selected_envelope(
         db, scope, artifact_id, envelope=envelope, manifest=manifest,
         domain_pack=pack, profile_context=profile,

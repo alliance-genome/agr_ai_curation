@@ -124,8 +124,11 @@ as evidence and no longer interpreted as quotas.
 
 Structural settings remain documented in `.env.example` and forwarded to backend,
 benchmark worker and tests: 2 attempts/target, 2 extraction attempts per entry,
-16 extra attempts/document operation, 64/batch, 64 reviewer calls, 256 review
-tools and 1800 seconds. Structural quota warnings remain at 75%/90%. The former
+16 extra attempts/document operation and 64/batch. Reviewer model calls, tools and
+whole-review deadlines are uncapped by default: leave `VALIDATION_REVIEW_REVIEWER_TURNS`,
+`VALIDATION_REVIEW_REVIEWER_TOOLS` and `VALIDATION_REVIEW_DEADLINE_SECONDS` blank.
+Positive values opt into operator caps. Existing frozen integer policies retain
+those caps and their consumed allowance; changing defaults does not refill them. Structural quota warnings remain at 75%/90%. The former
 reviewer/initial/reconsideration token ceiling settings are retired. Explicit
 curator renewal preserves previous history. Extractor/formatter limits are unchanged.
 
@@ -507,3 +510,40 @@ predecessor on retry. An already admitted round retains its recorded predecessor
 policy, charges and deadline when resumed. Only an explicit curator request may
 create a new round after an admitted review; automatic bootstrap cannot claim
 curator renewal.
+
+
+## Completed assessments with unresolved extraction fields
+
+`record_validation_review` can accept an extraction-only assessment with optional
+`unresolved_fields`, each containing an exact plain payload `field_path` and an
+`explanation`. The supervisor chooses the uncertainty; code validates ownership,
+field existence/type and selection version, then binds the field to stable history
+anchors. Structured resolvable identities keep their validator-owned contract.
+Missing executions, unreviewed records and pending investigation remain incomplete.
+
+The immutable accepting decision owns the assessment. Its current selected
+projection derives `validation_review.assessment_unresolved` findings, preserving
+actor, decision, selection and source provenance without changing extracted data.
+Review may complete and export its requested TSV columns: nonempty plain cells use
+`value (unresolved)`, explicitly uncertain empty cells use `UNRESOLVED`, and unflagged
+blanks and ordinary structural missing-field findings retain the requested missing-value display. Unsettled findings block external
+submission. They do not create a new automatic-retry or unfinished-flow recovery UI.
+
+In the existing curator field editor, **Save and confirm** explicitly acknowledges
+an uncertain field even when its value is unchanged. Changed values or explicit
+confirmation create durable curator overlays and settle that field's finding.
+Collection editors show each affected item and explicitly confirm the listed
+uncertainties using individual leaf anchors. Ordinary collection edits settle
+only changed assessed leaves; unchanged siblings remain uncertain. Size-changing
+collection edits with open assessments require explicit confirmation because
+positions alone cannot identify which item changed. Active curator authority is
+preserved by subsequent edits even if the review assessment is later revoked.
+Opening the editor, saving an unchanged value without confirmation, or editing a
+neighbor does not settle it. Rebuilding selected output replays curator authority;
+new machine judgments cannot silently override it. TraceReview exposes the explicit
+review input/result and finding provenance.
+
+Typed `review_pending`, `review_exhausted` and `interrupted` flow outcomes retain
+their reasons through persistence and replay. They do not become generic server
+failures or imply a completed export. Genuine provider and persistence failures
+retain their reporting owner and cannot be hidden by a later review-stop event.

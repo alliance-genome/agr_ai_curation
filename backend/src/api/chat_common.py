@@ -1365,6 +1365,14 @@ async def _run_resolved_chat_route(
             "type": _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE,
             "internal": {"events": terminal_events},
         }
+        from src.lib.flows.outcome import REVIEW_STOP_STATUSES
+        if outcome.status in REVIEW_STOP_STATUSES:
+            response = f"Flow review did not complete: {outcome.stop_reason}"
+            yield {"type": "RUN_FINISHED", "data": {
+                "response": response, "response_length": len(response),
+                "agents_used": agents_used, "flow_status": outcome.status,
+            }}
+            return
         if outcome.status != "completed":
             if not outcome.failure_already_reported:
                 report_runtime_exception(

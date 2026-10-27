@@ -14,7 +14,7 @@ describe('chat review readiness', () => {
     const props = {
       messages: [message], isLoading: false, progressMessage: '', flowProgress: null,
       messagesEndRef: createRef<HTMLDivElement>(), chatCssVariables: {} as ChatCssVariables,
-      sessionId: 'session', onCopyMessage: vi.fn(), onRestoreRequest: vi.fn(), canRestoreRequest: true,
+      sessionId: 'session', onCopyMessage: vi.fn(),
       onFeedbackClick: vi.fn(), onOpenCurationWorkspace: vi.fn().mockResolvedValue(null),
       onReviewAndCurateOpened: vi.fn(), onUnsupportedEvidenceReview: vi.fn(),
     }

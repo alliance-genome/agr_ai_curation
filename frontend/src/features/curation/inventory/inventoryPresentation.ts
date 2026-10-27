@@ -158,7 +158,7 @@ export function getValidationBuckets(
   }
 
   const success = validation.counts.validated
-  const warning = validation.counts.ambiguous + validation.counts.conflict
+  const warning = validation.counts.ambiguous + validation.counts.conflict + validation.counts.unresolved
   const error = validation.counts.not_found + validation.counts.invalid_format
   const neutral = validation.counts.skipped + validation.counts.overridden
 
