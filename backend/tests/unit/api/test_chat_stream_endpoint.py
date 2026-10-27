@@ -1981,7 +1981,7 @@ _TOOL_GROUP_CAP_MESSAGE = (
         (
             "runner exploded",
             "RuntimeError",
-            "This request could not be completed. You can restore the request to review it before trying again later. If it keeps failing, report it using the feedback menu.",
+            "This request could not be completed. Review the request before sending it again later. If it keeps failing, report it using the feedback menu.",
         ),
         # Written for the curator (ALL-1280 custom agent over the tool-group cap).
         (_TOOL_GROUP_CAP_MESSAGE, "ToolGroupCapError", _TOOL_GROUP_CAP_MESSAGE),

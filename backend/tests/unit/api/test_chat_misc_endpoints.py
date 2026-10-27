@@ -1247,7 +1247,7 @@ async def test_chat_endpoint_replays_failed_turn_without_rerunning_then_allows_a
         )
 
     assert exc.value.status_code == 500
-    assert "You can restore the request" in exc.value.detail
+    assert "Review the request before sending it again later" in exc.value.detail
     assert "model exploded" not in str(exc.value.detail)
     assert "model exploded" in caplog.text
     assert commits == ["commit"]
@@ -1829,7 +1829,7 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog, 
             db=_db_stub(commits=commits),
         )
     assert exc.value.status_code == 500
-    assert "You can restore the request" in exc.value.detail
+    assert "Review the request before sending it again later" in exc.value.detail
     assert "model exploded" not in str(exc.value.detail)
     assert "model exploded" in caplog.text
     assert commits == ["commit"]
@@ -2043,7 +2043,7 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog, fa
             db=_db_stub(commits=commits),
         )
     assert exc.value.status_code == 500
-    assert "You can restore the request" in exc.value.detail
+    assert "Review the request before sending it again later" in exc.value.detail
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
     assert "boom" in caplog.text

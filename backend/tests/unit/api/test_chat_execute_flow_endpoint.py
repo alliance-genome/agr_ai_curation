@@ -3509,7 +3509,7 @@ def test_flow_provider_failure_description_handles_context_and_cycles(error_type
     message, provider = chat._flow_execution_error_message(wrapper)
     assert provider == "openai"
     assert "private" not in message
-    assert ("try again later" in message) == (error_type == "server_error")
+    assert ("send the request again later" in message) == (error_type == "server_error")
     cyclic = RuntimeError("private cycle")
     cyclic.__cause__ = cyclic
     assert chat._flow_execution_error_message(cyclic) == (

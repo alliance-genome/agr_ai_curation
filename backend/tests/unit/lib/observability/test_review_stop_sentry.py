@@ -70,6 +70,7 @@ async def test_only_review_deadline_timeout_is_quiet(budget, own_deadline, link)
 
     loop = asyncio.get_running_loop()
     budget.execution.deadline = loop.time() + (0 if own_deadline else 60)
+    budget.execution.clock_initialized = True
 
     async def provider():
         if own_deadline:

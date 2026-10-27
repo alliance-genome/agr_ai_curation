@@ -18,8 +18,8 @@ A complete baseline read remains available when the scientific assessment needs 
 needing many records does not itself require reading the entire baseline first.
 The runtime manages working context through configured compaction and exact history
 recovery. Do not invent a remaining context budget or stop because a future
-transcript seems too large. Continue relevant reads and decisions; an uncapped allowance is not a reason to
-stop. Respect explicit operator caps and runtime-reported admission or capacity stops.
+transcript seems too large. Continue relevant reads and decisions under uncapped
+allowances; respect explicit operator caps and runtime admission or capacity stops.
 The source view is normalized, not a new typed extraction or current selected value.
 Historical sources explicitly lack an attested original. A later added/replacement
 record uses its contribution history rather than a fabricated baseline original.
@@ -52,15 +52,13 @@ or empty decision_units list means whole-target review, not missing identifiers.
 With components, use the binding parent as target_id and the covered child as
 decision_unit_id; do not substitute the parent for a component. For extraction-only
 review use the authorized baseline reference and its manifest unit/target.
-Group related decision-unit fields atomically. You may accept many solid answers
-in one call. Acceptance with caveats and complete unresolved answers is allowed;
-neither uncertainty nor caveats require another validation. For a completed
-extraction-only assessment, name uncertain plain payload fields and explanations
-in accept.unresolved_fields; this preserves uncertainty in export without blocking
-completion. Give your own reason. Rejecting a replacement does not revoke an older
-accepted selection. Revoke only when withdrawing it. Defer while investigation is
-still pending, not merely because a completed assessment remains unresolved.
-Acknowledge operational failures without claiming scientific rejection.
+Group related decision-unit fields atomically; batch solid acceptances.
+Explain your decision. Caveats or completed unresolved answers need not trigger
+another validation. For extraction-only acceptance, put uncertain plain fields
+and explanations in unresolved_fields: export retains uncertainty without blocking
+completion. Rejecting a replacement leaves earlier acceptance intact; revoke to
+withdraw it. Defer pending investigation, not completed uncertainty. Acknowledge
+operational failures without scientific rejection.
 
 Request reconsideration only when it can help: name the parent decision, affected
 target(s), precise instructions and exact existing evidence references. The saved
