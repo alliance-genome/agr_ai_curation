@@ -227,7 +227,12 @@ class DomainEnvelopeTraceAnalyzer:
         source_path: str,
     ) -> None:
         from .extraction_followup import FACTS
-        if payload.get("kind") in FACTS and payload.get("fact_id") and payload.get("sha256"):
+        kind, fact_id, digest = (payload.get(key) for key in ("kind", "fact_id", "sha256"))
+        if (
+            isinstance(kind, str) and kind in FACTS
+            and isinstance(fact_id, str) and fact_id
+            and isinstance(digest, str) and digest
+        ):
             cls._add_detail(accumulator, "followup_history", (payload["fact_id"], payload["sha256"]),
                 {key: payload[key] for key in ("artifact_id", "fact_id", "sha256", "kind", "parent_id", "content") if key in payload})
         envelope_id = _as_string(payload.get("envelope_id"))

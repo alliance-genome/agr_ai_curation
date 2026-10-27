@@ -27,7 +27,7 @@ from src.lib.domain_packs.validator_dispatch import (
     _normalized_authenticated_groups,
     group_dispatch_context,
 )
-from src.lib.domain_packs.validation_registry import ValidatorBindingMatch, DomainPackValidationRegistry
+from src.lib.domain_packs.validation_registry import ValidatorBinding, ValidatorBindingMatch, DomainPackValidationRegistry
 from src.lib.validation_history import store, runtime
 from src.schemas.domain_validator import DomainValidationRequest
 from . import admission, execution, scheduling
@@ -38,6 +38,7 @@ RECONSIDERATION_INPUT: ContextVar[dict | None] = ContextVar(
 )
 MATCH = TypeAdapter(ValidatorBindingMatch)
 REGISTRY = TypeAdapter(DomainPackValidationRegistry)
+BINDING = TypeAdapter(ValidatorBinding)
 
 
 def attach_reconsideration_context(agent, provider_payload):
@@ -82,21 +83,33 @@ def binding_contract(match):
     )[1]
 
 
-def serialize_match(match):
-    # Selector discriminators reject fields belonging to other selector kinds.
-    # Preserve the complete envelope (including mutable metadata dictionaries),
-    # while omitting unset selector options exactly as the registry does.
-    value = MATCH.dump_python(match, mode="json")
-    value["binding"]["input_fields"] = {
-        key: selector.model_dump(mode="json", exclude_none=True)
-        for key, selector in match.binding.input_fields.items()
+def _serialize_binding(binding):
+    """Preserve selector field presence without stripping scientific null values."""
+    value = BINDING.dump_python(binding, mode="json")
+    value["input_fields"] = {
+        key: selector.model_dump(mode="json", exclude_unset=True)
+        for key, selector in binding.input_fields.items()
     }
-    if match.binding.routes is not None:
-        for key, route in match.binding.routes.items():
-            value["binding"]["routes"][key]["input_fields"] = {
-                name: selector.model_dump(mode="json", exclude_none=True)
+    if binding.routes is not None:
+        for key, route in binding.routes.items():
+            value["routes"][key]["input_fields"] = {
+                name: selector.model_dump(mode="json", exclude_unset=True)
                 for name, selector in route.input_fields.items()
             }
+    if binding.custom_profile_reuse is not None:
+        for name, specification in binding.custom_profile_reuse.inputs.items():
+            if specification.context_selector is not None:
+                value["custom_profile_reuse"]["inputs"][name]["context_selector"] = (
+                    specification.context_selector.model_dump(mode="json", exclude_unset=True)
+                )
+    return value
+
+
+def serialize_match(match):
+    # Envelope and raw metadata retain their complete representation.
+    value = MATCH.dump_python(match, mode="json")
+    value["binding"] = _serialize_binding(match.binding)
+    MATCH.validate_python(value)
     return value
 
 
@@ -109,14 +122,7 @@ def save_plan(plan, *, context):
         tid = runtime.binding_target(binding, match)
         matches[tid] = serialize_match(match)
     registry = REGISTRY.dump_python(plan.registry, mode="json")
-    for saved, binding_definition in zip(registry["bindings"], plan.registry.bindings, strict=True):
-        saved["input_fields"] = {key: selector.model_dump(mode="json", exclude_none=True)
-                                  for key, selector in binding_definition.input_fields.items()}
-        if binding_definition.routes is not None:
-            for key, route in binding_definition.routes.items():
-                saved["routes"][key]["input_fields"] = {
-                    name: selector.model_dump(mode="json", exclude_none=True)
-                    for name, selector in route.input_fields.items()}
+    registry["bindings"] = [_serialize_binding(binding_definition) for binding_definition in plan.registry.bindings]
     REGISTRY.validate_python(registry)
     body = {
         "registry": registry,

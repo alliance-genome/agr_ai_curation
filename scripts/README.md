@@ -739,6 +739,15 @@ Evidence output:
 
 ## One-off data migrations
 
+### Generated unbound flow metadata groups
+
+`one_off/inspect_unbound_metadata_groups.py` inventories exact generated metadata
+execution groups; `--rehearse` applies inside a transaction and always rolls back.
+Commit is handled by Alembic migration `f4a8b0c2d3e5`. See the
+[repair operator guide](../docs/developer/guides/UNBOUND_FLOW_METADATA_REPAIR.md)
+for mounted-script commands, worker drain, audit receipts and benchmark revisions.
+
+
 ### migrations/repair_legacy_domain_envelope_objects_key.py
 
 Audits and repairs persisted `domain_envelopes.envelope_json` payloads that use

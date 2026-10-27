@@ -241,6 +241,31 @@ def test_compilation_retains_complete_provider_scope_and_selector(example, const
     assert build_domain_validation_request(match).request.selected_inputs["provider"] == "FB"
 
 
+def test_compiled_nullable_constant_survives_review_plan_serialization(example):
+    from src.lib.validation_review.validator_adapter import REGISTRY, MATCH, _serialize_binding, serialize_match
+    raw, cap, pack = example
+    reuse = cap.binding.custom_profile_reuse.model_copy(deep=True)
+    reuse.inputs["mention"] = reuse.inputs["mention"].model_copy(
+        update={"nullable": True, "allow_constant": True})
+    cap = replace(cap, binding=replace(cap.binding, custom_profile_reuse=reuse))
+    mapping = raw["validator_mappings"][0]
+    mapping["inputs"]["mention"] = {"source": "constant", "value": None}
+    mapping["capability_fingerprint"] = cap.fingerprint()
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap])
+    assert not context.unavailable
+    compiled, = context.registry.bindings
+    saved = REGISTRY.dump_python(context.registry, mode="json")
+    saved["bindings"] = [_serialize_binding(compiled)]
+    assert saved["bindings"][0]["input_fields"]["mention"]["value"] is None
+    assert "value" in saved["bindings"][0]["input_fields"]["mention"]
+    assert REGISTRY.validate_python(saved) == context.registry
+    match, = context.registry.match_bindings(envelope({"paper_name": "original"}))
+    serialized = serialize_match(match)
+    assert MATCH.validate_python(serialized) == match
+    assert serialized["binding"]["raw"] == compiled.raw
+
+
 def test_real_packaged_gene_mapping_builds_existing_request(example):
     from src.lib.agent_studio.profile_mapping_service import capability_catalog
     raw, _, pack = example
