@@ -87,6 +87,8 @@ class EnvelopeFieldPatch:
     operation: EnvelopeFieldPatchOperation = EnvelopeFieldPatchOperation.REPLACE
     reason: str | None = None
     patch_id: str = field(default_factory=lambda: f"curator-field-patch:{uuid4().hex}")
+    confirm_unresolved: bool = False
+    preserve_curator_authority: bool = False  # Internal server-resolved authority, never public input.
     selected_value_action: str | None = None
     selection_reference: Mapping[str, Any] | None = None
     selected_state: Mapping[str, Any] | None = None  # Server-resolved only; never a public request field.
@@ -249,6 +251,31 @@ def apply_curator_field_patch(
                 f"before does not match current value for field_path '{patch.field_path}'"
             )
 
+    from src.lib.validation_history.assessments import open_assessments, settle_assessments
+    assessment_fields = open_assessments(envelope, domain_object, patch.field_path,
+        descendants=True, include_settled=True) if domain_object is not None else []
+    assessments = [finding for finding in assessment_fields if finding.status.value == "open"]
+    # A size-changing collection replacement has no stable per-item mapping.
+    # Require explicit acknowledgement rather than infer which shifted item was edited.
+    if assessments and not patch.confirm_unresolved and patch.operation is EnvelopeFieldPatchOperation.REPLACE:
+        prefix = parse_field_path(patch.field_path)
+        for finding in assessments:
+            assert finding.field_ref is not None
+            old, new = patch.before, patch.value
+            for token in parse_field_path(finding.field_ref.field_path)[len(prefix):]:
+                if isinstance(old, list) and (not isinstance(new, list) or len(old) != len(new)):
+                    errors.append("Confirm the listed uncertainties before changing this collection's size")
+                    break
+                if isinstance(token, int):
+                    if not isinstance(old, list) or not isinstance(new, list) or token >= len(old):
+                        break
+                    old, new = old[token], new[token]
+                else:
+                    if not isinstance(old, dict) or not isinstance(new, dict) or token not in old or token not in new:
+                        break
+                    old, new = old[token], new[token]
+    if patch.confirm_unresolved and (not assessments or patch.operation is not EnvelopeFieldPatchOperation.REPLACE):
+        errors.append("Confirmation requires a current unresolved plain field")
     if errors:
         rejected = _with_rejection_history(
             envelope=envelope,
@@ -371,6 +398,15 @@ def apply_curator_field_patch(
         # follow the curator's identity now, as the next validator run would.
         settled_envelope = _follow_mirrors(settled_envelope, updated_object, domain_pack, validation_registry)
 
+    # Parent editors may show several plain leaves. Only explicit confirmation
+    # acknowledges all shown findings; ordinary edits settle changed leaves only.
+    assessments = [finding for finding in assessments
+        if finding.field_ref is not None and (patch.confirm_unresolved or
+        _payload_value(domain_object.payload, finding.field_ref.field_path) !=
+        _payload_value(updated_object.payload, finding.field_ref.field_path))]
+    assessment_edit = bool(assessments) and patch.operation is EnvelopeFieldPatchOperation.REPLACE
+    if assessment_edit:
+        settled_envelope = settle_assessments(settled_envelope, {f.finding_id for f in assessments})
     curator_value = None
     if profile is not None:
         validator_destinations = {path for mapping in profile.contract.validator_mappings for path in mapping.outputs.values()}
@@ -386,7 +422,7 @@ def apply_curator_field_patch(
     edited_path = declared_value_path(patch.field_path)
     validator_owned_field = any(edited_path == path or edited_path.startswith(path + ".") or path.startswith(edited_path + ".") or path.startswith(edited_path + "[]")
         for path in (declared_value_path(destination) for destination in validator_destinations))
-    authority_edit = patch.operation is not EnvelopeFieldPatchOperation.REMOVE and (override_audit is not None or validator_owned_field or "selected_contribution" in domain_object.metadata)
+    authority_edit = patch.operation is not EnvelopeFieldPatchOperation.REMOVE and (override_audit is not None or validator_owned_field or patch.preserve_curator_authority or bool(assessment_fields) or "selected_contribution" in domain_object.metadata)
     if authority_edit and "validation_history" in domain_object.metadata:
         from src.lib.validation_history.curator_authority import payload_changes, bind_patch_anchors
         originals_by_id = {obj.object_id or obj.pending_ref_id: obj for obj in envelope.extracted_objects}
@@ -394,6 +430,17 @@ def apply_curator_field_patch(
         for obj in settled_envelope.extracted_objects:
             prior = originals_by_id[obj.object_id or obj.pending_ref_id]
             changes.extend(payload_changes(prior.payload, obj.payload, prior.metadata["validation_history"]["target_id"]))
+        # Persist each unchanged acknowledgement at its stable leaf anchor,
+        # including when another value in the same collection was edited.
+        changed_paths = {change["path"] for change in changes
+                         if change["target_id"] == domain_object.metadata["validation_history"]["target_id"]}
+        for finding in assessments:
+            assert finding.field_ref is not None
+            path = finding.field_ref.field_path
+            value = _payload_value(updated_object.payload, path)
+            if path not in changed_paths and value is not _MISSING:
+                changes.append({"target_id": domain_object.metadata["validation_history"]["target_id"],
+                                "path": path, "present": True, "value": copy.deepcopy(value)})
         curator_value = {
             "target_id": domain_object.metadata["validation_history"]["target_id"],
             "object_id": domain_object.object_id or domain_object.pending_ref_id,
@@ -445,6 +492,8 @@ def apply_curator_field_patch(
         "before": current_before,
         "after": patch.value,
         "reason": patch.reason,
+        "confirm_unresolved": patch.confirm_unresolved,
+        "settled_assessment_ids": [finding.finding_id for finding in assessments] if assessment_edit else [],
         "selected_value_action": patch.selected_value_action,
         "selection_reference": dict(patch.selection_reference) if patch.selection_reference is not None else None,
     }

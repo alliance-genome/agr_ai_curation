@@ -106,7 +106,7 @@ class ValidationReviewCoverage(Base):
         ForeignKey("validation_review_scopes.id"), nullable=False, index=True
     )
     targets: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
-    allowances: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False)
+    allowances: Mapped[dict[str, int | None]] = mapped_column(JSONB, nullable=False)
     __table_args__ = (
         ForeignKeyConstraint(
             ["artifact_id", "episode_id"],

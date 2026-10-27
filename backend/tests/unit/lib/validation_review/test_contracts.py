@@ -8,9 +8,11 @@ from src.lib.validation_history.store import HistoryScope
 
 
 def test_structural_limits_remain_but_token_pools_are_retired(monkeypatch):
+    for key in ("REVIEWER_TURNS", "REVIEWER_TOOLS", "DEADLINE_SECONDS"):
+        monkeypatch.delenv("VALIDATION_REVIEW_" + key, raising=False)
     policy = ReviewLimits.configured()
     allowances = policy.allowances(targets=32, episodes=1, extras=16)
-    assert allowances == {"extra_attempts": 16, "reviewer_turns": 64, "reviewer_tools": 256}
+    assert allowances == {"extra_attempts": 16, "reviewer_turns": None, "reviewer_tools": None}
     assert policy.attempts_per_target == policy.extraction_attempts_per_entry == 2
     monkeypatch.setenv("VALIDATION_REVIEW_TOKENS_PER_TARGET", "1")
     monkeypatch.setenv("VALIDATION_REVIEW_WARNING_PERCENT", "65")
@@ -296,3 +298,25 @@ def test_model_facing_decision_contract_explains_whole_target_and_component_ids(
     for text in ("decision_unit_id equals target_id", "not missing", "covered child"):
         assert text in tool["description"]
         assert text in REVIEW_PROTOCOL
+
+
+@pytest.mark.parametrize("raw,expected", [("", None), ("  ", None), ("503", 503)])
+def test_optional_orchestration_caps_preserve_scientific_attempts(monkeypatch, raw, expected):
+    for name in ("REVIEWER_TURNS", "REVIEWER_TOOLS", "DEADLINE_SECONDS"):
+        monkeypatch.setenv("VALIDATION_REVIEW_" + name, raw)
+    policy = ReviewLimits.configured()
+    assert policy.reviewer_turns == policy.reviewer_tools == policy.deadline_seconds == expected
+    assert policy.attempts_per_target == policy.extraction_attempts_per_entry == 2
+    assert policy.allowances(targets=82, episodes=2, extras=16) == {
+        "extra_attempts": 16,
+        "reviewer_turns": None if expected is None else expected * 2,
+        "reviewer_tools": None if expected is None else expected * 2,
+    }
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "abc", "1.5"])
+@pytest.mark.parametrize("name", ["REVIEWER_TURNS", "REVIEWER_TOOLS", "DEADLINE_SECONDS"])
+def test_operator_caps_reject_invalid_values(monkeypatch, name, raw):
+    monkeypatch.setenv("VALIDATION_REVIEW_" + name, raw)
+    with pytest.raises(ValueError):
+        ReviewLimits.configured()

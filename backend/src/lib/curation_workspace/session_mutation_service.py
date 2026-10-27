@@ -615,6 +615,8 @@ def update_candidate_draft(
     changed_field_keys: list[str] = []
 
     for field_change in request.field_changes:
+        if field_change.confirm_unresolved and not _domain_envelope_candidate(candidate):
+            raise HTTPException(status_code=400, detail="Confirmation requires an envelope-backed unresolved field")
         field_position = field_index.get(field_change.field_key)
         if field_position is None:
             raise HTTPException(
@@ -645,7 +647,7 @@ def update_candidate_draft(
             }
         )
 
-        if current_field != next_field:
+        if current_field != next_field or field_change.confirm_unresolved:
             draft_fields[field_position] = next_field
             changed_field_keys.append(current_field.field_key)
 
@@ -675,6 +677,7 @@ def update_candidate_draft(
             candidate,
             draft_fields=draft_fields,
             changed_field_keys=changed_field_keys,
+            confirmed_field_keys={change.field_key for change in request.field_changes if change.confirm_unresolved},
             actor_claims=actor_claims,
             updated_at=now,
         )
@@ -775,6 +778,7 @@ def _materialize_candidate_draft_changes_into_envelope(
     *,
     draft_fields: Sequence[CurationDraftFieldSchema],
     changed_field_keys: Sequence[str],
+    confirmed_field_keys: set[str],
     actor_claims: dict[str, Any],
     updated_at: datetime,
 ) -> None:
@@ -862,6 +866,7 @@ def _materialize_candidate_draft_changes_into_envelope(
             }
             before = {key: copy.deepcopy(stored_value.get(key)) for key in value}
             operation = EnvelopeFieldPatchOperation.REPLACE_IDENTITY
+        from src.lib.validation_history.curator_authority import has_active_overlay
         patch_result = apply_curator_field_patch(
             working_envelope,
             domain_pack,
@@ -874,6 +879,8 @@ def _materialize_candidate_draft_changes_into_envelope(
                 value=value,
                 operation=operation,
                 reason="draft_materialization",
+                confirm_unresolved=first_key in confirmed_field_keys,
+                preserve_curator_authority=has_active_overlay(db, working_envelope, object_id, field_paths[first_key]),
             ),
             current_revision=current_revision,
             actor_id=actor["actor_id"],
@@ -1028,6 +1035,7 @@ def patch_envelope_field(
         "value": request.value,
         "operation": EnvelopeFieldPatchOperation(request.operation.value),
         "reason": request.reason,
+        "confirm_unresolved": request.confirm_unresolved,
     }
     if request.patch_id is not None:
         patch_payload["patch_id"] = request.patch_id
@@ -1081,6 +1089,8 @@ def patch_envelope_field(
     elif request.selection_reference is not None:
         raise HTTPException(status_code=422, detail="A historical selection requires an explicit restore action")
 
+    from src.lib.validation_history.curator_authority import has_active_overlay
+    patch_payload["preserve_curator_authority"] = has_active_overlay(db, envelope, request.object_id, request.field_path)
     patch_result = apply_curator_field_patch(
         envelope,
         domain_pack,

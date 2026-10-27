@@ -1069,3 +1069,48 @@ def test_durable_route_identity_is_not_a_client_authoritative_history_field():
         },
     )
     assert chat_common._serialize_message(record).payload_json == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["review_pending", "review_exhausted", "interrupted"])
+async def test_preferred_flow_review_stop_is_not_reported_as_server_failure(monkeypatch, status):
+    flow_id = uuid4()
+    flow = SimpleNamespace(id=flow_id, name="Review fixture")
+    captures = []
+    async def execute(**kwargs):
+        yield {"type": "FLOW_FINISHED", "data": {"status": status,
+            "review_reason": "PRIVATE_review_reason", "review_details": {"episode_id": "exact"}}}
+    monkeypatch.setattr(chat_common, "execute_flow", execute)
+    monkeypatch.setattr(chat_common, "report_runtime_exception", lambda *args, **kwargs: captures.append(kwargs))
+    events = [
+        event
+        async for event in chat_common._run_resolved_chat_route(
+            route=ResolvedChatRoute(
+                mode="flow",
+                target_id=str(flow_id),
+                target_display_name=flow.name,
+                flow_run_id="flow-run-failed",
+            ),
+            db=SimpleNamespace(get=lambda _model, _id: flow),
+            db_user_id=7,
+            context_messages=[{"role": "user", "content": "review this"}],
+            user_id="auth-sub",
+            session_id="session-1",
+            turn_id="turn-1",
+            document_id=None,
+            document_name=None,
+            active_groups=["RGD"],
+            supervisor_model=None,
+            specialist_model=None,
+            supervisor_temperature=None,
+            specialist_temperature=None,
+            supervisor_reasoning=None,
+            specialist_reasoning=None,
+        )
+    ]
+    assert captures == []
+    assert not any(event["type"] == "RUN_ERROR" for event in events)
+    terminal = next(event for event in events if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE)
+    assert terminal["internal"]["events"][-1]["status"] == status
+    assert terminal["internal"]["events"][-1]["review_reason"] == "PRIVATE_review_reason"
+    assert events[-1]["data"]["flow_status"] == status

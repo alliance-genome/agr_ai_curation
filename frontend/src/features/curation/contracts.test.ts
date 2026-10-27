@@ -25,6 +25,7 @@ describe('curation contracts', () => {
       'not_found',
       'invalid_format',
       'conflict',
+      'unresolved',
       'skipped',
       'overridden',
     ])

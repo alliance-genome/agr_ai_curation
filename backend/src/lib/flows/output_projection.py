@@ -1140,6 +1140,7 @@ def _validation_rows_from_records(
                 "validation.finding_id": record.get("finding_id") or record.get("id") or index,
                 "validation.status": record.get("status") or record.get("state") or "",
                 "validation.severity": record.get("severity") or "",
+                "validation.code": record.get("code") or "",
                 "validation.message": record.get("message") or record.get("detail") or record.get("reason") or "",
                 "validation.field_path": record.get("field_path") or record.get("field_key") or field_ref.get("field_path") or target.get("field_path") or "",
                 "validation.validator": record.get("validator") or record.get("binding_id") or result.get("validator_binding_id") or "",
@@ -3356,11 +3357,14 @@ def _project_row(
             )
         else:
             value = row.get(column.field_ref or "")
-            # Numbers and booleans stay typed; text and structured values render.
-            if render is not None and not _is_empty(value) and (
-                isinstance(value, (str, list, tuple, dict))
-            ):
-                value = render(column.field_ref or "", value, None)
+            # Empty fields with explicit findings still carry uncertainty. Keep
+            # unmarked numbers/booleans typed; marked cells need display text.
+            if render is not None:
+                rendered = render(column.field_ref or "", value, None)
+                if (rendered or not _is_empty(value)) and (
+                    not isinstance(value, (int, float, bool)) or rendered != display_text(value)
+                ):
+                    value = rendered
         if render is not None and value is not None and not isinstance(value, (str, int, float, bool)):
             value = display_text(value)
         if value is None or (not preserve_empty and _is_empty(value)):
@@ -3418,7 +3422,7 @@ def _object_ref_links(
     return links
 
 
-def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[int, list[tuple[Any, ...]]]:
+def _open_finding_paths(bundle: FlowOutputArtifactBundle, *, code: str | None = None) -> dict[int, list[tuple[Any, ...]]]:
     """Open validation finding paths per object row (keyed by ``id(row)``).
 
     Pending ref ids restart in every envelope, so findings match objects only
@@ -3431,6 +3435,8 @@ def _open_finding_paths(bundle: FlowOutputArtifactBundle) -> dict[int, list[tupl
     for artifact in bundle.artifacts:
         direct: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
         for row in artifact.rows_by_source.get("validation_finding") or []:
+            if code is not None and row.get("validation.code") != code:
+                continue
             if str(row.get("validation.status") or "").strip().lower() != "open":
                 continue
             field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
@@ -3538,9 +3544,11 @@ def _display_renderer(
     specs: Mapping[str, Any],
     finding_paths: Sequence[tuple[Any, ...]],
     covered: Sequence[tuple[Any, ...]] = (),
+    assessment_paths: Sequence[tuple[Any, ...]] = (),
 ) -> ValueRenderer:
     def render(field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str:
         unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref), covered)
+        empty_unresolved = _unresolved_for(assessment_paths, _payload_path_for_ref(field_ref), covered)
         if index is not None:
             # One split_list item: the findings on that position, or on every position.
             unresolved = frozenset(
@@ -3548,7 +3556,13 @@ def _display_renderer(
                 for path in unresolved
                 if not path or not isinstance(path[0], int) or path[0] == index
             )
-        return display_text(value, specs.get(field_ref), unresolved=unresolved, nested=nested)
+            empty_unresolved = frozenset(
+                path[1:] if path and path[0] == index else path
+                for path in empty_unresolved
+                if not path or not isinstance(path[0], int) or path[0] == index
+            )
+        return display_text(value, specs.get(field_ref), unresolved=unresolved,
+                            empty_unresolved=empty_unresolved, nested=nested)
 
     return render
 
@@ -3647,6 +3661,8 @@ def apply_projection_plan(
         return display_text(value, specs.get(field_ref), marked=False, nested=nested)
 
     open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
+    from src.lib.validation_history.assessments import FINDING_CODE
+    assessment_paths = _open_finding_paths(bundle, code=FINDING_CODE) if open_paths else {}
     covered_paths = _resolvable_paths_by_row(bundle) if open_paths else {}
     # Split lists are sized by the longest list across all filtered rows.
     output_columns, split_items = (
@@ -3659,7 +3675,8 @@ def apply_projection_plan(
     projected_rows = []
     for row in limited_rows:
         render = (
-            _display_renderer(specs, open_paths.get(id(row), []), covered_paths.get(id(row), []))
+            _display_renderer(specs, open_paths.get(id(row), []), covered_paths.get(id(row), []),
+                              assessment_paths.get(id(row), []))
             if display
             else None
         )

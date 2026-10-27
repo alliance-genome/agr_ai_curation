@@ -83,7 +83,7 @@ function buildCandidate(overrides: Partial<CurationCandidate> = {}): CurationCan
         ambiguous: 0,
         not_found: 0,
         invalid_format: 0,
-        conflict: 0,
+        conflict: 0, unresolved: 0,
         skipped: 0,
         overridden: 0,
       },

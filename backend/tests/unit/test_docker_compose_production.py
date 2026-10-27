@@ -1084,7 +1084,8 @@ def test_validation_review_limits_have_deployment_parity(key, default, override,
 
     monkeypatch.delenv(key, raising=False)
     field = key.removeprefix("VALIDATION_REVIEW_").lower()
-    assert str(ReviewLimits.configured().snapshot()[field]) == default
+    value = ReviewLimits.configured().snapshot()[field]
+    assert value == (int(default) if default else None)
     expected = "${" + key + ":-" + default + "}"
     for path, names in (
         (DEV_COMPOSE_PATH, ("backend", "benchmark_worker")),

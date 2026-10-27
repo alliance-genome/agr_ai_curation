@@ -570,6 +570,7 @@ def _aggregate_session_validation_snapshot(
         counts.not_found += candidate_counts.not_found
         counts.invalid_format += candidate_counts.invalid_format
         counts.conflict += candidate_counts.conflict
+        counts.unresolved += candidate_counts.unresolved
         counts.skipped += candidate_counts.skipped
         counts.overridden += candidate_counts.overridden
         warnings.extend(candidate_validation.warnings)

@@ -16,16 +16,17 @@ import { alpha } from '@mui/material/styles'
 
 import { FieldRow } from '@/features/curation/editor'
 import type { CurationAdapterEditorPack } from '@/features/curation/adapters'
-import type { CurationDraftField } from '@/features/curation/types'
+import type { DomainEnvelopeValidationFindingProjection, CurationDraftField } from '@/features/curation/types'
 
 export interface HorizontalGridFieldEditorDialogProps {
   autosaveWarning: string | null
   editorPack: CurationAdapterEditorPack | null
   field: CurationDraftField | null
+  unresolvedAssessments: DomainEnvelopeValidationFindingProjection[]
   isSaving: boolean
   onClose: () => void
   onRevert: () => Promise<boolean>
-  onSave: (value: unknown) => Promise<boolean>
+  onSave: (value: unknown, confirmUnresolved: boolean) => Promise<boolean>
   open: boolean
 }
 
@@ -33,6 +34,7 @@ export default function HorizontalGridFieldEditorDialog({
   autosaveWarning,
   editorPack,
   field,
+  unresolvedAssessments,
   isSaving,
   onClose,
   onRevert,
@@ -40,6 +42,7 @@ export default function HorizontalGridFieldEditorDialog({
   open,
 }: HorizontalGridFieldEditorDialogProps) {
   const titleId = useId()
+  const hasUnresolvedAssessment = unresolvedAssessments.length > 0
   const [draftValue, setDraftValue] = useState<unknown>(field?.value ?? null)
   const [revertToSeed, setRevertToSeed] = useState(false)
 
@@ -128,6 +131,11 @@ export default function HorizontalGridFieldEditorDialog({
             {autosaveWarning}
           </Alert>
         ) : null}
+        {unresolvedAssessments.map((finding) => (
+          <Alert key={finding.finding_id} severity="warning" sx={{ mb: 1 }}>
+            {finding.field_path}: {finding.message}
+          </Alert>
+        ))}
         {field ? (
           <Stack spacing={0}>
             <FieldRow
@@ -146,7 +154,9 @@ export default function HorizontalGridFieldEditorDialog({
                 lineHeight: 1.4,
                 m: '7px 0 20px'
               }}>
-              Save value applies this edit to the curation draft.
+              {hasUnresolvedAssessment
+                ? 'Save and confirm records your decision on the listed uncertainties in this field, even if you keep the values unchanged.'
+                : 'Save value applies this edit to the curation draft.'}
               {field.dirty ? ' You can also restore the extracted value before saving.' : ''}
             </Typography>
             {field.dirty ? (
@@ -186,7 +196,7 @@ export default function HorizontalGridFieldEditorDialog({
         <Button
           disabled={isSaving || !field}
           onClick={() => {
-            void (revertToSeed ? onRevert() : onSave(draftValue))
+            void (revertToSeed ? onRevert() : onSave(draftValue, hasUnresolvedAssessment))
           }}
           sx={(theme) => ({
             border: `1px solid ${theme.palette.mode === 'dark' ? '#0b7d72' : '#076b65'}`,
@@ -199,7 +209,7 @@ export default function HorizontalGridFieldEditorDialog({
           })}
           variant="contained"
         >
-          Save value
+          {hasUnresolvedAssessment ? 'Save and confirm' : 'Save value'}
         </Button>
       </DialogActions>
     </Dialog>

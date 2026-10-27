@@ -1161,3 +1161,43 @@ def test_a_referenced_objects_resolvable_value_finding_flags_no_referencing_cell
     annotation_row = next(row for row in bundle.rows_for_source("object")
                           if row["object.object_type"] == "PhenotypeAnnotation")
     assert _open_finding_paths(bundle).get(id(annotation_row), []) == []
+
+
+def test_explicit_uncertain_empty_field_is_not_an_intentional_blank():
+    assert display_text(None, empty_unresolved=True) == "UNRESOLVED"
+    assert display_text("", empty_unresolved=True) == "UNRESOLVED"
+    assert display_text(None) == ""
+    objects = [{"object_type": "GeneExpressionAnnotation", "pending_ref_id": key,
+        "payload": {"where_expressed_statement": None}} for key in ("uncertain", "blank")]
+    finding = _open_finding("where_expressed_statement", pending_ref_id="uncertain", object_type="GeneExpressionAnnotation")
+    finding["code"] = "validation_review.assessment_unresolved"
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression", objects, [finding])],
+        flow_name="Unresolved export", output_format="tsv")
+    rows = apply_projection_plan(bundle, _object_plan("tsv", [
+        ("where", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
+    ])).rows
+    assert rows == [{"where": "UNRESOLVED"}, {"where": "-"}]
+
+
+def test_missing_required_empty_field_keeps_missing_marker():
+    finding = _open_finding("where_expressed_statement", pending_ref_id="missing", object_type="GeneExpressionAnnotation")
+    finding["code"] = "domain_pack.required_field_missing"
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression",
+            [{"object_type": "GeneExpressionAnnotation", "pending_ref_id": "missing",
+              "payload": {"where_expressed_statement": None}}], [finding])],
+        flow_name="Missing field", output_format="tsv")
+    assert apply_projection_plan(bundle, _object_plan("tsv", [
+        ("where", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
+    ])).rows == [{"where": "-"}]
+    assert display_text([None, "present"], unresolved=[(0,)]) == "present"
+    assert display_text([None, "present"], empty_unresolved=[(0,)]) == "UNRESOLVED; present"
+
+
+def test_selected_field_null_keeps_custom_missing_display():
+    from src.lib.flows.output_projection import _display_renderer, _project_row, FlowOutputColumnSpec
+    assert _project_row({"object.payload.statement": None},
+        [FlowOutputColumnSpec(key="statement", field_ref="object.payload.statement")],
+        missing_value="NA", preserve_empty=True,
+        render=_display_renderer({}, [])) == {"statement": "NA"}

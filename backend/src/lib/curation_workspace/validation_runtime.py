@@ -25,6 +25,7 @@ _FIELD_STATUS_RANK: dict[FieldValidationStatus, int] = {
     FieldValidationStatus.AMBIGUOUS: 3,
     FieldValidationStatus.INVALID_FORMAT: 4,
     FieldValidationStatus.CONFLICT: 5,
+    FieldValidationStatus.UNRESOLVED: 5,
 }
 
 
@@ -177,6 +178,8 @@ def increment_validation_count(
         counts.invalid_format += 1
     elif status == FieldValidationStatus.CONFLICT:
         counts.conflict += 1
+    elif status == FieldValidationStatus.UNRESOLVED:
+        counts.unresolved += 1
     elif status == FieldValidationStatus.SKIPPED:
         counts.skipped += 1
     elif status == FieldValidationStatus.OVERRIDDEN:
@@ -248,6 +251,9 @@ def _field_status_for_finding(
     if finding.summary_status is DomainEnvelopeValidationStatus.WAIVED:
         return FieldValidationStatus.OVERRIDDEN
 
+    from src.lib.validation_history.assessments import FINDING_CODE
+    if finding.code == FINDING_CODE:
+        return FieldValidationStatus.UNRESOLVED
     code = (finding.code or "").lower()
     details = dict(finding.details)
     lookup_status = _lookup_status_from_details(details)

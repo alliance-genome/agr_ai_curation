@@ -194,3 +194,32 @@ async def test_unrecognized_direct_requests_remain_explicit(setup):
     with p.budget_scope(budget), pytest.raises(ReviewStopped, match="unsupported_review_direct"):
         p.guard_direct_request(provider="openai", api="chat.completions")
     reserve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_uncapped_clock_is_initialized_once_and_remains_cancellable(setup, monkeypatch):
+    import asyncio
+    budget, _, _, _ = setup
+    read = Mock(return_value=None)
+    monkeypatch.setattr(p, "remaining_seconds", read)
+    with p.budget_scope(budget):
+        for _ in range(300):
+            await p.guarded_await(asyncio.sleep(0))
+        task = asyncio.create_task(p.guarded_await(asyncio.Event().wait()))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert budget.execution.clock_initialized
+    assert budget.execution.deadline is None
+    read.assert_called_once_with(budget)
+
+
+@pytest.mark.asyncio
+async def test_explicit_deadline_still_interrupts(setup, monkeypatch):
+    import asyncio
+    budget, _, _, _ = setup
+    monkeypatch.setattr(p, "remaining_seconds", lambda _: 0)
+    with p.budget_scope(budget), pytest.raises(TimeoutError) as caught:
+        await p.guarded_await(asyncio.Event().wait())
+    assert caught.value._review_deadline_expired

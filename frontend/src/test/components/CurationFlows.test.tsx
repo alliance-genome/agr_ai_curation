@@ -173,6 +173,18 @@ describe('CurationFlows', () => {
     })
   })
 
+  it.each([
+    ['review_pending', 'Review pending'],
+    ['review_exhausted', 'Review limit reached'],
+    ['interrupted', 'Interrupted'],
+  ])('shows %s truthfully without offering unfinished review recovery', async (status, label) => {
+    renderComponent([completedRunEvent({ status, review_reason: 'Review stopped at the configured limit.' })])
+    expect(await screen.findByText(label)).toBeInTheDocument()
+    expect(screen.getByText('Review stopped at the configured limit.')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Review & Curate/i })).toBeDisabled()
+  })
+
   it('bootstraps review for a completed extraction-only flow with durable scope', async () => {
     const user = userEvent.setup()
 

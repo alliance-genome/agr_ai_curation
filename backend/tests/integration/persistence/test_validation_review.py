@@ -390,6 +390,7 @@ def test_public_decisions_publish_atomically_and_replay_without_new_revision(
 
 
 def test_deadline_expires_without_publishing_or_resetting_on_resume(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_DEADLINE_SECONDS", "1800")
     from src.models.sql.validation_review import ValidationReviewEpisode
 
     _, ep, _ = admitted(scope)
@@ -1031,7 +1032,8 @@ async def test_pre_send_refusal_records_reason_without_unknown_completion(
         )
 
 
-def test_warning_thresholds_are_durable_and_idempotent(scope):
+def test_warning_thresholds_are_durable_and_idempotent(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TOOLS", "256")
     from src.models.sql.validation_history import ValidationFact
 
     aid, ep, _ = admitted(scope)
@@ -1123,7 +1125,7 @@ async def test_real_runner_factory_tools_and_measured_seam_with_fake_provider(
     assert not reports
     assert len(model.calls) == calls
     budget = a.status(scope, ep)["budgets"][-1]["remaining"]
-    assert budget["reviewer_turns"] == 64 - calls
+    assert budget["reviewer_turns"] is None
     assert budget["reviewer_tools"] == max(0, tool_limit - 2)
     assert "reviewer_tokens" not in budget
     assert a.status(scope, ep)["budgets"][-1]["provider_usage"]["reported_tokens"]["reviewer_tokens"] == calls * 1280
@@ -1197,6 +1199,7 @@ def test_32_target_run_shares_16_extra_allowance_across_two_episodes(scope):
 def test_late_answer_reopens_public_review_without_refilling_budgets(
     scope, scenario, monkeypatch, expired
 ):
+    monkeypatch.setenv("VALIDATION_REVIEW_DEADLINE_SECONDS", "1800")
     from copy import deepcopy
     from dataclasses import replace
     from src.lib.validation_review import scheduling
@@ -1404,7 +1407,10 @@ def test_discovered_coverage_preserves_shared_extra_cap_and_frozen_policy(scope,
     assert remaining["extra_attempts"] == 0
 
 
-def test_curator_can_grant_new_bounded_round_without_erasing_usage(scope):
+def test_curator_can_grant_new_bounded_round_without_erasing_usage(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TURNS", "64")
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TOOLS", "256")
+    monkeypatch.setenv("VALIDATION_REVIEW_DEADLINE_SECONDS", "1800")
     from src.models.sql.validation_review import ValidationReviewScope, ValidationReviewEpisode
     aid, old, old_scope = admitted(scope)
     with h.SessionLocal.begin() as db:
@@ -1457,7 +1463,10 @@ def test_fresh_round_requires_explicit_curator_and_workspace_parent(scope):
 
 
 @pytest.mark.parametrize('state', ['cancelled', 'expired', 'exhausted'])
-def test_curator_decision_is_independent_of_machine_allowance(scope, scenario, state):
+def test_curator_decision_is_independent_of_machine_allowance(scope, scenario, state, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TURNS", "64")
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TOOLS", "256")
+    monkeypatch.setenv("VALIDATION_REVIEW_DEADLINE_SECONDS", "1800")
     from src.lib.validation_review.decisions import ReviewContext, record_decisions
     from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
     from src.models.sql.validation_review import ValidationReviewEpisode
@@ -1527,7 +1536,8 @@ def test_concurrent_actual_usage_settles_once_across_parent_and_children(scope):
         assert budgets[-1]["provider_usage"]["reported_tokens"]["initial_tokens"] == 200000
 
 
-def test_speculative_token_charges_rejected_but_structural_quotas_enforced(scope):
+def test_speculative_token_charges_rejected_but_structural_quotas_enforced(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TURNS", "64")
     _, ep, _ = admitted(scope)
     with pytest.raises(ValueError, match="not reserved"):
         a.reserve(scope, ep, operation_id="provider:bad", charges={"initial_tokens": 128000}, request={})
@@ -1573,3 +1583,258 @@ def test_public_component_decision_uses_parent_target_and_covered_child(scope, s
     assert result["ready"]
     projected, _ = read_published_projection(scope, result["publication"], finalized=True)
     assert projected.extracted_objects[0].payload["evidence_code_curies"] == ["ECO:VALIDATED"]
+
+
+def test_uncapped_review_crosses_old_boundaries_without_resetting_history(scope, monkeypatch):
+    from src.models.sql.validation_review import ValidationReviewEpisode, ValidationReviewScope
+    for name in ("REVIEWER_TURNS", "REVIEWER_TOOLS", "DEADLINE_SECONDS"):
+        monkeypatch.delenv("VALIDATION_REVIEW_" + name, raising=False)
+    _, ep, sid = admitted(scope)
+    first = a.reserve(scope, ep, operation_id="before-old-boundary",
+                      charges={"reviewer_turns": 64, "reviewer_tools": 256}, request={})
+    future = a.now() + timedelta(hours=2)
+    monkeypatch.setattr(a, "now", lambda: future)
+    second = a.reserve(scope, ep, operation_id="after-old-boundary",
+                       charges={"reviewer_turns": 200, "reviewer_tools": 300}, request={})
+    assert first != second
+    assert a.reserve(scope, ep, operation_id="after-old-boundary",
+                     charges={"reviewer_turns": 200, "reviewer_tools": 300}, request={}) == second
+    with h.SessionLocal() as db:
+        assert a.remaining_reviewer_turns(db, scope, ep) is None
+        for row in (db.get(ValidationReviewEpisode, ep), db.get(ValidationReviewScope, sid)):
+            assert row.charged["reviewer_turns"] == 264
+            assert row.charged["reviewer_tools"] == 556
+    report = a.status(scope, ep)
+    assert report["state"] == "pending"  # Unseen science never becomes accepted.
+    assert not report["warnings"]
+    assert all(x["remaining"]["reviewer_turns"] is None for x in report["budgets"])
+    a.cancel(scope, ep, actor_id=scope.owner_id, reason="Explicit stop")
+    with pytest.raises(a.ReviewStopped, match="cancelled"):
+        a.reserve(scope, ep, operation_id="after-cancel", charges={"reviewer_turns": 1}, request={})
+
+
+def test_explicit_turn_cap_is_frozen_and_sdk_uses_remaining_allowance(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_REVIEWER_TURNS", "70")
+    _, ep, _ = admitted(scope)
+    a.reserve(scope, ep, operation_id="used", charges={"reviewer_turns": 65}, request={})
+    monkeypatch.delenv("VALIDATION_REVIEW_REVIEWER_TURNS")
+    with h.SessionLocal() as db:
+        assert a.remaining_reviewer_turns(db, scope, ep) == 5
+    a.reserve(scope, ep, operation_id="last", charges={"reviewer_turns": 5}, request={})
+    with h.SessionLocal() as db, pytest.raises(a.ReviewStopped) as stopped:
+        a.remaining_reviewer_turns(db, scope, ep)
+    assert stopped.value.resource == "reviewer_turns"
+
+
+def test_extraction_assessment_is_selected_unresolved_without_rewriting_source(scope, tmp_path, monkeypatch):
+    from src.lib.validation_history import runtime, selections
+    from src.lib.validation_history.projection import read_published_projection, rebuild_selected_envelope
+    from src.lib.validation_review.decisions import ReviewContext, record_decisions
+    from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest
+    from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _multivalued_dispatch_pack
+
+    pack = _multivalued_dispatch_pack(tmp_path)
+    from dataclasses import replace
+    from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
+    definition = pack.metadata.object_definitions[0]
+    definition = definition.model_copy(update={"fields": [*definition.fields,
+        DomainPackFieldDefinition(field_path="statement", field_type="string", metadata={"editable": True}),
+        DomainPackFieldDefinition(field_path="description", field_type="string", metadata={"editable": True}),
+        DomainPackFieldDefinition(field_path="items", field_type="array", metadata={"editable": True}),
+        DomainPackFieldDefinition(field_path="nullable_identity", field_type="object",
+            metadata={"display": {"label": "name", "id": "curie", "mention": "mention"}}),
+    ]})
+    pack = replace(pack, metadata=pack.metadata.model_copy(update={"object_definitions": [definition]}))
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
+    env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=pack.pack_id,
+        extracted_objects=[CuratableObjectEnvelope(object_type="Annotation", pending_ref_id="one",
+            payload={"statement": None, "description": "Original text", "items": ["first", "second"], "nullable_identity": None,
+                "identity": {"mention": "paper", "resolution_state": "unresolved", "lookup_outcome": "not_found"}})])
+    env = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex, envelope=env, typed=env.model_dump(mode="json"), provenance={})
+    aid = env.metadata["validation_history"]["artifact_id"]
+    env = selections.declare_envelope_episode(runtime.CapturedArtifact(scope, aid), env, [])
+    ep = env.metadata["review_episode_id"]
+    sid = a.create_scope(scope, operation_id=uuid4().hex, kind="document_run", targets=1, episodes=1)
+    a.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
+    tid = env.extracted_objects[0].metadata["validation_history"]["target_id"]
+    with h.SessionLocal() as db:
+        baseline = h._artifact(db, aid, scope).baseline_sha
+    request = DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=env, expected_revision=0,
+        document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=uuid4())
+    entry = {"target_id": tid, "decision_unit_id": tid, "expected_version": 0,
+        "extraction_ref": baseline, "action": "accept", "reason": "Assessment complete; evidence remains uncertain",
+        "unresolved_fields": [{"field_path": "statement", "explanation": "Paper did not establish the use"},
+            {"field_path": "items[1]", "explanation": "Ambiguous item"}]}
+    context = ReviewContext(scope, ep, "reviewer")
+    # Structural failures do not consume the review or manufacture a finding.
+    for path in ("missing", "items", "items[5]", "description[0]", "identity.mention", "nullable_identity"):
+        bad = {**entry, "unresolved_fields": [{"field_path": path, "explanation": "Unknown"}]}
+        with pytest.raises((ValueError, h.HistoryConflict)):
+            record_decisions(context, checkpoint_request=request, operation_id="bad-" + path, entries=[bad])
+    for invalid in (
+        {**entry, "expected_version": 99},
+        {**entry, "decision_unit_id": str(uuid4())},
+        {**entry, "action": "defer"},
+        {**entry, "unresolved_fields": [entry["unresolved_fields"][0]] * 2},
+    ):
+        with pytest.raises((ValueError, h.HistoryConflict)):
+            record_decisions(context, checkpoint_request=request, operation_id=uuid4().hex, entries=[invalid])
+    result = record_decisions(context, checkpoint_request=request, operation_id="assessment", entries=[entry])
+    assert result["ready"]
+    assert record_decisions(context, checkpoint_request=request, operation_id="assessment", entries=[entry]) == result
+    projected, _ = read_published_projection(scope, result["publication"], finalized=True)
+    assert projected.extracted_objects[0].payload == env.extracted_objects[0].payload
+    findings = projected.validation_findings
+    assert {f.field_ref.field_path for f in findings} == {"statement", "items[1]"}
+    assert all(f.code == "validation_review.assessment_unresolved" and f.status.value == "open" for f in findings)
+    assert all(f.details["review_assessment"]["actor"] == {"type": "agent", "id": "reviewer"} for f in findings)
+    with h.SessionLocal.begin() as db:
+        manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
+        rebuilt = rebuild_selected_envelope(db, scope, aid, envelope=projected, manifest=manifest, domain_pack=pack)
+    assert [f.finding_id for f in rebuilt.validation_findings] == [f.finding_id for f in findings]
+    assert rebuilt.history == projected.history
+
+    # Display indexes can change; uncertainty follows the stable collection item.
+    from src.lib.validation_history.assessments import project_assessments
+    reordered = projected.model_copy(deep=True)
+    obj = reordered.extracted_objects[0]
+    obj.payload["items"].reverse()
+    obj.metadata["validation_history"]["elements"]["items"].reverse()
+    with h.SessionLocal.begin() as db:
+        reordered = project_assessments(db, aid, reordered, manifest)
+    item_finding = next(f for f in reordered.validation_findings if f.field_ref.field_path == "items[0]")
+    original_item = next(f for f in findings if f.field_ref.field_path == "items[1]")
+    assert item_finding.finding_id == original_item.finding_id
+    assert reordered.extracted_objects[0].payload["items"][0] == "second"
+
+    # A collection editor changes only its edited leaf unless it explicitly
+    # confirms the displayed uncertainties. An unaffected sibling stays open.
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+    extra = original_item.model_copy(update={"finding_id": "second-assessment", "field_ref":
+        original_item.field_ref.model_copy(update={"field_path": "items[0]"})})
+    two_items = projected.model_copy(update={"validation_findings": [*findings, extra]})
+    collection_patch = EnvelopeFieldPatch(envelope_id=projected.envelope_id, expected_revision=1,
+        object_id="one", field_path="items", before=["first", "second"], value=["edited", "second"])
+    edited = apply_curator_field_patch(two_items, pack, collection_patch, current_revision=1,
+        actor_id=scope.owner_id, actor_display_name="Curator")
+    assert edited.accepted, edited.errors
+    assert {f.field_ref.field_path: f.status.value for f in edited.envelope.validation_findings} == {
+        "statement": "open", "items[0]": "resolved", "items[1]": "open"}
+
+    # An explicit unchanged-value confirmation is an immutable curator overlay.
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, apply_curator_field_patch
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
+    from src.lib.validation_history import curator_authority
+    patch = EnvelopeFieldPatch(envelope_id=projected.envelope_id, expected_revision=1,
+        object_id="one", field_path="statement", before=None, value=None)
+    unchanged = apply_curator_field_patch(projected, pack, patch, current_revision=1,
+        actor_id=scope.owner_id, actor_display_name="Curator")
+    assert unchanged.accepted
+    assert all(f.status.value == "open" for f in unchanged.envelope.validation_findings)
+    confirmed = apply_curator_field_patch(projected, pack, replace(patch, confirm_unresolved=True), current_revision=1,
+        actor_id=scope.owner_id, actor_display_name="Curator")
+    assert confirmed.accepted, confirmed.errors
+    assert {f.field_ref.field_path: f.status.value for f in confirmed.envelope.validation_findings} == {
+        "statement": "resolved", "items[1]": "open"}
+    with h.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, replace(request, envelope=confirmed.envelope, expected_revision=1))
+    with h.SessionLocal.begin() as db:
+        assert len(curator_authority.active_overlays(db, aid)) == 1
+        rebuilt = rebuild_selected_envelope(db, scope, aid, envelope=confirmed.envelope, manifest=manifest, domain_pack=pack)
+    assert {f.field_ref.field_path: f.status.value for f in rebuilt.validation_findings} == {
+        "statement": "resolved", "items[1]": "open"}
+    assert rebuilt.extracted_objects[0].payload == env.extracted_objects[0].payload
+
+    # Revocation removes the selected assessment; old publications remain exact.
+    curator = ReviewContext(scope, ep, scope.owner_id, actor_type="curator")
+    revoked = record_decisions(curator, checkpoint_request=replace(request,
+        envelope=confirmed.envelope, expected_revision=2), operation_id="revoke-assessment",
+        entries=[{"target_id": tid, "decision_unit_id": tid, "expected_version": 1,
+                  "action": "revoke", "reason": "Reconsider assessment"}])
+    assert not revoked["ready"]
+    withdrawn, _ = read_published_projection(scope, revoked["publication"])
+    assert not withdrawn.validation_findings
+    original, _ = read_published_projection(scope, result["publication"])
+    assert all(f.status.value == "open" for f in original.validation_findings)
+    selected_again = record_decisions(curator, checkpoint_request=replace(request,
+        envelope=withdrawn, expected_revision=3), operation_id="select-new-assessment",
+        entries=[{**entry, "expected_version": 2}])
+    assert selected_again["ready"]
+    reselected, _ = read_published_projection(scope, selected_again["publication"], finalized=True)
+    assert {f.field_ref.field_path: f.status.value for f in reselected.validation_findings} == {
+        "statement": "resolved", "items[1]": "open"}
+
+    # A size-changing edit cannot silently decide which shifted item was edited.
+    unconfirmed_removal = apply_curator_field_patch(reselected, pack,
+        replace(collection_patch, expected_revision=4, value=["second"]),
+        current_revision=4, actor_id=scope.owner_id, actor_display_name="Curator")
+    assert not unconfirmed_removal.accepted
+    removed_open = apply_curator_field_patch(reselected, pack,
+        replace(collection_patch, expected_revision=4, value=["first"], confirm_unresolved=True),
+        current_revision=4, actor_id=scope.owner_id, actor_display_name="Curator")
+    assert removed_open.accepted, removed_open.errors
+    # Rehearse this branch transactionally, then retain the unchanged-confirm path below.
+    with h.SessionLocal() as db:
+        write_domain_envelope_checkpoint(db, replace(request, envelope=removed_open.envelope, expected_revision=4))
+        current_manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
+        removed_replay = rebuild_selected_envelope(db, scope, aid, envelope=removed_open.envelope,
+            manifest=current_manifest, domain_pack=pack)
+        assert removed_replay.extracted_objects[0].payload["items"] == ["first"]
+        assert all(f.status.value == "resolved" for f in removed_replay.validation_findings)
+        db.rollback()
+
+    # Real collection-editor acknowledgement persists at the leaf, not its list.
+    collection_confirmation = apply_curator_field_patch(reselected, pack,
+        replace(collection_patch, expected_revision=4, value=["first", "second"], confirm_unresolved=True),
+        current_revision=4, actor_id=scope.owner_id, actor_display_name="Curator")
+    assert collection_confirmation.accepted, collection_confirmation.errors
+    with h.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, replace(request,
+            envelope=collection_confirmation.envelope, expected_revision=4))
+    with h.SessionLocal.begin() as db:
+        current_manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
+        rebuilt = rebuild_selected_envelope(db, scope, aid,
+            envelope=collection_confirmation.envelope, manifest=current_manifest, domain_pack=pack)
+        overlays = curator_authority.active_overlays(db, aid)
+        assert any(change["path"] == "items[1]" for _, body in overlays for change in body["changes"])
+    assert all(f.status.value == "resolved" for f in rebuilt.validation_findings)
+    assert rebuilt.extracted_objects[0].payload == env.extracted_objects[0].payload
+
+    # Removing an assessed item through a whole-list editor remains settled
+    # after replay of the structural parent overlay, without reviving the item.
+    shortened = apply_curator_field_patch(rebuilt, pack,
+        replace(collection_patch, expected_revision=5, value=["first"]),
+        current_revision=5, actor_id=scope.owner_id, actor_display_name="Curator")
+    assert shortened.accepted, shortened.errors
+    with h.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, replace(request, envelope=shortened.envelope, expected_revision=5))
+    with h.SessionLocal.begin() as db:
+        replayed = rebuild_selected_envelope(db, scope, aid, envelope=shortened.envelope,
+            manifest=current_manifest, domain_pack=pack)
+    assert replayed.extracted_objects[0].payload["items"] == ["first"]
+    assert all(f.status.value == "resolved" for f in replayed.validation_findings)
+
+    # Revoking the assessment does not withdraw a curator's saved value authority.
+    revoked_again = record_decisions(curator, checkpoint_request=replace(request,
+        envelope=replayed, expected_revision=6), operation_id="revoke-again",
+        entries=[{"target_id": tid, "decision_unit_id": tid, "expected_version": 3,
+                  "action": "revoke", "reason": "Reconsider without losing curator edits"}])
+    revoked_projection, _ = read_published_projection(scope, revoked_again["publication"])
+    assert not revoked_projection.validation_findings
+    with h.SessionLocal() as db:
+        preserve = curator_authority.has_active_overlay(db, revoked_projection, "one", "statement")
+    assert preserve
+    edited_again = apply_curator_field_patch(revoked_projection, pack,
+        replace(patch, expected_revision=7, value="Curator's newer value", preserve_curator_authority=preserve),
+        current_revision=7, actor_id=scope.owner_id, actor_display_name="Curator")
+    assert edited_again.accepted, edited_again.errors
+    with h.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, replace(request, envelope=edited_again.envelope, expected_revision=7))
+    final_selection = record_decisions(curator, checkpoint_request=replace(request,
+        envelope=edited_again.envelope, expected_revision=8), operation_id="accept-after-edit",
+        entries=[{**entry, "expected_version": 4}])
+    final_projection, _ = read_published_projection(scope, final_selection["publication"], finalized=True)
+    assert final_projection.extracted_objects[0].payload["statement"] == "Curator's newer value"
+    assert final_projection.extracted_objects[0].payload["items"] == ["first"]
+    assert all(f.status.value == "resolved" for f in final_projection.validation_findings)

@@ -14,6 +14,23 @@ class HistoryActor(HistoryContract):
     id: StrictStr = Field(min_length=1)
 
 
+class StableValueAnchor(HistoryContract):
+    target_id: StrictStr = Field(min_length=1)
+    suffix: list[StrictStr | StrictInt] = Field(default_factory=list)
+
+
+class UnresolvedFieldAssessment(HistoryContract):
+    """The reviewer's explicit scientific uncertainty, not an execution failure."""
+
+    field_path: StrictStr = Field(min_length=1)
+    explanation: StrictStr = Field(min_length=1)
+
+
+class BoundUnresolvedFieldAssessment(UnresolvedFieldAssessment):
+    object_target_id: StrictStr = Field(min_length=1)
+    anchor: StableValueAnchor
+
+
 class HistoryDecision(HistoryContract):
     target_id: StrictStr = Field(min_length=1)
     expected_version: StrictInt = Field(ge=0)
@@ -30,6 +47,7 @@ class HistoryDecision(HistoryContract):
     ]
     reason: StrictStr = Field(min_length=1)
     subject: StrictStr | None = None
+    unresolved_fields: list[BoundUnresolvedFieldAssessment] | None = None
     replacement_original: dict[str, Any] | None = None
     replacement_target_id: StrictStr | None = None
 
@@ -44,6 +62,12 @@ class HistoryDecision(HistoryContract):
             raise ValueError("Only replacement decisions supply new original content")
         if self.replacement_target_id is not None and self.action != "replace":
             raise ValueError("Only replacement can assign a replacement identity")
+        if self.unresolved_fields is not None:
+            if self.action != "accept" or self.subject != "baseline":
+                raise ValueError("Field assessments require acceptance of extraction-only content")
+            paths = [item.field_path for item in self.unresolved_fields]
+            if not paths or len(set(paths)) != len(paths):
+                raise ValueError("Unresolved fields must be nonempty and distinct")
         return self
 
 
@@ -59,11 +83,6 @@ class PrerequisiteSelection(HistoryContract):
     target_id: StrictStr = Field(min_length=1)
     selection_id: StrictStr = Field(min_length=1)
     selection_generation: StrictInt = Field(ge=1)
-
-
-class StableValueAnchor(HistoryContract):
-    target_id: StrictStr = Field(min_length=1)
-    suffix: list[StrictStr | StrictInt] = Field(default_factory=list)
 
 
 class FrozenValidationInput(HistoryContract):

@@ -148,7 +148,8 @@ async def test_observer_detach_does_not_cancel_producer(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_authoritative_failed_outcome_overrides_clean_stream_exhaustion(monkeypatch):
+@pytest.mark.parametrize("status", ["failed", "review_pending", "review_exhausted", "interrupted"])
+async def test_authoritative_outcome_overrides_clean_stream_exhaustion(monkeypatch, status):
     monkeypatch.setattr(
         "src.lib.executable_runs.get_executable_run_event_replay_limit",
         lambda: 10,
@@ -157,7 +158,7 @@ async def test_authoritative_failed_outcome_overrides_clean_stream_exhaustion(mo
     manager = ExecutableRunManager()
 
     async def stream_factory():
-        await manager.set_outcome_status("curation_flow_run:session-1:turn-1", "failed")
+        await manager.set_outcome_status("curation_flow_run:session-1:turn-1", status)
         yield 'data: {"type":"FLOW_FINISHED","status":"failed"}\n\n'
 
     run, _ = await manager.get_or_start_stream(
@@ -172,7 +173,8 @@ async def test_authoritative_failed_outcome_overrides_clean_stream_exhaustion(mo
     events = [event async for event in manager.observe(run)]
 
     assert len(events) == 1
-    assert run.status == "failed"
+    assert run.status == status
+    assert run.terminal
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ const BLOCKING_VALIDATION_COUNT_KEYS: Array<keyof CurationValidationCounts> = [
   'not_found',
   'invalid_format',
   'conflict',
+  'unresolved',
 ]
 
 function hasBlockingEnvelopeSummary(

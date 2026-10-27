@@ -145,10 +145,9 @@ async def run(context, agent, *, input, run_config=None):
 
         def policy_turns():
             with store.SessionLocal.begin() as db:
-                ep, _ = admission.lock_episode(
+                return admission.remaining_reviewer_turns(
                     db, context.history_scope, context.episode_id
                 )
-                return ep.policy["reviewer_turns"]
 
         turns = await asyncio.to_thread(policy_turns)
         from src.lib.observability.cost_context import get_agent_cost_identity

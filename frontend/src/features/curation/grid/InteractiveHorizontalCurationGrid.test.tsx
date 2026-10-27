@@ -695,6 +695,27 @@ describe('InteractiveHorizontalCurationGrid', () => {
     unsubscribe()
   })
 
+  it('explicitly confirms an unchanged uncertain field without confirming on open', async () => {
+    const user = userEvent.setup()
+    const autosave = createAutosave()
+    const summary = resolvedSummary()
+    summary.status = 'unresolved'
+    summary.open_finding_count = 1
+    summary.findings = [{ finding_id: 'assessment', envelope_id: 'envelope-1',
+      object_id: 'object-1', field_path: 'citation.authors[1]', envelope_revision: 3,
+      severity: 'warning', finding_status: 'open', summary_status: 'unresolved',
+      code: 'validation_review.assessment_unresolved', message: 'Attribution uncertain', details: {} }]
+    const candidate = buildCandidate({ validation_summary_projections: [summary] })
+    renderGrid({ autosave, workspace: buildWorkspace(candidate) })
+    await user.click(screen.getByRole('button', { name: /^Edit Authors:/ }))
+    expect(autosave.queueFieldChange).not.toHaveBeenCalled()
+    expect(screen.getByText('citation.authors[1]: Attribution uncertain')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save and confirm' }))
+    expect(autosave.queueFieldChange).toHaveBeenCalledWith({ field_key: 'authors',
+      value: ['Ada Lovelace', 'Grace Hopper'], confirm_unresolved: true })
+    expect(autosave.flush).toHaveBeenCalledTimes(1)
+  })
+
   it('uses the adapter FieldRow renderer and saves or restores only after confirmation', async () => {
     const user = userEvent.setup()
     const autosave = createAutosave({ warning: 'Draft version conflict; edits remain local.' })

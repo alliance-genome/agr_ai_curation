@@ -235,6 +235,7 @@ export const FIELD_VALIDATION_STATUSES = [
   'not_found',
   'invalid_format',
   'conflict',
+  'unresolved',
   'skipped',
   'overridden',
 ] as const

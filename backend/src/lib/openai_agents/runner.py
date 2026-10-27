@@ -658,7 +658,7 @@ async def run_agent_with_owned_openai_resources(
     agent: Agent,
     input_value: Any,
     *,
-    max_turns: int,
+    max_turns: int | None,
     **run_kwargs: Any,
 ) -> Any:
     """Run one non-streaming agent with provider cleanup before loop shutdown."""

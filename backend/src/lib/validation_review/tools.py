@@ -146,7 +146,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         IDs. logical_attempt_id is the attempt fact ID, not the completion fact ID.
         expected_version is the unit's current head version, not selection_generation.
         Omitted targets remain pending. Accept caveated/unresolved complete answers
-        when appropriate. Reject leaves an older selection intact; revoke withdraws
+        when appropriate. For extraction-only acceptance, unresolved_fields names
+        uncertain plain payload paths and explanations; it does not alter source values.
+        Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """
         request = await asyncio.to_thread(checkpoint_provider)

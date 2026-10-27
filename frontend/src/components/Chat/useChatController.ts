@@ -1740,12 +1740,6 @@ export function useChatController({
     }
   }
 
-  const handleRestoreRequest = (text: string) => {
-    if (isLoading || inputMessage.trim() || !text.trim()) return
-    setInputMessage(text)
-    textareaRef.current?.focus()
-  }
-
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value
     setInputMessage(value)
@@ -1864,8 +1858,6 @@ export function useChatController({
     handleFeedbackDialogClose,
     handleFeedbackSubmit,
     handleInputChange,
-    handleRestoreRequest,
-    canRestoreRequest: !isLoading && !inputMessage.trim(),
     handleKeyPress,
     handleOpenCurationWorkspace,
     handleOpenPrepDialog,

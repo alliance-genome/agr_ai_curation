@@ -99,6 +99,23 @@ def active_overlays(db, artifact_id, *, through_sequence=None):
     return sorted(active, key=lambda item: item[0].sequence)
 
 
+def has_active_overlay(db, envelope, object_id, path):
+    """Server-only authority context for a subsequent curator edit."""
+    history = envelope.metadata.get("validation_history")
+    if history is None:
+        return False
+    obj = next((obj for obj in envelope.extracted_objects
+                if object_id in {obj.object_id, obj.pending_ref_id}), None)
+    if obj is None:
+        return False
+    refs = obj.metadata.get("validation_history")
+    if refs is None:
+        return False
+    return any(body["target_id"] == refs["target_id"] and
+               _overlap(anchored_path(refs, body["anchor"]), path)
+               for _, body in active_overlays(db, history["artifact_id"]))
+
+
 def record_patch(db, scope, artifact_id, *, event_id, actor_id, body):
     # One fact per independent change keeps authorization and replacement exact.
     # Declared compound identities and their mirrors are the only atomic group.
@@ -373,7 +390,8 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
 
 def apply_overlays(db, artifact_id, envelope):
     """Apply only exact target edits. Never transfer a curator edit by similar text."""
-    from src.lib.domain_envelopes.patches import set_payload_value
+    from src.lib.domain_envelopes.patches import set_payload_value, _payload_value
+    from .assessments import open_assessments, settle_assessments
     result = envelope.model_copy(deep=True)
     objects = {obj.metadata["validation_history"]["target_id"]: obj for obj in result.extracted_objects}
     for _, body in active_overlays(db, artifact_id):
@@ -387,6 +405,14 @@ def apply_overlays(db, artifact_id, envelope):
             if obj is None:
                 raise store.HistoryConflict("Replacing this record requires explicit curator revalidation authority")
             current_path = anchored_path(obj.metadata["validation_history"], change["anchor"])
+            findings = open_assessments(result, obj, current_path)
+            # A whole-collection value overlay also preserves removal/change of
+            # assessed leaves. Capture exact old values before replay; unchanged
+            # siblings require their own explicit acknowledgement overlay.
+            structural_findings = open_assessments(result, obj, current_path, descendants=True) if change.get("structural") else []
+            previous_values = {finding.finding_id: _payload_value(obj.payload, finding.field_ref.field_path)
+                               for finding in structural_findings if finding.field_ref is not None}
+            result = settle_assessments(result, {finding.finding_id for finding in findings})
             if change["present"]:
                 if current_path:
                     set_payload_value(obj.payload, current_path, deepcopy(change["value"]))
@@ -398,6 +424,10 @@ def apply_overlays(db, artifact_id, envelope):
                 for part in parts[:-1]:
                     value = value[part]
                 value.pop(parts[-1], None)
+            result = settle_assessments(result, {
+                finding.finding_id for finding in structural_findings
+                if finding.field_ref is not None and previous_values[finding.finding_id] != _payload_value(obj.payload, finding.field_ref.field_path)
+            })
     return result
 
 

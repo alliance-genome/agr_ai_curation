@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy import select
 from src.lib.validation_history import store
 from .audit import append_fact
+from src.schemas.validation_history import UnresolvedFieldAssessment
 from src.lib.validation_history.projection import publish_decisions_in_transaction
 from src.models.sql.validation_history import ValidationFact
 from .admission import lock_episode
@@ -46,6 +47,12 @@ class ReviewEntry(BaseModel):
         "Name exactly one attempt or authorized extraction_ref except for revoke."
     ))
     extraction_ref: StrictStr | None = None
+    unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
+        "Only with accept of extraction-only content: exact plain payload field paths "
+        "and explanations of remaining scientific uncertainty after assessment. "
+        "Acceptance completes review without claiming these fields are resolved. "
+        "Do not use for structured validator identities or incomplete executions."
+    ))
 
 
 def bounded_text(value, limit, name):
@@ -65,6 +72,11 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
         entries = [
             ReviewEntry.model_validate(e).model_dump(mode="json") for e in entries
         ]
+        # The new assessment is genuinely optional; absent annotations do not
+        # change the identity of previously recorded requests.
+        for entry in entries:
+            if entry["unresolved_fields"] is None:
+                del entry["unresolved_fields"]
         identity = {
             "entries": entries,
             "actor": {"type": context.actor_type, "id": context.actor_id},
@@ -169,6 +181,12 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
                         "Extraction reference does not match the immutable baseline"
                     )
                 subject = "baseline"
+            assessments = entry.get("unresolved_fields")
+            if assessments is not None:
+                if action != "accept" or subject != "baseline":
+                    raise ValueError("Unresolved fields require extraction-only acceptance")
+                for assessment in assessments:
+                    bounded_text(assessment["explanation"], limits.instruction_chars, "Field explanation")
             resolved.append(
                 {
                     "target_id": unit.id,
@@ -176,6 +194,7 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
                     "action": action,
                     "reason": entry["reason"],
                     **({"subject": subject} if subject else {}),
+                    **({"unresolved_fields": assessments} if assessments is not None else {}),
                 }
             )
         # The model never chooses the checkpoint/source linkage or the actor.

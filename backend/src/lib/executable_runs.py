@@ -40,6 +40,9 @@ ExecutableRunStatus = Literal[
     "failed",
     "cancel_requested",
     "cancelled",
+    "review_pending",
+    "review_exhausted",
+    "interrupted",
 ]
 
 
@@ -95,7 +98,7 @@ class ExecutableRun:
     task: asyncio.Task[None] | None = None
     terminal_monotonic: float | None = None
     terminal_error_event_factory: Callable[[Exception], str | None] | None = None
-    outcome_status: Literal["completed", "failed"] | None = None
+    outcome_status: Literal["completed", "failed", "review_pending", "review_exhausted", "interrupted"] | None = None
 
     def snapshot(self) -> ExecutableRunSnapshot:
         return ExecutableRunSnapshot(
@@ -118,7 +121,7 @@ class ExecutableRun:
 
     @property
     def terminal(self) -> bool:
-        return self.status in {"completed", "failed", "cancelled"}
+        return self.status in {"completed", "failed", "cancelled", "review_pending", "review_exhausted", "interrupted"}
 
 
 class ExecutableRunManager:
@@ -219,7 +222,7 @@ class ExecutableRunManager:
     async def set_outcome_status(
         self,
         run_id: str,
-        status: Literal["completed", "failed"],
+        status: Literal["completed", "failed", "review_pending", "review_exhausted", "interrupted"],
     ) -> None:
         """Record the producer's authoritative outcome for final run status."""
 

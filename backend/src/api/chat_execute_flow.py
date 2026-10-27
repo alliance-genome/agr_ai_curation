@@ -1206,7 +1206,7 @@ async def execute_flow_endpoint(
                     adapter_keys=adapter_keys,
                     domain_warning_count=domain_warning_count,
                     file_outputs=file_outputs,
-                    failure_reason=outcome.failure_reason,
+                    failure_reason=outcome.failure_reason or outcome.stop_reason,
                 )
                 summary_row = _build_execute_flow_summary_row(
                     flow_id=str(flow.id),
@@ -1227,7 +1227,7 @@ async def execute_flow_endpoint(
                     status=outcome.status,
                     trace_id=trace_id,
                     final_user_output=outcome.final_user_visible_text,
-                    failure_reason=outcome.failure_reason,
+                    failure_reason=outcome.failure_reason or outcome.stop_reason,
                     assistant_message=history_assistant_message,
                     run_started_event=run_started_event,
                     terminal_events=terminal_events,
@@ -1263,9 +1263,8 @@ async def execute_flow_endpoint(
                             "flow_run_id": prepared_turn.flow_run_id,
                         },
                     )
-                authoritative_run_status = (
-                    "completed" if outcome.status == "completed" else "failed"
-                )
+                authoritative_run_status = outcome.status
+                assert authoritative_run_status != "running", "Terminal flow outcome must have a terminal status"
                 await executable_run_manager.set_outcome_status(
                     run_id,
                     authoritative_run_status,
@@ -1371,7 +1370,7 @@ async def execute_flow_endpoint(
                 adapter_keys=adapter_keys,
                 domain_warning_count=domain_warning_count,
                 file_outputs=file_outputs,
-                failure_reason=outcome.failure_reason,
+                failure_reason=outcome.failure_reason or outcome.stop_reason,
             )
             failure_summary_row = _build_execute_flow_summary_row(
                 flow_id=str(flow.id),
@@ -1382,7 +1381,7 @@ async def execute_flow_endpoint(
                 status=outcome.status,
                 trace_id=trace_id,
                 final_user_output=outcome.final_user_visible_text,
-                failure_reason=outcome.failure_reason,
+                failure_reason=outcome.failure_reason or outcome.stop_reason,
                 assistant_message=failure_assistant_message,
                 run_started_event=run_started_event,
                 terminal_events=failure_terminal_events,

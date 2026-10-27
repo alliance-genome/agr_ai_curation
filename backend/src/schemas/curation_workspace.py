@@ -152,6 +152,7 @@ class FieldValidationStatus(str, Enum):
     NOT_FOUND = "not_found"
     INVALID_FORMAT = "invalid_format"
     CONFLICT = "conflict"
+    UNRESOLVED = "unresolved"
     SKIPPED = "skipped"
     OVERRIDDEN = "overridden"
 
@@ -590,6 +591,7 @@ class CurationValidationCounts(CurationWorkspaceBaseModel):
     not_found: int = Field(default=0, ge=0)
     invalid_format: int = Field(default=0, ge=0)
     conflict: int = Field(default=0, ge=0)
+    unresolved: int = Field(default=0, ge=0)
     skipped: int = Field(default=0, ge=0)
     overridden: int = Field(default=0, ge=0)
 
@@ -2138,6 +2140,7 @@ class CurationDraftFieldChange(CurationWorkspaceBaseModel):
     """Patch payload for mutating one or more draft fields."""
 
     field_key: str = Field(description="Field identifier to mutate")
+    confirm_unresolved: bool = Field(default=False, description="Explicit curator confirmation of a flagged plain value, including unchanged text")
     value: Optional[Any] = Field(default=None, description="New field value")
     revert_to_seed: bool = Field(
         default=False,
@@ -2204,6 +2207,7 @@ class CurationEnvelopeFieldPatchRequest(CurationWorkspaceBaseModel):
         default=None,
         description="Client-observed field value before the edit",
     )
+    confirm_unresolved: bool = Field(default=False, description="Explicit curator confirmation of a flagged plain value, including unchanged text")
     value: Optional[Any] = Field(default=None, description="New field value")
     selected_value_action: Optional[Literal["withdraw_override", "restore_selected"]] = None
     selection_reference: Optional[dict[str, Any]] = Field(

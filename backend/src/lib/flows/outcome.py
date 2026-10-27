@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 
 
-FlowRunStatus = Literal["running", "completed", "failed"]
+FlowRunStatus = Literal["running", "completed", "failed", "review_pending", "review_exhausted", "interrupted"]
+REVIEW_STOP_STATUSES = frozenset({"review_pending", "review_exhausted", "interrupted"})
 FlowPersistenceStatus = Literal["pending", "succeeded", "failed"]
 
 _TYPED_SUCCESS_OUTPUT_EVENTS = {"FILE_READY", "CHAT_OUTPUT_READY"}
@@ -70,6 +71,7 @@ class FlowRunOutcome:
 
     status: FlowRunStatus = "running"
     failure_reason: str | None = None
+    stop_reason: str | None = None
     failure_type: str | None = None
     failure_category: str | None = None
     failure_phase: str | None = None
@@ -168,6 +170,14 @@ class FlowRunOutcome:
         self._flow_finished_event = dict(event)
         self.output_status = event.get("output_status")
         terminal_status = str(event.get("status") or "failed")
+        if terminal_status in REVIEW_STOP_STATUSES and self.status != "failed" and self.failure_type is None:
+            self.status = cast(FlowRunStatus, terminal_status)
+            self.stop_reason = str(event.get("review_reason") or "Review did not complete.")
+            self.final_user_visible_text = None
+            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+            self._run_finished_event = None
+            self._curation_handoff_ready_event = None
+            return
         if terminal_status != "completed" or self.status == "failed":
             self.status = "failed"
             self.failure_reason = str(
@@ -203,7 +213,7 @@ class FlowRunOutcome:
         return (
             "Partial result: some requested outputs could not be produced. "
             "The available outputs are shown below and saved files remain available. "
-            "Review what is missing before restoring your request to try again. "
+            "Review which requested outputs are missing. "
             "A saved result does not by itself establish curation readiness."
         )
 
@@ -222,7 +232,7 @@ class FlowRunOutcome:
             events.extend(dict(event) for event in self._success_output_events)
             if not self._has_chat_output and self._run_finished_event is not None:
                 events.append(dict(self._run_finished_event))
-        elif self.status == "failed":
+        elif self.status == "failed" or self.status in REVIEW_STOP_STATUSES:
             events.extend(dict(event) for event in self._success_output_events)
             if self._run_error_event is not None:
                 events.append(dict(self._run_error_event))

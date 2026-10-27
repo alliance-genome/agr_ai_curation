@@ -865,7 +865,7 @@ def _entity_db_status(
 
     if summary.counts.not_found > 0 or summary.counts.invalid_format > 0:
         return CurationEntityTagDbValidationStatus.NOT_FOUND
-    if summary.counts.ambiguous > 0 or summary.counts.conflict > 0:
+    if summary.counts.ambiguous > 0 or summary.counts.conflict > 0 or summary.counts.unresolved > 0:
         return CurationEntityTagDbValidationStatus.AMBIGUOUS
     if summary.counts.validated > 0:
         return CurationEntityTagDbValidationStatus.VALIDATED

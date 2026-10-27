@@ -26,15 +26,15 @@ class CuratorFailure:
 
 _FAILURES = {
     "pdf_read_failed": CuratorFailure("pdf_read_failed", "There was an error reading the PDF. We couldn't continue the extraction.", False),
-    "history_unavailable": CuratorFailure("history_unavailable", "This run stopped because the request grew too large while its history could not be saved. Completed actions were not repeated. You can restore your request and try again later.", True),
+    "history_unavailable": CuratorFailure("history_unavailable", "This run stopped because the request grew too large while its history could not be saved. Completed actions were not repeated. You can send the request again later.", True),
     "protected_context_limit": CuratorFailure("protected_context_limit", "This run stopped before required context would be lost. Please split the task into smaller requests. Completed actions were not repeated.", False),
-    "provider_unavailable": CuratorFailure("provider_unavailable", "The AI service is temporarily unavailable or busy. This request did not finish. You can restore your request and try again later. If it keeps happening, report it using the feedback menu.", True),
-    "provider_connection": CuratorFailure("provider_connection", "The connection to the AI service was interrupted before this request finished. You can restore your request and try again later.", True),
+    "provider_unavailable": CuratorFailure("provider_unavailable", "The AI service is temporarily unavailable or busy. This request did not finish. You can send the request again later. If it keeps happening, report it using the feedback menu.", True),
+    "provider_connection": CuratorFailure("provider_connection", "The connection to the AI service was interrupted before this request finished. You can send the request again later.", True),
     "provider_configuration": CuratorFailure("provider_configuration", "The AI service could not accept this request because of a request, access, quota or configuration problem. Please report it using the feedback menu. Repeating the same request will not fix this problem.", False),
     "context_limit": CuratorFailure("context_limit", "This request exceeded an AI context or request-size limit. Try a smaller document scope or a new chat. Report the problem if the same workflow keeps failing.", False),
     "invalid_result": CuratorFailure("invalid_result", "The AI response could not be finalized as a valid result. This run did not complete. Please report it using the feedback menu before repeating this workflow.", False),
     "persistence_failed": CuratorFailure("persistence_failed", "The result could not be saved. This run did not complete, and unsaved output is not ready for curation. Keep any visible text and report the problem using the feedback menu.", False),
-    "unknown": CuratorFailure("unknown", "This request could not be completed. You can restore the request to review it before trying again later. If it keeps failing, report it using the feedback menu.", True),
+    "unknown": CuratorFailure("unknown", "This request could not be completed. Review the request before sending it again later. If it keeps failing, report it using the feedback menu.", True),
     "provider_content_policy": CuratorFailure("provider_content_policy", PROVIDER_POLICY_CHAT_MESSAGE, False, "openai"),
 }
 _EVENT_CATEGORIES = {
