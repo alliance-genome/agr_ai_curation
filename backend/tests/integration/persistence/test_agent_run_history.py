@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
+from alembic.runtime.migration import MigrationContext
 
 from sqlalchemy import delete, func, select
 
@@ -19,8 +21,21 @@ from src.models.sql.database import SessionLocal
 def test_history_downgrade_cannot_remove_retained_originals():
     config = Config(str(Path(__file__).resolve().parents[3] / "alembic.ini"))
     command.upgrade(config, "head")
-    with pytest.raises(RuntimeError, match="retained"):
+    # Exercise the history guard itself even when a newer forward-only repair
+    # stops a downgrade before it can reach this revision.
+    scripts = ScriptDirectory.from_config(config)
+    with pytest.raises(RuntimeError, match="canonical retained data"):
+        scripts.get_revision("c9b3e4f5a6d7").module.downgrade()
+    with SessionLocal() as db:
+        before = MigrationContext.configure(db.connection()).get_current_heads()
+        counts = [db.scalar(select(func.count()).select_from(model))
+                  for model in (AgentHistoryEvent, AgentHistoryPayload)]
+    with pytest.raises(RuntimeError, match="Forward-only flow repair"):
         command.downgrade(config, "b8a2d3f4e5c6")
+    with SessionLocal() as db:
+        assert MigrationContext.configure(db.connection()).get_current_heads() == before
+        assert [db.scalar(select(func.count()).select_from(model))
+                for model in (AgentHistoryEvent, AgentHistoryPayload)] == counts
 
 
 def test_concurrent_identical_payloads_have_distinct_events_and_one_durable_body():
