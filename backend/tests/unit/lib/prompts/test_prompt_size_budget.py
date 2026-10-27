@@ -12,9 +12,10 @@ CORE_GENERATED_BUDGET = 2500
 # original/contribution provenance, and complete-page evidence rules. The
 # incremental source/answer navigation and runtime compaction guidance bring the
 # measured contract to 6242 chars. Explicit whole-target/component decision routing
-# brings it to 6788 chars; keep the ceiling close to that reviewed text.
+# brings it to 6788 chars. Explicit whole-record retirement routing adds one
+# reviewed sentence (149 chars), bringing it to 6937; keep the ceiling close.
 # This is a source-growth regression ceiling, not a runtime truncation limit.
-AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 6800}
+AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 7000}
 
 
 def test_core_generated_within_budget_for_all_agents():
