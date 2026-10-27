@@ -9,7 +9,7 @@ from agents.models.openai_responses import Converter
 
 from src.lib.validation_history.store import HistoryScope
 from src.lib.validation_review.extractor_phase import create_phase
-from src.schemas.validation_followup import TargetedFollowupResult, TargetedFollowupTransport
+from src.schemas.validation_followup import TargetedFollowupSubmission, FollowupEntryResult, TargetedFollowupTransport
 
 
 def transport_payload(encoded):
@@ -32,7 +32,7 @@ def test_decode_preserves_native_values_and_evidence(value):
     assert result.entries[0].evidence_record_ids == ["methods"]
     assert "value_json" not in proposed.model_dump()
     # Re-reading canonical scientific strings such as '[1]' must not decode again.
-    assert TargetedFollowupResult.model_validate(result.model_dump()).entries[0].proposed_values[0].value == value
+    assert TargetedFollowupSubmission[FollowupEntryResult].model_validate(result.model_dump()).entries[0].proposed_values[0].value == value
 
 
 @pytest.mark.parametrize("encoded", [
@@ -105,6 +105,34 @@ def test_actual_phase_responses_schema_is_typed_and_old_any_fails(phase_trace):
     wire = Converter.get_response_format(AgentOutputSchema(phase.output_type))
     assert wire["format"]["type"] == "json_schema" and wire["format"]["strict"] is True
     assert_closed_typed_schema(wire["format"]["schema"])
-    old_wire = Converter.get_response_format(AgentOutputSchema(TargetedFollowupResult))
+    old_wire = Converter.get_response_format(AgentOutputSchema(TargetedFollowupSubmission[FollowupEntryResult]))
     with pytest.raises(AssertionError, match="Untyped schema node"):
         assert_closed_typed_schema(old_wire["format"]["schema"])
+
+
+def test_whole_record_retirement_is_distinct_from_field_replacement():
+    from pydantic import ValidationError
+    from src.schemas.validation_followup import FollowupEntryResult
+    payload = transport_payload('[]')
+    entry = payload["entries"][0]
+    entry.update(outcome="propose_retirement", proposed_values=[])
+    decoded = TargetedFollowupTransport.model_validate(payload).decode()
+    assert FollowupEntryResult.model_validate(decoded.entries[0].model_dump()).outcome == "propose_retirement"
+    entry["proposed_values"] = transport_payload('[]')["entries"][0]["proposed_values"]
+    decoded = TargetedFollowupTransport.model_validate(payload).decode()
+    with pytest.raises(ValidationError, match="no field replacements"):
+        FollowupEntryResult.model_validate(decoded.entries[0].model_dump())
+
+
+def test_incident_shape_is_retained_for_ingress_but_never_valid_selection():
+    from pydantic import ValidationError
+    from src.schemas.validation_followup import FollowupEntryResult
+    payload = transport_payload('[]')
+    proposed = payload["entries"][0]["proposed_values"][0]
+    proposed["field_path"] = "entries"
+    proposed["collection_mappings"] = [{"collection_path": "entries", "source_collection_id": None,
+        "items": [], "retired_item_ids": ["entry"], "retirement_reason": "Outside task scope"}]
+    decoded = TargetedFollowupTransport.model_validate(payload).decode()
+    assert decoded.entries[0].assessment == payload["entries"][0]["assessment"]
+    with pytest.raises(ValidationError, match="new collection cannot refer to old items"):
+        FollowupEntryResult.model_validate(decoded.entries[0].model_dump())

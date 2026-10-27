@@ -47,6 +47,11 @@ class ExtractorAdapter:
         def prepare():
             if not self.receipt["contract"]:
                 raise admission.ReviewStopped("saved_extractor_contract_unavailable")
+            from .extractor_phase import TARGETED_EXTRACTION_PROTOCOL, TargetedFollowupTransport
+            pinned = self.receipt["contract"]
+            if (pinned.get("followup_protocol") != TARGETED_EXTRACTION_PROTOCOL
+                    or pinned.get("followup_transport_schema") != TargetedFollowupTransport.model_json_schema()):
+                raise admission.ReviewStopped("fresh_extraction_required")
             checkpoint = self.checkpoint_provider()
             with store.SessionLocal.begin() as db:
                 source = projection.source_envelope_in_transaction(

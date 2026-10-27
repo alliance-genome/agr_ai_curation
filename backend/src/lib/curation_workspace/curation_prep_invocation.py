@@ -39,6 +39,7 @@ class _ChatPrepContext:
     candidate_count: int
     unscoped_candidate_count: int
     preparable_candidate_count: int
+    retired_record_count: int = 0
 
 
 def build_chat_curation_prep_preview(
@@ -183,7 +184,7 @@ def _load_chat_prep_context(
     discussed_adapter_keys = _unique_non_empty(
         record.adapter_key
         for record in extraction_results
-        if record.adapter_key and max(int(record.candidate_count), 0) > 0
+        if record.adapter_key
     )
     unscoped_candidate_count = sum(
         max(int(record.candidate_count), 0)
@@ -201,6 +202,7 @@ def _load_chat_prep_context(
         candidate_count=sum(max(int(record.candidate_count), 0) for record in extraction_results),
         unscoped_candidate_count=unscoped_candidate_count,
         preparable_candidate_count=prep_scope_summary.candidate_count,
+        retired_record_count=prep_scope_summary.retired_record_count,
     )
 
 
@@ -209,7 +211,7 @@ def _build_run_blocking_reasons(context: _ChatPrepContext) -> list[str]:
         return [
             "No candidate annotations are available from this chat yet. Ask the assistant to extract findings before preparing for curation review."
         ]
-    if context.candidate_count <= 0:
+    if context.candidate_count <= 0 and context.retired_record_count == 0:
         return [
             "This chat has extraction context, but it did not retain any candidate annotations to prepare yet."
         ]
@@ -217,7 +219,7 @@ def _build_run_blocking_reasons(context: _ChatPrepContext) -> list[str]:
         return [
             "The current chat extraction results do not include adapter scope, so prep cannot determine what to prepare."
         ]
-    if context.preparable_candidate_count <= 0:
+    if context.preparable_candidate_count <= 0 and context.retired_record_count == 0:
         return [
             "No evidence-verified candidates were available to prepare for curation review."
         ]
@@ -227,6 +229,10 @@ def _build_run_blocking_reasons(context: _ChatPrepContext) -> list[str]:
 def _build_summary_text(context: _ChatPrepContext, blocking_reasons: Sequence[str]) -> str:
     if blocking_reasons:
         return blocking_reasons[0]
+
+    if context.preparable_candidate_count == 0 and context.retired_record_count > 0:
+        return (f"All {context.retired_record_count} records were retired after review. "
+                "Open the curation workspace to inspect their history or restore a record for review.")
 
     scope_labels = []
     if context.discussed_adapter_keys:

@@ -92,6 +92,8 @@ def _load_candidate_for_write(
                 f"{normalized_session_id}"
             ),
         )
+    from .record_retirement_service import require_active_candidate_for_write
+    require_active_candidate_for_write(db, candidate)
     if candidate.draft is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -710,7 +712,10 @@ def validate_session(
         )
     session_row = _load_session_for_validation(db, session_id=normalized_session_id)
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
-    target_candidate_ids = request.candidate_ids or list(candidate_map.keys())
+    target_candidate_ids = request.candidate_ids or [
+        candidate_id for candidate_id, candidate in candidate_map.items()
+        if not candidate.candidate_metadata.get("record_retired", False)
+    ]
     unknown_candidate_ids = [
         candidate_id
         for candidate_id in target_candidate_ids
@@ -721,6 +726,10 @@ def validate_session(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown candidate(s) for session: {', '.join(sorted(unknown_candidate_ids))}",
         )
+
+    if any(candidate_map[key].candidate_metadata.get("record_retired", False)
+           for key in target_candidate_ids):
+        raise HTTPException(status_code=409, detail="Restore retired records before validation")
 
     # Validate every selected contract before any candidate writes a snapshot
     # or invokes a validator. A later invalid source must not partially apply.

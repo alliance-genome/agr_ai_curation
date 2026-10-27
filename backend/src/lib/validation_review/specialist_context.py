@@ -64,6 +64,15 @@ def assemble_in_transaction(
         parent_body = {"actor": parent_body["identity"]["actor"],
             "entries": [{"target_id": parent.target_id, "action": "select_extraction_contribution",
                          "reason": parent_body["identity"]["reason"]}]}
+    elif parent.kind in {"record_retirement_decision", "record_restoration"}:
+        if parent.kind == "record_retirement_decision" and parent_body["identity"]["decision"] != "approve":
+            raise store.HistoryConflict("Declined retirement cannot change source inputs")
+        affected = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact.id, ValidationFact.parent_id == parent.id,
+            ValidationFact.kind == "validation_source_input")))
+        parent_body = {"actor": parent_body["identity"]["actor"], "entries": [
+            {"target_id": fact.target_id, "action": parent.kind, "reason": parent_body["identity"]["reason"]}
+            for fact in affected]}
     elif parent.kind == "workspace_revalidation_request":
         if parent.parent_id != episode.id or parent_body["actor"] != {"type": "curator", "id": scope.owner_id}:
             raise store.HistoryAccessError("Revalidation request is outside this curator round")

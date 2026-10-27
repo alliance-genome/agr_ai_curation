@@ -171,6 +171,9 @@ def pin_publication_in_transaction(
     ref = envelope.metadata.get("validation_history", {})
     if ref.get("artifact_id") != artifact_id:
         raise store.HistoryConflict("Published projection has a different artifact")
+    from .record_lifecycle import counts
+    envelope = envelope.model_copy(update={"metadata": {**envelope.metadata,
+        "record_counts": counts(db, artifact_id, manifest["blockers"])}})
     body = {
         "manifest": manifest,
         "envelope_revision": envelope_revision,
@@ -499,12 +502,19 @@ def refresh_workspace_projection(db, envelope, revision):
     if row is None or row.session_id is None:
         return  # Extraction-only artifacts do not yet have a workspace.
     objects = {obj.object_id or obj.pending_ref_id: obj for obj in envelope.extracted_objects}
+    from .record_lifecycle import retired_records
+    ref = envelope.metadata["validation_history"]
+    retired = {item["object_id"]: item for item in retired_records(db, ref["artifact_id"])}
     now = datetime.now(timezone.utc)
     for candidate in load_envelope_candidates_for_patch(db, session_id=row.session_id, envelope_id=envelope.envelope_id):
         obj = objects.get(candidate.object_id)
         if obj is None:
-            # Do not leave an old selected payload pretending to be current.
-            raise store.HistoryConflict("Workspace candidate is absent from selected projection")
+            if candidate.object_id not in retired:
+                raise store.HistoryConflict("Workspace candidate is absent from selected projection")
+            candidate.candidate_metadata = {**candidate.candidate_metadata, "record_retired": True}
+            candidate.envelope_revision = revision
+            continue
+        candidate.candidate_metadata = {**candidate.candidate_metadata, "record_retired": False}
         changed_fields = []
         for raw in candidate.draft.fields if candidate.draft is not None else ():
             field = CurationDraftField.model_validate(raw)
@@ -514,6 +524,16 @@ def refresh_workspace_projection(db, envelope, revision):
             candidate, obj, envelope_revision=revision,
             changed_field_path=tuple(changed_fields), updated_at=now,
         )
+    from src.lib.curation_workspace.session_persistence import _apply_candidate_progress_counts
+    from src.lib.curation_workspace.models import CurationReviewSession, CurationCandidate
+    session = db.get(CurationReviewSession, row.session_id)
+    candidates = list(db.scalars(select(CurationCandidate).where(CurationCandidate.session_id == row.session_id)))
+    _apply_candidate_progress_counts(session, [item for item in candidates
+        if not item.candidate_metadata.get("record_retired", False)])
+    if session.current_candidate_id is not None and not any(
+            item.id == session.current_candidate_id and not item.candidate_metadata.get("record_retired", False)
+            for item in candidates):
+        session.current_candidate_id = None
     db.flush()
 
 

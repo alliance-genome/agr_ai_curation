@@ -1806,6 +1806,7 @@ class CurationReviewSession(CurationSessionSummary):
 class CurationWorkspace(CurationWorkspaceBaseModel):
     """Hydrated workspace payload consumed by page shells and detail endpoints."""
 
+    retired_records: list[dict[str, Any]] = Field(default_factory=list)
     session: CurationReviewSession = Field(description="Detailed review session payload")
     entity_tags: list[CurationEntityTag] = Field(
         default_factory=list,

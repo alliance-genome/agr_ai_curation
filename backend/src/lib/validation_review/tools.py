@@ -8,6 +8,7 @@ from . import decisions, reads, scheduling
 from .admission import ReviewStopped
 from src.lib.validation_history import store
 from functools import wraps
+from typing import Literal
 from inspect import signature
 from .decisions import ReviewEntry
 
@@ -41,6 +42,8 @@ def _recoverable_tool(function):
                     "source_input_changed",
                     "extraction_attempts_exhausted",
                     "saved_extractor_contract_unavailable",
+                    "fresh_extraction_required",
+                    "configured_extractor_changed",
                 }
                 or (
                     exc.reason == "budget_exhausted"
@@ -229,7 +232,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         """Approve exact proposed source fields/evidence and their item relationships.
 
         Read the full contribution first. Decide whether each proposed correction,
-        merge, split, reorder, addition or retirement is scientifically justified.
+        merge, split, reorder, addition or item retirement within a record is justified.
         field_paths select complete proposals including their explicit predecessor
         mappings; the runtime never guesses identity from matching text or indices.
         Include the evidence required by selected fields. expected_source_sha is
@@ -241,6 +244,23 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         return await select_source(operation_id=operation_id,
             contribution_ref=contribution.model_dump(mode="json"), field_paths=field_paths,
             evidence_ids=evidence_ids, expected_source_sha=expected_source_sha, reason=reason)
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def decide_record_retirement(operation_id: str, contribution: EvidenceReference,
+            decision: Literal["approve", "decline"], expected_source_sha: str, reason: str) -> dict:
+        """Approve or decline an extractor's whole-record retirement recommendation.
+
+        Read its exact contribution, evidence and uncertainty first. Approval omits
+        the record from current results without deleting original data or history;
+        decline preserves current values and readiness. Curator authority is protected.
+        Use the current packet manifest's source_state_sha256. A field or nested-item
+        correction belongs to select_extraction_contribution instead.
+        """
+        assert select_source is not None
+        return await select_source(operation_id=operation_id,
+            contribution_ref=contribution.model_dump(mode="json"), retirement_decision=decision,
+            expected_source_sha=expected_source_sha, reason=reason)
 
     @function_tool(failure_error_function=None)
     @_recoverable_tool
@@ -270,7 +290,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         get_validation_review_status,
     ]
     if all(callback is not None for callback in (request_extraction, select_source, assess_source)):
-        result.extend([request_targeted_extraction, select_extraction_contribution, validate_selected_extraction_source])
+        result.extend([request_targeted_extraction, select_extraction_contribution,
+                       decide_record_retirement, validate_selected_extraction_source])
     elif any(callback is not None for callback in (request_extraction, select_source, assess_source)):
         raise ValueError("Targeted extraction, source selection and assessment must be wired together")
     return result

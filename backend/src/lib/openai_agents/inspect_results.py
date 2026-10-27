@@ -1335,6 +1335,7 @@ def _summary_response(result: _Result) -> dict[str, Any]:
     for _key, entry in decisions:
         decision_status[str(entry["status"])] = decision_status.get(str(entry["status"]), 0) + 1
     inventory = {
+        "record_counts": result.envelope.metadata.get("record_counts"),
         "result_status": "non_empty_extraction_ready" if visible else "empty_extraction",
         "object_count": len(visible),
         "other_object_count": len(result.envelope.extracted_objects) - len(visible),

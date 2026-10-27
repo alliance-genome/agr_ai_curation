@@ -760,3 +760,24 @@ def test_only_a_stored_extraction_may_carry_values_without_resolution_state():
         payload[key] = None
     with pytest.raises(ValueError, match="records no resolution state"):
         domain_envelope_from_extraction_result(extraction_result, stored=False)
+
+
+def test_prep_preview_uses_current_all_retired_publication(monkeypatch):
+    from unittest.mock import Mock
+    record = _make_domain_envelope_extraction_result()
+    record.document_id = "00000000-0000-0000-0000-000000000001"
+    record.metadata["chat_review"] = {"history_scope_id": "history", "artifact_id": "artifact"}
+    selected = domain_envelope_from_extraction_result(record, stored=True)
+    selected.extracted_objects = []
+    selected.metadata["record_counts"] = {"active": 0, "retired": 1, "pending": 0}
+    monkeypatch.setattr("src.lib.validation_history.projection.latest_publication_reference", lambda *a: {"ref": "current"})
+    reader = Mock(return_value=(selected, {}))
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", reader)
+    materializer = Mock()
+    materializer.materialize.side_effect = lambda envelope, **kw: list(envelope.extracted_objects)
+    monkeypatch.setattr(module, "_review_row_materializer_for_extraction_result", lambda *a, **kw: materializer)
+    ref = module.ensure_domain_envelope_materialization(record, persist=False)
+    assert ref.review_row_count == 0
+    assert ref.retired_record_count == 1
+    assert reader.call_args.kwargs["finalized"] is True
+    assert materializer.materialize.call_args.args[0] is selected

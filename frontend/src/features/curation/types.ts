@@ -580,7 +580,19 @@ export interface CurationReviewSession extends CurationSessionSummary {
   rejection_reason?: string | null
 }
 
+export interface RetiredRecord {
+  envelope_id: string
+  target_id: string
+  object_id: string
+  version: number
+  reason: string | null
+  original: { fact_id: string; sha256: string }
+  proposal: { fact_id: string; sha256: string }
+  retirement: { fact_id: string; sha256: string }
+}
+
 export interface CurationWorkspace {
+  retired_records?: RetiredRecord[]
   session: CurationReviewSession
   candidates: CurationCandidate[]
   evidence_anchor_projections?: DomainEnvelopeEvidenceAnchorProjection[]

@@ -374,6 +374,7 @@ class FlowOutputField(BaseModel):
 
 
 class FlowOutputArtifact(BaseModel):
+    record_counts: dict[str, int] | None = None
     selected_projection: dict[str, Any] | None = None
     review_session_id: str | None = None
     node_id: str = ""
@@ -439,6 +440,7 @@ class FlowOutputArtifactBundle(BaseModel):
 
 
 class FlowOutputProjectionResult(BaseModel):
+    empty_reason: Literal["all_records_retired"] | None = None
     selection_manifests: list[dict[str, Any]] = Field(default_factory=list)
     # None explicitly means a caller did not supply stage measurements.
     export_accounting: ExportAccounting | None = None
@@ -1589,6 +1591,7 @@ def _build_artifact_from_step(
         return None
 
     selected_reference = None
+    record_counts = None
     review_session_id = None
     if isinstance(payload, Mapping):
         source_metadata = payload.get("metadata") or {}
@@ -1635,6 +1638,7 @@ def _build_artifact_from_step(
                     warnings=["Selected values await publication: " + str(exc)],
                 )
             payload = selected_envelope.model_dump(mode="json")
+            record_counts = selected_envelope.metadata.get("record_counts")
     raw_receipt = _candidate_attr(candidate, "execution_receipt")
     receipt = AgentExecutionReceipt.model_validate(raw_receipt) if raw_receipt is not None else None
     profile_fields = None
@@ -1943,7 +1947,7 @@ def _build_artifact_from_step(
                                       display=display_specs.get(f["ref"]))
                       for f in catalog["fields"] if not f["ref"].startswith("object.attribute.")]
     return FlowOutputArtifact(
-        selected_projection=selected_reference, review_session_id=review_session_id,
+        selected_projection=selected_reference, review_session_id=review_session_id, record_counts=record_counts,
         node_id=node_id, export_schema_fingerprint=catalog["schema_fingerprint"],
         execution_receipt=receipt,
         declared_fields=[FlowOutputField(
@@ -2018,7 +2022,10 @@ def _default_row_source_for_bundle(
     rows_by_source: Mapping[str, Sequence[Mapping[str, Any]]],
     output_format: FlowOutputFormat | None,
 ) -> FlowOutputRowSource:
-    del artifacts
+    if artifacts and all(artifact.is_canonical_curation_data and artifact.record_counts is not None
+                         and artifact.record_counts["active"] == 0 and artifact.record_counts["retired"] > 0
+                         for artifact in artifacts):
+        return "object"
     if output_format == "tsv":
         return "object"
     if rows_by_source.get("object"):
@@ -2949,6 +2956,24 @@ def _expand_split_columns(
     return output, items
 
 
+def _retired_source_snapshot(bundle, plan):
+    """Preview only; finalization independently verifies the saved publications."""
+    if plan.row_source != "object":
+        return False
+    nodes = {source.node_id for source in plan.selected_sources}
+    keys, ids = set(plan.source_keys), set(plan.source_extraction_result_ids)
+    artifacts = [artifact for artifact in bundle.artifacts
+        if (not nodes or artifact.node_id in nodes)
+        and (not keys and not ids or artifact.source_key in keys or artifact.extraction_result_id in ids)]
+    return (bool(artifacts) and nodes.issubset({item.node_id for item in artifacts})
+        and keys.issubset({item.source_key for item in artifacts})
+        and ids.issubset({item.extraction_result_id for item in artifacts})
+        and all(item.is_canonical_curation_data and item.selected_projection is not None
+                and item.record_counts is not None and item.record_counts["active"] == 0
+                and item.record_counts["retired"] > 0 and not item.rows_by_source.get("object", [])
+                for item in artifacts))
+
+
 def validate_projection_plan(
     bundle: FlowOutputArtifactBundle,
     plan: FlowOutputProjectionPlan,
@@ -2960,6 +2985,10 @@ def validate_projection_plan(
     if plan.selection_mode == "selected_fields":
         from src.lib.flows.selected_export import selected_export_errors
         errors.extend(selected_export_errors(bundle, plan))
+    if _retired_source_snapshot(bundle, plan):
+        if len({column.key for column in plan.columns}) != len(plan.columns):
+            errors.append("Projection column keys must be unique")
+        return errors, warnings, list(plan.columns)
     all_rows = bundle.rows_for_source(plan.row_source)
     rows = _rows_for_plan(bundle, plan)
     if plan.format == "tsv" and plan.row_source == "artifact":
@@ -3566,6 +3595,10 @@ def apply_projection_plan(
     if errors:
         raise ValueError("; ".join(errors))
 
+    if _retired_source_snapshot(bundle, plan):
+        return FlowOutputProjectionResult(format=plan.format, row_source=plan.row_source,
+            columns=columns, rows=[], total_count=0, empty_reason="all_records_retired",
+            warnings=[*warnings, "All records were explicitly retired; original records and decisions remain in history."])
     rows = _rows_for_plan(bundle, plan)
     candidate_row_count = len(rows)
     synthetic_row_count = 0
@@ -3846,6 +3879,8 @@ def finalize_output_projection(
         selected_artifacts = [artifact for artifact in bundle.artifacts
             if not source_ids and not source_keys
             or artifact.extraction_result_id in source_ids or artifact.source_key in source_keys]
+    verified_counts = []
+    verified_empty = []
     for artifact in selected_artifacts:
         if not artifact.is_canonical_curation_data:
             continue
@@ -3853,11 +3888,36 @@ def finalize_output_projection(
             raise HistoryConflict("Output awaits explicit review and selected-value publication")
         if not bundle.authorization_user_id or not artifact.review_session_id:
             raise HistoryConflict("Selected output requires authenticated source scope")
-        read_published_projection(
+        verified_envelope, _ = read_published_projection(
             HistoryScope(bundle.authorization_user_id, bundle.document_id, artifact.review_session_id),
             artifact.selected_projection, finalized=True,
         )
-    result = apply_projection_plan(bundle, plan, render_display=True)
+        verified_counts.append(verified_envelope.metadata.get("record_counts"))
+        verified_empty.append(not verified_envelope.extracted_objects)
+    all_retired = (len(verified_counts) == len(selected_artifacts)
+        and bool(verified_counts) and all(verified_empty) and all(
+            counts is not None and counts["active"] == 0 and counts["retired"] > 0
+            for counts in verified_counts))
+    if all_retired:
+        if plan.selection_mode == "selected_fields":
+            from src.lib.flows.selected_export import selected_export_errors
+            errors = selected_export_errors(bundle, plan)
+            if errors:
+                raise ValueError("; ".join(errors))
+        if len({column.key for column in plan.columns}) != len(plan.columns):
+            raise ValueError("Projection column keys must be unique")
+        requested_nodes = {source.node_id for source in plan.selected_sources}
+        if (not requested_nodes.issubset({artifact.node_id for artifact in selected_artifacts})
+                or not set(plan.source_keys).issubset({artifact.source_key for artifact in selected_artifacts})
+                or not set(plan.source_extraction_result_ids).issubset({artifact.extraction_result_id for artifact in selected_artifacts})):
+            raise ValueError("Requested source is unavailable; an absent source is not an empty result")
+        # There are intentionally no row-derived fields to discover or resolve.
+        # Preserve requested headers without inventing a record or source value.
+        result = FlowOutputProjectionResult(format=plan.format, row_source=plan.row_source,
+            columns=plan.columns, rows=[], total_count=0, empty_reason="all_records_retired",
+            warnings=["All records were explicitly retired after review; original records and decisions remain in history."])
+    else:
+        result = apply_projection_plan(bundle, plan, render_display=True)
     result.selection_manifests = [
         dict(artifact.selected_projection) for artifact in selected_artifacts
         if artifact.selected_projection is not None

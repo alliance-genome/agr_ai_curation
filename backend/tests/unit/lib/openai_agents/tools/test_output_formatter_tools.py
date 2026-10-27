@@ -206,7 +206,7 @@ def published_formatter_sources(monkeypatch):
         return bundle
     monkeypatch.setattr(sys.modules[__name__], "build_flow_output_artifact_bundle", published)
     monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
-                        lambda *args, **kwargs: (None, {"ready": True}))
+                        lambda *args, **kwargs: (SimpleNamespace(metadata={}, extracted_objects=[]), {"ready": True}))
 
 
 def _bundle() -> FlowOutputArtifactBundle:
@@ -1455,3 +1455,29 @@ async def test_finalizer_refuses_unreviewed_canonical_source_without_saving():
                            {"plan_json": "", "filename_hint": "pending"})
     assert result["status"] == "invalid"
     assert "explicit review" in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_all_retired_source_saves_an_explicit_empty_file(monkeypatch):
+    from src.lib.flows.output_projection import FlowOutputArtifact, FlowOutputArtifactBundle
+    counts = {"active": 0, "retired": 2, "pending": 0}
+    bundle = FlowOutputArtifactBundle(flow_name="retired", authorization_user_id="owner", default_row_source="object",
+        artifacts=[FlowOutputArtifact(node_id="source", source_key="source", is_canonical_curation_data=True,
+            review_session_id="session", selected_projection={"fact_id": "publication"}, record_counts=counts,
+            rows_by_source={"object": []})])
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
+                        lambda *args, **kwargs: (SimpleNamespace(metadata={"record_counts": counts}, extracted_objects=[]), {"ready": True}))
+    saved = []
+    async def save(output_format, projection, filename_hint, formatter_agent_id):
+        saved.append(projection)
+        return {"file_id": "empty", "filename": "empty.csv", "format": "csv", "size_bytes": 5,
+                "download_url": "/download/empty"}
+    tools = build_output_formatter_tools(bundle=bundle, output_format="csv", formatter_agent_id="csv_formatter",
+                                         save_projected_output=save)
+    result = await _invoke(_tool_by_name(tools, "finalize_and_save"), {"plan_json": json.dumps({
+        "format": "csv", "row_source": "object", "source_keys": ["source"],
+        "columns": [{"key": "name", "header": "Name", "field_ref": "object.name"}]}), "filename_hint": "empty"})
+    assert result["status"] == "ok"
+    assert result["projection_summary"]["empty_reason"] == "all_records_retired"
+    assert len(saved) == 1 and saved[0].rows == []
+    assert saved[0].columns[0].header == "Name"

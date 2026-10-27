@@ -215,8 +215,8 @@ class CurationPrepScopeConfirmation(CurationPrepBaseModel):
         description="Additional scope confirmation notes",
     )
     expected_review_row_count: int | None = Field(
-        default=None, ge=1,
-        description="Exact previewed row count; abort the transaction if materialization changes it",
+        default=None, ge=0,
+        description="Exact previewed active row count (zero requires verified retired history); abort the transaction if materialization changes it",
     )
 
     @model_validator(mode="after")
@@ -297,6 +297,8 @@ class CurationPrepCandidate(CurationPrepBaseModel):
 
 class CurationPrepEnvelopeRef(CurationPrepBaseModel):
     """Persisted envelope revision selected for review-row materialization."""
+
+    retired_record_count: int = Field(default=0, ge=0)
 
     envelope_id: NonEmptyString = Field(description="Persisted domain envelope identifier")
     envelope_revision: int = Field(

@@ -524,7 +524,15 @@ def _materialized_review_rows(
         rows.extend(response.rows)
 
     if not rows:
-        raise ValueError("Domain-envelope post-curation pipeline materialized no review rows")
+        from src.lib.validation_history.record_lifecycle import retired_records
+        has_retirement = False
+        for ref in request.prep_output.envelope_refs:
+            saved = db.get(DomainEnvelopeModel, ref.envelope_id)
+            history = saved.envelope_json.get("metadata", {}).get("validation_history")
+            if history is not None and retired_records(db, history["artifact_id"]):
+                has_retirement = True
+        if not has_retirement:
+            raise ValueError("Domain-envelope post-curation pipeline materialized no review rows")
     return rows
 
 
@@ -665,8 +673,8 @@ def _prepared_candidate_input_from_review_row(
     review_row: DomainEnvelopeReviewRow,
     *,
     adapter_key: str,
-    prep_extraction_result_id: str,
-    prep_output: CurationPrepAgentOutput,
+    prep_extraction_result_id: str | None,
+    prep_output: CurationPrepAgentOutput | None,
     candidate_index: int,
 ) -> PreparedCandidateInput:
     draft_fields = _draft_fields_from_review_row(review_row)
@@ -704,11 +712,8 @@ def _prepared_candidate_input_from_review_row(
             field.model_dump(mode="json")
             for field in review_row.summary_fields
         ],
-        "prep_envelope_refs": [
-            envelope_ref.model_dump(mode="json")
-            for envelope_ref in prep_output.envelope_refs
-        ],
-        "prep_candidate_index": candidate_index,
+        **({"prep_envelope_refs": [ref.model_dump(mode="json") for ref in prep_output.envelope_refs],
+            "prep_candidate_index": candidate_index} if prep_output is not None else {}),
     }
 
     return PreparedCandidateInput(
@@ -733,7 +738,8 @@ def _prepared_candidate_input_from_review_row(
         draft_summary=review_row.secondary_label,
         draft_metadata={
             "semantic_source": "domain_envelope.extracted_objects",
-            "prep_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
+            **({"prep_run_metadata": prep_output.run_metadata.model_dump(mode="json")}
+               if prep_output is not None else {}),
             "projection_ref": {
                 "envelope_id": review_row.envelope_id,
                 "object_id": review_row.object_id,

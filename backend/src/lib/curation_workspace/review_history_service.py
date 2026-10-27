@@ -61,6 +61,7 @@ def history_page(db, candidate_id, *, owner_id, after=0):
         "extraction_contribution",
         "review_episode_abandoned",
         "extraction_source_selection",
+        "record_retirement_decision",
         "curator_revalidation_release",
     )
     rows = list(
@@ -180,8 +181,8 @@ def history_page(db, candidate_id, *, owner_id, after=0):
                 "parent_id": fact.parent_id,
                 "sha256": fact.body_sha,
                 "created_at": fact.created_at.isoformat(),
-                "actor": body.get("actor"),
-                "reason": body.get("reason"),
+                "actor": body["identity"]["actor"] if fact.kind == "record_retirement_decision" else body.get("actor"),
+                "reason": body["identity"]["reason"] if fact.kind == "record_retirement_decision" else body.get("reason"),
                 "state": body.get("state"),
                 "decisions": decisions,
                 "choices": choices,
@@ -300,13 +301,13 @@ def decide(candidate_id, *, owner_id, request, groups):
 
 
 def record_targets(db, envelope, artifact_id, object_id):
-    roots = [
-        obj.metadata["validation_history"]["target_id"]
-        for obj in envelope.extracted_objects
-        if object_id in (obj.object_id, obj.pending_ref_id)
-    ]
+    # The selected projection deliberately omits retired records. Resolve the
+    # immutable object identity so the curator can still inspect its history.
+    roots = [fact.id for fact in db.scalars(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target"))
+        if store._content(db, fact).get("object_ref") == object_id]
     if len(roots) != 1:
-        raise store.HistoryConflict("Record has no unique current history identity")
+        raise store.HistoryConflict("Record has no unique immutable history identity")
     descendants = (
         select(ValidationFact.id)
         .where(ValidationFact.artifact_id == artifact_id, ValidationFact.id == roots[0])

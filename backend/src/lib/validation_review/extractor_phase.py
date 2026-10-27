@@ -49,6 +49,7 @@ def contract(agent, *, max_turns):
         "tools": [{"name": tool.name, "description": tool.description,
                    "parameters": tool.params_json_schema} for tool in source_tools(agent)],
         "followup_protocol": TARGETED_EXTRACTION_PROTOCOL,
+        "followup_transport_schema": TargetedFollowupTransport.model_json_schema(),
     })
 
 

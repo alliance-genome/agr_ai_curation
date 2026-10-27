@@ -325,6 +325,8 @@ def _refresh_prerequisites(db, context, ep, frozen, refresh_inputs):
     request = deepcopy(frozen["input"])
     if source_changed:
         request = deepcopy(store._content(db, current_source)["request"])
+        if request is None:
+            raise ReviewStopped("required_inputs_unavailable")
         if (request["target_id"], request["binding_id"]) != (
                 frozen["input"]["target_id"], frozen["input"]["binding_id"]):
             raise store.HistoryConflict("Source revision changes the authorized validator target")

@@ -6,6 +6,7 @@ and test_output_projection's gate tests; this helper is opt-in, never autouse.
 """
 
 import pytest
+from types import SimpleNamespace
 
 
 def mark_reviewed_output_bundle(bundle):
@@ -27,5 +28,5 @@ def reviewed_output_reader(monkeypatch):
     def read(scope, reference, *, finalized=False, **kwargs):
         assert reference == {"fact_id": "reviewed-output-unit-fixture"}
         assert finalized is True
-        return None, {"ready": True}
+        return SimpleNamespace(metadata={}, extracted_objects=[]), {"ready": True}
     monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", read)

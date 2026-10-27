@@ -76,7 +76,8 @@ def test_uncertain_followup_never_replays_or_refills(planned):
         assert store._content(db, uncertain)["reason"] == "worker_lost"
 
 
-def test_late_proposal_retains_original_and_requires_actual_evidence(planned):
+@pytest.mark.parametrize("missing_evidence", [False, True])
+def test_late_proposal_retains_original_and_requires_actual_evidence(planned, missing_evidence):
     item = planned
     args = request_args(item)
     before = store.read_baseline(item.scope, item.aid)
@@ -91,10 +92,10 @@ def test_late_proposal_retains_original_and_requires_actual_evidence(planned):
         "remaining_uncertainty": "", "evidence_record_ids": ["methods"],
         "proposed_values": [{"field_path": "organism", "value": "Drosophila melanogaster",
                              "evidence_record_ids": ["methods"]}]}]}
-    with pytest.raises(store.HistoryConflict, match="evidence is missing"):
-        extraction_results.retain(item.scope, work_id, claim["lease_token"], result, evidence_records=[])
     evidence = [{"evidence_record_id": "methods", "verified_quote": "Drosophila melanogaster",
                  "section": "Materials and Methods", "document_id": item.scope.document_id}]
+    if missing_evidence:
+        evidence = []
     outcome = extraction_results.retain(item.scope, work_id, claim["lease_token"], result, evidence_records=evidence)
     assert extraction_results.retain(item.scope, work_id, claim["lease_token"], result, evidence_records=evidence) == outcome
     work.finish(item.scope, work_id, claim["lease_token"], outcome=outcome)
@@ -103,7 +104,12 @@ def test_late_proposal_retains_original_and_requires_actual_evidence(planned):
         contribution = store._fact(
             db, item.aid, outcome["contributions"][0]["fact_id"])
         body = store._content(db, contribution)
-        assert body["evidence"][0]["origin"] == "followup"
+        assert body["selectable"] is not missing_evidence
+        if missing_evidence:
+            assert body["structural_failure"] == "invalid_evidence_reference"
+            assert body["evidence"] == []
+        else:
+            assert body["evidence"][0]["origin"] == "followup"
         assert body["proposal"]["proposed_values"][0]["value"] == "Drosophila melanogaster"
         assert store._current(db, item.aid, args["entry_ids"][0])["selected"] is None
     result["entries"][0]["assessment"] = "A different answer"

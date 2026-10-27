@@ -39,6 +39,15 @@ def scientific_input(frozen):
 def update(db, artifact_id, *, operation_id, before, after, selection_id=None):
     """Both maps come from the same trusted binding resolver, never the model."""
     changed = []
+    for target in before.keys() - after.keys():
+        try:
+            store._require_active_target(db, artifact_id, target)
+        except store.HistoryConflict:
+            continue  # Retirement already invalidates every descendant attempt.
+        fact = append_fact(db, artifact_id, operation_id="source-input:" + operation_id + ":" + target,
+            kind="validation_source_input", target_id=target, parent_id=selection_id,
+            body={"input": None, "request": None})
+        changed.append({"target_id": target, "reference": reference(fact), "runnable": False})
     for target, frozen in after.items():
         if target != frozen["target_id"]:
             raise store.HistoryConflict("Binding input map has a mismatched target")

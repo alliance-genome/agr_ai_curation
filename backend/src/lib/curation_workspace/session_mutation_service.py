@@ -2038,7 +2038,8 @@ def delete_candidate(
     session.last_worked_at = now
     session.updated_at = now
     session.session_version += 1
-    _apply_candidate_progress_counts(session, remaining_candidates)
+    _apply_candidate_progress_counts(session, [item for item in remaining_candidates
+        if not item.candidate_metadata.get("record_retired", False)])
 
     action_log_row = SessionActionLogModel(
         session_id=session.id,
@@ -2106,6 +2107,12 @@ def decide_candidate(
             ),
         )
 
+    from .record_retirement_service import require_active_candidate_for_write
+    require_active_candidate_for_write(db, candidate)
+    db.refresh(session)
+    db.scalars(select(CurationCandidate).where(CurationCandidate.session_id == session.id)
+        .execution_options(populate_existing=True)).all()
+
     now = datetime.now(timezone.utc)
     previous_candidate_status = candidate.status
     previous_session_status = session.status
@@ -2141,7 +2148,8 @@ def decide_candidate(
     candidate.last_reviewed_at = now
     candidate.updated_at = now
 
-    _apply_candidate_progress_counts(session, session.candidates)
+    _apply_candidate_progress_counts(session, [item for item in session.candidates
+        if not item.candidate_metadata.get("record_retired", False)])
 
     action_log_row = SessionActionLogModel(
         session_id=session.id,
@@ -2351,7 +2359,8 @@ def _next_pending_candidate_id(
     for offset in range(1, candidate_count):
         next_index = (current_index + offset) % candidate_count
         candidate_row = ordered_candidates[next_index]
-        if candidate_row.status == CurationCandidateStatus.PENDING:
+        if (candidate_row.status == CurationCandidateStatus.PENDING
+                and not candidate_row.candidate_metadata.get("record_retired", False)):
             return candidate_row.id
 
     return None

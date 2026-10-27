@@ -250,7 +250,7 @@ async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection
     extraction, selection, assessment = AsyncMock(), AsyncMock(), AsyncMock(return_value={"state": "completed"})
     tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
         request_extraction=extraction, select_source=selection, assess_source=assessment)}
-    assert len(tools) == 9
+    assert len(tools) == 10
     for tool in tools.values():
         assert not {"actor_id", "episode_id", "validator_agent", "receipt", "scope_id", "extractor_agent"}.intersection(
             tool.params_json_schema["properties"])
@@ -261,6 +261,13 @@ async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection
         ToolContext(context=None, tool_name="validate_selected_extraction_source", tool_call_id="test",
                     tool_arguments=json.dumps(arguments)), json.dumps(arguments))
     assessment.assert_awaited_once_with(**arguments)
+    retirement = {"operation_id": "retire", "contribution": {"fact_id": "proposal", "sha256": "exact"},
+                  "decision": "approve", "expected_source_sha": "current", "reason": "Outside scope"}
+    await tools["decide_record_retirement"].on_invoke_tool(
+        ToolContext(context=None, tool_name="decide_record_retirement", tool_call_id="retire-test",
+                    tool_arguments=json.dumps(retirement)), json.dumps(retirement))
+    selection.assert_awaited_once_with(operation_id="retire", contribution_ref=retirement["contribution"],
+        retirement_decision="approve", expected_source_sha="current", reason="Outside scope")
     with pytest.raises(ValueError, match="must be wired together"):
         create_tools(context, checkpoint_provider=Mock(), request_extraction=extraction, select_source=selection)
 

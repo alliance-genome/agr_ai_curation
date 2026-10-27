@@ -62,7 +62,7 @@ async def prepare_from_chat(
             return _reply("unsupported_candidate_scope", "Preparation cannot select individual candidates within a saved extraction yet. Nothing was prepared. Do not substitute all findings for the requested subset.")
         if action not in {"preview", "confirm"}:
             return _reply("invalid_request", "Choose preview or confirm.")
-        if not result_refs or len(set(result_refs)) != len(result_refs) or expected_candidate_count < 1:
+        if not result_refs or len(set(result_refs)) != len(result_refs) or expected_candidate_count < 0:
             await client.delete(key)
             return _reply("scope_confirmation_required", "Select distinct saved result references and the expected candidate count first.")
         records = await asyncio.to_thread(
@@ -84,15 +84,21 @@ async def prepare_from_chat(
         if summary.candidate_count != expected_candidate_count:
             await client.delete(key)
             return _reply("scope_count_mismatch", "The saved results do not match the requested candidate count. Nothing was prepared; do not broaden the curator's selection.", candidate_count=summary.candidate_count)
+        if summary.candidate_count == 0 and summary.retired_record_count == 0:
+            await client.delete(key)
+            return _reply("scope_confirmation_required", "No candidates or reviewed retired records are available to prepare.")
         snapshot = {
             "document_id": document_id, "result_refs": sorted(result_refs),
             "expected_candidate_count": expected_candidate_count,
+            "retired_record_count": summary.retired_record_count,
             "payloads": [record.model_dump(mode="json") for record in selected],
         }
         digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
         if action == "preview":
             pending = json.dumps({"scope": digest, "trace_id": trace_id}, sort_keys=True)
             await client.set(key, pending, ex=get_chat_curation_confirmation_ttl_seconds())
+            if summary.candidate_count == 0:
+                return _reply("confirmation_required", "Ask the curator to confirm opening the retired records in the curation workspace for history review or restoration. Wait for their next response; nothing has been prepared.", candidate_count=0, retired_record_count=summary.retired_record_count, result_refs=sorted(result_refs), adapter_keys=summary.adapter_keys)
             return _reply("confirmation_required", f"Ask the curator to confirm preparing ALL {summary.candidate_count} eligible candidates in these exact saved results. Individual-candidate subsets are not supported. Wait for their next response; nothing has been prepared.", candidate_count=summary.candidate_count, result_refs=sorted(result_refs), adapter_keys=summary.adapter_keys)
 
         pending = await client.get(key)

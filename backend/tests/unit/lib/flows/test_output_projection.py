@@ -461,7 +461,7 @@ def test_packaged_nested_fields_use_envelope_pack_without_execution_receipt(monk
         source.review_session_id = "chat"
         source.selected_projection = {"fact_id": "reviewed-layout-fixture"}
     monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
-                        lambda *args, **kwargs: (None, {"ready": True}))
+                        lambda *args, **kwargs: (SimpleNamespace(metadata={}, extracted_objects=[]), {"ready": True}))
     projection = finalize_output_projection(bundle, plan)
     csv_bytes = _projection_content_for_file_type(output_format="csv", projection=projection).encode("utf-8")
     rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
@@ -2662,7 +2662,7 @@ def test_expression_statements_with_source_evidence_reach_final_chat(selection_m
         source.review_session_id = "chat"
         source.selected_projection = {"fact_id": "reviewed-layout-fixture"}
     monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
-                        lambda *args, **kwargs: (None, {"ready": True}))
+                        lambda *args, **kwargs: (SimpleNamespace(metadata={}, extracted_objects=[]), {"ready": True}))
     projection = finalize_output_projection(bundle, plan)
     assert projection.total_count == 2
     assert "No signal" in json.dumps(projection.rows[0]["evidence"])
@@ -2689,7 +2689,7 @@ def test_final_export_requires_review_only_for_selected_sources(monkeypatch):
     reads = []
     def read(scope, reference, **kwargs):
         reads.append((scope, reference, kwargs))
-        return None, {"ready": True}
+        return SimpleNamespace(metadata={}, extracted_objects=[]), {"ready": True}
     monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", read)
     projected = finalize_output_projection(bundle, plan)
     assert projected.rows == [{"name": "A"}]
@@ -2722,3 +2722,29 @@ def test_stale_selected_artifact_exposes_pending_without_leaking_old_rows(monkey
     assert artifact.selected_projection is None
     assert not artifact.rows_by_source
     assert "await publication" in artifact.warnings[0]
+
+
+def test_all_retired_is_explicit_complete_empty_only_from_verified_manifest(monkeypatch):
+    from src.lib.flows.output_projection import FlowOutputArtifact, FlowOutputArtifactBundle, finalize_output_projection
+    from src.lib.openai_agents.tools.output_formatter_tools import _is_intentional_empty_projection
+    bundle = FlowOutputArtifactBundle(flow_name="review", authorization_user_id="owner", artifacts=[
+        FlowOutputArtifact(node_id="selected", source_key="selected", is_canonical_curation_data=True,
+            review_session_id="session", selected_projection={"fact_id": "accepted"}, rows_by_source={"object": []})])
+    plan = FlowOutputProjectionPlan(format="csv", row_source="object", source_keys=["selected"],
+        columns=[{"key": "name", "field_ref": "object.name"}])
+    from types import SimpleNamespace
+    metadata = {"record_counts": {"active": 0, "retired": 3, "pending": 0}}
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
+                        lambda *args, **kwargs: (SimpleNamespace(metadata=metadata, extracted_objects=[]), {"ready": True}))
+    result = finalize_output_projection(bundle, plan)
+    assert result.rows == [] and result.total_count == 0
+    assert result.empty_reason == "all_records_retired"
+    assert _is_intentional_empty_projection(result)
+    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection",
+        lambda *args, **kwargs: (SimpleNamespace(metadata=metadata, extracted_objects=[object()]), {"ready": True}))
+    bundle.artifacts[0].rows_by_source["object"] = [{"artifact.source_key": "selected", "object.name": "Derived"}]
+    assert finalize_output_projection(bundle, plan).rows == [{"name": "Derived"}]
+    bundle.artifacts[0].rows_by_source["object"] = []
+    metadata["record_counts"] = {"active": 0, "retired": 0, "pending": 0}
+    with pytest.raises(ValueError, match="no canonical object rows"):
+        finalize_output_projection(bundle, plan)

@@ -1,3 +1,4 @@
+import RetiredRecordsPanel from '@/features/curation/grid/RetiredRecordsPanel'
 import { useWorkspaceReviewCompletion } from '@/features/curation/workspace/useWorkspaceReviewCompletion'
 import RevalidationControls from '@/features/curation/grid/RevalidationControls'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -585,6 +586,8 @@ function CurationWorkspacePageContent({
         </Alert>
       ) : null}
 
+      <RetiredRecordsPanel records={workspace.retired_records ?? []} onChanged={refreshAfterReview}
+        beforeChange={async () => { if (!await autosave.flush()) throw new Error('Save your edits before restoring a record.') }} />
       {backgroundReviewError && <Alert severity="error">{backgroundReviewError}</Alert>}
       {tableError ? (
         <Alert severity="error">

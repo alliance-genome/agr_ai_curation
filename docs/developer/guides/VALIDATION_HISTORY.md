@@ -285,3 +285,29 @@ published exact snapshots remain readable. Do not mutate immutable recipes or
 guess the schema of historical results to make them replay. Before the initial
 coordinated rollout, inventory candidate facts in each environment and account
 for pre-descriptor development workspaces separately.
+
+## Whole-record retirement after targeted extraction
+
+A targeted extractor can return `propose_retirement` with a reason, uncertainty,
+and available evidence references. It cannot retire a record itself. The bound
+supervisor tool `decide_record_retirement` approves or declines that exact retained
+contribution. Approval records an immutable decision, retires the original root,
+rebuilds applicable coverage and validator inputs, and publishes the current
+projection in one transaction. Decline records the decision without changing the
+source. Changed surviving validator inputs require assessment; unavailable inputs
+remain non-runnable. Existing scientific attempt allowances are unchanged.
+
+The SDK transport validates shape; application validation retains structurally
+invalid entry proposals as non-selectable history without losing valid siblings.
+An executable extractor contract pins this transport schema. Old contracts remain
+readable but cannot perform a new targeted follow-up with the changed protocol;
+`fresh_extraction_required` is returned before provider execution or admission.
+
+Workspace history exposes retired records even when there are no active rows.
+Explicit curator restoration preserves the original identity and history, restores
+pending coverage, and does not schedule a model or renew an allowance. A later
+explicit revalidation uses the normal curator workflow. Retired draft caches are
+excluded from active counts, default validation and submission. All-retired current
+exports are explicitly empty, with headers when configured; earlier exports remain
+unchanged. TraceReview retains the proposal, decision, restoration and source-input
+facts alongside tool calls. No historical backfill is required.

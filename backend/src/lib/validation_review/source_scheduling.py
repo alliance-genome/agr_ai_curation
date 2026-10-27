@@ -19,14 +19,21 @@ def request(context, *, operation_id, selection_id, target_ids, instructions, re
         if prior is not None:
             return prior.id
         admission.lock_episode(db, context.history_scope, context.episode_id)
-        selection = store._fact(db, ep.artifact_id, selection_id, kind="extraction_source_selection")
+        selection = store._fact(db, ep.artifact_id, selection_id)
         source = store._content(db, selection)
+        if selection.kind not in {"extraction_source_selection", "record_retirement_decision", "record_restoration"}:
+            raise store.HistoryConflict("Assessment requires an approved source decision")
+        if (selection.kind == "record_retirement_decision"
+                and source["identity"]["decision"] != "approve"):
+            raise store.HistoryConflict("Declining retirement cannot change validator inputs")
         requests = []
         for target in target_ids:
             fact = source_inputs.latest(db, ep.artifact_id, target)
             if fact is None or fact.parent_id != selection.id:
                 raise store.HistoryConflict("Target has no changed input from this approved source selection")
             request = deepcopy(store._content(db, fact)["request"])
+            if request is None:
+                raise admission.ReviewStopped("required_inputs_unavailable")
             request["source_input_ref"] = source_inputs.reference(fact)
             request["review_episode_id"] = ep.id
             requests.append(request)

@@ -71,7 +71,7 @@ from src.schemas.curation_prep import (
     CurationPrepChatRunRequest,
     CurationPrepChatRunResponse,
 )
-from src.schemas.workspace_review import WorkspaceReviewRequest, WorkspaceReviewDecisionRequest
+from src.schemas.workspace_review import WorkspaceReviewRequest, WorkspaceReviewDecisionRequest, WorkspaceRecordRestoreRequest
 from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
@@ -1241,5 +1241,29 @@ async def get_active_workspace_review_operations(
     from src.lib.curation_workspace import review_operations
     try:
         return review_operations.active_for_session(db, str(session_id), owner_id=_require_current_user_id(user))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.post('/envelopes/{envelope_id}/restore-record')
+async def restore_workspace_record(envelope_id: str, request: WorkspaceRecordRestoreRequest,
+                                   user: dict = get_auth_dependency()) -> dict:
+    import asyncio
+    from src.lib.curation_workspace.record_retirement_service import restore
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return await asyncio.to_thread(restore, envelope_id, owner_id=_require_current_user_id(user),
+            request=request, groups=_authenticated_active_groups(user))
+    except ValueError as error:
+        _workspace_review_error(error)
+
+
+@router.get('/envelopes/{envelope_id}/record-history/{fact_id}')
+async def read_workspace_record_history(envelope_id: str, fact_id: str, sha256: str, offset: int = 0,
+        user: dict = get_auth_dependency(), db: Session = Depends(get_db)) -> dict:
+    from src.lib.curation_workspace.record_retirement_service import detail
+    try:
+        return detail(db, envelope_id, owner_id=_require_current_user_id(user),
+                      fact_id=fact_id, sha256=sha256, offset=offset)
     except ValueError as error:
         _workspace_review_error(error)

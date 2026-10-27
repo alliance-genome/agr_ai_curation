@@ -126,7 +126,7 @@ def review_candidate(extraction, request):
     from src.schemas.curation_workspace import CurationDraftField
     db, receipt, payload = extraction
     candidate = SimpleNamespace(
-        id=uuid4(), session_id=uuid4(), agent_revision_id=receipt.agent_revision_id,
+        id=uuid4(), session_id=uuid4(), agent_revision_id=receipt.agent_revision_id, candidate_metadata={},
         execution_receipt=receipt.model_dump(mode="json"), envelope_id=None, object_id=None,
         normalized_payload={"object_type": "generic_object", "class_key": "generic:generic_object",
                             "semantic_class": "record", "attributes": {"count": 1}},
@@ -607,3 +607,29 @@ def test_projected_optional_placeholder_preserves_absence_only(extraction, schem
     # Without an authoritative source, supplied null remains an explicit value.
     with pytest.raises(ProfileConformanceError):
         profiled_draft_payload(db, receipt, fields)
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_session_validation_never_dispatches_retired_cache(review_candidate, monkeypatch, explicit):
+    from fastapi import HTTPException
+    from src.lib.curation_workspace import session_validation_service as validation
+    from src.schemas.curation_workspace import CurationSessionValidationRequest
+    db, candidate = review_candidate
+    candidate.candidate_metadata = {"record_retired": True}
+    session = SimpleNamespace(id=candidate.session_id, candidates=[candidate])
+    monkeypatch.setattr(validation, "_load_session_for_validation", lambda *a, **k: session)
+    dispatch = Mock()
+    monkeypatch.setattr(validation, "_apply_candidate_validation", dispatch)
+    class ReachedAggregate(Exception):
+        pass
+    def aggregate(**kwargs):
+        assert kwargs["candidate_validations"] == []
+        raise ReachedAggregate()
+    monkeypatch.setattr(validation, "_aggregate_session_validation_snapshot", aggregate)
+    request = CurationSessionValidationRequest(session_id=str(session.id),
+        candidate_ids=[str(candidate.id)] if explicit else [])
+    with pytest.raises(HTTPException if explicit else ReachedAggregate) as caught:
+        validation.validate_session(db, session.id, request)
+    if explicit:
+        assert caught.value.status_code == 409
+    dispatch.assert_not_called()

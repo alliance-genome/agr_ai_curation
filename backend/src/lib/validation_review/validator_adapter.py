@@ -162,6 +162,7 @@ class ValidatorAdapter:
         if saved["kind"] != "review_chat_plan":
             raise store.HistoryConflict("Invalid saved review plan")
         self.plan = saved["content"]
+        self.original_matches = dict(self.plan["matches"])
         if self.plan["envelope"]["metadata"]["review_episode_id"] != episode_id:
             raise store.HistoryConflict("Review plan belongs to another episode")
         self.context = ValidatorRuntimeContext(
@@ -206,8 +207,10 @@ class ValidatorAdapter:
         def rebuild(db, envelope):
             resolved_matches.clear()
             jobs = []
-            original_matches = [MATCH.validate_python(item) for item in self.plan["matches"].values()]
+            original_matches = [MATCH.validate_python(item) for item in self.original_matches.values()]
             roots = {item.object_envelope.metadata["validation_history"]["target_id"] for item in original_matches if item.object_envelope is not None}
+            if "restore_target_id" in arguments:
+                roots.add(arguments["restore_target_id"])
             envelope_bindings = {item.binding.binding_id for item in original_matches if item.object_envelope is None}
             for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE]):
                 if match.object_envelope is not None:
@@ -241,6 +244,9 @@ class ValidatorAdapter:
                         obligations.append({"target_id": fact.id, "mode": "validation", "binding_id": match.binding.binding_id})
                 else:
                     obligations.append({"target_id": target, "mode": "validation", "binding_id": match.binding.binding_id})
+            source_fact = store._fact(db, self.artifact_id, selection_id)
+            if source_fact.kind == "record_restoration":
+                obligations.extend(store._content(db, source_fact)["restored_obligations"])
             episode = store._fact(db, self.artifact_id, self.episode_id, kind="review_episode")
             covered = {item["target_id"] for item in obligations}
             for item in selections.effective_episode(db, episode)["obligations"]:
@@ -266,12 +272,25 @@ class ValidatorAdapter:
                 operation_id="source:" + selection_id, manifest=manifest, envelope=projected,
                 envelope_revision=checkpoint.expected_revision + 1)
             written = write_domain_envelope_checkpoint(db, replace(checkpoint, envelope=projected))
+            if source_fact.kind == "record_restoration":
+                from src.lib.curation_workspace.record_retirement_service import materialize_restored_candidate
+                materialize_restored_candidate(db, projected, written.revision, source_fact.target_id,
+                                               groups=self.context.authenticated_groups)
             projection.refresh_workspace_projection(db, projected, written.revision)
             return {"revision": written.revision, "ready": manifest["ready"], "blockers": manifest["blockers"]}
 
         with store.SessionLocal.begin() as db:
-            admission.lock_episode(db, self.scope, self.episode_id)
+            admission.lock_episode(db, self.scope, self.episode_id,
+                                   require_open="restore_target_id" not in arguments)
             source = projection.source_envelope_in_transaction(db, self.scope, self.artifact_id, checkpoint.envelope)
+            if "restore_target_id" in arguments:
+                from .record_retirement import restore_in_transaction
+                return restore_in_transaction(db, context, source_envelope=source,
+                    rebuild_inputs=rebuild, publish=publish, **arguments)
+            if "retirement_decision" in arguments:
+                from .record_retirement import decide_in_transaction
+                return decide_in_transaction(db, context, source_envelope=source,
+                    rebuild_inputs=rebuild, publish=publish, **arguments)
             return source_selection.select_in_transaction(db, context, source_envelope=source,
                 rebuild_inputs=rebuild, publish=publish, **arguments)
 
@@ -286,7 +305,10 @@ class ValidatorAdapter:
                     fact = source_inputs.latest(db, self.artifact_id, target)
                     if fact is None:
                         raise store.HistoryConflict("Target has no follow-up source input")
-                    requests.append(store._content(db, fact)["request"])
+                    request = store._content(db, fact)["request"]
+                    if request is None:
+                        raise admission.ReviewStopped("required_inputs_unavailable")
+                    requests.append(request)
             jobs = [self.job(request) for request in requests]
             receipt = self.receipt(jobs, batch_key=None)
             return source_scheduling.request(context, operation_id=operation_id, selection_id=selection_id,
