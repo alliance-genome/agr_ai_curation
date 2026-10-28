@@ -38,6 +38,8 @@ class SelectorBuildResult:
     selected_inputs: dict[str, Any]
     input_selectors: dict[str, dict[str, Any]]
     evidence: list[dict[str, Any]]
+    # Verified all-optional scientific absence, never a configuration/selector failure.
+    absent_inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,7 +76,7 @@ def build_domain_validation_request(
     selectors: dict[str, dict[str, Any]] = {}
     declared_non_literal_inputs = False
     selected_non_literal_inputs = False
-    missing_optional_non_literal_inputs = False
+    missing_optional_non_literal_inputs: list[str] = []
 
     for input_name, selector in binding.input_fields.items():
         selectors[input_name] = _selector_payload(selector)
@@ -87,7 +89,7 @@ def build_domain_validation_request(
             continue
         if value is _OPTIONAL_INPUT_MISSING:
             if counts_as_non_literal:
-                missing_optional_non_literal_inputs = True
+                missing_optional_non_literal_inputs.append(input_name)
             continue
         if counts_as_non_literal:
             selected_non_literal_inputs = True
@@ -113,6 +115,8 @@ def build_domain_validation_request(
             selected_inputs=selected_inputs,
             input_selectors=selectors,
             evidence=_evidence_records_for_target(match),
+            absent_inputs=(tuple(missing_optional_non_literal_inputs)
+                           if binding.validator_agent is not None else ()),
         )
 
     if binding.validator_agent is None:

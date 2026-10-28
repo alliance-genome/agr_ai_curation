@@ -241,6 +241,7 @@ def test_payload_keyed_literal_maps_sibling_value_to_subset(tmp_path: Path):
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     assert result.selected_inputs["subset"] == "AGM Disease Relation"
     assert result.selected_inputs["selected"] == "agm"
 
@@ -264,6 +265,7 @@ def test_payload_keyed_literal_unknown_value_is_omitted(tmp_path: Path):
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     # Unknown sibling value -> the keyed input is simply omitted (no guessed literal).
     assert "subset" not in result.selected_inputs
     assert result.selected_inputs["selected"] == "gene"
@@ -400,6 +402,7 @@ def test_validation_request_carries_selected_inputs_evidence_and_expected_fields
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     request = result.request.model_dump(mode="json")
     assert request["validator_binding_id"] == "fixture.selector"
     assert request["validator_agent"] == {
@@ -433,6 +436,7 @@ def test_optional_payload_selector_missing_suppresses_literal_only_request(
 
     assert result.findings == ()
     assert result.request is None
+    assert result.absent_inputs == ("curie",)
     assert result.selected_inputs == {"ontology_term_type": "DOTerm"}
     assert result.input_selectors["curie"] == {
         "source": "payload",
@@ -463,6 +467,7 @@ def test_optional_context_only_selectors_do_not_launch_request(tmp_path: Path):
 
     assert result.findings == ()
     assert result.request is None
+    assert result.absent_inputs == ("curie",)
     assert result.selected_inputs == {
         "organism_id": "NCBITaxon:6239",
         "ontology_term_type": "DOTerm",
@@ -488,6 +493,7 @@ def test_optional_payload_selector_present_keeps_literal_context(
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     request = result.request.model_dump(mode="json")
     assert request["selected_inputs"] == {
         "curie": "DOID:1",
@@ -571,6 +577,7 @@ def test_allow_multiple_payload_selector_preserves_list_values(tmp_path: Path):
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     request = result.request.model_dump(mode="json")
     assert request["selected_inputs"] == {"selected": ["AGR:1", "AGR:2"]}
     assert request["target"]["input_values"] == {"selected": ["AGR:1", "AGR:2"]}
@@ -638,6 +645,7 @@ def test_optional_missing_selector_is_omitted_without_suppressing_request(
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     request = result.request.model_dump(mode="json")
     assert request["selected_inputs"] == {"selected": "AGR:1"}
     assert request["target"]["input_values"] == {"selected": "AGR:1"}
@@ -676,6 +684,7 @@ def test_evidence_selector_reads_nested_extraction_metadata_records(tmp_path: Pa
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     assert result.selected_inputs == {
         "selected": "AGR:1",
         "evidence_quote": "Nested extraction metadata quote.",
@@ -722,6 +731,7 @@ def test_evidence_selector_does_not_fallback_to_envelope_records_without_object_
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     assert result.selected_inputs == {"selected": "AGR:1"}
     assert result.evidence == []
 
@@ -764,6 +774,7 @@ def test_evidence_selector_keeps_object_local_records_without_object_ids(
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     assert result.selected_inputs == {
         "selected": "AGR:1",
         "evidence_quote": "Object-local quote.",
@@ -809,6 +820,7 @@ def test_evidence_selector_filters_by_field_path_without_unrelated_fallback(
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     assert result.selected_inputs == {"selected": "AGR:1"}
     assert "evidence_quote" not in result.selected_inputs
 
@@ -857,6 +869,7 @@ def test_evidence_selector_allow_multiple_returns_all_field_matched_quotes(
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     assert result.selected_inputs["evidence_quotes"] == [
         "First value quote.",
         "Second value quote.",
@@ -910,6 +923,7 @@ def test_evidence_quote_bundle_selector_returns_record_id_field_and_quote(
 
     assert result.findings == ()
     assert result.request is not None
+    assert result.absent_inputs == ()
     assert result.selected_inputs["evidence_quotes"] == [
         {
             "evidence_record_id": "evidence-1",
@@ -999,3 +1013,47 @@ def test_object_ref_selector_uses_explicit_ref_not_sibling_guessing(tmp_path: Pa
 
     assert {finding.code for finding in result.findings} == {"selector_missing"}
     assert result.request is None
+
+
+@pytest.mark.parametrize("payload, absent", [({}, True), ({"value": None}, True),
+    ({"value": []}, True), ({"value": ""}, False), ({"value": "AGR:1"}, False)])
+def test_optional_absence_marker_keeps_existing_missing_value_semantics(tmp_path, payload, absent):
+    result = _run_selector(tmp_path, """
+          selected:
+            source: payload
+            path: value
+            required: false
+""", _assertion_envelope(payload=payload))
+    assert result.absent_inputs == (("selected",) if absent else ())
+    assert (result.request is None) == absent
+
+
+def test_required_missing_input_is_not_an_optional_absence(tmp_path):
+    result = _run_selector(tmp_path, """
+          selected:
+            source: payload
+            path: value
+""", _assertion_envelope(payload={}))
+    assert result.request is None
+    assert result.findings
+    assert result.absent_inputs == ()
+
+
+@pytest.mark.parametrize("unrouted", [False, True])
+def test_unavailable_validator_contract_never_declares_optional_absence(tmp_path, unrouted):
+    from dataclasses import replace
+    pack = _loaded_pack(tmp_path, """
+          selected:
+            source: payload
+            path: value
+            required: false
+""")
+    match = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(
+        _assertion_envelope(payload={}), states=[ValidationBindingState.ACTIVE])[0]
+    binding = replace(match.binding, validator_agent=None,
+        routes={} if unrouted else None, route_by_path="kind" if unrouted else None)
+    result = build_domain_validation_request(replace(match, binding=binding))
+    assert result.request is None
+    assert result.absent_inputs == ()
+    if unrouted:
+        assert result.findings
