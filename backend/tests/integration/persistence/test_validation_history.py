@@ -387,7 +387,8 @@ def test_runtime_captures_baseline_and_request_before_runner_mutates_them(
             object_envelope=obj,
             envelope=captured,
             field_path=request.target.field_path,
-            binding=SimpleNamespace(decision_units=(), route_value=None, binding_id=request.validator_binding_id),
+            binding=SimpleNamespace(decision_units=(), route_value=None, runs_after=(),
+                                    binding_id=request.validator_binding_id),
         ),
         request=request,
     )
