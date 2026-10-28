@@ -1,5 +1,6 @@
 """Real PostgreSQL history: immutable facts, scoped reads and retirement CAS."""
 
+from tests.cancellation_test_support import install_cancel_reader
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
@@ -881,7 +882,7 @@ def test_automatic_flow_validation_freezes_inputs_and_retains_truthful_outcome(
         lambda package, agent: AgentDefinition(folder_name=agent, agent_id=agent, name=agent, package_id=package))
     monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner', lambda: custom)
     from unittest.mock import AsyncMock
-    monkeypatch.setattr('src.lib.redis_client.check_cancel_signal', AsyncMock(return_value=False))
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     context = ValidatorRuntimeContext(user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=())
     plan = flow_plan.prepare(source, pack,
         groups=[{'binding_id': 'fixture.identifier_lookup', 'state': 'automatic'}],

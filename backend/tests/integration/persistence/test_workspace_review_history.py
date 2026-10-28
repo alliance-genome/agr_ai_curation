@@ -1,5 +1,6 @@
 """Owned workspace history and durable explicit commands use real PostgreSQL."""
 
+from tests.cancellation_test_support import install_cancel_reader
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 import pytest
@@ -369,9 +370,7 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
     from src.lib.validation_review import validator_adapter, reviewer
     from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
 
-    monkeypatch.setattr(
-        "src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False)
-    )
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     monkeypatch.setattr(
         validator_adapter,
         "binding_contract",
