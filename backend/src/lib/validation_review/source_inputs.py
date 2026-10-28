@@ -22,7 +22,7 @@ def current(db, artifact_id, frozen):
     return frozen.get("source_input_ref") == reference(latest(db, artifact_id, frozen["target_id"]))
 
 
-def absent_input(match, result, target_id):
+def absent_input(match, result, target_id, *, requires_prerequisites=None):
     """Freeze verified selector absence without fabricating a validator request."""
     if result.request is not None or result.findings or not result.absent_inputs:
         raise ValueError("An absence fact requires verified optional-input absence")
@@ -31,6 +31,7 @@ def absent_input(match, result, target_id):
     content = {
         "binding_id": match.binding.binding_id,
         "runs_after": list(match.binding.runs_after),
+        "requires_prerequisites": (bool(match.binding.runs_after) if requires_prerequisites is None else requires_prerequisites),
         "absent_inputs": list(result.absent_inputs),
         "validator_agent": match.binding.validator_agent.to_dict(),
         "selected_inputs": deepcopy(result.selected_inputs),
@@ -75,7 +76,7 @@ def require_absence(db, artifact_id, unit_id, fact_id, *, scope, sha256=None):
     if body["lineage_generations"] != store._target_lineage(db, artifact_id, parent_id):
         raise store.HistoryConflict("Optional-absence source lineage has changed")
     pins = body["input"].get("prerequisites", [])
-    if body["input"]["runs_after"] and not pins:
+    if body["input"]["requires_prerequisites"] and not pins:
         raise store.HistoryConflict("Optional-absence source is awaiting prerequisite review")
     store._prerequisites_current(db, scope, pins)
     return fact

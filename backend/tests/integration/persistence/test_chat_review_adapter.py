@@ -99,7 +99,7 @@ def planned(scope, tmp_path, monkeypatch, request):
         text = text.replace("    fields:\n", "    fields:\n      - field_path: genes\n        field_type: string\n        metadata:\n          multivalued: true\n")
         pack.metadata_path.write_text(text)
         pack = replace(pack, metadata=load_domain_pack_metadata(pack.metadata_path))
-    if fixture_shape in {"absent", "optional-absence", "optional-composite-absence", "absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent"}:
+    if fixture_shape in {"absent", "optional-absence", "optional-composite-absence", "absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent", "unmatched-prerequisite", "unmatched-prerequisite-absence"}:
         from copy import deepcopy
         raw = deepcopy(pack.metadata.metadata)
         binding = raw["validator_bindings"]["active"][0]
@@ -113,17 +113,22 @@ def planned(scope, tmp_path, monkeypatch, request):
         field = pack.metadata.object_definitions[0].fields[0].model_copy(
             update={"field_path": "optional.term", "metadata": {}})
         fields = [field]
-        if fixture_shape in {"absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent"}:
+        if fixture_shape in {"absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent", "unmatched-prerequisite", "unmatched-prerequisite-absence"}:
             dependent = deepcopy(binding)
             dependent.update(binding_id="fixture.dependent", runs_after=[binding["binding_id"]])
             dependent["applies_to"]["field_paths"] = ["optional.other"]
             dependent["expected_result_fields"] = {"curie": "optional.other"}
             dependent["input_fields"] = {"query": {"source": "payload", "path": "optional.term",
                 "required": fixture_shape == "absence-dependent-required"}}
-            if fixture_shape == "absence-runnable-dependent":
+            if fixture_shape in {"absence-runnable-dependent", "unmatched-prerequisite"}:
                 dependent["input_fields"] = {"query": {"source": "literal", "value": "Supplied optional policy context"}}
             raw["validator_bindings"]["active"].append(dependent)
             fields.append(field.model_copy(update={"field_path": "optional.other"}))
+        if fixture_shape in {"unmatched-prerequisite", "unmatched-prerequisite-absence"}:
+            binding["applies_to"]["field_paths"] = ["optional.parents"]
+            binding["expected_result_fields"] = {"curie": "optional.parents"}
+            binding["input_fields"] = {"query": {"source": "payload", "path": "optional.parents"}}
+            fields.append(field.model_copy(update={"field_path": "optional.parents", "metadata": {"multivalued": True}}))
         definition = pack.metadata.object_definitions[0].model_copy(update={"fields": fields})
         pack = replace(pack, metadata=pack.metadata.model_copy(update={
             "metadata": raw, "object_definitions": [definition]}))
@@ -159,8 +164,10 @@ def planned(scope, tmp_path, monkeypatch, request):
             object_type="Annotation", pending_ref_id=name,
             payload={"kind": name, "evidence_code_curies": ["eco:" + name]})
             for name in ("one", "two")]
-    if fixture_shape in {"absent", "optional-absence", "optional-composite-absence", "absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent"}:
+    if fixture_shape in {"absent", "optional-absence", "optional-composite-absence", "absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent", "unmatched-prerequisite", "unmatched-prerequisite-absence"}:
         env.extracted_objects[0].payload = {"optional": {}}
+        if fixture_shape in {"unmatched-prerequisite", "unmatched-prerequisite-absence"}:
+            env.extracted_objects[0].payload["optional"]["parents"] = []
     if fixture_shape == "three":
         env.extracted_objects = [CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=name,
             payload={"evidence_code_curies": ["eco:" + name]}) for name in "ABC"]
@@ -1825,3 +1832,25 @@ def test_outstanding_pages_keep_multiple_answers_and_global_blockers(planned):
     retired = reads.outstanding(item.scope, item.ep)
     assert not retired["ready"]
     assert retired["global_blockers"]["document_retired"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["unmatched-prerequisite", "unmatched-prerequisite-absence"], indirect=True)
+async def test_unmatched_prerequisite_orders_no_initial_work_or_absence_review(planned, monkeypatch):
+    item = planned
+    assert len(item.plan.matches) == 1
+    assert item.plan.matches[0].binding.runs_after
+    checkpoint = checkpoint_provider(item)
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    if item.plan.initial_jobs:
+        assert len(item.plan.initial_jobs) == 1 and item.plan.initial_jobs[0].history_wave == 0
+        assert not item.adapter.plan["initial_requests"][0]["requires_prerequisites"]
+        monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
+            lambda: lambda request, **kwargs: {**_result_payload(request, resolved_values={"curie": "ECO:VALUE"}),
+                                              "resolved_objects": []})
+        await item.adapter.initial()
+        entries = entries_for(item, "accept")
+    else:
+        entries = [absence_entry(item)]
+    result = decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="review-first-wave", entries=entries)
+    assert result["ready"]

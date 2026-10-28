@@ -432,7 +432,7 @@ async def test_evidence_selection_never_bypasses_dependent_absence_prerequisites
                 source_inputs.require_absence(db, item.aid, child, fact.id, scope=item.scope)
     if writeback:
         from src.lib.validation_review import scheduling
-        with pytest.raises(store.HistoryConflict, match="Prerequisite"):
+        with pytest.raises(admission.ReviewStopped, match="prerequisite_reconsideration_required"):
             await item.adapter.assess_source(context, operation_id="refuse-stale-parent",
                 selection_id=selection["selection_id"], target_ids=[child], instructions="Review selected source")
         deferred = decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="defer-old-child",

@@ -339,3 +339,35 @@ def test_invalid_corrective_nudge_setting_is_rejected(monkeypatch, value):
     monkeypatch.setenv("VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS", value)
     with pytest.raises(ValueError):
         get_validation_review_initial_corrective_continuations()
+
+
+@pytest.mark.asyncio
+async def test_source_prerequisite_retry_is_recoverable_at_bound_tool_boundary():
+    import json
+    from unittest.mock import AsyncMock
+    from agents.tool_context import ToolContext
+    from src.lib.validation_review.admission import ReviewStopped
+
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    assessment = AsyncMock(side_effect=[
+        ReviewStopped("prerequisite_reconsideration_required", resource="dependent"),
+        {"state": "completed"},
+    ])
+    tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
+        request_extraction=AsyncMock(), select_source=AsyncMock(), assess_source=assessment)}
+    tool = tools["validate_selected_extraction_source"]
+    arguments = {"operation_id": "retry", "selection_id": "selection",
+                 "target_ids": ["dependent"], "instructions": "Assess selected source"}
+
+    async def invoke():
+        encoded = json.dumps(arguments)
+        return await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name,
+            tool_call_id=arguments["operation_id"], tool_arguments=encoded), encoded)
+
+    result = await invoke()
+    assert result == {"state": "not_applied", "code": "prerequisite_reconsideration_required",
+                      "resource": "dependent", "applied": [], "targets": ["dependent"]}
+    arguments.update(operation_id="independent", target_ids=["independent"])
+    assert await invoke() == {"state": "completed"}
+    assert assessment.await_count == 2

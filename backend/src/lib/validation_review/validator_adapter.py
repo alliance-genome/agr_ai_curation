@@ -52,7 +52,7 @@ def _prerequisite_targets(match, matches, units, parents):
             covered = [unit["target_id"] for unit in units
                        if unit["target_id"] == other_id or parents.get(unit["target_id"]) == other_id]
             if not covered:
-                return []
+                return None
             dependencies.extend(covered)
     return dependencies
 
@@ -312,7 +312,10 @@ class ValidatorAdapter:
                         continue
                     dependencies = _prerequisite_targets(resolved_matches[target], resolved_matches, units, parents)
                     if frozen["request"] is not None:
-                        frozen["prerequisite_targets"] = dependencies
+                        frozen["requires_prerequisites"] = dependencies != []
+                        frozen["prerequisite_targets"] = dependencies or []
+                    else:
+                        frozen["input"]["requires_prerequisites"] = dependencies != []
                     if dependencies and not blocked.intersection(dependencies):
                         frozen["prerequisites"] = selections.selected_prerequisites(manifest, dependencies)
             return requests
@@ -393,6 +396,13 @@ class ValidatorAdapter:
                     request = store._content(db, fact)["request"]
                     if request is None:
                         raise admission.ReviewStopped("required_inputs_unavailable")
+                    if request.get("requires_prerequisites"):
+                        try:
+                            if not request["prerequisites"]:
+                                raise store.HistoryConflict("Prerequisite approvals are pending")
+                            store._prerequisites_current(db, self.scope, request["prerequisites"])
+                        except store.HistoryConflict as error:
+                            raise admission.ReviewStopped("prerequisite_reconsideration_required", resource=target) from error
                     requests.append(request)
             jobs = [self.job(request) for request in requests]
             receipt = self.receipt(jobs, batch_key=None)

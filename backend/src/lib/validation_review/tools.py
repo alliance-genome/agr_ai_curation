@@ -39,6 +39,7 @@ def _recoverable_tool(function):
                     "scientific_attempts_exhausted",
                     "fresh_prerequisite_adapter_required",
                     "prerequisite_review_pending",
+                    "prerequisite_reconsideration_required",
                     "non_validator_prerequisite",
                     "required_inputs_unavailable",
                     "source_input_changed",
@@ -300,6 +301,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         never resets them. Read the returned answer before separately accepting it.
         Do not call this when the extractor found no new information or when no
         binding input changed. Uncertainty alone does not require another attempt.
+        If prerequisite_reconsideration_required is returned, review the prerequisites
+        first, then use request_validation_reconsideration for the existing answer.
         """
         assert assess_source is not None  # Tool is exposed only with its bound callback.
         return await assess_source(operation_id=operation_id, selection_id=selection_id,

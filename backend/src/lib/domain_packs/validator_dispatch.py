@@ -576,7 +576,7 @@ def prepare_validator_dispatch(
             if selector_result.request is None:
                 if selector_result.absent_inputs:
                     from src.lib.validation_history.runtime import record_absent_source_input
-                    absence_ref = record_absent_source_input(history_binding, match, selector_result)
+                    absence_ref = record_absent_source_input(history_binding, match, selector_result, requires_prerequisites=False)
                     record_match_scheduling(history_binding, match, "optional_inputs_absent",
                                             details={"applicability_ref": absence_ref})
                 else:
