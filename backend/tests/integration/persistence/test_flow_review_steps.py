@@ -131,7 +131,8 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     envelope = DomainEnvelope.model_validate(flow.record.payload_json)
     fixture = SimpleNamespace(scope=source_scope, aid=ref["artifact_id"], ep=ref["episode_id"],
         plan=SimpleNamespace(envelope=envelope))
-    checkpoint = lambda: flow.checkpoint(flow.record)
+    def checkpoint():
+        return flow.checkpoint(flow.record)
     assert checkpoint().flow_run_id == run_id
     assert checkpoint().source_extraction_result_id == flow.record.extraction_result_id
     async def review(record):
