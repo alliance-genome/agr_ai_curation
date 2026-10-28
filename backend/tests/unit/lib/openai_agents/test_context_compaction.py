@@ -433,3 +433,138 @@ async def test_token_count_failure_is_recorded_and_never_dispatches_generation(h
     assert capacity_event["output_summary"]["outcome"] == "failed_before_generation"
     assert capacity_event["output_summary"]["error_type"] == "ConnectionError"
     assert any(kind == "model_error" for kind, _ in history.store.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["http", "websocket"])
+async def test_reviewer_continuation_reuses_real_sdk_compaction_history_and_accounting(history, monkeypatch, transport):
+    """Two ordinary SDK phases, two compactions, one exact history/budget; no paid IO."""
+    import httpx
+    from unittest.mock import MagicMock, Mock
+    from src.lib.config.tool_loading_loader import ToolLoadingPolicy
+    from src.lib.openai_agents import runner, model_request_measurement as measurement
+    from src.lib.validation_review import reviewer, continuation, provider
+    from src.lib.validation_review.decisions import ReviewContext
+    from src.lib.validation_review.observations import record_read
+    from src.lib.validation_history import store
+
+    monkeypatch.setenv("VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS", "0")
+    monkeypatch.setattr(measurement, "_publish", lambda _: None)
+    created_history = Mock(return_value=history)
+    monkeypatch.setattr("src.lib.openai_agents.run_history.new_history", created_history)
+    monkeypatch.setattr("src.lib.openai_agents.tool_surface.resolve_tool_loading_policy",
+                        lambda *a: ToolLoadingPolicy(mode="eager"))
+    monkeypatch.setattr("src.lib.observability.cost_context.get_agent_cost_identity",
+                        lambda _: {"agent_id": "supervisor", "agent_name": "Supervisor", "agent_role": "supervisor"})
+    monkeypatch.setattr(store, "SessionLocal", MagicMock())
+    commit, flush = Mock(), Mock()
+    monkeypatch.setattr("src.lib.prompts.context.commit_pending_prompts", commit)
+    monkeypatch.setattr(reviewer, "flush_phase_config", flush)
+    charges, settled, turn_allowances, inputs, writes, budgets, policies = [], [], [], [], [], [], []
+
+    def reserve(*args, **kwargs):
+        charges.append(kwargs["charges"])
+        return str(len(charges))
+
+    def remaining(*args):
+        value = 20 - sum(item.get("reviewer_turns", 0) for item in charges)
+        turn_allowances.append(value)
+        return value
+
+    monkeypatch.setattr(provider.admission, "reserve", reserve)
+    monkeypatch.setattr(provider.admission, "reconcile", lambda *a, **kw: settled.append(kw["actual"]))
+    monkeypatch.setattr(provider.admission, "remaining_reviewer_turns", remaining)
+    deadline = Mock(return_value=None)
+    monkeypatch.setattr(provider, "remaining_seconds", deadline)
+    monkeypatch.setattr(continuation, "inspect", lambda *a: {
+        "signature": "selected" if writes else "unreviewed", "eligible": set() if writes else {"record-a"},
+        "causes": [], "review": {"ready": bool(writes), "state": "complete" if writes else "pending"}})
+    evidence = {"original": "NOT observed α😀", "caveat": "Check the Methods section", "record": "record-a"}
+
+    @function_tool
+    def read_validation_history() -> dict:
+        record_read("review_record_source", {"sha256": "source-hash", "offset": 0,
+                                             "content": json.dumps(evidence)})
+        return evidence
+
+    @function_tool
+    def record_validation_review() -> dict:
+        writes.append("record-a")
+        return {"saved": "record-a", "assessment": "unresolved"}
+
+    def response(wire):
+        inputs.append(deepcopy(wire["input"]))
+        budgets.append(provider.ACTIVE_BUDGET.get())
+        policies.append(history.context_policy)
+        step = len(inputs)
+        assert wire["context_management"] == [{"type": "compaction", "compact_threshold": 250000}]
+        assert wire.get("previous_response_id") is None
+        if step == 1:
+            output = [{"type": "function_call", "call_id": "read-source", "name": "read_validation_history", "arguments": "{}"}]
+        elif step == 2:
+            output = [{"type": "compaction", "id": "phase-one-compaction", "encrypted_content": "opaque-one"},
+                      final_message().model_dump()]
+        elif step == 3:
+            assert wire["input"][0]["encrypted_content"] == "opaque-one"
+            assert any(item.get("content") == continuation.REMINDER for item in wire["input"])
+            ref = next(ref for kind, ref in history.store.events
+                       if kind == "tool_result" and history.store.rows[ref] == evidence)
+            output = [{"type": "function_call", "call_id": "recover-source", "name": "read_run_history",
+                       "arguments": json.dumps({"event_id": ref, "detail_path": "payload"})}]
+        elif step == 4:
+            recovered = next(item["output"] for item in wire["input"] if item.get("call_id") == "recover-source"
+                             and item["type"] == "function_call_output")
+            assert "NOT observed" in recovered and "Methods" in recovered
+            output = [{"type": "compaction", "id": "phase-two-compaction", "encrypted_content": "opaque-two"},
+                      {"type": "function_call", "call_id": "save", "name": "record_validation_review", "arguments": "{}"}]
+        else:
+            assert step == 5
+            assert wire["input"][0]["encrypted_content"] == "opaque-two"
+            output = [final_message().model_dump()]
+        return {"id": f"response-{step}", "object": "response", "created_at": 0, "model": "gpt-6-astra",
+                "status": "completed", "output": output, "parallel_tool_calls": True, "tools": [], "tool_choice": "auto",
+                "usage": {"input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
+                          "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}
+
+    def http_reply(request):
+        return httpx.Response(200, json=response(json.loads(request.content)))
+
+    class Socket:
+        state = SimpleNamespace(name="OPEN")
+        async def send(self, frame):
+            self.payload = response(json.loads(frame))
+        async def recv(self):
+            return json.dumps({"type": "response.completed", "sequence_number": 1, "response": self.payload})
+        async def close(self, **kwargs):
+            pass
+
+    # Owned HTTP clients still use the real SDK serializer and ownership path,
+    # but every newly created transport is locally intercepted.
+    monkeypatch.setattr(runner, "DefaultAsyncHttpxClient", lambda **kw: httpx.AsyncClient(
+        transport=httpx.MockTransport(http_reply), **kw))
+    async with AsyncOpenAI(api_key="fixture", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(http_reply))) as client:
+        kind = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
+        model = kind(model="gpt-6-astra", openai_client=client)
+        if transport == "websocket":
+            monkeypatch.setattr(model, "_open_websocket_connection", AsyncMock(return_value=Socket()))
+        agent = Agent(name="Supervisor", model=model, instructions="Review every record.",
+                      tools=[read_validation_history, record_validation_review], model_settings=ModelSettings(store=False))
+        context = ReviewContext(store.HistoryScope("owner", "11111111-1111-1111-1111-111111111111", "session"),
+                                "episode", "supervisor")
+        result = await reviewer.run(context, agent, input="Review the saved extraction.",
+                                    run_config=RunConfig(tracing_disabled=True))
+        assert result["review"]["ready"] and result["output"] == "done"
+        assert writes == ["record-a"] and len(inputs) == 5
+        assert len(history.native_compaction_keys) == 2
+        assert all(budget is budgets[0] for budget in budgets) and budgets[0] is not None
+        assert all(policy is policies[0] for policy in policies) and policies[0] is not None
+        assert turn_allowances == [20, 18]
+        assert sum(item.get("reviewer_turns", 0) for item in charges) == 5
+        assert sum(item.get("reviewer_tools", 0) for item in charges) == 3
+        assert len(settled) == 5 and sum(item["reviewer_tokens"] for item in settled) == 5100
+        created_history.assert_called_once()
+        commit.assert_called_once()
+        flush.assert_called_once()
+        deadline.assert_called_once()
+        await model.close()

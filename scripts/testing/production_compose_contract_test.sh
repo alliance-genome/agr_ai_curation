@@ -308,7 +308,7 @@ import sys
 
 settings = [line.split("|") for line in Path(sys.argv[1]).read_text().splitlines()
             if line and not line.startswith("#")]
-assert len(settings) == 14
+assert len(settings) == 15
 # Empty defaults are deliberately uncapped; explicit positive overrides must
 # reach both consumers in the actual rendered development/production config.
 for index, path in enumerate(sys.argv[2:]):

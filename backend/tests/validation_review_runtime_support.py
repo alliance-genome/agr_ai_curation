@@ -30,13 +30,20 @@ class HistoryReadingReviewer(FakeResponsesWSModel):
         from src.lib.validation_review.tools import runtime_tool_contract
         offered = {tool.name for tool in kwargs["tools"]}
         allowed = {tool["name"] for tool in runtime_tool_contract()}
-        core = {"get_validation_review_packet", "get_validation_record_source", "read_validation_history", "record_validation_review",
+        core = {"get_outstanding_validation_reviews", "get_validation_review_packet", "get_validation_record_source", "read_validation_history", "record_validation_review",
                 "request_validation_reconsideration", "get_validation_review_status"}
         from src.lib.openai_agents.run_history import HISTORY_TOOL_NAMES
         assert offered & HISTORY_TOOL_NAMES in (set(), HISTORY_TOOL_NAMES), offered
         assert offered - HISTORY_TOOL_NAMES in (core, allowed), offered
         if len(self.calls) == 1:
             response = next(self.script)
+        elif self.pending_call_id is None:
+            from src.lib.validation_review.continuation import REMINDER
+            assert kwargs["input"][-1] == {"role": "user", "content": REMINDER}
+            try:
+                response = self.script.send(None)
+            except StopIteration as error:
+                raise AssertionError("Unexpected continuation after script completion") from error
         else:
             outputs = [item for item in kwargs["input"]
                        if isinstance(item, dict)

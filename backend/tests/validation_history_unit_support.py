@@ -75,6 +75,7 @@ def isolated_validation_history(monkeypatch):
     monkeypatch.setattr(selections, "declare_envelope_episode", declare)
     monkeypatch.setattr(candidates, "_record_recipe", lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime, "record_match_scheduling", lambda *args, **kwargs: str(uuid4()))
+    monkeypatch.setattr(runtime, "record_absent_source_input", lambda *args, **kwargs: {"fact_id": str(uuid4()), "sha256": "fixture-absence"})
     monkeypatch.setattr(runtime, "capture_extraction", lambda **kwargs: kwargs["envelope"])
     monkeypatch.setattr(runtime, "bind_artifact", lambda envelope, context: binding)
     monkeypatch.setattr(runtime, "record_runner_receipt", lambda *args, **kwargs: None)

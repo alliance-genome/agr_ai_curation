@@ -1201,3 +1201,22 @@ def test_selected_field_null_keeps_custom_missing_display():
         [FlowOutputColumnSpec(key="statement", field_ref="object.payload.statement")],
         missing_value="NA", preserve_empty=True,
         render=_display_renderer({}, [])) == {"statement": "NA"}
+
+
+@pytest.mark.parametrize("payload", [{}, {"expression_pattern": {"where_expressed": {"cellular_component": None}}}])
+def test_unresolved_optional_absence_exports_without_fabricating_a_term(payload):
+    path = "expression_pattern.where_expressed.cellular_component"
+    finding = _open_finding(path, pending_ref_id="uncertain", object_type="GeneExpressionAnnotation")
+    finding["code"] = "validation_review.assessment_unresolved"
+    finding["details"] = {"review_assessment": {"absence_assessment": "unresolved"}}
+    objects = [{"object_type": "GeneExpressionAnnotation", "pending_ref_id": key,
+                "payload": deepcopy(payload)} for key in ("uncertain", "blank")]
+    original = deepcopy(objects)
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression", objects, [finding])],
+        flow_name="Optional absence export", output_format="tsv")
+    rows = apply_projection_plan(bundle, _object_plan("tsv", [
+        ("component", "object.pack.GeneExpressionAnnotation." + path),
+    ])).rows
+    assert rows == [{"component": "UNRESOLVED"}, {"component": "-"}]
+    assert objects == original

@@ -3856,6 +3856,15 @@ def get_connections_health_snapshot_ttl_seconds() -> float:
     return value
 
 
+def get_validation_review_initial_corrective_continuations() -> int:
+    """Consecutive no-progress nudges per invocation; never a scientific retry cap."""
+    name = "VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS"
+    value = int(_get_env(name, "1"))
+    if value < 0:
+        raise ValueError(f"{name} must be nonnegative")
+    return value
+
+
 def get_validation_review_limits() -> dict[str, int | None]:
     """Frozen scientific policy and optional, explicit operator review caps."""
     defaults = {

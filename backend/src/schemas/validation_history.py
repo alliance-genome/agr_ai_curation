@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, model_validator
 
 
 class HistoryContract(BaseModel):
@@ -31,6 +31,11 @@ class BoundUnresolvedFieldAssessment(UnresolvedFieldAssessment):
     anchor: StableValueAnchor
 
 
+class HistoryFactReference(HistoryContract):
+    fact_id: StrictStr = Field(min_length=1)
+    sha256: StrictStr = Field(min_length=1)
+
+
 class HistoryDecision(HistoryContract):
     target_id: StrictStr = Field(min_length=1)
     expected_version: StrictInt = Field(ge=0)
@@ -48,6 +53,7 @@ class HistoryDecision(HistoryContract):
     reason: StrictStr = Field(min_length=1)
     subject: StrictStr | None = None
     unresolved_fields: list[BoundUnresolvedFieldAssessment] | None = None
+    absence_assessment: Literal["omission_supported", "unresolved"] | None = None
     replacement_original: dict[str, Any] | None = None
     replacement_target_id: StrictStr | None = None
 
@@ -62,6 +68,9 @@ class HistoryDecision(HistoryContract):
             raise ValueError("Only replacement decisions supply new original content")
         if self.replacement_target_id is not None and self.action != "replace":
             raise ValueError("Only replacement can assign a replacement identity")
+        if self.absence_assessment is not None and (
+                self.action != "accept" or self.subject in {None, "baseline", "curator"}):
+            raise ValueError("Absence assessments require acceptance of an exact absence source")
         if self.unresolved_fields is not None:
             if self.action != "accept" or self.subject != "baseline":
                 raise ValueError("Field assessments require acceptance of extraction-only content")
@@ -94,6 +103,8 @@ class FrozenValidationInput(HistoryContract):
     result_anchors: dict[StrictStr, StableValueAnchor] = Field(default_factory=dict)
     decision_units: list[DecisionUnit] = Field(default_factory=list)
     prerequisites: list[PrerequisiteSelection] = Field(default_factory=list)
+    requires_prerequisites: StrictBool = Field(default=False, exclude_if=lambda value: not value)
+    prerequisite_targets: list[StrictStr] = Field(default_factory=list, exclude_if=lambda value: not value)
     dispatch_wave: StrictInt | None = Field(default=None, ge=0)
     review_episode_id: StrictStr | None = None
     available_prior_completions: list[StrictStr] = Field(default_factory=list)

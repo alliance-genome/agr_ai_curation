@@ -27,9 +27,11 @@ def _recoverable_tool(function):
 
     @wraps(function)
     async def invoke(*args, **kwargs):
+        from .observations import record_tool
+
         arguments = contract.bind(*args, **kwargs).arguments
         try:
-            return await function(*args, **kwargs)
+            result = await function(*args, **kwargs)
         except ReviewStopped as exc:
             if not (
                 exc.reason
@@ -37,6 +39,7 @@ def _recoverable_tool(function):
                     "scientific_attempts_exhausted",
                     "fresh_prerequisite_adapter_required",
                     "prerequisite_review_pending",
+                    "prerequisite_reconsideration_required",
                     "non_validator_prerequisite",
                     "required_inputs_unavailable",
                     "source_input_changed",
@@ -51,7 +54,7 @@ def _recoverable_tool(function):
                 )
             ):
                 raise
-            return {
+            result = {
                 "state": "not_applied",
                 "code": exc.reason,
                 "resource": exc.resource,
@@ -59,7 +62,7 @@ def _recoverable_tool(function):
                 "targets": arguments.get("target_ids", []),
             }
         except (store.HistoryConflict, store.HistoryAccessError, ValueError) as exc:
-            return {
+            result = {
                 "state": "conflict",
                 "code": type(exc).__name__,
                 "applied": [],
@@ -70,6 +73,8 @@ def _recoverable_tool(function):
                     e.decision_unit_id for e in arguments.get("entries", [])
                 ],
             }
+
+        return record_tool(function.__name__, arguments, result)
 
     return invoke
 
@@ -93,6 +98,20 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             context.episode_id,
             operation_id=operation_id,
         )
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def get_outstanding_validation_reviews(cursor: str | None = None) -> dict:
+        """Find current outstanding units and exact answer/optional-absence references.
+
+        Pass next_cursor to continue the live keyset scan; completed earlier rows
+        do not shift later pages. Start a fresh scan after changing source/coverage
+        and before finishing review. scan_complete only ends this scan; ready checks
+        the entire requested scope. Read exact evidence with read_validation_history
+        or get_validation_record_source before deciding; listing is not assessment.
+        """
+        return await asyncio.to_thread(reads.outstanding, context.history_scope,
+                                      context.episode_id, cursor=cursor)
 
     @function_tool(failure_error_function=None)
     @_recoverable_tool
@@ -148,6 +167,10 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Omitted targets remain pending. Accept caveated/unresolved complete answers
         when appropriate. For extraction-only acceptance, unresolved_fields names
         uncertain plain payload paths and explanations; it does not alter source values.
+        For declared optional-input absence, use the exact applicability_ref fact/hash
+        instead of an attempt or baseline, with its binding target and covered unit.
+        Acceptance requires absence_assessment (omission_supported or unresolved)
+        and your reason; optionality alone is not justification. No value is invented.
         Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """
@@ -278,6 +301,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         never resets them. Read the returned answer before separately accepting it.
         Do not call this when the extractor found no new information or when no
         binding input changed. Uncertainty alone does not require another attempt.
+        If prerequisite_reconsideration_required is returned, review the prerequisites
+        first, then use request_validation_reconsideration for the existing answer.
         """
         assert assess_source is not None  # Tool is exposed only with its bound callback.
         return await assess_source(operation_id=operation_id, selection_id=selection_id,
@@ -285,6 +310,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
 
     result = [
         get_validation_review_packet,
+        get_outstanding_validation_reviews,
         get_validation_record_source,
         read_validation_history,
         record_validation_review,

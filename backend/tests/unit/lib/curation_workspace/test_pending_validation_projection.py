@@ -29,12 +29,13 @@ def test_pending_proposal_preserves_history_without_changing_current_field_statu
     assert envelope.validation_findings == [finding]
 
 
-def test_supervisor_uncertainty_is_explicit_and_blocks_submission_until_settled():
+@pytest.mark.parametrize("payload", [{"name": "paper"}, {}, {"name": None}])
+def test_supervisor_uncertainty_is_explicit_and_blocks_submission_until_settled(payload):
     from src.lib.curation_workspace.session_submission_service import _finding_blocks_readiness
     finding = ValidationFinding(code="validation_review.assessment_unresolved", message="Use not established",
         severity="warning", field_ref=FieldRef(object_ref=ObjectRef(object_id="one", object_type="entity"), field_path="name"))
     envelope = DomainEnvelope(envelope_id="reviewed", domain_pack_id="fixture",
-        extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="entity", payload={"name": "paper"})],
+        extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="entity", payload=payload)],
         validation_findings=[finding])
     results, _ = domain_envelope_field_validation_results(envelope, envelope_revision=1, object_id="one", field_keys=["name"])
     assert results["name"].status.value == "unresolved"

@@ -262,7 +262,8 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
     matches = registry.match_bindings(working)
     grouped = {}
     for unit in manifest["units"]:
-        if unit["eligible"] and unit["selected"] not in {"baseline", "curator"}:
+        if (unit["eligible"] and unit["selected"] not in {"baseline", "curator"}
+                and unit.get("applicability_ref") is None):
             grouped.setdefault(unit["selected"], []).append(unit)
 
     def match_for(attempt):

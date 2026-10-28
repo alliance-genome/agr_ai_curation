@@ -222,7 +222,19 @@ def _selected_unit(db, scope, artifact_id, target_id):
             return unit
         unit.update(eligible=True, reason=None)
         return unit
-    completion = store._fact(db, artifact_id, state["selected"], kind="completion")
+    completion = store._fact(db, artifact_id, state["selected"])
+    if completion.kind == "validation_source_input":
+        from src.lib.validation_review import source_inputs
+        try:
+            source_inputs.require_absence(db, artifact_id, target_id, completion.id, scope=scope)
+        except store.HistoryConflict:
+            unit["reason"] = "stale"
+            return unit
+        unit.update(eligible=True, reason=None, applicability_ref=source_inputs.reference(completion),
+                    decision_unit=store._content(db, target).get("decision_unit"))
+        return unit
+    if completion.kind != "completion":
+        raise store.HistoryConflict("Selected subject has an unsupported fact kind")
     content = store._content(db, completion)
     attempt = store._fact(db, artifact_id, completion.parent_id, kind="attempt")
     frozen = store._content(db, attempt)

@@ -1084,7 +1084,13 @@ def test_validation_review_limits_have_deployment_parity(key, default, override,
 
     monkeypatch.delenv(key, raising=False)
     field = key.removeprefix("VALIDATION_REVIEW_").lower()
-    value = ReviewLimits.configured().snapshot()[field]
+    def configured_value():
+        if field == "initial_corrective_continuations":
+            from src.lib.openai_agents.config import get_validation_review_initial_corrective_continuations
+            return get_validation_review_initial_corrective_continuations()
+        return ReviewLimits.configured().snapshot()[field]
+
+    value = configured_value()
     assert value == (int(default) if default else None)
     expected = "${" + key + ":-" + default + "}"
     for path, names in (
@@ -1100,7 +1106,7 @@ def test_validation_review_limits_have_deployment_parity(key, default, override,
             assert env[key] == expected
     assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
     monkeypatch.setenv(key, override)
-    assert str(ReviewLimits.configured().snapshot()[field]) == override
+    assert str(configured_value()) == override
 
 
 def test_validation_review_deployment_contract_covers_every_getter():
@@ -1108,7 +1114,7 @@ def test_validation_review_deployment_contract_covers_every_getter():
 
     assert {key for key, _, _ in REVIEW_LIMIT_CONTRACT} == {
         "VALIDATION_REVIEW_" + field.upper() for field in ReviewLimits.configured().snapshot()
-    }
+    } | {"VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS"}
 
 
 def test_workspace_review_concurrency_deployment_parity(monkeypatch):

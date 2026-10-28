@@ -369,6 +369,7 @@ def frozen_job_requests(binding, jobs, *, db=None):
             "review_episode_id": j.history_episode_id or j.match.envelope.metadata.get("review_episode_id"),
             "available_prior_completions": list(j.history_prior_completions),
             "prerequisites": list(j.history_prerequisites),
+            "requires_prerequisites": bool(j.match.binding.runs_after) and j.history_wave != 0,
         }
         for j in jobs
         for target in [binding_target(binding, j.match, db=db)]
@@ -710,6 +711,24 @@ def replace_projection_targets(before, after, *, replacement_path=None):
     result = after.model_copy(deep=True)
     result.metadata["validation_history"] = refs
     return result, {"changes": changes, "additions": additions}
+
+
+def record_absent_source_input(binding, match, result, *, requires_prerequisites=None):
+    """Persist optional absence under the same artifact lock as scientific history."""
+    from uuid import uuid4
+    from sqlalchemy import select
+    from src.models.sql.validation_history import ValidationArtifact
+    from src.lib.validation_review import source_inputs
+
+    with store.SessionLocal.begin() as db:
+        store._artifact(db, binding.artifact_id, binding.scope)
+        db.scalar(select(ValidationArtifact.id).where(
+            ValidationArtifact.id == binding.artifact_id).with_for_update())
+        target = binding_target(binding, match, db=db)
+        frozen = source_inputs.absent_input(match, result, target, requires_prerequisites=requires_prerequisites)
+        source_inputs.update(db, binding.artifact_id, operation_id="absence:" + str(uuid4()),
+                             before={}, after={target: frozen})
+        return source_inputs.reference(source_inputs.latest(db, binding.artifact_id, target))
 
 
 def record_match_scheduling(binding, match, outcome, *, details=None):

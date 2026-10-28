@@ -409,7 +409,13 @@ def _prerequisites_current(db, scope, references):
             raise HistoryConflict("Prerequisite selection is stale or ineligible")
 
         if pinned["selected"] not in {"baseline", "curator"}:
-            completion = _fact(db, aid, pinned["selected"], kind="completion")
+            completion = _fact(db, aid, pinned["selected"])
+            if completion.kind == "validation_source_input":
+                from src.lib.validation_review import source_inputs
+                source_inputs.require_absence(db, aid, tid, completion.id, scope=scope)
+                continue
+            if completion.kind != "completion":
+                raise HistoryConflict("Prerequisite has an unsupported subject")
             attempt = _fact(db, aid, completion.parent_id, kind="attempt")
             if not _attempt_is_current(db, scope, aid, _content(db, attempt), tid):
                 raise HistoryConflict("Prerequisite inputs are no longer current")
@@ -510,6 +516,8 @@ def begin_execution_in_transaction(db, scope, artifact_id, *, operation_id, rece
         # snapshotting and grouped selection updates atomic without lock cycles.
         if any(p["artifact_id"] != artifact_id for p in request["prerequisites"]):
             raise HistoryConflict("Prerequisites must belong to the same artifact")
+        if request.get("requires_prerequisites") and not request["prerequisites"]:
+            raise HistoryConflict("Dependent validation requires reviewed prerequisites")
         _prerequisites_current(db, scope, request["prerequisites"])
         for fact_id in request["available_prior_completions"]:
             _fact(db, artifact_id, fact_id, kind="completion")
@@ -632,6 +640,7 @@ def record_scheduling(
         "opted_out",
         "inactive",
         "missing_input",
+        "optional_inputs_absent",
         "unsupported_preflight",
         "flow_skipped",
         "not_validatable",
@@ -822,11 +831,14 @@ def apply_decisions_in_transaction(
             _require_active_target(db, artifact_id, target.id)
         if action in {"accept", "reject", "acknowledge_failure"} or (action == "defer" and entry.get("subject")):
             subject = entry["subject"]
+            completion = None
+            named = None
             uncertain_attempt = False
             if action == "acknowledge_failure" and subject not in {"baseline", "curator"}:
                 named = _fact(db, artifact_id, subject)
                 uncertain_attempt = named.kind == "attempt"
             if uncertain_attempt:
+                assert named is not None
                 if target.id not in _content(db, named)["coverage"] or not db.scalar(select(ValidationFact.id).where(
                     ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_uncertainty",
                     ValidationFact.parent_id == named.id).limit(1)):
@@ -842,7 +854,16 @@ def apply_decisions_in_transaction(
                 if (actor["type"] != "curator" or actor["id"] != scope.owner_id
                         or not _has_curator_subject(db, artifact_id, target.id)):
                     raise HistoryAccessError("Only the owner can select an attested curator source")
+            elif _fact(db, artifact_id, subject).kind == "validation_source_input":
+                from src.lib.validation_review import source_inputs
+                source_inputs.require_absence(db, artifact_id, target.id, subject, scope=scope)
+                if action == "acknowledge_failure":
+                    raise HistoryConflict("Optional absence is not an execution failure")
+                if action == "accept" and entry.get("absence_assessment") is None:
+                    raise HistoryConflict("Optional absence acceptance requires an explicit assessment")
             else:
+                if entry.get("absence_assessment") is not None:
+                    raise HistoryConflict("Absence assessment requires an optional-absence source")
                 completion = _fact(db, artifact_id, subject, kind="completion")
                 attempt = _fact(db, artifact_id, completion.parent_id, kind="attempt")
                 attempt_content = _content(db, attempt)
@@ -863,7 +884,7 @@ def apply_decisions_in_transaction(
                         "Incomplete or failed execution cannot finalize a target"
                     )
             if action == "acknowledge_failure" and not uncertain_attempt and (
-                subject in {"baseline", "curator"} or _content(db, completion)["state"] == "completed"
+                completion is None or _content(db, completion)["state"] == "completed"
             ):
                 raise HistoryConflict("Only an operationally incomplete attempt can be acknowledged")
             review = "pending" if action in {"defer", "acknowledge_failure"} else action

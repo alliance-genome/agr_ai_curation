@@ -126,6 +126,9 @@ GENERIC_RUNTIME_PLACEHOLDER_PATTERNS = (
 )
 
 ALLOWED_ALLIANCE_TEST_PATHS = {
+    # Optional-input absence uses the installed gene-expression/GO packs and
+    # RGD policy to prove real domain selectors preserve scientific payloads.
+    Path("backend/tests/integration/persistence/test_optional_input_domains.py"),
     # ALL-1446 verifies the installed GO pack's RGD policy, Alliance lookup
     # requests, and group audit through real review/publication persistence.
     Path("backend/tests/integration/persistence/test_go_reviewed_policy.py"),

@@ -371,3 +371,90 @@ async def test_source_publication_retires_absence_coverage_and_rejects_late_answ
         attempt = store._content(db, store._fact(db, item.aid, execution["attempt_ids"][0]))
         assert not store._attempt_is_current(db, item.scope, item.aid, attempt)
     assert store.read_baseline(item.scope, item.aid) == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned,parent_accepted", [("absence-dependent-optional", False),
+    ("absence-dependent-optional", True), ("dependent-writeback", True)], indirect=["planned"])
+async def test_evidence_selection_never_bypasses_dependent_absence_prerequisites(planned, parent_accepted, monkeypatch):
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider, absence_entry
+    from src.lib.validation_review import decisions, source_inputs
+    item = planned
+    context = ReviewContext(item.scope, item.ep, "supervisor")
+    checkpoint = checkpoint_provider(item)
+    matches = {match.binding.binding_id: match for match in item.plan.matches}
+    from src.lib.validation_history import runtime
+    child = runtime.binding_target(item.plan.history_binding, matches["fixture.dependent"])
+    parent_match = next(m for m in item.plan.matches if m.binding.binding_id != "fixture.dependent")
+    parent = runtime.binding_target(item.plan.history_binding, parent_match)
+    writeback = bool(item.plan.initial_jobs)
+    if writeback:
+        from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+        from tests.integration.persistence.test_chat_review_adapter import entries_for
+        monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
+            lambda: lambda request, **kwargs: {**_result_payload(request, resolved_values={"curie": "ECO:SELECTED"}),
+                                              "resolved_objects": []})
+        await item.adapter.initial()
+    if parent_accepted:
+        entries = (entries_for(item, "accept", binding_id=parent_match.binding.binding_id) if writeback
+                   else [absence_entry(item, target_id=parent)])
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="first-parent-review", entries=entries)
+        await item.adapter.advance(checkpoint)
+    args = request_args(item)
+    wid = extraction_scheduling.request(context, **args)
+    claim = work.claim(item.scope, wid)
+    work.mark_submitted(item.scope, wid, claim["lease_token"])
+    evidence = [{"evidence_record_id": "clarifying-methods", "verified_quote": "No cellular localization was reported.",
+                 "section": "Methods", "document_id": item.scope.document_id}]
+    result = {"entries": [{"entry_id": args["entry_ids"][0], "outcome": "additional_information",
+        "assessment": "Additional Methods context for the supervisor", "remaining_uncertainty": "",
+        "evidence_record_ids": ["clarifying-methods"], "proposed_values": []}]}
+    retained = extraction_results.retain(item.scope, wid, claim["lease_token"], result, evidence_records=evidence)
+    work.finish(item.scope, wid, claim["lease_token"], outcome=retained)
+    with store.SessionLocal() as db:
+        digest = selections.source_state_digest(db, item.aid)
+    selection = await item.adapter.select_source(context, checkpoint, operation_id="select-clarification",
+        contribution_ref=retained["contributions"][0], field_paths=[], evidence_ids=["clarifying-methods"],
+        expected_source_sha=digest, reason="Use the extractor's additional supplied context")
+    with store.SessionLocal() as db:
+        fact = source_inputs.latest(db, item.aid, child)
+        assert fact is not None
+        if writeback:
+            body = store._content(db, fact)
+            assert not source_inputs.is_absence(body)
+            assert body["request"]["request"]["selected_inputs"]["query"] == "ECO:SELECTED"
+            assert body["request"]["requires_prerequisites"]
+            assert body["request"]["prerequisite_targets"] == [parent]
+            assert body["request"]["prerequisites"]
+        else:
+            assert store._content(db, fact)["input"]["runs_after"] == list(matches["fixture.dependent"].binding.runs_after)
+            with pytest.raises(store.HistoryConflict):
+                source_inputs.require_absence(db, item.aid, child, fact.id, scope=item.scope)
+    if writeback:
+        from src.lib.validation_review import scheduling
+        with pytest.raises(admission.ReviewStopped, match="prerequisite_reconsideration_required"):
+            await item.adapter.assess_source(context, operation_id="refuse-stale-parent",
+                selection_id=selection["selection_id"], target_ids=[child], instructions="Review selected source")
+        deferred = decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="defer-old-child",
+            entries=entries_for(item, "defer", binding_id="fixture.dependent"))
+        await item.adapter.assess_source(context, operation_id="refresh-parent",
+            selection_id=selection["selection_id"], target_ids=[parent], instructions="Check the additional source context")
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-refreshed-parent",
+            entries=entries_for(item, "accept", binding_id=parent_match.binding.binding_id)[-1:])
+        item.adapter.prepare_inputs(checkpoint)
+        wid = scheduling.reconsider(context, operation_id="retry-child-with-current-parent",
+            parent_decision_id=deferred["decision_id"], target_ids=[child], instructions="Use the refreshed parent",
+            evidence_refs=[], refresh_inputs=item.adapter.refresh_inputs, rebind_receipt=item.adapter.rebind_receipt)
+        outcome = await item.adapter.execute(wid)
+        assert outcome["state"] == "completed"
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-refreshed-child",
+            entries=entries_for(item, "accept", binding_id="fixture.dependent")[-1:])
+        assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
+        return
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="review-clarified-parent",
+        entries=[absence_entry(item, target_id=parent)])
+    await item.adapter.advance(checkpoint)
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="review-clarified-child",
+        entries=[absence_entry(item, target_id=child)])
+    assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
+    assert checkpoint().envelope.extracted_objects[0].payload == {"optional": {}}

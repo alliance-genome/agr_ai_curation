@@ -14,8 +14,11 @@ CORE_GENERATED_BUDGET = 2500
 # measured contract to 6242 chars. Explicit whole-target/component decision routing
 # brings it to 6788 chars. Explicit whole-record retirement routing adds one
 # reviewed sentence (149 chars), bringing it to 6937; keep the ceiling close.
+# Outstanding-work navigation, explicit optional-absence assessment, and awaited
+# execution guidance add 592 reviewed characters, bringing it to 7529. Keep
+# only 71 characters of headroom for accidental source growth.
 # This is a source-growth regression ceiling, not a runtime truncation limit.
-AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 7000}
+AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 7600}
 
 
 def test_core_generated_within_budget_for_all_agents():

@@ -1,6 +1,9 @@
 """Resume dependent bindings inside the same artifact and review episode."""
 
+from uuid import uuid4
+
 from .admission import lock_episode
+from . import source_inputs
 from .scheduling import _enqueue, _existing
 from src.lib.validation_history import store, selections
 
@@ -44,11 +47,22 @@ def advance(
                     "targets": [tid],
                 }
             sources[tid] = store._content(
-                db, store._fact(db, ep.artifact_id, selected, kind="completion")
+                db, store._fact(db, ep.artifact_id, selected)
             )
         requests = build_requests(sources)
         if not requests:
             return {"state": "not_runnable", "reason": "required_inputs_unavailable"}
+        absences = {request["target_id"]: {**request, "prerequisites": pins}
+                    for request in requests if source_inputs.is_absence(request)}
+        if absences:
+            source_inputs.update(db, ep.artifact_id, operation_id="dependent-absence:" + str(uuid4()),
+                                 before={}, after=absences)
+            requests = [request for request in requests if not source_inputs.is_absence(request)]
+            if not requests:
+                return {"state": "awaiting_review", "reason": "optional_inputs_absent",
+                        "targets": list(absences), "applicability_refs": {
+                            target: source_inputs.reference(source_inputs.latest(db, ep.artifact_id, target))
+                            for target in absences}}
         if any(
             not isinstance(request.get("request", {}).get("selected_inputs"), dict)
             for request in requests

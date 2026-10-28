@@ -12,5 +12,5 @@ def annotate_review_assessments(calls):
         call["validation_review_decisions"] = {
             "arguments": arguments, "result": body,
             "result_available": body is not None,
-            "note": "An accepted assessment can remain scientifically unresolved; only explicit unresolved_fields carry field uncertainty.",
+            "note": "An accepted assessment can remain scientifically unresolved; explicit unresolved_fields or absence_assessment=unresolved retain scientific uncertainty.",
         }

@@ -348,7 +348,11 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
     for entry in accepted_entries:
         if entry["action"] != "accept" or entry.get("subject") in {None, "baseline", "curator"}:
             continue
-        completion = store._fact(db, artifact_id, entry["subject"], kind="completion")
+        completion = store._fact(db, artifact_id, entry["subject"])
+        if completion.kind == "validation_source_input":
+            continue  # No validator result exists to authorize replacing curator values.
+        if completion.kind != "completion":
+            raise store.HistoryConflict("Curator revalidation requires a completion")
         attempt = store._fact(db, artifact_id, completion.parent_id, kind="attempt")
         if attempt.sequence <= episode.sequence or store._content(db, completion)["state"] != "completed":
             continue
