@@ -1542,3 +1542,47 @@ def test_outstanding_cursor_is_bound_to_authenticated_episode(planned):
         reads.outstanding(item.scope, item.ep, cursor=forged)
     with pytest.raises(ValueError, match="bound episode"):
         reads.outstanding(item.scope, item.ep, cursor="not a cursor")
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+def test_continuation_view_uses_absence_subject_and_ignores_status_and_version_churn(planned):
+    from src.lib.validation_review import continuation, reads
+    item = planned
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    checkpoint = checkpoint_provider(item)
+    before = continuation.inspect(context, {"record_validation_review"})
+    assert before["eligible"] and not before["causes"]
+    reads.status_reference(item.scope, item.ep)
+    reads.snapshot(item.scope, item.ep, operation_id="status-churn")
+    assert continuation.inspect(context, {"record_validation_review"})["signature"] == before["signature"]
+    for operation in ("defer-first", "defer-again"):
+        decisions.record_decisions(context, checkpoint_request=checkpoint(),
+            operation_id=operation, entries=[absence_entry(item, action="defer")])
+        current = continuation.inspect(context, {"record_validation_review"})
+        if operation == "defer-first":
+            deferred = current["signature"]
+        else:
+            assert current["signature"] == deferred
+    decisions.record_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="accept-source", entries=[absence_entry(item)])
+    complete = continuation.inspect(context, {"record_validation_review"})
+    assert complete["review"]["ready"] and not complete["eligible"]
+    assert complete["signature"] != deferred
+
+
+@pytest.mark.parametrize("planned", [{"shape": "optional-absence", "count": 2}], indirect=True)
+def test_continuation_accept_revoke_accept_returns_to_seen_scientific_state(planned):
+    from src.lib.validation_review import continuation
+    item = planned
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    checkpoint = checkpoint_provider(item)
+    decisions.record_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="first-accept", entries=[absence_entry(item)])
+    accepted = continuation.inspect(context, {"record_validation_review"})["signature"]
+    revoke = absence_entry(item, action="revoke")
+    revoke.pop("applicability_ref")
+    decisions.record_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="revoke-selection", entries=[revoke])
+    decisions.record_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="accept-again", entries=[absence_entry(item)])
+    assert continuation.inspect(context, {"record_validation_review"})["signature"] == accepted

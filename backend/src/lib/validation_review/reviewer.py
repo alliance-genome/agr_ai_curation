@@ -140,7 +140,14 @@ def create_supervisor_phase(
 async def run(context, agent, *, input, run_config=None):
     """A model's final prose cannot mark the episode complete; consult the ledger."""
     from src.lib.validation_history import store
+    from src.lib.openai_agents.config import get_validation_review_initial_corrective_continuations
+    from . import continuation
+    from .observations import Observations, observation_scope
 
+    observations = Observations()
+    allowance = get_validation_review_initial_corrective_continuations()
+    consecutive_idle = 0
+    last_output = None
     try:
 
         def policy_turns():
@@ -149,7 +156,6 @@ async def run(context, agent, *, input, run_config=None):
                     db, context.history_scope, context.episode_id
                 )
 
-        turns = await asyncio.to_thread(policy_turns)
         from src.lib.observability.cost_context import get_agent_cost_identity
 
         budget = ExecutionBudget(
@@ -159,7 +165,7 @@ async def run(context, agent, *, input, run_config=None):
             True,
             reviewer_agent_id=get_agent_cost_identity(agent)["agent_id"],
         )
-        with budget_scope(budget):
+        with budget_scope(budget), observation_scope(observations):
             from src.lib.openai_agents.tool_surface import apply_tool_surface
 
             _require_review_tools(agent)
@@ -178,27 +184,49 @@ async def run(context, agent, *, input, run_config=None):
                 run_config or RunConfig(),
                 tool_not_found_behavior="return_error_to_model",
             )
-            result = await guarded_await(
-                run_agent_with_owned_openai_resources(
-                    agent, input, run_config=phase_config, max_turns=turns
+            surface = getattr(agent, "tool_surface", None)
+            source_tools = surface.source_tools if surface is not None else agent.tools
+            tool_names = {tool.name for tool in source_tools}
+            view = await asyncio.to_thread(continuation.inspect, context, tool_names)
+            observations.progress(view["signature"])
+            while True:
+                turns = await asyncio.to_thread(policy_turns)
+                result = await guarded_await(
+                    run_agent_with_owned_openai_resources(
+                        agent, input, run_config=phase_config, max_turns=turns
+                    )
                 )
-            )
+                last_output = result.final_output
+                view = await asyncio.to_thread(continuation.inspect, context, tool_names)
+                if view["review"]["ready"]:
+                    return {"output": last_output, "review": view["review"]}
+                _, refusals = observations.snapshot()
+                if not view["eligible"]:
+                    return continuation.terminal(view, refusals, last_output)
+                if observations.progress(view["signature"]):
+                    consecutive_idle = 0
+                elif consecutive_idle < allowance:
+                    consecutive_idle += 1
+                else:
+                    return continuation.terminal(view, refusals, last_output, stalled=True)
+                # Reuse SDK-owned exact history and the same compiled agent,
+                # context policy and budget; the reminder carries no IDs or data.
+                input = [*result.to_input_list(),
+                         {"role": "user", "content": continuation.REMINDER}]
     except Exception as error:
         from .stops import review_stop
 
         stopped = review_stop(error)
         if stopped is not None:
-            return await _stopped_response(context, stopped)
+            response = await _stopped_response(context, stopped)
+            if last_output is not None:
+                response["output"] = last_output
+            return response
         from .audit import report_operational_failure
 
         report_operational_failure(error)
         raise
-    return {
-        "output": result.final_output,
-        "review": await asyncio.to_thread(
-            admission.status, context.history_scope, context.episode_id
-        ),
-    }
+
 
 
 async def _stopped_response(context, exc):

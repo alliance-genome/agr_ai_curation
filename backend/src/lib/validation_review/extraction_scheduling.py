@@ -17,6 +17,21 @@ from .decisions import bounded_text
 from .work import enqueue_in_transaction
 
 
+def attempt_counts(db, artifact_id, entry_ids):
+    """Existing immutable request count, shared by admission and continuation."""
+    counts = dict.fromkeys(entry_ids, 1)  # The immutable original is attempt 1.
+    for fact in db.scalars(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact_id,
+        ValidationFact.kind == "extraction_followup_request",
+    )):
+        body = store._content(db, fact)
+        # Artifact identity preserves entitlement across turns/episodes and
+        # even independently admitted scopes for the same saved original.
+        for entry_id in set(body["entry_ids"]).intersection(counts):
+            counts[entry_id] += 1
+    return counts
+
+
 def request(context, *, operation_id, parent_decision_id, entry_ids, instructions,
             receipt, current_entries, contributions=(), expected_source_sha=None):
     """Atomically freeze context, consume entitlement and enqueue one invocation.
@@ -75,16 +90,7 @@ def request(context, *, operation_id, parent_decision_id, entry_ids, instruction
         if not all(any(item["target_id"] in descendants for item in declared)
                    for descendants in coverage.values()):
             raise store.HistoryAccessError("Follow-up entry is outside this episode")
-        counts = dict.fromkeys(entry_ids, 1)  # The immutable original is attempt 1.
-        for fact in db.scalars(select(ValidationFact).where(
-            ValidationFact.artifact_id == ep.artifact_id,
-            ValidationFact.kind == "extraction_followup_request",
-        )):
-            body = store._content(db, fact)
-            # Artifact identity preserves entitlement across turns/episodes and
-            # even independently admitted scopes for the same saved original.
-            for entry_id in set(body["entry_ids"]).intersection(counts):
-                counts[entry_id] += 1
+        counts = attempt_counts(db, ep.artifact_id, entry_ids)
         ceiling = ep.policy["extraction_attempts_per_entry"]
         for entry_id, count in counts.items():
             if count >= ceiling:
