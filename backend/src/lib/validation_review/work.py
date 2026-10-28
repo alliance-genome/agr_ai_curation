@@ -216,16 +216,44 @@ def mark_uncertain(scope, work_id, lease_token, *, reason):
 
 
 def heartbeat(scope, work_id, lease_token):
-    """Extend delivery ownership, never the fixed scientific review deadline."""
+    """Renew delivery only; scientific locks must not block ownership pulses.
+
+    Admission/publication still take scope -> artifact -> episode -> work locks.
+    Never acquire those locks after this work-row lock. Status reads may race a
+    stop by one tick; renewal cannot authorize another provider call or answer.
+    """
+    from src.models.sql.validation_review import ValidationReviewEpisode
+    from src.lib.validation_history.episodes import latest_effective_episode
+
     with store.SessionLocal.begin() as db:
-        episode, row = _locked(db, scope, work_id, require_open=True)
+        row = db.scalar(select(Work).where(Work.id == work_id).with_for_update())
+        if row is None:
+            raise store.HistoryAccessError("Review work unavailable")
+        episode = db.get(ValidationReviewEpisode, row.episode_id)
+        if episode is None:
+            raise store.HistoryAccessError("Admitted review episode unavailable")
+        store._artifact(db, episode.artifact_id, scope)
+        if store._document_retirement(db, episode.artifact_id) is not None:
+            raise ReviewStopped("retired")
+        latest = latest_effective_episode(db, episode.artifact_id)
+        if latest is None or latest.id != episode.id:
+            raise ReviewStopped("superseded")
+        # A heartbeat never reopens a completed episode. Locked admission owns
+        # late-answer reopening and all scientific permission checks.
+        if episode.state not in {"open", "complete"}:
+            raise ReviewStopped(episode.state)
+        current = now()
+        deadline = episode.policy["deadline_seconds"]
+        if deadline is not None and episode.started_at and current >= episode.started_at + timedelta(seconds=deadline):
+            raise ReviewStopped("expired")
         if (
             row.lease_token != lease_token
             or row.state not in {"claimed", "submitted"}
-            or row.lease_until <= now()
+            or row.lease_until is None
+            or row.lease_until <= current
         ):
             raise ReviewStopped("worker_lease_lost", resource=work_id)
-        row.lease_until = now() + timedelta(seconds=episode.policy["lease_seconds"])
+        row.lease_until = current + timedelta(seconds=episode.policy["lease_seconds"])
 
 
 def mark_not_admitted(scope, work_id, lease_token, *, reason, resource=None):
@@ -246,3 +274,41 @@ def mark_not_admitted(scope, work_id, lease_token, *, reason, resource=None):
             parent_id=episode.id,
             body={"work_id": row.id, "outcome": row.outcome},
         )
+
+
+def require_provider_ownership(db, episode_id, work_id, lease_token):
+    """Caller already owns scope/artifact/episode locks in canonical order."""
+    row = db.scalar(select(Work).where(Work.id == work_id).with_for_update()
+                    .execution_options(populate_existing=True))
+    if (row is None or row.episode_id != episode_id or lease_token is None
+            or row.lease_token != lease_token or row.state != "submitted"
+            or row.lease_until is None or row.lease_until <= now()):
+        raise ReviewStopped("worker_lease_lost", resource=work_id)
+
+
+async def submit_owned(scope, work_id, lease_token, *, execution=None):
+    """Finish a submission transaction before its async owner can classify it."""
+    import asyncio
+    pending = asyncio.create_task(asyncio.to_thread(mark_submitted, scope, work_id, lease_token))
+    try:
+        result = await asyncio.shield(pending)
+        if execution is not None:
+            execution.submitted = True
+        return result
+    except asyncio.CancelledError:
+        while not pending.done():
+            try:
+                await asyncio.shield(pending)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        error = pending.exception()
+        if error is None and execution is not None:
+            execution.submitted = True
+        if error is not None:
+            from .stops import review_stop
+            if review_stop(error) is None:
+                from .audit import report_operational_failure
+                report_operational_failure(error)
+        raise

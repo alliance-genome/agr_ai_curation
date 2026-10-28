@@ -29,21 +29,23 @@ async def execute(scope, work_id, *, resolve_agent):
             row = db.get(Work, work_id)
             if row.kind != "extraction_followup":
                 raise store.HistoryAccessError("Not targeted extraction work")
-            ep, _ = admission.lock_episode(db, scope, row.episode_id)
+            from src.models.sql.validation_review import ValidationReviewEpisode
+            ep = db.get(ValidationReviewEpisode, row.episode_id)
+            store._artifact(db, ep.artifact_id, scope)
             return ep.id, ep.artifact_id, ep.policy
 
     episode_id, artifact_id, policy = await asyncio.to_thread(details)
     payload = deepcopy(claim["payload"])
-    budget = ExecutionBudget(scope, episode_id, "reviewer_tokens", reviewer=False, work_id=work_id)
-    # Explicit submission fence covers authorization/setup failures too. It is
-    # marked not-admitted when we know no provider admission occurred.
-    await asyncio.to_thread(work.mark_submitted, scope, work_id, claim["lease_token"])
+    budget = ExecutionBudget(scope, episode_id, "reviewer_tokens", reviewer=False, work_id=work_id, lease_token=claim["lease_token"])
+    # Submission is protected by the ownership pulse inside invoke. Only a
+    # committed submission may be classified as not-admitted or uncertain.
     # Original records are read-only context, never mutable run-workspace entries.
     # Tools can revise/discard only evidence created by this follow-up invocation.
     evidence = []
     evidence_token = set_active_evidence_records(evidence)
 
     async def invoke():
+        await work.submit_owned(scope, work_id, claim["lease_token"], execution=budget.execution)
         agent = await asyncio.to_thread(resolve_agent, payload["receipt"])
         pinned = payload["receipt"]["contract"]
         if extractor_phase.contract(agent, max_turns=pinned["max_turns"]) != pinned:
@@ -61,6 +63,10 @@ async def execute(scope, work_id, *, resolve_agent):
         await asyncio.to_thread(work.finish, scope, work_id, claim["lease_token"], outcome=outcome)
         return {"state": "completed", "work_id": work_id, **outcome}
     except BaseException as error:
+        if not budget.execution.submitted:
+            # No delivery committed: preserve claimed-work recovery and never
+            # invent completions or report an ordinary pre-submission stop.
+            raise
         stopped = review_stop(error)
         reason = getattr(stopped, "reason", None) or (
             "cancelled" if isinstance(error, asyncio.CancelledError)

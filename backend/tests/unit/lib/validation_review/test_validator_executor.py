@@ -131,11 +131,11 @@ def test_cancelled_queued_validator_never_starts_and_execution_records_uncertain
 
     @contextmanager
     def database():
-        yield SimpleNamespace(get=lambda model, work_id: SimpleNamespace(episode_id="episode"))
+        yield SimpleNamespace(get=lambda model, work_id: SimpleNamespace(
+            episode_id="episode", id="episode", artifact_id="artifact", policy={"lease_seconds": 30}))
 
     monkeypatch.setattr(execution.store, "SessionLocal", database)
-    monkeypatch.setattr(execution.admission, "lock_episode", lambda *args: (
-        SimpleNamespace(id="episode", artifact_id="artifact", policy={"lease_seconds": 30}), []))
+    monkeypatch.setattr(execution.store, "_artifact", lambda *args: None)
     monkeypatch.setattr(provider, "remaining_seconds", lambda budget: None)
     monkeypatch.setattr(execution.work, "claim", lambda *args: {"lease_token": "lease", "payload": payload})
     monkeypatch.setattr(execution.work, "mark_submitted", lambda *args: transitions.append("submitted"))
@@ -195,3 +195,99 @@ def test_cancelled_queued_validator_never_starts_and_execution_records_uncertain
                                      return_exceptions=True)
 
         asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("worker_failure", [False, True])
+def test_cancelled_running_validator_drains_before_budget_owner_exits(monkeypatch, worker_failure):
+    release = Event()
+    settled, reported = [], []
+    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure", reported.append)
+    budget = provider.ExecutionBudget(_SCOPE, "episode", "initial_tokens", reviewer=False)
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+
+        def run(payload, jobs):
+            loop.call_soon_threadsafe(started.set)
+            assert release.wait(_WAIT)
+
+            async def late_settlement():
+                def record():
+                    active = provider.ACTIVE_BUDGET.get()
+                    assert active is not None
+                    settled.append(active.execution.capture_owner_active)
+                await asyncio.to_thread(record)
+
+            asyncio.run(late_settlement())
+            if worker_failure:
+                raise RuntimeError("fixture worker failure")
+            return []
+
+        adapter = _adapter(monkeypatch, run)
+
+        async def owned():
+            with provider.budget_scope(budget):
+                return await adapter.call(_payload("running"))
+
+        task = asyncio.create_task(owned())
+        try:
+            await asyncio.wait_for(started.wait(), _WAIT)
+            task.cancel()
+            # A queued loop callback runs after the cancellation is delivered.
+            delivered = loop.create_future()
+            loop.call_soon(delivered.set_result, None)
+            await delivered
+            assert not task.done(), "Owner exited while its validator thread was still running"
+            assert budget.execution.capture_owner_active
+            task.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, _WAIT)
+            assert settled == [True]
+            assert len(reported) == int(worker_failure)
+            assert not budget.execution.capture_owner_active
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        monkeypatch.setattr(validator_adapter, "_VALIDATOR_POOL", pool)
+        asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("targeted_extraction", [False, True])
+async def test_stop_before_submission_does_not_invent_results_or_report_failure(monkeypatch, targeted_extraction):
+    from unittest.mock import Mock
+    from src.lib.validation_review import extraction_execution, admission
+
+    module = extraction_execution if targeted_extraction else execution
+    row = SimpleNamespace(episode_id="episode", id="episode", artifact_id="artifact",
+                          kind="extraction_followup", policy={"lease_seconds": 30})
+
+    @contextmanager
+    def database():
+        yield SimpleNamespace(get=lambda *args: row)
+
+    monkeypatch.setattr(module.store, "SessionLocal", database)
+    monkeypatch.setattr(module.store, "_artifact", lambda *args: None)
+    monkeypatch.setattr(provider, "remaining_seconds", lambda _: None)
+    monkeypatch.setattr(module.work, "recover", lambda *args: None)
+    monkeypatch.setattr(module.work, "claim", lambda *args: {"lease_token": "lease", "payload": _payload("early-stop")})
+
+    def stopped(*args):
+        raise admission.ReviewStopped("cancelled")
+
+    monkeypatch.setattr(module.work, "mark_submitted", stopped)
+    unexpected = Mock(side_effect=AssertionError("Unsubmitted stop must not record a result or failure"))
+    for name in ("mark_not_admitted", "mark_uncertain", "finish"):
+        monkeypatch.setattr(module.work, name, unexpected)
+    monkeypatch.setattr(module.store, "complete_attempt", unexpected)
+    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure", unexpected)
+    with pytest.raises(admission.ReviewStopped, match="cancelled"):
+        if targeted_extraction:
+            await module.execute(_SCOPE, "work", resolve_agent=unexpected)
+        else:
+            await module.execute(_SCOPE, "work", call=unexpected)
+    unexpected.assert_not_called()

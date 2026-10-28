@@ -555,3 +555,24 @@ Typed `review_pending`, `review_exhausted` and `interrupted` flow outcomes retai
 their reasons through persistence and replay. They do not become generic server
 failures or imply a completed export. Genuine provider and persistence failures
 retain their reporting owner and cannot be hidden by a later review-stop event.
+
+### Work ownership and cancellation
+
+The inner work heartbeat renews delivery ownership independently of scientific
+packet construction. It locks only its work row, verifies the exact token and
+unexpired claim, and reads episode status without taking scope, artifact, or
+episode write locks. It neither reopens an episode nor grants scientific authority.
+Provider admission still locks scope, artifact, episode, then work in that order,
+and atomically rejects stale work before committing its reservation. Both validator
+and targeted-extraction executors renew ownership while submitting claimed work.
+
+Cancellation cancels queued validators and drains running validator threads before
+their accounting owner exits. A cooperative stop prevents subsequent provider
+admissions; already-running calls retain their usage and exact late answers.
+An in-flight reservation transaction is also drained before work is classified.
+If cancellation prevents the reservation from ever returning to its caller, no
+provider request was sent: reconcile zero tokens while retaining the admitted
+turn charge. Reconciliation of genuinely sent requests remains allowed after
+ownership loss. No lease extension changes a frozen scientific deadline or grants
+another attempt. The frontend Stop response remains immediate; backend cleanup
+can wait for the current provider invocation to finish.

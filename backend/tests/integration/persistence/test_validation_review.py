@@ -1838,3 +1838,96 @@ def test_extraction_assessment_is_selected_unresolved_without_rewriting_source(s
     assert final_projection.extracted_objects[0].payload["statement"] == "Curator's newer value"
     assert final_projection.extracted_objects[0].payload["items"] == ["first"]
     assert all(f.status.value == "resolved" for f in final_projection.validation_findings)
+
+
+def test_work_heartbeat_does_not_wait_for_scientific_packet_locks(scope):
+    """Packet preparation cannot prevent a live worker renewing ownership."""
+    from threading import Event
+    aid, ep, _ = admitted(scope)
+    wid = queue(scope, ep)
+    claim = w.claim(scope, wid)
+    assert claim is not None
+    w.mark_submitted(scope, wid, claim["lease_token"])
+    with h.SessionLocal() as db:
+        before = db.get(Work, wid).lease_until
+    started = Event()
+
+    def renew():
+        started.set()
+        w.heartbeat(scope, wid, claim["lease_token"])
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with h.SessionLocal.begin() as preparation:
+            a.lock_episode(preparation, scope, ep)
+            pending = pool.submit(renew)
+            assert started.wait(5)
+            # Failure guard, not production policy: renewal must commit before
+            # these locks release, irrespective of the packet preparation cost.
+            pending.result(timeout=3)
+        with h.SessionLocal() as db:
+            row = db.get(Work, wid)
+            assert row.lease_until > before
+            assert row.lease_token == claim["lease_token"]
+            assert row.state == "submitted"
+
+
+@pytest.mark.parametrize("invalid", ["token", "expired", "completed", "episode"])
+def test_provider_admission_rolls_back_when_work_ownership_is_invalid(scope, invalid):
+    from src.models.sql.validation_review import ValidationReviewReservation
+    aid, ep, _ = admitted(scope)
+    wid = queue(scope, ep)
+    claim = w.claim(scope, wid)
+    assert claim is not None
+    w.mark_submitted(scope, wid, claim["lease_token"])
+    token = claim["lease_token"]
+    if invalid == "token":
+        token = "different-worker"
+    elif invalid == "expired":
+        expire(wid)
+    elif invalid == "completed":
+        w.finish(scope, wid, token, outcome={"fixture": "done"})
+    else:
+        _, ep, _ = admitted(scope)
+    operation = "provider:" + uuid4().hex
+    with pytest.raises(a.ReviewStopped, match="worker_lease_lost"):
+        a.reserve(scope, ep, operation_id=operation, charges={"initial_tokens": 0},
+                  request={"work_id": wid, "usage_metered": True}, work_id=wid, lease_token=token)
+    with h.SessionLocal() as db:
+        assert db.scalar(select(ValidationReviewReservation).where(
+            ValidationReviewReservation.operation_id == operation)) is None
+
+
+@pytest.mark.asyncio
+async def test_claimed_work_renews_while_submission_waits_on_scientific_lock(scope, monkeypatch):
+    import asyncio
+    from threading import Event
+    from src.lib.validation_review.execution import _while_owned
+
+    _, ep, _ = admitted(scope)
+    wid = queue(scope, ep)
+    claim = w.claim(scope, wid)
+    assert claim is not None
+    renewed = Event()
+    original = w.heartbeat
+
+    def heartbeat(*args):
+        original(*args)
+        renewed.set()
+
+    monkeypatch.setattr(w, "heartbeat", heartbeat)
+    task = None
+    try:
+        with h.SessionLocal.begin() as preparation:
+            a.lock_episode(preparation, scope, ep)
+            task = asyncio.create_task(_while_owned(
+                w.submit_owned(scope, wid, claim["lease_token"]),
+                scope, wid, claim["lease_token"], 0.03,
+            ))
+            assert await asyncio.to_thread(renewed.wait, 5)
+            assert not task.done()
+        await asyncio.wait_for(task, 5)
+        with h.SessionLocal() as db:
+            assert db.get(Work, wid).state == "submitted"
+    finally:
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
