@@ -3,10 +3,27 @@
 from copy import deepcopy
 from dataclasses import replace
 
+from sqlalchemy import select
+
+from src.models.sql.validation_history import ValidationBody
+
 from . import store
 
 
-def restore_execution_binding(db, artifact_id, attempt_fact, attempt, match):
+def _plan_authority(db, plan_fact):
+    """Read authority fields without materializing the plan's scientific context."""
+    body = ValidationBody.content
+    bindings, contracts, episode_id = db.execute(select(
+        body["registry"]["bindings"],
+        body["contracts"],
+        body["envelope"]["metadata"]["review_episode_id"],
+    ).where(ValidationBody.sha256 == plan_fact.body_sha)).one()
+    if not isinstance(bindings, list) or not isinstance(contracts, dict):
+        raise store.HistoryConflict("Selected execution plan has malformed authority")
+    return bindings, contracts, episode_id
+
+
+def restore_execution_binding(db, artifact_id, attempt_fact, attempt, match, *, plans):
     execution = store._fact(db, artifact_id, attempt_fact.parent_id, kind="execution")
     receipt = store._content(db, execution)["receipt"]
     if "plan_ref" not in receipt:
@@ -14,17 +31,20 @@ def restore_execution_binding(db, artifact_id, attempt_fact, attempt, match):
         # recipe fingerprint, so this cannot authorize a saved flow override.
         return match
     plan_fact = store._fact(db, artifact_id, receipt["plan_ref"], kind="review_chat_plan")
-    plan = store._content(db, plan_fact)
+    key = (artifact_id, plan_fact.id, plan_fact.body_sha)
+    if key not in plans:
+        plans[key] = _plan_authority(db, plan_fact)
+    bindings, contracts, plan_episode_id = plans[key]
     episode_id = attempt["input"].get("review_episode_id")
     if (not episode_id or plan_fact.parent_id != episode_id
-            or plan["envelope"]["metadata"].get("review_episode_id") != episode_id):
+            or plan_episode_id != episode_id):
         raise store.HistoryConflict("Selected execution plan belongs to another episode")
     binding_id = match.binding.binding_id
-    definitions = [item for item in plan["registry"]["bindings"]
+    definitions = [item for item in bindings
                    if item["binding_id"] == binding_id]
     if len(definitions) != 1:
         raise store.HistoryConflict("Selected execution plan has no unique binding")
-    contract = plan["contracts"].get(binding_id)
+    contract = contracts.get(binding_id)
     if contract is None or receipt.get("contracts", {}).get(binding_id) != contract:
         raise store.HistoryConflict("Selected execution differs from its frozen plan contract")
     saved_raw = definitions[0]["raw"]

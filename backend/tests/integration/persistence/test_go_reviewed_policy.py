@@ -131,10 +131,41 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
 
     from src.lib.validation_history import selections
     from src.lib.validation_history.projection import rebuild_selected_envelope
+    from src.models.sql.validation_history import ValidationBody
+    from sqlalchemy import event
     manifest = selections.read_manifest(scope, aid, episode_id=episode)
     with store.SessionLocal.begin() as db:
-        replayed = rebuild_selected_envelope(db, scope, aid, envelope=source,
-            manifest=manifest, domain_pack=pack)
+        completions = {unit["selected"] for unit in manifest["units"]
+            if unit["eligible"] and unit["selected"] not in {"baseline", "curator"}
+            and unit.get("applicability_ref") is None}
+        assert len(completions) >= 2
+        for identity in completions:
+            completion = store._fact(db, aid, identity, kind="completion")
+            attempt = store._fact(db, aid, completion.parent_id, kind="attempt")
+            execution = store._fact(db, aid, attempt.parent_id, kind="execution")
+            assert store._content(db, execution)["receipt"]["plan_ref"] == plan_ref
+        plan_fact = store._fact(db, aid, plan_ref, kind="review_chat_plan")
+        reads = []
+
+        def capture_plan_read(conn, cursor, statement, parameters, context, executemany):
+            if plan_fact.body_sha not in parameters.values() or "validation_bodies" not in statement:
+                return
+            columns = context.compiled.statement.selected_columns
+            reads.append(any(column.compare(ValidationBody.__table__.c.content) for column in columns))
+
+        connection = db.connection()
+        event.listen(connection, "before_cursor_execute", capture_plan_read)
+        try:
+            for _ in range(2):
+                reads.clear()
+                replayed = rebuild_selected_envelope(db, scope, aid, envelope=source,
+                    manifest=manifest, domain_pack=pack)
+                # Exactly one narrow read for this rebuild; never a full body
+                # fetch or reuse from the previous rebuild's transaction work.
+                assert reads == [False]
+                assert replayed.extracted_objects[0].payload == selected.extracted_objects[0].payload
+        finally:
+            event.remove(connection, "before_cursor_execute", capture_plan_read)
     assert replayed.extracted_objects[0].payload == selected.extracted_objects[0].payload
     replayed_audits = {finding.details["validation_metadata"]["validator_binding_id"]:
         finding.details["validation_metadata"].get("dispatch_context")
@@ -157,3 +188,43 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
                 rebuild_selected_envelope(db, scope, aid, envelope=source,
                     manifest=manifest, domain_pack=pack)
         assert checkpoint().envelope.extracted_objects[0].payload == selected.extracted_objects[0].payload
+
+
+@pytest.mark.parametrize("episode_id", ["123", 123, None])
+def test_replay_authority_preserves_episode_json_type(episode_id):
+    from src.lib.validation_history.replay_binding import _plan_authority
+    body = {"registry": {"bindings": []}, "contracts": {},
+            "envelope": {"metadata": {"review_episode_id": episode_id}},
+            "matches": [{"unused_scientific_context": "retained"}]}
+    with store.SessionLocal.begin() as db:
+        plan = SimpleNamespace(body_sha=store._body(db, body))
+        bindings, contracts, restored_episode = _plan_authority(db, plan)
+        assert bindings == [] and contracts == {}
+        assert restored_episode == episode_id
+        assert type(restored_episode) is type(episode_id)
+        assert store._content(db, plan) == body
+
+
+def test_replay_authority_does_not_materialize_large_scientific_context():
+    import hashlib
+    import json
+    from src.lib.validation_history.replay_binding import _plan_authority
+    from src.models.sql.validation_history import ValidationBody
+
+    # Generated, varied context exercises a toasted body without a large file
+    # in the repository or a timing threshold sensitive to CI host load.
+    body = {"registry": {"bindings": [{"binding_id": "gene", "raw": {"validator": "gene"}}]},
+            "contracts": {"gene": "frozen"},
+            "envelope": {"metadata": {"review_episode_id": "episode"}},
+            "matches": [{"object_id": str(index), "scientific_context": " ".join(
+                hashlib.sha256(f"{index}:{part}".encode()).hexdigest()
+                for part in range(256))} for index in range(128)]}
+    assert len(json.dumps(body)) > 2_000_000
+    with store.SessionLocal.begin() as db:
+        digest = store._body(db, body)
+    with store.SessionLocal.begin() as db:
+        authority = _plan_authority(db, SimpleNamespace(body_sha=digest))
+        assert authority == (body["registry"]["bindings"], body["contracts"], "episode")
+        assert len(json.dumps(authority)) < 256
+        assert not any(isinstance(row, ValidationBody) for row in db.identity_map.values())
+        assert store._content(db, SimpleNamespace(body_sha=digest)) == body
