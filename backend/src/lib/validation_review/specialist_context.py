@@ -206,7 +206,14 @@ def create_history_reader(scope, artifact_id, *, records, packet_bytes):
 
     def read(fact_id, sha256, offset):
         if allowed.get(fact_id) != sha256:
-            raise store.HistoryAccessError("History record was not supplied to this dispatch")
+            return {
+                "status": "not_supplied",
+                "message": (
+                    "Only exact references in history.records or supplied_history.records "
+                    "are readable. Nested references describe provenance, not access grants. "
+                    "Use the supplied inline context or read an explicitly supplied record."
+                ),
+            }
         with store.SessionLocal() as db:
             store._artifact(db, artifact_id, scope)
             fact = store._fact(db, artifact_id, fact_id, kind="specialist_context")

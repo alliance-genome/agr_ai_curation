@@ -117,6 +117,7 @@ The current request and its selected prerequisite values are authoritative for
 this attempt. Historical values explain how it was reached, not another request
 to execute. Inspect the supplied history when it is needed: read_supplied_history
 accepts only the supplied exact fact ID/SHA and supports complete offset paging.
+Only history.records/supplied_history.records grant reads; nested references are provenance.
 Follow next_offset until null to read a whole record; do not guess omitted data.
 
 Apply your configured scientific policy independently. Report your best supported
@@ -171,6 +172,7 @@ extractor/validator, reset the allowance, or ask the caller to replay the step.
 No new information is a valid outcome and does not require another validation.
 Use read_supplied_history with the exact supplied references if more history is
 needed. Read all continuation pages for a complete record. This history reader
+accepts only history.records/supplied_history.records, not nested provenance references, and
 cannot access other entries; paper access uses your separately authorized tools.
 </targeted_extraction_protocol>
 """

@@ -2593,11 +2593,47 @@ def get_all_agent_tools(
                 result_ref = _flow_extraction_result_ref(record)["result_ref"]
                 if inspection_manifest is None:
                     raise RuntimeError("Completed canonical extraction has no prepared inspection manifest.")
-                result = render_extraction_manifest_page(bind_extraction_manifest_reference(
-                    inspection_manifest, str(record.extraction_result_id),
+                manifest_view = None
+                manifest_header = ""
+                if flow_review is not None:
+                    from src.lib.openai_agents.result_inspection_views import (
+                        accepted_view, InspectionViewUnavailable,
+                    )
+                    try:
+                        accepted = await asyncio.to_thread(accepted_view, record, user_id=user_id)
+                    except InspectionViewUnavailable as exc:
+                        manifest_header = (
+                            f"Current selected view unavailable: {exc}\n"
+                            "The following is original extractor output recorded before validation; "
+                            "it does not establish current identity resolution or readiness. "
+                            "Unavailable validation state is unknown, not unresolved.\n"
+                        )
+                    else:
+                        accepted_manifest_error = None
+                        try:
+                            inspection_manifest = build_extraction_manifest_page(
+                                accepted["payload_json"], adapter_key=record.adapter_key,
+                                agent_key=record.agent_key,
+                            )
+                        except ExtractionManifestError:
+                            logger.warning("Flow selected result inspection manifest is unavailable", exc_info=True,
+                                           extra={"sentry_skip_event": True})
+                            accepted_manifest_error = sanitized_runtime_error("Flow selected result inspection manifest is unavailable")
+                            report_runtime_exception(accepted_manifest_error, component="flow_executor", operation="inspection_manifest_failed")
+                        if accepted_manifest_error is not None:
+                            raise accepted_manifest_error
+                        manifest_view = "accepted"
+                        manifest_header = (
+                            'Validation review completed. Current selected result (result_view="accepted"): '
+                            "use these selected values and remaining caveats for the final summary. "
+                            "Review selection is not curator approval, export, or submission. "
+                            'Original paper wording remains available with result_view="original".\n'
+                        )
+                result = manifest_header + render_extraction_manifest_page(bind_extraction_manifest_reference(
+                    inspection_manifest, str(record.extraction_result_id), result_view=manifest_view,
                 ))
                 checkpoint = record.metadata.get("inspection_checkpoint")
-                if checkpoint:
+                if checkpoint and flow_review is None:
                     result += ("\nPost-validation view: inspect_results(result_ref="
                                + json.dumps(result_ref) + ', result_view="post_validation", envelope_revision='
                                + str(checkpoint["revision"]) + ', action="summary").')
@@ -3263,7 +3299,7 @@ def build_supervisor_instructions(
         name_hint = f" ('{document_name}')" if document_name else ""
         doc_guidance = f"""
 Document Available{name_hint}: A document is loaded for this flow execution.
-Use the PDF Specialist tools to read and search the document's content.
+The configured extractor specialists read and search the document's content.
 Do NOT ask the user to provide a document - one is already available.
 """
 

@@ -715,6 +715,7 @@ class ChatReview:
             execution_receipt=record.execution_receipt,
             document_id=self.document_id,
             adapter_key=record.adapter_key,
+            flow_run_id=record.flow_run_id,
             source_extraction_result_id=record.extraction_result_id,
             source_payload_hash=domain_envelope_payload_hash(original),
             execution_context=(
