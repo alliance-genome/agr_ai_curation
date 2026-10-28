@@ -31,7 +31,7 @@ def test_tool_schema_cannot_choose_actor_episode_or_validator():
         "reviewer",
     )
     tools = create_tools(context, checkpoint_provider=Mock())
-    assert len(tools) == 6
+    assert len(tools) == 7
     for tool in tools:
         fields = tool.params_json_schema["properties"]
         assert not {
@@ -252,7 +252,7 @@ async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection
     extraction, selection, assessment = AsyncMock(), AsyncMock(), AsyncMock(return_value={"state": "completed"})
     tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
         request_extraction=extraction, select_source=selection, assess_source=assessment)}
-    assert len(tools) == 10
+    assert len(tools) == 11
     for tool in tools.values():
         assert not {"actor_id", "episode_id", "validator_agent", "receipt", "scope_id", "extractor_agent"}.intersection(
             tool.params_json_schema["properties"])
@@ -320,3 +320,22 @@ def test_operator_caps_reject_invalid_values(monkeypatch, name, raw):
     monkeypatch.setenv("VALIDATION_REVIEW_" + name, raw)
     with pytest.raises(ValueError):
         ReviewLimits.configured()
+
+
+@pytest.mark.parametrize("value,expected", [("0", 0), ("1", 1), ("3", 3)])
+def test_corrective_nudges_are_not_frozen_scientific_policy(monkeypatch, value, expected):
+    from src.lib.openai_agents.config import get_validation_review_initial_corrective_continuations
+
+    before = ReviewLimits.configured().snapshot()
+    monkeypatch.setenv("VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS", value)
+    assert get_validation_review_initial_corrective_continuations() == expected
+    assert ReviewLimits.configured().snapshot() == before
+
+
+@pytest.mark.parametrize("value", ["-1", "nonsense", "1.5"])
+def test_invalid_corrective_nudge_setting_is_rejected(monkeypatch, value):
+    from src.lib.openai_agents.config import get_validation_review_initial_corrective_continuations
+
+    monkeypatch.setenv("VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS", value)
+    with pytest.raises(ValueError):
+        get_validation_review_initial_corrective_continuations()

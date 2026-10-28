@@ -27,9 +27,11 @@ def _recoverable_tool(function):
 
     @wraps(function)
     async def invoke(*args, **kwargs):
+        from .observations import record_tool
+
         arguments = contract.bind(*args, **kwargs).arguments
         try:
-            return await function(*args, **kwargs)
+            result = await function(*args, **kwargs)
         except ReviewStopped as exc:
             if not (
                 exc.reason
@@ -51,7 +53,7 @@ def _recoverable_tool(function):
                 )
             ):
                 raise
-            return {
+            result = {
                 "state": "not_applied",
                 "code": exc.reason,
                 "resource": exc.resource,
@@ -59,7 +61,7 @@ def _recoverable_tool(function):
                 "targets": arguments.get("target_ids", []),
             }
         except (store.HistoryConflict, store.HistoryAccessError, ValueError) as exc:
-            return {
+            result = {
                 "state": "conflict",
                 "code": type(exc).__name__,
                 "applied": [],
@@ -70,6 +72,8 @@ def _recoverable_tool(function):
                     e.decision_unit_id for e in arguments.get("entries", [])
                 ],
             }
+
+        return record_tool(function.__name__, arguments, result)
 
     return invoke
 
@@ -93,6 +97,20 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             context.episode_id,
             operation_id=operation_id,
         )
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def get_outstanding_validation_reviews(cursor: str | None = None) -> dict:
+        """Find current outstanding units and exact answer/optional-absence references.
+
+        Pass next_cursor to continue the live keyset scan; completed earlier rows
+        do not shift later pages. Start a fresh scan after changing source/coverage
+        and before finishing review. scan_complete only ends this scan; ready checks
+        the entire requested scope. Read exact evidence with read_validation_history
+        or get_validation_record_source before deciding; listing is not assessment.
+        """
+        return await asyncio.to_thread(reads.outstanding, context.history_scope,
+                                      context.episode_id, cursor=cursor)
 
     @function_tool(failure_error_function=None)
     @_recoverable_tool
@@ -289,6 +307,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
 
     result = [
         get_validation_review_packet,
+        get_outstanding_validation_reviews,
         get_validation_record_source,
         read_validation_history,
         record_validation_review,

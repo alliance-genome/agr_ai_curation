@@ -44,6 +44,8 @@ def planned(scope, tmp_path, monkeypatch, request):
     fixture_options = getattr(request, "param", None)
     fixture_shape = fixture_options.get("shape") if isinstance(fixture_options, dict) else fixture_options
     admit_initial = fixture_options.get("admitted", True) if isinstance(fixture_options, dict) else True
+    if isinstance(fixture_options, dict) and "packet_bytes" in fixture_options:
+        monkeypatch.setenv("VALIDATION_REVIEW_PACKET_BYTES", str(fixture_options["packet_bytes"]))
     pack = _multivalued_dispatch_pack(tmp_path)
     if fixture_shape == "routed":
         from copy import deepcopy
@@ -161,6 +163,10 @@ def planned(scope, tmp_path, monkeypatch, request):
         env.extracted_objects[0].evidence_record_ids = ["original-evidence"]
         env.metadata["evidence_records"] = [{"evidence_record_id": "original-evidence",
             "document_id": scope.document_id, "verified_quote": "Original quoted evidence"}]
+    if isinstance(fixture_options, dict) and fixture_options.get("count"):
+        template = env.extracted_objects[0]
+        env.extracted_objects = [template.model_copy(deep=True, update={"pending_ref_id": f"record-{index}"})
+                                 for index in range(fixture_options["count"])]
     env = runtime.capture_extraction(
         scope=scope,
         producer_id=uuid4().hex,
@@ -1482,3 +1488,57 @@ def test_retirement_and_restoration_do_not_reactivate_old_absence_acceptance(pla
     manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
     assert not manifest["ready"]
     assert manifest["units"][0]["reason"] == "stale"
+
+
+@pytest.mark.parametrize("planned", [{"shape": "optional-absence", "count": 80, "packet_bytes": 3500}], indirect=True)
+def test_live_outstanding_scan_covers_eighty_records_while_earlier_pages_complete(planned):
+    from src.lib.validation_review import reads
+    item = planned
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    checkpoint = checkpoint_provider(item)
+    seen = set()
+    cursor = None
+    pages = 0
+    while True:
+        page = reads.outstanding(item.scope, item.ep, cursor=cursor)
+        assert reads._wire_size(page) <= 3500
+        assert page["decision_entries"] == 100
+        assert not page["ready"]
+        assert page["rows"]
+        entries = []
+        for row in page["rows"]:
+            assert row["decision_unit_id"] not in seen
+            seen.add(row["decision_unit_id"])
+            assert row["mode"] == "validation" and row["agent_may_decide"]
+            assert row["record_target_id"]
+            assert row["unit_ref"]["fact_id"] == row["decision_unit_id"]
+            entries.append({key: row[key] for key in ("target_id", "decision_unit_id", "expected_version", "applicability_ref")}
+                           | {"action": "accept", "absence_assessment": "omission_supported", "reason": "Reviewed source supports omission"})
+        pages += 1
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id=f"page-{pages}", entries=entries)
+        cursor = page["next_cursor"]
+        if cursor is None:
+            assert page["scan_complete"]
+            break
+    assert pages > 1 and len(seen) == 80
+    complete = reads.outstanding(item.scope, item.ep)
+    assert complete["ready"] and complete["artifact_ready"]
+    assert complete["rows"] == [] and complete["outstanding_units"] == 0
+    assert complete["scan_complete"]
+
+
+@pytest.mark.parametrize("planned", [{"shape": "optional-absence", "count": 3, "packet_bytes": 1800}], indirect=True)
+def test_outstanding_cursor_is_bound_to_authenticated_episode(planned):
+    import base64
+    import json
+    from src.lib.validation_review import reads
+    item = planned
+    page = reads.outstanding(item.scope, item.ep)
+    assert page["next_cursor"]
+    cursor = json.loads(base64.urlsafe_b64decode(page["next_cursor"]))
+    cursor["context"] = "different-episode-or-owner"
+    forged = base64.urlsafe_b64encode(json.dumps(cursor).encode()).decode()
+    with pytest.raises(ValueError, match="bound episode"):
+        reads.outstanding(item.scope, item.ep, cursor=forged)
+    with pytest.raises(ValueError, match="bound episode"):
+        reads.outstanding(item.scope, item.ep, cursor="not a cursor")
