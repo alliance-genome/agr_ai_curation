@@ -2682,7 +2682,7 @@ def test_package_scoped_validator_agent_uses_compact_finalization_schema(
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
-    binding = cast(Any, SimpleNamespace(raw={}, max_tool_calls=16))
+    binding = cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=16))
     validator_routes = {
         f"validator:{request.validator_binding_id}": {
             "provider": "openrouter",
@@ -2871,6 +2871,7 @@ def test_package_scoped_validator_agent_prefers_accepted_finalization_tool_resul
     raw_output = run_package_scoped_validator_agent(
         request,
         binding=cast(Any, SimpleNamespace(
+            route_value=None,
             raw={"profile_validation": {"mapping": {}}} if profile_mapped else {},
             max_tool_calls=4,
         )),
@@ -2963,7 +2964,7 @@ def test_package_scoped_validator_agent_keeps_lookup_and_supplied_context_only(
 
     run_package_scoped_validator_agent(
         request,
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+        binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)),
         runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
     )
 
@@ -3024,7 +3025,7 @@ def test_package_scoped_validator_agent_describes_missing_runtime_paper_tools(
 
     run_package_scoped_validator_agent(
         request,
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+        binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)),
     )
 
     assert [tool.name for tool in captured["agent"].tools] == [
@@ -3076,7 +3077,7 @@ def test_package_scoped_validator_agent_clears_accepted_result_after_rejection(
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     output = run_package_scoped_validator_agent(
-        request, binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+        request, binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)))
     assert output.accepted_result.output_issues
     assert output.accepted_result._execution_failure is None
     assert output.accepted_result._raw_output["raw_output"] == _result_payload(request)
@@ -3113,7 +3114,7 @@ def test_package_scoped_validator_agent_requires_accepted_finalization_tool(
     )
 
     output = run_package_scoped_validator_agent(
-        request, binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+        request, binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)))
     assert output.accepted_result.output_issues
     assert output.accepted_result._execution_failure is None
     assert output.accepted_result._raw_output["raw_output"] == _result_payload(request)
@@ -3176,9 +3177,9 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
-    binding = cast(Any, SimpleNamespace(raw={}, max_tool_calls=4))
+    binding = cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4))
     run_package_scoped_validator_agent_batch(
-        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={})))]),
         binding=binding,
         runtime_context=ValidatorRuntimeContext(authenticated_groups=("RGD",)),
     )
@@ -3260,8 +3261,8 @@ def test_package_scoped_validator_batch_agent_never_offers_paper_tools(
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     run_package_scoped_validator_agent_batch(
-        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={})))]),
+        binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)),
         runtime_context=ValidatorRuntimeContext(document_id="doc-123", user_id="user-1"),
     )
 
@@ -3301,8 +3302,8 @@ def test_package_scoped_validator_lookup_rejects_nonmatching_runtime_groups(
     with pytest.raises(ValueError, match="restricted validator agent is unavailable"):
         if batch:
             run_package_scoped_validator_agent_batch(
-                cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-                binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+                cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={})))]),
+                binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)),
                 runtime_context=ValidatorRuntimeContext(
                     authenticated_groups=("MGI",),
                 ),
@@ -3310,7 +3311,7 @@ def test_package_scoped_validator_lookup_rejects_nonmatching_runtime_groups(
         else:
             run_package_scoped_validator_agent(
                 request,
-                binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+                binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)),
                 runtime_context=ValidatorRuntimeContext(
                     authenticated_groups=("MGI",),
                 ),
@@ -3447,7 +3448,7 @@ def test_package_scoped_validator_agent_sets_max_turns_when_max_tool_calls_unset
 
     run_package_scoped_validator_agent(
         request,
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=None)),
+        binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=None)),
     )
 
     # max_tool_calls unset must still pin max_turns rather than fall to the
@@ -3507,8 +3508,8 @@ def test_package_scoped_validator_batch_agent_sets_max_turns_when_max_tool_calls
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", _fake_run_sync)
 
     run_package_scoped_validator_agent_batch(
-        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=None)),
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={})))]),
+        binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=None)),
     )
 
     # Single-job batch with max_tool_calls unset: default budget (8) + 2 still
@@ -3542,7 +3543,7 @@ def test_package_scoped_validator_batch_agent_max_turns_scales_with_job_count(
         request = base_request.model_copy(
             update={"request_id": f"domain-validation:verbose-{index}"}
         )
-        return SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))
+        return SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={})))
 
     jobs = [_job(index) for index in range(3)]
 
@@ -3588,7 +3589,7 @@ def test_package_scoped_validator_batch_agent_max_turns_scales_with_job_count(
     with pytest.raises(RuntimeError, match="captured max_turns"):
         run_package_scoped_validator_agent_batch(
             cast(Any, jobs),
-            binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=max_tool_calls)),
+            binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=max_tool_calls)),
         )
 
     assert captured["kwargs"]["max_turns"] == expected_max_turns
@@ -3603,7 +3604,7 @@ def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_resu
     )
 
     request = _validation_request()
-    job = cast(Any, SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={}))))
+    job = cast(Any, SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={}))))
     source_agent = SimpleNamespace(
         output_type=GeneResultEnvelope,
         tools=[_compact_lookup_tool()],
@@ -3644,7 +3645,7 @@ def test_package_scoped_validator_batch_agent_prefers_accepted_finalization_resu
 
     raw_output = run_package_scoped_validator_agent_batch(
         [job],
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)),
+        binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)),
     )
     results = _validated_results_from_agent_batch_output(raw_output, jobs=[job])
 
@@ -3685,8 +3686,8 @@ def test_package_scoped_validator_batch_agent_requires_accepted_finalization_too
     )
 
     output = run_package_scoped_validator_agent_batch(
-        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={})))]),
-        binding=cast(Any, SimpleNamespace(raw={}, max_tool_calls=4)))
+        cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={})))]),
+        binding=cast(Any, SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)))
     assert output.accepted_results[0].output_issues
     assert output.accepted_results[0]._execution_failure is None
     assert output.accepted_results[0]._raw_output["raw_output"] == {"results": [_result_payload(request)]}
@@ -3857,7 +3858,7 @@ def test_profile_batch_finalization_enforces_each_trusted_binding():
         },
     })
     job = SimpleNamespace(request=request, match=SimpleNamespace(
-        binding=SimpleNamespace(raw={"profile_validation": {"mapping": {"mapping_id": "alleles"}}}),
+        binding=SimpleNamespace(route_value=None, raw={"profile_validation": {"mapping": {"mapping_id": "alleles"}}}),
     ))
     raw = _result_payload(request)
     feedback = _validator_batch_results_finalization_feedback([raw], jobs=[job])
@@ -4059,7 +4060,7 @@ def test_validator_correction_preserves_judgment_until_complete(monkeypatch, bat
         return {"ignored": "unfinalized answer"}
 
     monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_sync_with_owned_openai_resources", run)
-    binding = SimpleNamespace(raw={}, max_tool_calls=4)
+    binding = SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)
     stages = []
     observer = SimpleNamespace(started=lambda _: None, completed=stages.append)
     with observe_stages(cast(Any, observer)), measure_stage(StageIdentity("validator", "validation")):
@@ -4092,7 +4093,7 @@ def test_batch_correction_retains_each_requested_result_without_losing_peers():
         _ValidatorFinalizationState, _build_finalize_validator_batch_results_tool,
     )
     requests = [_validation_request().model_copy(update={"request_id": f"request-{index}"}) for index in range(3)]
-    jobs = [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(raw={}))) for request in requests]
+    jobs = [SimpleNamespace(request=request, match=SimpleNamespace(binding=SimpleNamespace(route_value=None, raw={}))) for request in requests]
     state = _ValidatorFinalizationState()
     finalize = _build_finalize_validator_batch_results_tool(
         jobs, finalization_state=state,
@@ -4135,7 +4136,7 @@ def test_batch_exhaustion_returns_safe_judgments_across_partial_compact_retries(
     from src.lib.agent_studio.diagnostic_tools.tool_definitions import _unwrap_function_tool
 
     requests = [_validation_request().model_copy(update={"request_id": f"request-{index}"}) for index in range(2)]
-    binding = SimpleNamespace(raw={}, max_tool_calls=4)
+    binding = SimpleNamespace(route_value=None, raw={}, max_tool_calls=4)
     jobs = [SimpleNamespace(request=request, match=SimpleNamespace(binding=binding)) for request in requests]
     source_agent = SimpleNamespace(output_type=GeneResultEnvelope, tools=[_compact_lookup_tool()],
                                    instructions="Validate the evidence.")

@@ -1636,7 +1636,7 @@ def run_package_scoped_validator_agent(
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
     from src.lib.validation_review.validator_adapter import pin_validator_agent
-    pin_validator_agent(agent, request.validator_binding_id)
+    pin_validator_agent(agent, request.validator_binding_id, route_value=binding.route_value)
     if runtime_context is not None:
         agent.cost_boundary = {
             "document_id": runtime_context.document_id,
@@ -1876,7 +1876,10 @@ def run_package_scoped_validator_agent_batch(
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
     from src.lib.validation_review.validator_adapter import pin_validator_agent
-    pin_validator_agent(agent, representative_request.validator_binding_id)
+    for binding_id, route_value in {
+        (job.request.validator_binding_id, job.match.binding.route_value) for job in jobs
+    }:
+        pin_validator_agent(agent, binding_id, route_value=route_value)
     if runtime_context is not None:
         agent.cost_boundary = {
             "document_id": runtime_context.document_id,

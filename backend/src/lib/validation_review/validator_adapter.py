@@ -68,19 +68,28 @@ def binding_contract(match):
     """Pin executable definition and configured capability, not a catalog-wide grant."""
     from src.lib.config.agent_loader import get_agent_definition_for_package
 
-    ref = match.binding.validator_agent
-    if ref is None:
+    def configured_agent(ref):
+        definition = get_agent_definition_for_package(ref.package_id, ref.agent_id)
+        if definition is None:
+            raise admission.ReviewStopped("configured_validator_unavailable")
+        return to_jsonable_python(asdict(definition))
+
+    binding = match.binding
+    if binding.routes is not None:
+        # Pin the whole declared configuration, independently of the selected route.
+        return store.canonical({
+            "binding": binding.raw,
+            "routes": {key: configured_agent(route.validator_agent)
+                       for key, route in binding.routes.items()},
+            "custom_validator": binding.raw.get("custom_validator"),
+        })[1]
+    if binding.validator_agent is None:
         raise store.HistoryConflict("Configured binding has no validator")
-    definition = get_agent_definition_for_package(ref.package_id, ref.agent_id)
-    if definition is None:
-        raise store.HistoryConflict("Configured validator is unavailable")
-    return store.canonical(
-        {
-            "binding": match.binding.raw,
-            "agent": to_jsonable_python(asdict(definition)),
-            "custom_validator": match.binding.raw.get("custom_validator"),
-        }
-    )[1]
+    return store.canonical({
+        "binding": binding.raw,
+        "agent": configured_agent(binding.validator_agent),
+        "custom_validator": binding.raw.get("custom_validator"),
+    })[1]
 
 
 def _serialize_binding(binding):
@@ -131,7 +140,8 @@ def save_plan(plan, *, context):
         "contracts": {
             definition.binding_id: binding_contract(SimpleNamespace(binding=definition))
             for definition in plan.registry.bindings
-            if definition.validator_agent is not None and definition.state == ValidationBindingState.ACTIVE
+            if (definition.validator_agent is not None or definition.routes is not None)
+            and definition.state == ValidationBindingState.ACTIVE
         },
         "initial_requests": runtime.frozen_job_requests(binding, plan.initial_jobs),
         "authenticated_groups": list(context.authenticated_groups or ()),
@@ -374,6 +384,7 @@ class ValidatorAdapter:
         request = DomainValidationRequest.model_validate(frozen["request"])
         if (
             match.binding.validator_agent is None
+            or frozen.get("route_value") != match.binding.route_value
             or frozen["binding_id"] != match.binding.binding_id
             or request.validator_binding_id != match.binding.binding_id
             or request.validator_agent.model_dump(mode="json")
@@ -979,7 +990,7 @@ class ValidatorAdapter:
         return outcomes
 
 
-def pin_validator_agent(agent, binding_id):
+def pin_validator_agent(agent, binding_id, *, route_value=None):
     """Refuse changed executable model/prompt/tool contracts before provider submission."""
     active = runtime.ACTIVE_VALIDATION_EXECUTION.get()
     from .provider import ACTIVE_BUDGET
@@ -1030,9 +1041,12 @@ def pin_validator_agent(agent, binding_id):
             for aid in invocation["attempt_ids"]
         ]
         # The budget binds the exact admitted episode; no model can change this.
-        if not any(request["binding_id"] == binding_id for request in requests):
+        if not any(request["binding_id"] == binding_id
+                   and request.get("route_value") == route_value for request in requests):
             raise store.HistoryAccessError("Agent is outside the admitted invocation")
         operation = "chat-validator-config:" + budget.episode_id + ":" + binding_id
+        if route_value is not None:
+            operation += ":route:" + store.canonical({"route_value": route_value})[0]
         from sqlalchemy import select
         from src.models.sql.validation_history import ValidationFact
 

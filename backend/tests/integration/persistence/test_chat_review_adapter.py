@@ -45,6 +45,23 @@ def planned(scope, tmp_path, monkeypatch, request):
     fixture_shape = fixture_options.get("shape") if isinstance(fixture_options, dict) else fixture_options
     admit_initial = fixture_options.get("admitted", True) if isinstance(fixture_options, dict) else True
     pack = _multivalued_dispatch_pack(tmp_path)
+    if fixture_shape == "routed":
+        from copy import deepcopy
+        from src.schemas.domain_pack_metadata import DomainPackMetadata
+        raw = pack.metadata.model_dump(mode="json", exclude_none=True)
+        original = raw["metadata"]["validator_bindings"]["active"][0]
+        route = {key: original.pop(key) for key in
+                 ("validator_agent", "input_fields", "expected_result_fields")}
+        for key in ("max_tool_calls", "custom_profile_reuse"):
+            original.pop(key, None)
+        original["route_by"] = {"source": "payload", "path": "kind"}
+        original["routes"] = {
+            name: {**deepcopy(route), "validator_agent": {
+                **route["validator_agent"], "agent_id": name}}
+            for name in ("one", "two")
+        }
+        raw["object_definitions"][0]["fields"].append({"field_path": "kind", "field_type": "string"})
+        pack = replace(pack, metadata=DomainPackMetadata.model_validate(raw))
     if fixture_shape == "nested-selector":
         from copy import deepcopy
         raw = deepcopy(pack.metadata.metadata)
@@ -119,6 +136,11 @@ def planned(scope, tmp_path, monkeypatch, request):
             )
         ],
     )
+    if fixture_shape == "routed":
+        env.extracted_objects = [CuratableObjectEnvelope(
+            object_type="Annotation", pending_ref_id=name,
+            payload={"kind": name, "evidence_code_curies": ["eco:" + name]})
+            for name in ("one", "two")]
     if fixture_shape == "absent":
         env.extracted_objects[0].payload = {"optional": {}}
     if fixture_shape == "three":
@@ -1152,3 +1174,37 @@ async def test_initial_drains_started_threads_and_leaves_queued_work(planned, mo
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["routed"], indirect=True)
+async def test_routed_plan_replays_both_specialists_with_distinct_execution_pins(planned, monkeypatch):
+    from copy import deepcopy
+    from src.lib.validation_review.validator_adapter import pin_validator_agent
+    item = planned
+    calls = []
+    def run(request, binding, **kwargs):
+        pin_validator_agent(Agent(name=binding.route_value, model="gpt-test",
+            instructions="Policy for " + binding.route_value),
+            binding.binding_id, route_value=binding.route_value)
+        calls.append(binding.route_value)
+        return {**_result_payload(request, resolved_values={"curie": "ECO:" + binding.route_value}), "resolved_objects": []}
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner", lambda: lambda *a, **kw: pytest.fail("Unexpected batch"))
+    assert item.adapter.plan["contracts"]
+    frozen = runtime.frozen_job_requests(item.plan.history_binding, item.plan.initial_jobs)
+    assert {request["route_value"] for request in frozen} == {"one", "two"}
+    changed = deepcopy(frozen[0])
+    changed["route_value"] = "two" if changed["route_value"] == "one" else "one"
+    with pytest.raises(store.HistoryAccessError):
+        item.adapter.job(changed)
+    await item.adapter.initial()
+    await item.adapter.initial()
+    assert sorted(calls) == ["one", "two"]
+    with store.SessionLocal() as db:
+        pins = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == item.aid, ValidationFact.kind == "review_validator_config")))
+        assert len(pins) == 2
+    result = decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint_provider(item)(), operation_id="accept-both-routes", entries=entries_for(item, "accept"))
+    assert result["ready"] is True
