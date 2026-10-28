@@ -292,6 +292,9 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         return found[0]
 
     items = []
+    # Immutable plan authority is shared only within this rebuild. Current
+    # source, episode, receipt and binding checks still run for every completion.
+    plans = {}
     for completion_id, units in grouped.items():
         completion = store._fact(db, artifact_id, completion_id, kind="completion")
         attempt_fact = store._fact(
@@ -316,7 +319,8 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         request = DomainValidationRequest.model_validate(body["request"])
         match = match_for(attempt)
         from .replay_binding import restore_execution_binding
-        match = restore_execution_binding(db, artifact_id, attempt_fact, attempt, match)
+        match = restore_execution_binding(db, artifact_id, attempt_fact, attempt, match,
+                                          plans=plans)
         fingerprint = store.canonical({
             "binding": match.binding.raw,
             "object_definition": match.object_definition.model_dump(mode="json")
