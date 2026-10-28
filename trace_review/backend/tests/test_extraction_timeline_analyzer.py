@@ -651,3 +651,23 @@ def test_runtime_unavailable_work_retains_operational_reason_and_exact_fact(tmp_
     assert event["fact_id"] == "failure-fact"
     assert event["sha256"] == "exact-sha"
     assert event["content"] == content
+
+
+def test_optional_absence_source_and_assessment_retain_exact_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    bodies = {
+        "validation_source_input": {"input": {"binding_id": "optional.lookup", "absent_inputs": ["query"],
+            "selected_inputs": {}, "input_selectors": {"query": {"source": "payload", "path": "term", "required": False}},
+            "evidence": []}, "request": None},
+        "review_response": {"entries": [{"target_id": "target", "applicability_ref": {
+            "fact_id": "absence-fact", "sha256": "exact-source"}, "absence_assessment": "unresolved",
+            "action": "accept", "reason": "Source remains ambiguous"}]},
+    }
+    for sequence, (kind, content) in enumerate(bodies.items(), 1):
+        _write_event(tmp_path, "absence", _event("absence", sequence, "validation_review." + kind,
+            output_summary={"preview": {"fact_id": kind, "sha256": "exact-" + kind, "content": content}}))
+    result = ExtractionTimelineAnalyzer.analyze(trace_id="absence", raw_trace={}, observations=[], include_raw_outputs=True)
+    assert result["validation_review"]["event_count"] == 2
+    for event, (kind, content) in zip(result["validation_review"]["events"], bodies.items(), strict=True):
+        assert event["output"]["preview"]["content"] == content
+        assert event["output"]["preview"]["sha256"] == "exact-" + kind

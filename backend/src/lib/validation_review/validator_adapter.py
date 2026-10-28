@@ -221,8 +221,10 @@ class ValidatorAdapter:
         resolved_matches = {}
 
         def rebuild(db, envelope):
+            from . import source_inputs
             resolved_matches.clear()
             jobs = []
+            absences = {}
             original_matches = [MATCH.validate_python(item) for item in self.original_matches.values()]
             roots = {item.object_envelope.metadata["validation_history"]["target_id"] for item in original_matches if item.object_envelope is not None}
             if "restore_target_id" in arguments:
@@ -246,7 +248,10 @@ class ValidatorAdapter:
                 selected = build_domain_validation_request(match)
                 if selected.request is not None:
                     jobs.append(ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id))
-            return {request["target_id"]: request for request in runtime.frozen_job_requests(self.binding, jobs, db=db)}
+                elif selected.absent_inputs:
+                    absences[target] = source_inputs.absent_input(match, selected, target)
+            return {**absences, **{request["target_id"]: request
+                for request in runtime.frozen_job_requests(self.binding, jobs, db=db)}}
 
         def publish(db, envelope, requests, changed, selection_id):
             obligations = []
@@ -835,7 +840,7 @@ class ValidatorAdapter:
                 unit["target_id"]: store._content(
                     db,
                     store._fact(
-                        db, self.artifact_id, unit["selected"], kind="completion"
+                        db, self.artifact_id, unit["selected"]
                     ),
                 )
                 for unit in manifest["units"]
@@ -869,9 +874,15 @@ class ValidatorAdapter:
         self.attempted_targets = attempted
 
     def selected_request(self, target_id, sources):
-        """Pure selector callback. Changed selection invalidates the prepared snapshot."""
-        from dataclasses import replace
+        return self.selected_input_result(target_id, sources).request
+
+    def selected_input_result(self, target_id, sources):
+        """Pure selector callback, retaining verified absence as well as requests."""
         from src.lib.domain_packs.input_selectors import build_domain_validation_request
+        return build_domain_validation_request(self._selected_match(target_id, sources))
+
+    def _selected_match(self, target_id, sources):
+        from dataclasses import replace
 
         if any(self.selected_sources.get(tid) != body for tid, body in sources.items()):
             raise store.HistoryConflict(
@@ -889,8 +900,7 @@ class ValidatorAdapter:
             if len(found) != 1:
                 raise store.HistoryConflict("Dependent validator source target changed")
             obj = found[0]
-        selected = replace(match, envelope=self.selected_envelope, object_envelope=obj)
-        return build_domain_validation_request(selected).request
+        return replace(match, envelope=self.selected_envelope, object_envelope=obj)
 
     def refresh_inputs(self, frozen_request, sources):
         found = []
@@ -946,19 +956,15 @@ class ValidatorAdapter:
                     }
                 )
                 continue
-            request = self.selected_request(tid, self.selected_sources)
-            frozen = (
-                []
-                if request is None
-                else runtime.frozen_job_requests(
-                    self.binding,
-                    [
-                        ValidatorDispatchJob(
-                            match, request, history_episode_id=self.episode_id
-                        )
-                    ],
-                )
-            )
+            selected = self.selected_input_result(tid, self.selected_sources)
+            if selected.request is not None:
+                frozen = runtime.frozen_job_requests(self.binding, [
+                    ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id)])
+            elif selected.absent_inputs:
+                from . import source_inputs
+                frozen = [source_inputs.absent_input(self._selected_match(tid, self.selected_sources), selected, tid)]
+            else:
+                frozen = []
 
             def build(sources):
                 # All identity registration happened above, outside the locked

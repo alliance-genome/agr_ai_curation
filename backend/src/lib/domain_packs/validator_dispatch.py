@@ -574,7 +574,13 @@ def prepare_validator_dispatch(
                         previous = selector_result.request.validation_guidance
                         selector_result.request.validation_guidance = "\n\n".join(value for value in (previous, "Curator revalidation guidance: " + guidance) if value)
             if selector_result.request is None:
-                record_match_scheduling(history_binding, match, "missing_input")
+                if selector_result.absent_inputs:
+                    from src.lib.validation_history.runtime import record_absent_source_input
+                    absence_ref = record_absent_source_input(history_binding, match, selector_result)
+                    record_match_scheduling(history_binding, match, "optional_inputs_absent",
+                                            details={"applicability_ref": absence_ref})
+                else:
+                    record_match_scheduling(history_binding, match, "missing_input")
                 continue
 
             jobs.append(

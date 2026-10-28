@@ -712,6 +712,24 @@ def replace_projection_targets(before, after, *, replacement_path=None):
     return result, {"changes": changes, "additions": additions}
 
 
+def record_absent_source_input(binding, match, result):
+    """Persist optional absence under the same artifact lock as scientific history."""
+    from uuid import uuid4
+    from sqlalchemy import select
+    from src.models.sql.validation_history import ValidationArtifact
+    from src.lib.validation_review import source_inputs
+
+    with store.SessionLocal.begin() as db:
+        store._artifact(db, binding.artifact_id, binding.scope)
+        db.scalar(select(ValidationArtifact.id).where(
+            ValidationArtifact.id == binding.artifact_id).with_for_update())
+        target = binding_target(binding, match, db=db)
+        frozen = source_inputs.absent_input(match, result, target)
+        source_inputs.update(db, binding.artifact_id, operation_id="absence:" + str(uuid4()),
+                             before={}, after={target: frozen})
+        return source_inputs.reference(source_inputs.latest(db, binding.artifact_id, target))
+
+
 def record_match_scheduling(binding, match, outcome, *, details=None):
     from uuid import uuid4
 

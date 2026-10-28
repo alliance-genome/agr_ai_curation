@@ -148,6 +148,10 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Omitted targets remain pending. Accept caveated/unresolved complete answers
         when appropriate. For extraction-only acceptance, unresolved_fields names
         uncertain plain payload paths and explanations; it does not alter source values.
+        For declared optional-input absence, use the exact applicability_ref fact/hash
+        instead of an attempt or baseline, with its binding target and covered unit.
+        Acceptance requires absence_assessment (omission_supported or unresolved)
+        and your reason; optionality alone is not justification. No value is invented.
         Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """

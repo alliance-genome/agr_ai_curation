@@ -84,7 +84,8 @@ def project_assessments(db, artifact_id, envelope, manifest):
     findings = []
     decisions = {}
     for unit in manifest["units"]:
-        if not unit["eligible"] or unit["selected"] != "baseline" or unit["selection_id"] is None:
+        if (not unit["eligible"] or unit["selection_id"] is None
+                or (unit["selected"] != "baseline" and unit.get("applicability_ref") is None)):
             continue
         selection = store._fact(db, artifact_id, unit["selection_id"], kind="selection")
         if selection.parent_id not in decisions:
@@ -92,6 +93,32 @@ def project_assessments(db, artifact_id, envelope, manifest):
             decisions[decision.id] = store._content(db, decision)
         body = decisions[selection.parent_id]
         entry = next(item for item in body["entries"] if item["target_id"] == unit["target_id"])
+        if unit.get("applicability_ref") is not None:
+            if entry.get("absence_assessment") != "unresolved":
+                continue
+            source = store._fact(db, artifact_id, entry["subject"], kind="validation_source_input")
+            binding_fact = store._fact(db, artifact_id, source.target_id, kind="target")
+            binding = store._content(db, binding_fact)
+            obj = objects.get(binding.get("object_target"))
+            anchor = binding.get("absent_anchor")
+            if obj is not None and anchor is None:
+                stable_path = binding.get("stable_path", [])
+                anchor = {"target_id": stable_path[-1] if stable_path else binding["object_target"], "suffix": []}
+            path = anchored_path(obj.metadata["validation_history"], anchor) if obj is not None else None
+            findings.append(ValidationFinding(
+                finding_id=f"review-absence:{selection.parent_id}:{unit['target_id']}",
+                severity=ValidationFindingSeverity.WARNING, code=FINDING_CODE, message=entry["reason"],
+                object_ref=obj.to_object_ref() if obj is not None else None,
+                field_ref=FieldRef(object_ref=obj.to_object_ref(), field_path=path) if obj is not None and path else None,
+                details={"review_assessment": {
+                    "artifact_id": artifact_id, "decision_id": selection.parent_id,
+                    "selection_id": selection.id, "actor": body["actor"],
+                    "source": entry["subject"], "applicability_ref": unit["applicability_ref"],
+                    "absence_assessment": "unresolved", "anchor": anchor,
+                    "object_target_id": binding.get("object_target"),
+                }},
+            ))
+            continue
         for assessment in entry.get("unresolved_fields") or []:
             obj = objects[assessment["object_target_id"]]
             path = anchored_path(obj.metadata["validation_history"], assessment["anchor"])

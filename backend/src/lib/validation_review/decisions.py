@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy import select
 from src.lib.validation_history import store
 from .audit import append_fact
-from src.schemas.validation_history import UnresolvedFieldAssessment
+from src.schemas.validation_history import UnresolvedFieldAssessment, HistoryFactReference
 from src.lib.validation_history.projection import publish_decisions_in_transaction
 from src.models.sql.validation_history import ValidationFact
 from .admission import lock_episode
@@ -44,9 +44,15 @@ class ReviewEntry(BaseModel):
     reason: StrictStr
     logical_attempt_id: StrictStr | None = Field(default=None, description=(
         "Exact attempt_ref fact_id for the answer, not its completion_ref fact_id. "
-        "Name exactly one attempt or authorized extraction_ref except for revoke."
+        "Name exactly one attempt, authorized extraction_ref or applicability_ref except for revoke."
     ))
     extraction_ref: StrictStr | None = None
+    applicability_ref: HistoryFactReference | None = Field(default=None, description=(
+        "Exact source-input fact and hash declaring optional-input absence. Use instead of an attempt or extraction reference."
+    ))
+    absence_assessment: Literal["omission_supported", "unresolved"] | None = Field(default=None, description=(
+        "Required only when accepting optional-input absence: omission_supported or unresolved, with an evidence-grounded reason."
+    ))
     unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
         "Only with accept of extraction-only content: exact plain payload field paths "
         "and explanations of remaining scientific uncertainty after assessment. "
@@ -75,8 +81,9 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
         # The new assessment is genuinely optional; absent annotations do not
         # change the identity of previously recorded requests.
         for entry in entries:
-            if entry["unresolved_fields"] is None:
-                del entry["unresolved_fields"]
+            for optional in ("unresolved_fields", "applicability_ref", "absence_assessment"):
+                if entry[optional] is None:
+                    del entry[optional]
         identity = {
             "entries": entries,
             "actor": {"type": context.actor_type, "id": context.actor_id},
@@ -130,12 +137,22 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
                 raise store.HistoryConflict("Decision unit is outside the named target")
             attempt_id = entry.get("logical_attempt_id")
             extraction_ref = entry.get("extraction_ref")
+            applicability_ref = entry.get("applicability_ref")
             subject = None
             if action == "revoke":
-                if attempt_id or extraction_ref:
+                if attempt_id or extraction_ref or applicability_ref:
                     raise ValueError("Revocation does not select an answer")
-            elif bool(attempt_id) == bool(extraction_ref):
-                raise ValueError("Name exactly one attempt or extraction reference")
+            elif sum(bool(ref) for ref in (attempt_id, extraction_ref, applicability_ref)) != 1:
+                raise ValueError("Name exactly one attempt, extraction or applicability reference")
+            elif applicability_ref:
+                from . import source_inputs
+                if action == "acknowledge_failure":
+                    raise ValueError("Optional absence is not an execution failure")
+                fact = source_inputs.require_absence(db, episode.artifact_id, unit.id,
+                    applicability_ref["fact_id"], scope=context.history_scope, sha256=applicability_ref["sha256"])
+                if fact.target_id != target.id:
+                    raise store.HistoryConflict("Absence source belongs to another named target")
+                subject = fact.id
             elif attempt_id:
                 attempt = store._fact(
                     db, episode.artifact_id, attempt_id, kind="attempt"
@@ -181,6 +198,12 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
                         "Extraction reference does not match the immutable baseline"
                     )
                 subject = "baseline"
+            absence_assessment = entry.get("absence_assessment")
+            if action == "accept" and applicability_ref:
+                if absence_assessment is None:
+                    raise ValueError("Accepting optional absence requires an explicit assessment")
+            elif absence_assessment is not None:
+                raise ValueError("Absence assessment requires optional-absence acceptance")
             assessments = entry.get("unresolved_fields")
             if assessments is not None:
                 if action != "accept" or subject != "baseline":
@@ -194,6 +217,7 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
                     "action": action,
                     "reason": entry["reason"],
                     **({"subject": subject} if subject else {}),
+                    **({"absence_assessment": absence_assessment} if absence_assessment is not None else {}),
                     **({"unresolved_fields": assessments} if assessments is not None else {}),
                 }
             )

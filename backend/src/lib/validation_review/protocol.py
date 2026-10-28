@@ -59,6 +59,10 @@ and explanations in unresolved_fields: export retains uncertainty without blocki
 completion. Rejecting a replacement leaves earlier acceptance intact; revoke to
 withdraw it. Defer pending investigation, not completed uncertainty. Acknowledge
 operational failures without scientific rejection.
+Assess declared optional-input absences against the corresponding source and evidence;
+optionality alone does not justify an omission. Record an explicit absence assessment
+for its exact applicability_ref, or use configured extractor follow-up when needed;
+a later supplied value requires applicable validation.
 
 Request reconsideration only when it can help: name the parent decision, affected
 target(s), precise instructions and exact existing evidence references. The saved

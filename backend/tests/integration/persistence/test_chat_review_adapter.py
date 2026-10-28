@@ -97,16 +97,27 @@ def planned(scope, tmp_path, monkeypatch, request):
         text = text.replace("    fields:\n", "    fields:\n      - field_path: genes\n        field_type: string\n        metadata:\n          multivalued: true\n")
         pack.metadata_path.write_text(text)
         pack = replace(pack, metadata=load_domain_pack_metadata(pack.metadata_path))
-    if fixture_shape == "absent":
+    if fixture_shape in {"absent", "optional-absence", "absence-dependent-optional", "absence-dependent-required"}:
         from copy import deepcopy
         raw = deepcopy(pack.metadata.metadata)
         binding = raw["validator_bindings"]["active"][0]
         binding["applies_to"]["field_paths"] = ["optional.term"]
         binding["input_fields"] = {"query": {"source": "literal", "value": "fixture lookup"}}
+        if fixture_shape != "absent":
+            binding["input_fields"] = {"query": {"source": "payload", "path": "optional.term", "required": False}}
         binding["expected_result_fields"] = {"curie": "optional.term"}
         field = pack.metadata.object_definitions[0].fields[0].model_copy(
             update={"field_path": "optional.term", "metadata": {}})
-        definition = pack.metadata.object_definitions[0].model_copy(update={"fields": [field]})
+        fields = [field]
+        if fixture_shape in {"absence-dependent-optional", "absence-dependent-required"}:
+            dependent = deepcopy(binding)
+            dependent.update(binding_id="fixture.dependent", runs_after=[binding["binding_id"]])
+            dependent["applies_to"]["field_paths"] = ["optional.other"]
+            dependent["expected_result_fields"] = {"curie": "optional.other"}
+            dependent["input_fields"]["query"]["required"] = fixture_shape == "absence-dependent-required"
+            raw["validator_bindings"]["active"].append(dependent)
+            fields.append(field.model_copy(update={"field_path": "optional.other"}))
+        definition = pack.metadata.object_definitions[0].model_copy(update={"fields": fields})
         pack = replace(pack, metadata=pack.metadata.model_copy(update={
             "metadata": raw, "object_definitions": [definition]}))
     groups = ()
@@ -141,7 +152,7 @@ def planned(scope, tmp_path, monkeypatch, request):
             object_type="Annotation", pending_ref_id=name,
             payload={"kind": name, "evidence_code_curies": ["eco:" + name]})
             for name in ("one", "two")]
-    if fixture_shape == "absent":
+    if fixture_shape in {"absent", "optional-absence", "absence-dependent-optional", "absence-dependent-required"}:
         env.extracted_objects[0].payload = {"optional": {}}
     if fixture_shape == "three":
         env.extracted_objects = [CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=name,
@@ -1284,3 +1295,190 @@ async def test_runtime_unavailable_route_does_not_stop_independent_route(planned
     assert not any(row["code"] == "configured_validator_unavailable" for row in current["blockers"])
     assert not current["ready"]  # The new answer still needs an explicit decision.
     assert capture.call_count == 1
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+def test_optional_absence_is_saved_once_without_a_validator_attempt(planned):
+    from src.lib.validation_review import source_inputs
+    from src.lib.validation_history import selections
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    item = planned
+    assert not item.plan.initial_jobs
+    match = item.plan.matches[0]
+    result = build_domain_validation_request(match)
+    assert result.absent_inputs == ("query",)
+    first = runtime.record_absent_source_input(item.plan.history_binding, match, result)
+    again = runtime.record_absent_source_input(item.plan.history_binding, match, result)
+    assert again == first
+    with store.SessionLocal() as db:
+        facts = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == item.aid, ValidationFact.kind == "validation_source_input")))
+        assert len(facts) == 1
+        body = store._content(db, facts[0])
+        assert source_inputs.is_absence(body)
+        assert body["request"] is None
+        assert body["input"]["input_selectors"]["query"]["path"] == "optional.term"
+        assert not source_inputs.is_absence({"input": None, "request": None})
+        assert not list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == item.aid, ValidationFact.kind == "attempt")))
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert manifest["units"]
+    assert not manifest["ready"]  # A declared optional absence is not scientific acceptance.
+
+
+def absence_entry(item, action="accept", assessment="omission_supported", target_id=None):
+    from src.lib.validation_review import source_inputs
+    from src.lib.validation_history import selections
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    unit = next(unit for unit in manifest["units"] if target_id is None or unit["target_id"] == target_id)
+    with store.SessionLocal() as db:
+        fact = source_inputs.latest(db, item.aid, unit["target_id"])
+        return {"target_id": fact.target_id, "decision_unit_id": unit["target_id"],
+                "expected_version": unit["version"], "action": action,
+                "reason": "Reviewer assessed the original source and supplied evidence",
+                "applicability_ref": source_inputs.reference(fact),
+                **({"absence_assessment": assessment} if action == "accept" else {})}
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+@pytest.mark.parametrize("action", ["accept", "reject", "defer"])
+def test_optional_absence_has_an_explicit_scientific_disposition(planned, action):
+    from src.lib.validation_history import selections
+    item = planned
+    entry = absence_entry(item, action)
+    checkpoint = checkpoint_provider(item)
+    response = decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint(), operation_id="assess-absence", entries=[entry])
+    assert response["ready"] == (action == "accept")
+    assert checkpoint().envelope.extracted_objects[0].payload == {"optional": {}}
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert manifest["units"][0]["eligible"] == (action == "accept")
+    if action == "accept":
+        assert manifest["units"][0]["applicability_ref"] == entry["applicability_ref"]
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+@pytest.mark.parametrize("invalid", ["hash", "no_assessment", "ambiguous", "baseline"])
+def test_optional_absence_decisions_reject_inexact_or_ambiguous_subjects(planned, invalid):
+    item = planned
+    entry = absence_entry(item)
+    if invalid == "hash":
+        entry["applicability_ref"]["sha256"] = "wrong"
+    elif invalid == "no_assessment":
+        entry.pop("absence_assessment")
+    elif invalid == "ambiguous":
+        entry["extraction_ref"] = "also-baseline"
+    else:
+        entry.pop("applicability_ref")
+        entry.pop("absence_assessment")
+        with store.SessionLocal() as db:
+            entry["extraction_ref"] = store._artifact(db, item.aid, item.scope).baseline_sha
+    with pytest.raises((ValueError, store.HistoryConflict)):
+        decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+            checkpoint_request=checkpoint_provider(item)(), operation_id="invalid-absence", entries=[entry])
+    with store.SessionLocal() as db:
+        assert store._current(db, item.aid, entry["target_id"])["version"] == 0
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+def test_absence_assessment_stales_on_changed_supplied_evidence(planned):
+    from dataclasses import replace
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.validation_history import selections
+    item = planned
+    entry = absence_entry(item)
+    decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint_provider(item)(), operation_id="accept-absence", entries=[entry])
+    match = item.plan.matches[0]
+    result = build_domain_validation_request(match)
+    assert runtime.record_absent_source_input(item.plan.history_binding, match, result) == entry["applicability_ref"]
+    assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
+    changed = replace(result, evidence=[{"evidence_record_id": "new-evidence", "quote": "New supplied evidence"}])
+    assert runtime.record_absent_source_input(item.plan.history_binding, match, changed) != entry["applicability_ref"]
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert not manifest["ready"]
+    assert manifest["units"][0]["reason"] == "stale"
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+def test_unresolved_absence_is_reviewed_but_projects_honest_uncertainty(planned):
+    from src.lib.validation_history.assessments import FINDING_CODE
+    item = planned
+    checkpoint = checkpoint_provider(item)
+    entry = absence_entry(item, assessment="unresolved")
+    response = decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint(), operation_id="unresolved-absence", entries=[entry])
+    assert response["ready"]  # Assessment is complete; submission rules remain separate.
+    envelope = checkpoint().envelope
+    assert envelope.extracted_objects[0].payload == {"optional": {}}
+    findings = [finding for finding in envelope.validation_findings if finding.code == FINDING_CODE]
+    assert len(findings) == 1
+    assert findings[0].message == entry["reason"]
+    assert findings[0].field_ref.field_path == "optional.term"
+    assert findings[0].details["review_assessment"]["applicability_ref"] == entry["applicability_ref"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["absence-dependent-optional", "absence-dependent-required"], indirect=True)
+async def test_dependent_absence_requires_reviewed_prerequisite_and_respects_selectors(planned, monkeypatch):
+    from src.lib.validation_review import source_inputs
+    from src.lib.validation_history import selections
+    item = planned
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
+        lambda: lambda *a, **kw: pytest.fail("Absent inputs must not call a provider"))
+    checkpoint = checkpoint_provider(item)
+    matches = {match.binding.binding_id: match for match in item.plan.matches}
+    parent = runtime.binding_target(item.plan.history_binding, matches["fixture.evidence_lookup"])
+    child = runtime.binding_target(item.plan.history_binding, matches["fixture.dependent"])
+    before = await item.adapter.advance(checkpoint)
+    assert before[0]["state"] == "awaiting_review"
+    with store.SessionLocal() as db:
+        assert source_inputs.latest(db, item.aid, child) is None
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-parent-absence",
+        entries=[absence_entry(item, target_id=parent)])
+    after = await item.adapter.advance(checkpoint)
+    required = matches["fixture.dependent"].binding.input_fields["query"].required
+    if required:
+        assert after[0]["state"] == "not_runnable"
+        assert after[0]["reason"] == "required_inputs_unavailable"
+        with store.SessionLocal() as db:
+            assert source_inputs.latest(db, item.aid, child) is None
+    else:
+        assert after[0]["reason"] == "optional_inputs_absent"
+        with store.SessionLocal() as db:
+            fact = source_inputs.latest(db, item.aid, child)
+            body = store._content(db, fact)
+            assert body["input"]["prerequisites"][0]["target_id"] == parent
+            original_ref = source_inputs.reference(fact)
+        repeated = await item.adapter.advance(checkpoint)
+        assert repeated[0]["applicability_refs"][child] == original_ref
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-dependent-absence",
+            entries=[absence_entry(item, target_id=child)])
+        assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
+        with store.SessionLocal.begin() as db:
+            store.apply_decisions_in_transaction(db, item.scope, item.aid, operation_id="revoke-prerequisite",
+                actor={"type": "agent", "id": "supervisor"}, entries=[{
+                    "target_id": parent, "expected_version": store._current(db, item.aid, parent)["version"],
+                    "action": "revoke", "reason": "Reconsider source"}])
+        manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+        assert next(unit for unit in manifest["units"] if unit["target_id"] == child)["reason"] == "stale"
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+def test_retirement_and_restoration_do_not_reactivate_old_absence_acceptance(planned):
+    from src.lib.validation_history import selections
+    item = planned
+    entry = absence_entry(item)
+    decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint_provider(item)(), operation_id="accept-before-retirement", entries=[entry])
+    root = item.plan.envelope.extracted_objects[0].metadata["validation_history"]["target_id"]
+    with store.SessionLocal.begin() as db:
+        for action in ("retire", "restore"):
+            store.apply_decisions_in_transaction(db, item.scope, item.aid, operation_id=action + "-source",
+                actor={"type": "agent", "id": "supervisor"}, entries=[{
+                    "target_id": root, "expected_version": store._current(db, item.aid, root)["version"],
+                    "action": action, "reason": "Explicit source lifecycle decision"}])
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert not manifest["ready"]
+    assert manifest["units"][0]["reason"] == "stale"

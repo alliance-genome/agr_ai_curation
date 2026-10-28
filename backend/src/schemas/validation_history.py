@@ -31,6 +31,11 @@ class BoundUnresolvedFieldAssessment(UnresolvedFieldAssessment):
     anchor: StableValueAnchor
 
 
+class HistoryFactReference(HistoryContract):
+    fact_id: StrictStr = Field(min_length=1)
+    sha256: StrictStr = Field(min_length=1)
+
+
 class HistoryDecision(HistoryContract):
     target_id: StrictStr = Field(min_length=1)
     expected_version: StrictInt = Field(ge=0)
@@ -48,6 +53,7 @@ class HistoryDecision(HistoryContract):
     reason: StrictStr = Field(min_length=1)
     subject: StrictStr | None = None
     unresolved_fields: list[BoundUnresolvedFieldAssessment] | None = None
+    absence_assessment: Literal["omission_supported", "unresolved"] | None = None
     replacement_original: dict[str, Any] | None = None
     replacement_target_id: StrictStr | None = None
 
@@ -62,6 +68,9 @@ class HistoryDecision(HistoryContract):
             raise ValueError("Only replacement decisions supply new original content")
         if self.replacement_target_id is not None and self.action != "replace":
             raise ValueError("Only replacement can assign a replacement identity")
+        if self.absence_assessment is not None and (
+                self.action != "accept" or self.subject in {None, "baseline", "curator"}):
+            raise ValueError("Absence assessments require acceptance of an exact absence source")
         if self.unresolved_fields is not None:
             if self.action != "accept" or self.subject != "baseline":
                 raise ValueError("Field assessments require acceptance of extraction-only content")
