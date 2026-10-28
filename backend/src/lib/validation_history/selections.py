@@ -329,6 +329,25 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
             )
             if selection["action"] != "accept":
                 blockers.append({"target_id": unit["target_id"], "code": "episode_review_pending"})
+        current_attempts = [
+            attempt for attempt in attempts_by_target.get(unit["target_id"], ())
+            if store._attempt_is_current(db, scope, artifact_id, store._content(db, attempt), unit["target_id"])
+        ]
+        if current_attempts:
+            latest_attempt = max(current_attempts, key=lambda attempt: attempt.sequence)
+            latest_completion = completions.get(latest_attempt.id)
+            if latest_completion is not None:
+                completed = store._content(db, latest_completion)
+                if (completed["state"] == "failed"
+                        and completed.get("diagnostics", {}).get("reason") == "configured_validator_unavailable"):
+                    frozen = store._content(db, latest_attempt)["input"]
+                    blockers.append({
+                        "target_id": unit["target_id"], "code": "configured_validator_unavailable",
+                        "binding_id": frozen["binding_id"],
+                        **({"route_value": frozen["route_value"]} if frozen.get("route_value") is not None else {}),
+                        "attempt_ref": {"fact_id": latest_attempt.id, "sha256": latest_attempt.body_sha},
+                        "completion_ref": {"fact_id": latest_completion.id, "sha256": latest_completion.body_sha},
+                    })
         # A new answer requires an explicit disposition even if an older one
         # remains selected. Automatic reconsideration stays within this episode;
         # later human renewal creates a linked episode without resetting parent quotas.

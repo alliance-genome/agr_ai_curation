@@ -43,9 +43,9 @@ def test_direct_contract_keeps_original_representation(monkeypatch):
     assert adapter.binding_contract(SimpleNamespace(binding=configured)) == expected
 
 
-def test_missing_runtime_specialist_has_typed_operational_reason(monkeypatch):
+def test_missing_installed_definition_remains_configuration_failure(monkeypatch):
     monkeypatch.setattr("src.lib.config.agent_loader.get_agent_definition_for_package", lambda *args: None)
-    with pytest.raises(admission.ReviewStopped, match="configured_validator_unavailable"):
+    with pytest.raises(admission.ReviewStopped, match="configured_validator_changed"):
         adapter.binding_contract(SimpleNamespace(binding=binding()))
 
 

@@ -71,7 +71,7 @@ def binding_contract(match):
     def configured_agent(ref):
         definition = get_agent_definition_for_package(ref.package_id, ref.agent_id)
         if definition is None:
-            raise admission.ReviewStopped("configured_validator_unavailable")
+            raise admission.ReviewStopped("configured_validator_changed")
         return to_jsonable_python(asdict(definition))
 
     binding = match.binding
@@ -521,6 +521,13 @@ class ValidatorAdapter:
                     return {"state": "not_started", "work_id": wid}
                 try:
                     return await self.execute(wid)
+                except admission.ReviewStopped as error:
+                    if error.reason == "configured_validator_unavailable":
+                        # execute() has already persisted failed operational completions
+                        # and a not-admitted outcome for these exact requests.
+                        return {"state": "not_admitted", "work_id": wid, "reason": error.reason}
+                    stopping = True
+                    raise
                 except BaseException:
                     stopping = True
                     raise
@@ -587,14 +594,11 @@ class ValidatorAdapter:
             ].items()
         ):
             raise admission.ReviewStopped("configured_validator_changed")
-        try:
-            changed = any(
-                binding_contract(job.match)
-                != receipt["contracts"][job.match.binding.binding_id]
-                for job in jobs
-            )
-        except store.HistoryConflict as error:
-            raise admission.ReviewStopped("configured_validator_unavailable") from error
+        changed = any(
+            binding_contract(job.match)
+            != receipt["contracts"][job.match.binding.binding_id]
+            for job in jobs
+        )
         if changed:
             raise admission.ReviewStopped("configured_validator_changed")
         # Custom revisions are reauthorized by the existing package runner.

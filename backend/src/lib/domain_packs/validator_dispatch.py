@@ -1582,6 +1582,17 @@ def _remap_validator_result_for_request(
     return _finalize_validator_result(remapped, request=request)
 
 
+def _build_available_validator_agent(agent_key, **kwargs):
+    """Distinguish a runtime-store outage from configuration/authorization failure."""
+    from src.lib.agent_studio.catalog_service import get_agent_by_id, AgentRuntimeUnavailable
+    from src.lib.validation_review.admission import ReviewStopped
+
+    try:
+        return get_agent_by_id(agent_key, **kwargs)
+    except AgentRuntimeUnavailable as exc:
+        raise ReviewStopped("configured_validator_unavailable") from exc
+
+
 def run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
@@ -1592,7 +1603,6 @@ def run_package_scoped_validator_agent(
 
     from agents import AgentOutputSchema, function_tool
 
-    from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,
         get_agent_definition_for_package,
@@ -1622,7 +1632,7 @@ def run_package_scoped_validator_agent(
         from src.lib.agent_studio.custom_profile_validators import build_custom_validator_agent
         agent = build_custom_validator_agent(custom_pin, runtime_context, benchmark_slot=benchmark_slot)
     else:
-        agent = get_agent_by_id(
+        agent = _build_available_validator_agent(
             canonical_system_agent_key(agent_definition),
             **benchmark_route_kwargs(benchmark_slot),
             **(
@@ -1829,7 +1839,6 @@ def run_package_scoped_validator_agent_batch(
 
     from agents import AgentOutputSchema, function_tool
 
-    from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,
         get_agent_definition_for_package,
@@ -1865,7 +1874,7 @@ def run_package_scoped_validator_agent_batch(
     benchmark_kwargs = benchmark_route_kwargs(
         f"validator:{representative_request.validator_binding_id}"
     )
-    agent = get_agent_by_id(
+    agent = _build_available_validator_agent(
         canonical_system_agent_key(agent_definition),
         **benchmark_kwargs,
         **(

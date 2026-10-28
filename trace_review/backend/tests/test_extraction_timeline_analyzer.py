@@ -637,3 +637,17 @@ def test_workspace_curator_rounds_are_visible_with_exact_request_history(tmp_pat
     assert result['validation_review']['event_count'] == 3
     assert len(result['workspace_validation_review']['events']) == 3
     assert result['workspace_validation_review']['events'][1]['output']['preview']['sha256'] == 'exact-request'
+
+
+def test_runtime_unavailable_work_retains_operational_reason_and_exact_fact(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    content = {"work_id": "affected-work", "outcome": {
+        "state": "not_admitted", "reason": "configured_validator_unavailable", "resource": None}}
+    _write_event(tmp_path, "unavailable", _event("unavailable", 1, "validation_review.review_outcome",
+        output_summary={"preview": {"artifact_id": "artifact", "fact_id": "failure-fact", "sha256": "exact-sha",
+            "kind": "review_outcome", "content": content}}))
+    result = ExtractionTimelineAnalyzer.analyze(trace_id="unavailable", raw_trace={}, observations=[], include_raw_outputs=True)
+    event = result["validation_review"]["events"][0]["output"]["preview"]
+    assert event["fact_id"] == "failure-fact"
+    assert event["sha256"] == "exact-sha"
+    assert event["content"] == content

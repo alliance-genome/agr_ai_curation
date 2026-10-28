@@ -110,6 +110,10 @@ async def execute(
                 else "validator_turns_exhausted"
             )
             resource = getattr(stopped, "resource", None)
+            if reason == "configured_validator_unavailable":
+                from .audit import report_operational_failure
+                report_operational_failure(stopped)
+
             try:
                 if (
                     isinstance(stopped, (admission.ReviewStopped, ContextRecoveryError))
