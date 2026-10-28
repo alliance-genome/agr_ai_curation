@@ -62,21 +62,15 @@ def test_unavailable_validator_fails_instead_of_silently_omitting_it(monkeypatch
         stages.flow_stages(flow(None), {"node_0": {}}, authorize_validator=Mock(side_effect=ValueError("unavailable")))
 
 
-def test_sidecar_nodes_are_included_even_outside_control_order(monkeypatch):
+def test_benchmark_rejects_historical_override_before_building_stages(monkeypatch):
+    from src.schemas.flows import FlowEdge
     definition = flow(None, None)
-    monkeypatch.setattr(stages, "apply_flow_validation_attachment_defaults", lambda value, **kwargs: value)
-    monkeypatch.setattr(stages, "project_executable_flow_graph", lambda value: NS(
-        ordered_executable_node_ids=("node_0",),
-        validation_sidecars=(NS(validator_node_id="node_1", source_node_id="node_0", binding_id="sidecar"),),
-    ))
-    schedule = Mock(return_value={"scheduled_validators": []})
-    monkeypatch.setattr(stages, "validation_schedule_from_node_data", schedule)
-    result = stages.flow_stages(definition, {"node_0": {}, "node_1": {"category": "Custom"}}, authorize_validator=Mock())
-    assert result[-1].role == "validation"
-    assert result[-1].binding_id == "sidecar"
-    assert result[-1].route_slot == "agent:ca_fixture"
-    assert result[-1].source_node_id == "node_0"
-    schedule.assert_called_once()  # Sidecar palette defaults are not control-step schedules.
+    definition.edges = [FlowEdge(id="old", source="node_0", target="node_1",
+        role="validation_attachment", satisfies_binding_id="sidecar", replaces_attachment_id=None, condition=None)]
+    authorize = Mock()
+    with pytest.raises(ValueError, match="not supported"):
+        stages.flow_stages(definition, {"node_0": {}, "node_1": {"category": "Custom"}}, authorize_validator=authorize)
+    authorize.assert_not_called()
 
 
 def test_scheduled_package_validator_requires_current_visibility(monkeypatch):

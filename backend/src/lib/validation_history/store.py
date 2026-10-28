@@ -637,7 +637,6 @@ def record_scheduling(
         "not_validatable",
         "no_contract",
         "ineligible",
-        "custom_replacement",
         "awaiting_review",
     }:
         raise ValueError("Unknown scheduling outcome")

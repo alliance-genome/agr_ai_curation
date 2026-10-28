@@ -107,32 +107,27 @@ def flow_stages(
     """Hydrate the same attachment defaults used by normal flow authoring.
 
     The callback must authorize scheduled model validators and return their
-    canonical agent key; deterministic bindings return None. Graph-attached
-    validators use the same agent:<key> route as ordinary executable nodes.
-    Domain-pack/profile scheduled validators use validator:<binding-id>.
+    canonical agent key; deterministic bindings return None. Domain-pack/profile
+    scheduled validators use validator:<binding-id>. Unsupported historical
+    flow overrides are rejected by the shared attachment preflight.
     """
     hydrated = apply_flow_validation_attachment_defaults(
         definition, entries_by_node=entries_by_node,
     )
     graph = project_executable_flow_graph(hydrated)
-    sidecars = {sidecar.validator_node_id: sidecar for sidecar in graph.validation_sidecars}
     nodes = {node.id: node for node in hydrated.nodes}
     stages = [BenchmarkFlowStage(
         stage_id="supervisor", node_id=None, title="Flow supervisor",
         role="supervisor", route_slot="supervisor",
     )]
-    ordered_node_ids = tuple(dict.fromkeys((
-        *graph.ordered_executable_node_ids,
-        *(sidecar.validator_node_id for sidecar in graph.validation_sidecars),
-    )))
+    ordered_node_ids = graph.ordered_executable_node_ids
     for node_id in ordered_node_ids:
         node = nodes[node_id]
         if node.type == "task_input":
             continue
         entry = entries_by_node[node_id]
         agent_id = node.data.agent_id
-        sidecar = sidecars.get(node_id)
-        role: FlowStageRole = "validation" if sidecar else role_from_category(entry.get("category"))
+        role: FlowStageRole = role_from_category(entry.get("category"))
         # These branches mirror executor runtime tools, not biological names.
         non_model = agent_id in {CURATION_PREP_AGENT_ID, "curation_handoff"} or (
             resolved_formatter_format(agent_id, entry) is not None
@@ -140,17 +135,12 @@ def flow_stages(
         receipt = entry.get("execution_receipt")
         stages.append(BenchmarkFlowStage(
             stage_id=_digest({"node": node_id}), node_id=node_id,
-            source_node_id=sidecar.source_node_id if sidecar else None,
-            binding_id=sidecar.binding_id if sidecar else None,
+            source_node_id=None,
+            binding_id=None,
             title=node.data.agent_display_name, role=role, agent_id=agent_id,
             route_slot=None if non_model else f"agent:{agent_id}",
             execution_receipt=AgentExecutionReceipt.model_validate(receipt) if receipt else None,
         ))
-        if sidecar is not None:
-            # The normal executor invokes sidecars as saved validator routes
-            # in the shared supervisor review plan, not ordinary control steps.
-            # Their palette defaults therefore are not another scheduled layer.
-            continue
         schedule = validation_schedule_from_node_data(node.data.model_dump())
         # Defaults attach one binding per field, but the executor dispatches a
         # binding's envelope matches once (identical request ids), so it is one stage.

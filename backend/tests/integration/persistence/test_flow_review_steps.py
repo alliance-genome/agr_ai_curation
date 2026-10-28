@@ -89,15 +89,7 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     calls = []
     def run(request, binding, **kwargs):
         calls.append(request.request_id)
-        if selection != "automatic":
-            assert binding.raw["flow_validator"] == {"node_id": "chosen-validator", "data": nodes["chosen-validator"]["data"]}
         payload = {**_result_payload(request, resolved_values={"curie": "ECO:chosen"}), "resolved_objects": []}
-        if selection != "automatic":
-            from src.lib.config.schema_discovery import resolve_output_schema
-            from src.lib.domain_packs.validator_dispatch import _ValidatorAgentRunOutput
-            payload["gene_candidates"] = [{"gene_id": "GENE:example-1", "symbol": "geneA"}]
-            return _ValidatorAgentRunOutput(raw_output=payload,
-                accepted_result=resolve_output_schema("GeneResultEnvelope").model_validate(payload))
         return payload
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner",
@@ -105,6 +97,14 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     # The fixture domain pack has no production adapter; preserve its exact source
     # when constructing the checkpoint, using the same persisted-row loader.
     from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    if selection != "automatic":
+        with pytest.raises(ValueError, match="not supported"):
+            await flow.receive(env, item.pack, agent_key="fixture", adapter_key="fixture", tool_name="specialist-label",
+                source_metadata={}, execution_receipt=None,
+                context=ValidatorRuntimeContext(user_id=item.scope.owner_id,
+                    document_id=item.scope.document_id, authenticated_groups=()))
+        assert calls == []
+        return
     await flow.receive(env, item.pack, agent_key="fixture", adapter_key="fixture", tool_name="specialist-label",
         source_metadata={"flow_id": "untrusted", "flow_name": "untrusted", "step": 99,
                          "agent_name": "untrusted", "tool_name": "untrusted", "execution_context": {}},

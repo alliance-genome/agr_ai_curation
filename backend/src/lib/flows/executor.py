@@ -3240,8 +3240,6 @@ def build_supervisor_instructions(
         validation_schedule = validation_schedule_from_node_data(data)
         scheduled_count = len(validation_schedule["scheduled_validators"])
         opt_out_count = len(validation_schedule["opt_outs"])
-        replacement_count = len(validation_schedule["replacement_validators"])
-        supplemental_count = len(validation_schedule["supplemental_validators"])
         under_development_count = sum(
             1
             for item in validation_schedule["inactive_metadata"]
@@ -3251,10 +3249,6 @@ def build_supervisor_instructions(
             step_desc += f" [schedule {scheduled_count} validator(s)]"
         if opt_out_count:
             step_desc += f" [validation opt-outs recorded: {opt_out_count}]"
-        if replacement_count:
-            step_desc += f" [replacement validators: {replacement_count}]"
-        if supplemental_count:
-            step_desc += f" [supplemental validators: {supplemental_count}]"
         if under_development_count:
             step_desc += (
                 f" [under-development validators visible: {under_development_count}]"

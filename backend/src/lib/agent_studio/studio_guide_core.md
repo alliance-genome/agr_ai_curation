@@ -237,3 +237,5 @@ When proposing or applying prompt edits, use this distilled OpenAI-style prompt 
 - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
 - for extraction/factual behavior, prioritize deterministic wording over creative language.
 </studio_guide_topic>
+
+Replacement and supplemental validator attachments are unsupported for new flow execution. Read-only inspection may show them in older saved flows; help the curator remove those connections and unused validator steps while retaining automatic checks and permitted opt-outs. Never recreate an override attachment.

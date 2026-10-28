@@ -220,6 +220,9 @@ def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warn
             "agent_display_name": "Gene Extractor",
         }
     )
+    template_definition = flows.apply_flow_validation_attachment_defaults(
+        FlowDefinition.model_validate(template_definition)
+    ).model_dump()
     template_definition["nodes"].append(
         {
             "id": "validator_1",
@@ -241,9 +244,8 @@ def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warn
             "satisfies_binding_id": "custom.supplemental",
         }
     )
-    template_flow = flows.apply_flow_validation_attachment_defaults(
-        FlowDefinition.model_validate(template_definition)
-    )
+    # Historical override data is readable without reauthorizing its execution.
+    template_flow = FlowDefinition.model_validate(template_definition)
     inherited_attachments = [
         attachment.model_dump()
         for attachment in template_flow.nodes[1].data.validation_attachments
@@ -474,8 +476,7 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
         }
     )
     template_flow = flows.apply_flow_validation_attachment_defaults(
-        FlowDefinition.model_validate(template_definition)
-    )
+        FlowDefinition.model_validate(template_definition))
     inherited_attachments = [
         attachment.model_dump()
         for attachment in template_flow.nodes[1].data.validation_attachments

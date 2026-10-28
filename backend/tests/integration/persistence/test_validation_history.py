@@ -387,7 +387,7 @@ def test_runtime_captures_baseline_and_request_before_runner_mutates_them(
             object_envelope=obj,
             envelope=captured,
             field_path=request.target.field_path,
-            binding=SimpleNamespace(decision_units=(), binding_id=request.validator_binding_id),
+            binding=SimpleNamespace(decision_units=(), route_value=None, binding_id=request.validator_binding_id),
         ),
         request=request,
     )
@@ -815,7 +815,7 @@ def test_checkpoint_storage_grows_with_new_content_not_repeated_full_history(sco
 
 
 @pytest.mark.parametrize("outcome", ["completed", "failed", "interrupted"])
-def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
+def test_automatic_flow_validation_freezes_inputs_and_retains_truthful_outcome(
     scope, tmp_path, monkeypatch, outcome
 ):
     import asyncio
@@ -845,7 +845,7 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
     seen = []
 
     def custom(request, **kwargs):
-        assert kwargs["binding"].raw["flow_validator"]["data"]["agent_id"] == "custom-agent"
+        assert "flow_validator" not in kwargs["binding"].raw
         from agents import ModelSettings
         from openai.types.shared import Reasoning
         from src.lib.openai_agents.config import build_default_model_retry
@@ -883,8 +883,8 @@ def test_custom_flow_attachment_freezes_inputs_and_retains_truthful_outcome(
     monkeypatch.setattr('src.lib.redis_client.check_cancel_signal', AsyncMock(return_value=False))
     context = ValidatorRuntimeContext(user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=())
     plan = flow_plan.prepare(source, pack,
-        groups=[{'binding_id': 'fixture.identifier_lookup', 'state': 'replaced', 'validator_node_id': 'custom'}],
-        nodes={'custom': {'id': 'custom', 'data': {'agent_id': 'custom-agent'}}}, runtime_context=context)
+        groups=[{'binding_id': 'fixture.identifier_lookup', 'state': 'automatic'}],
+        nodes={}, runtime_context=context)
     ref = save_plan(plan, context=context)
     episode = plan.envelope.metadata['review_episode_id']
     sid = admission.create_scope(scope, operation_id=uuid4().hex, kind='discovered_document_run', targets=0, episodes=0)

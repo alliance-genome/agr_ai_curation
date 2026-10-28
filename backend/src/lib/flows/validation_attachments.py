@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import lru_cache
 import re
 from typing import Any, Mapping
@@ -28,15 +27,6 @@ from src.schemas.flows import (
 
 class FlowValidationAttachmentError(ValueError):
     """Raised when a flow validation attachment selection violates policy."""
-
-
-@dataclass(frozen=True)
-class _ValidationAttachmentEdgeGroup:
-    edge_id: str
-    source_node_id: str
-    validator_node_id: str
-    binding_id: str
-    replaces_attachment_id: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -145,7 +135,7 @@ def reconcile_revision_attachments(
                 continue
             if ((edge.replaces_attachment_id and edge.replaces_attachment_id not in new_ids)
                     or (edge.satisfies_binding_id and edge.satisfies_binding_id not in new_bindings)):
-                raise FlowValidationAttachmentError("This revision changes a check used by an attached validator step. Remove that attachment edge, select the revision, then reconnect the validator to the new check.")
+                raise FlowValidationAttachmentError("This revision changes a check used by an attached validator step. Remove that attachment edge and its unused validator step, then select the revision and use its automatic checks.")
         node.data.validation_attachments = selections
         node.data.validation_groups = []
     return refreshed
@@ -165,8 +155,19 @@ def apply_flow_validation_attachment_defaults(
     except PersistedFlowMigrationError as exc:
         raise FlowValidationAttachmentError(str(exc)) from exc
 
+    if any(edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE for edge in flow_definition.edges):
+        raise FlowValidationAttachmentError(
+            "Replacement and supplemental validators are not supported in flows. "
+            "Remove the validator attachment connection and use the extractor's automatic checks."
+        )
+    from src.lib.domain_packs.flow_validator_selection import effective_flow_validation_groups
+    try:
+        for node in flow_definition.nodes:
+            effective_flow_validation_groups([group.model_dump() for group in node.data.validation_groups])
+    except ValueError as exc:
+        raise FlowValidationAttachmentError(str(exc)) from exc
+
     hydrated = flow_definition.model_copy(deep=True)
-    options_by_node_id: dict[str, tuple[ValidationAttachmentOption, ...]] = {}
     selections_by_node_id: dict[str, list[FlowValidationAttachmentSelection]] = {}
 
     for node in hydrated.nodes:
@@ -193,7 +194,6 @@ def apply_flow_validation_attachment_defaults(
                 )
             continue
 
-        options_by_node_id[node.id] = options
         option_ids = {option.attachment_id for option in options}
         existing_by_id = {
             selection.attachment_id: selection
@@ -218,19 +218,9 @@ def apply_flow_validation_attachment_defaults(
         node.data.validation_attachments = selections
         selections_by_node_id[node.id] = selections
 
-    sidecar_groups_by_source = _validation_attachment_edge_groups_by_source(
-        hydrated,
-        selections_by_node_id=selections_by_node_id,
-        options_by_node_id=options_by_node_id,
-    )
-
     for node in hydrated.nodes:
-        if node.id not in selections_by_node_id:
-            continue
-        node.data.validation_groups = _resolved_validation_groups(
-            selections_by_node_id[node.id],
-            sidecar_groups_by_source.get(node.id, ()),
-        )
+        if node.id in selections_by_node_id:
+            node.data.validation_groups = _resolved_validation_groups(selections_by_node_id[node.id])
 
     return hydrated
 
@@ -238,7 +228,11 @@ def apply_flow_validation_attachment_defaults(
 def validation_schedule_from_node_data(
     node_data: Mapping[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Build the supervisor-facing validation schedule for one extraction node."""
+    """Describe saved choices, including unsupported historical overrides.
+
+    This is read-only inspection, not execution authorization. Shared flow
+    authoring/preflight rejects replacement and supplemental attachments.
+    """
 
     attachments = node_data.get("validation_attachments") or []
     groups = node_data.get("validation_groups") or []
@@ -375,200 +369,22 @@ def _plain_group(raw_group: Any) -> dict[str, Any]:
     )
 
 
-def _validation_attachment_edge_groups_by_source(
-    flow_definition: FlowDefinition,
-    *,
-    selections_by_node_id: Mapping[str, list[FlowValidationAttachmentSelection]],
-    options_by_node_id: Mapping[str, tuple[ValidationAttachmentOption, ...]],
-) -> dict[str, tuple[_ValidationAttachmentEdgeGroup, ...]]:
-    """Validate sidecar validator edges and resolve them by extraction node."""
-
-    node_by_id = {node.id: node for node in flow_definition.nodes}
-    groups_by_source: dict[str, list[_ValidationAttachmentEdgeGroup]] = {}
-    seen_binding_ids_by_source: dict[str, set[str]] = {}
-
-    for edge in flow_definition.edges:
-        if edge.role != VALIDATION_ATTACHMENT_EDGE_ROLE:
-            continue
-
-        source_node = node_by_id.get(edge.source)
-        target_node = node_by_id.get(edge.target)
-        if source_node is None or target_node is None:
-            continue
-        if source_node.type != "agent" or source_node.id not in options_by_node_id:
-            raise FlowValidationAttachmentError(
-                "validation_attachment edges must originate directly from "
-                "an extraction agent node with validation attachment metadata"
-            )
-        if target_node.type != "agent" or target_node.id == source_node.id:
-            raise FlowValidationAttachmentError(
-                "validation_attachment edges must target a distinct validator agent node"
-            )
-
-        receipt = source_node.data.execution_receipt
-        if receipt is not None and receipt.output_contract.output_mode == "profile_bound_generic":
-            raise FlowValidationAttachmentError(
-                "Profile validators are pinned by the saved output structure; "
-                "edit its validator mapping instead of replacing it with a flow sidecar"
-            )
-
-        selections_by_attachment_id = {
-            selection.attachment_id: selection
-            for selection in selections_by_node_id[source_node.id]
-        }
-        binding_id = edge.satisfies_binding_id
-        replaces_attachment_id = edge.replaces_attachment_id
-        if replaces_attachment_id:
-            replaced_selection = selections_by_attachment_id.get(replaces_attachment_id)
-            if replaced_selection is None:
-                raise FlowValidationAttachmentError(
-                    "validation_attachment edge references unknown "
-                    f"replaces_attachment_id '{replaces_attachment_id}'"
-                )
-            if replaced_selection.validator_binding_id is None:
-                raise FlowValidationAttachmentError(
-                    "validation_attachment edge cannot replace an attachment "
-                    "without a validator_binding_id"
-                )
-            binding_id = replaced_selection.validator_binding_id
-
-        if not binding_id:
-            raise FlowValidationAttachmentError(
-                "validation_attachment edges must name a validator binding"
-            )
-
-        seen_binding_ids = seen_binding_ids_by_source.setdefault(source_node.id, set())
-        if binding_id in seen_binding_ids:
-            raise FlowValidationAttachmentError(
-                "validation_attachment edges from one extraction node must "
-                f"name distinct validator bindings; duplicate '{binding_id}'"
-            )
-        seen_binding_ids.add(binding_id)
-
-        groups_by_source.setdefault(source_node.id, []).append(
-            _ValidationAttachmentEdgeGroup(
-                edge_id=edge.id,
-                source_node_id=source_node.id,
-                validator_node_id=target_node.id,
-                binding_id=binding_id,
-                replaces_attachment_id=replaces_attachment_id,
-            )
-        )
-
-    return {
-        source_node_id: tuple(groups)
-        for source_node_id, groups in groups_by_source.items()
-    }
-
-
 def _resolved_validation_groups(
     selections: list[FlowValidationAttachmentSelection],
-    sidecar_groups: tuple[_ValidationAttachmentEdgeGroup, ...],
 ) -> list[FlowValidationAttachmentGroup]:
-    """Return automatic, skipped, replaced, and supplemental validator groups."""
-
-    sidecar_by_binding_id = {
-        group.binding_id: group
-        for group in sidecar_groups
-    }
-    selection_binding_ids = {
-        selection.validator_binding_id
-        for selection in selections
-        if selection.validator_binding_id
-    }
-    groups: list[FlowValidationAttachmentGroup] = []
-
-    for selection in selections:
-        if selection.state != "active" or not selection.validator_binding_id:
-            continue
-
-        sidecar_group = sidecar_by_binding_id.get(selection.validator_binding_id)
-        if sidecar_group is not None and not selection.enabled:
-            raise FlowValidationAttachmentError(
-                "validation attachment binding "
-                f"'{sidecar_group.binding_id}' cannot be both disabled and replaced"
-            )
-
-        if sidecar_group is not None:
-            state = "replaced"
-        elif selection.enabled:
-            state = "automatic"
-        else:
-            state = "skipped"
-
-        groups.append(
-            FlowValidationAttachmentGroup(
-                **_validation_group_payload(
-                    group_id=selection.attachment_id,
-                    state=state,
-                    binding_id=selection.validator_binding_id,
-                    attachment_id=selection.attachment_id,
-                    label=selection.label,
-                    required=selection.required,
-                    blocking=selection.blocking,
-                    allow_opt_out=selection.allow_opt_out,
-                    sidecar_group=sidecar_group,
-                )
-            )
-        )
-
-    for sidecar_group in sidecar_groups:
-        if sidecar_group.binding_id in selection_binding_ids:
-            continue
-        groups.append(
-            FlowValidationAttachmentGroup(
-                **_validation_group_payload(
-                    group_id=f"edge:{sidecar_group.edge_id}",
-                    state="supplemental",
-                    binding_id=sidecar_group.binding_id,
-                    attachment_id=None,
-                    label=None,
-                    required=False,
-                    blocking=False,
-                    allow_opt_out=False,
-                    sidecar_group=sidecar_group,
-                )
-            )
-        )
-
-    return groups
-
-
-def _validation_group_payload(
-    *,
-    group_id: str,
-    state: str,
-    binding_id: str | None,
-    attachment_id: str | None,
-    label: str | None,
-    required: bool,
-    blocking: bool,
-    allow_opt_out: bool,
-    sidecar_group: _ValidationAttachmentEdgeGroup | None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "group_id": group_id,
-        "state": state,
-        "binding_id": binding_id,
-        "attachment_id": attachment_id,
-        "label": label,
-        "required": required,
-        "blocking": blocking,
-        "allow_opt_out": allow_opt_out,
-    }
-    if sidecar_group is not None:
-        payload.update(
-            {
-                "edge_id": sidecar_group.edge_id,
-                "validator_node_id": sidecar_group.validator_node_id,
-                "replaces_attachment_id": sidecar_group.replaces_attachment_id,
-            }
-        )
-    return {
-        key: value
-        for key, value in payload.items()
-        if value not in (None, "")
-    }
+    """Resolve the existing automatic checks and explicit opt-outs."""
+    return [FlowValidationAttachmentGroup(
+        group_id=selection.attachment_id,
+        state="automatic" if selection.enabled else "skipped",
+        binding_id=selection.validator_binding_id,
+        attachment_id=selection.attachment_id,
+        edge_id=None, validator_node_id=None, replaces_attachment_id=None,
+        label=selection.label,
+        required=selection.required,
+        blocking=selection.blocking,
+        allow_opt_out=selection.allow_opt_out,
+    ) for selection in selections
+       if selection.state == "active" and selection.validator_binding_id]
 
 
 def _schedule_entry(attachment: Mapping[str, Any]) -> dict[str, Any]:

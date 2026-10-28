@@ -879,8 +879,7 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     assert result.validator_results[0].status == "resolved"
 
 
-@pytest.mark.parametrize("state", ["replaced", "supplemental", "skipped"])
-def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, state):
+def test_flow_optout_suppresses_upstream_before_any_model_call(tmp_path):
     from src.lib.domain_packs.flow_validator_selection import (
         set_flow_validator_selections, reset_flow_validator_selections,
     )
@@ -892,8 +891,8 @@ def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, stat
         return _result_payload(request)
 
     token = set_flow_validator_selections([{
-        "binding_id": "fixture.identifier_lookup", "state": state,
-        "validator_node_id": "custom-validator" if state != "skipped" else None,
+        "binding_id": "fixture.identifier_lookup", "state": "skipped",
+        "validator_node_id": None,
     }])
     try:
         # The real extraction dispatcher crosses an asyncio.to_thread boundary.
@@ -906,7 +905,7 @@ def test_flow_selection_suppresses_upstream_before_any_model_call(tmp_path, stat
     assert calls == ["fixture.symbol_lookup"]
     audit = result.envelope.metadata["suppressed_upstream_validators"]
     assert audit[0]["validator_binding_id"] == "fixture.identifier_lookup"
-    assert audit[0]["reason"] == ("flow_skip" if state == "skipped" else "custom_replacement")
+    assert audit[0]["reason"] == "flow_skip"
     assert audit[0]["target"]["pending_ref_id"] == "object-1"
     calls.clear()
     dispatch_active_validator_bindings(_envelope(), pack, runner=runner)
@@ -4235,3 +4234,19 @@ def test_explicit_curator_guidance_is_scoped_to_requested_object(tmp_path):
             curator_revalidation=[{"object_id": first.object_id or first.pending_ref_id,
                 "field_paths": [], "actor_id": "curator", "guidance": "Check organism."}]))
     assert captured == ["Curator revalidation guidance: Check organism.", None]
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_historical_flow_pin_cannot_authorize_new_validator_execution(monkeypatch, batch):
+    request = _validation_request()
+    binding = cast(Any, SimpleNamespace(raw={"flow_validator": {"node_id": "saved", "data": {"agent_id": "old"}}}, route_value=None))
+    monkeypatch.setattr("src.lib.config.agent_loader.get_agent_definition_for_package", lambda *a: SimpleNamespace())
+    from unittest.mock import Mock
+    constructor = Mock(side_effect=AssertionError("Historical pin must not build an executor"))
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_agent_by_id", constructor)
+    with pytest.raises(ValueError, match="Historical flow validator overrides"):
+        if batch:
+            run_package_scoped_validator_agent_batch(cast(Any, [SimpleNamespace(request=request, match=SimpleNamespace(binding=binding))]), binding=binding)
+        else:
+            run_package_scoped_validator_agent(request, binding=binding)
+    constructor.assert_not_called()

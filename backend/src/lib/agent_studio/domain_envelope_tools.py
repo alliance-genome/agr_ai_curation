@@ -883,9 +883,8 @@ def get_domain_pack_validation_plan(
             "automatically on extraction nodes, and runtime dispatch writes their "
             "findings back into domain envelopes after extraction. Under-development "
             "validator bindings are explanatory metadata, not scheduled work. Flow "
-            "opt-outs mean an active default validator was skipped or replaced by "
-            "flow configuration; replacement_validators and supplemental_validators "
-            "appear in get_current_flow validation_schedule when configured. Do not "
+            "opt-outs mean an active default validator was explicitly skipped where "
+            "allowed. Replacement and supplemental validator steps are not supported. Do not "
             "ask extractor prompts to call validators directly."
         )
         identity = {
