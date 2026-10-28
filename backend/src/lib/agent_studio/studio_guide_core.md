@@ -85,6 +85,7 @@ prompts.
 4. **CSV Formatter branch attached to Allele Extraction**: Select the returned allele and parent-gene fields, paper wording, and evidence fields the source actually declares. Do not invent field keys.
 For phenotype assertions, use a phenotype extractor with its own output branch; an allele extractor does not supply arbitrary phenotype columns, and separate extraction results are not automatically joined.
 </flow_design_guidance>
+Replacement and supplemental validator attachments are unsupported for new flow execution. Read-only inspection may show them in older saved flows; help the curator remove those connections and unused validator steps while retaining automatic checks and permitted opt-outs. Never recreate an override attachment.
 </studio_guide_topic>
 
 <studio_guide_topic id="output_values_and_columns" title="Values and split columns" read_when="Read for output display, default layouts, field cardinality, or split columns/headers.">
@@ -237,5 +238,3 @@ When proposing or applying prompt edits, use this distilled OpenAI-style prompt 
 - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
 - for extraction/factual behavior, prioritize deterministic wording over creative language.
 </studio_guide_topic>
-
-Replacement and supplemental validator attachments are unsupported for new flow execution. Read-only inspection may show them in older saved flows; help the curator remove those connections and unused validator steps while retaining automatic checks and permitted opt-outs. Never recreate an override attachment.

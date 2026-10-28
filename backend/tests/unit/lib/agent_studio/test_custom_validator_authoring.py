@@ -1,7 +1,6 @@
 """Regression for attachment-only custom validators, independent of paid execution."""
 
 from copy import deepcopy
-from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +11,6 @@ from src.lib.agent_studio.authoring_validation import (
 )
 from src.lib.flows.validation_attachments import (
     apply_flow_validation_attachment_defaults,
-    validation_schedule_from_node_data,
 )
 from src.schemas.flows import FlowDefinition
 
@@ -94,47 +92,37 @@ def compile_attachment(candidate, entries, **overrides):
 
 
 @pytest.mark.parametrize("phase", ["proposal", "pre_apply", "post_apply", "save"])
-def test_exact_replacement_operation_preserves_pin_and_required_schedule(phase):
+def test_historical_override_is_rejected_in_every_mutation_phase(phase):
+    candidate, entries = fixture()
+    candidate["nodes"].append({
+        "id": "old-validator", "type": "agent", "position": {"x": 2, "y": 2},
+        "data": {"agent_id": AGENT, "agent_display_name": "Old validator",
+                 "output_key": "validation", "agent_revision_id": PIN},
+    })
+    candidate["edges"].append({"id": "old-override", "source": "node_5",
+        "target": "old-validator", "role": "validation_attachment",
+        "replaces_attachment_id": ATTACHMENT})
+    original = deepcopy(candidate)
+    result = validate_flow_authoring_draft(candidate,
+        context=AuthoringValidationContext.from_values(db_user_id=2, active_group_ids=[]),
+        resolve_agent=lambda key, _: entries.get(key),
+        apply_attachment_defaults=lambda value: value, phase=phase)
+    assert not result.valid
+    assert "unsupported_validator_override" in {f.code for f in result.findings}
+    assert candidate == original
+
+
+@pytest.mark.parametrize("overrides", [
+    {}, {"satisfies_binding_id": "wrong"},
+    {"replaces_attachment_id": None, "satisfies_binding_id": "supplemental"},
+])
+def test_override_proposals_are_rejected_without_mutating_draft(overrides):
     candidate, entries = fixture()
     original = deepcopy(candidate)
-    compile_attachment(candidate, entries)
-    added = candidate["nodes"][-1]
-    assert added["data"]["agent_revision_id"] == PIN  # Not today's catalog head.
-    assert candidate["nodes"][:-1] == original["nodes"]
-    edge = candidate["edges"][-1]
-    assert edge["role"] == "validation_attachment"
-    assert edge["replaces_attachment_id"] == ATTACHMENT
-    assert "satisfies_binding_id" not in edge
-    result = validate_flow_authoring_draft(
-        candidate,
-        context=AuthoringValidationContext.from_values(
-            db_user_id=2, active_group_ids=[]
-        ),
-        resolve_agent=lambda key, _: entries.get(key),
-        apply_attachment_defaults=lambda value: apply_flow_validation_attachment_defaults(
-            value, agent_registry=entries
-        ),
-        phase=phase,
-    )
-    assert result.valid, result.findings
-    assert result.candidate is not None
-    schedule = validation_schedule_from_node_data(
-        result.candidate.nodes[1].data.model_dump()
-    )
-    assert len(schedule["replacement_validators"]) == 1
-    replacement = schedule["replacement_validators"][0]
-    assert replacement["validator_node_id"] == added["id"]
-    assert replacement["required"] is True
-    assert not any(
-        item["validator_binding_id"] == BINDING
-        for item in schedule["scheduled_validators"]
-    )
-
-
-def test_mismatched_dual_binding_is_rejected():
-    candidate, entries = fixture()
-    with pytest.raises(flow_tools._FlowProposalCompileError, match="do not match"):
-        compile_attachment(candidate, entries, satisfies_binding_id="wrong")
+    with pytest.raises(flow_tools._FlowProposalCompileError) as error:
+        compile_attachment(candidate, entries, **overrides)
+    assert error.value.code == "unsupported_validator_override"
+    assert candidate == original
 
 
 def test_validator_remains_unavailable_as_ordinary_step():
@@ -144,29 +132,7 @@ def test_validator_remains_unavailable_as_ordinary_step():
     assert raised.value.code == "attachment_only_agent_in_control_flow"
 
 
-def test_incompatible_result_schema_and_binding_are_typed():
-    candidate, entries = fixture()
-    compile_attachment(
-        candidate, entries, replaces_attachment_id=None, satisfies_binding_id="missing"
-    )
-    entries[AGENT]["output_schema_key"] = "NoSuchSchema"
-    result = validate_flow_authoring_draft(
-        candidate,
-        context=AuthoringValidationContext.from_values(
-            db_user_id=2, active_group_ids=[]
-        ),
-        resolve_agent=lambda key, _: entries.get(key),
-        apply_attachment_defaults=lambda value: apply_flow_validation_attachment_defaults(
-            value, agent_registry=entries
-        ),
-    )
-    assert {
-        "incompatible_validator_result_contract",
-        "incompatible_validation_binding",
-    } <= {f.code for f in result.findings}
-
-
-def test_authorized_catalog_keeps_validators_only_for_attachment_authoring(monkeypatch):
+def test_authorized_catalog_excludes_attachment_only_validators(monkeypatch):
     from src.lib.agent_studio import catalog_service
 
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: 2)
@@ -183,56 +149,6 @@ def test_authorized_catalog_keeps_validators_only_for_attachment_authoring(monke
         ],
     )
     assert AGENT not in flow_tools._accessible_flow_agents()
-    assert AGENT in flow_tools._accessible_flow_agents(include_attachment_only=True)
-
-
-def test_supported_supplemental_binding_has_separate_schedule(monkeypatch):
-    from dataclasses import replace
-    from src.lib.flows import validation_attachments as attachments
-
-    candidate, entries = fixture()
-    registry = attachments.domain_pack_validation_registries()["agr.alliance.allele"]
-    original_binding = next(
-        item for item in registry.bindings if item.binding_id == BINDING
-    )
-    monkeypatch.setattr(
-        attachments,
-        "domain_pack_validation_registries",
-        lambda: {
-            "agr.alliance.allele": SimpleNamespace(
-                bindings=(
-                    *registry.bindings,
-                    replace(original_binding, binding_id="supplemental"),
-                )
-            )
-        },
-    )
-    compile_attachment(
-        candidate,
-        entries,
-        replaces_attachment_id=None,
-        satisfies_binding_id="supplemental",
-    )
-    result = validate_flow_authoring_draft(
-        candidate,
-        context=AuthoringValidationContext.from_values(
-            db_user_id=2, active_group_ids=[]
-        ),
-        resolve_agent=lambda key, _: entries.get(key),
-        apply_attachment_defaults=lambda value: apply_flow_validation_attachment_defaults(
-            value, agent_registry=entries
-        ),
-    )
-    assert result.valid, result.findings
-    assert result.candidate is not None
-    schedule = validation_schedule_from_node_data(
-        result.candidate.nodes[1].data.model_dump()
-    )
-    assert len(schedule["supplemental_validators"]) == 1
-    assert any(
-        item["validator_binding_id"] == BINDING
-        for item in schedule["scheduled_validators"]
-    )
 
 
 def test_proposal_path_does_not_apply_or_save_and_reports_compiler_contradiction(
@@ -279,8 +195,8 @@ def test_proposal_path_does_not_apply_or_save_and_reports_compiler_contradiction
             operations=[operation],
             change_summary="Attach validator",
         )
-        assert result["success"] is True, result
-        assert result["pending_user_approval"] is True
+        assert result["success"] is False, result
+        assert result["code"] == "unsupported_validator_override"
         assert context == original
 
         def fail(**kwargs):

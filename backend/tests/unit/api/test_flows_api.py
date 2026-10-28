@@ -162,7 +162,9 @@ def _minimal_flow_definition_payload() -> dict:
     }
 
 
-def test_flow_definition_payload_defaults_saved_edges_to_control_flow():
+def test_flow_definition_payload_defaults_saved_edges_to_control_flow(monkeypatch):
+    # The synthetic agent has no installed database row; do not contact a real DB.
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service._get_db_agent_row", lambda *a, **kw: None)
     payload = flows._validated_flow_definition_payload(
         FlowDefinition.model_validate(_minimal_flow_definition_payload())
     )
