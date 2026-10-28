@@ -371,7 +371,7 @@ def test_revision_reconciliation_does_not_drop_explicit_validator_edges(monkeypa
              "role": "validation_attachment", "replaces_attachment_id": old.attachment_id},
         ])
     monkeypatch.setattr(validation_attachments_module, "_options_for_agent_entry", lambda entry, db=None: (new,))
-    with pytest.raises(FlowValidationAttachmentError, match="reconnect the validator"):
+    with pytest.raises(FlowValidationAttachmentError, match="Remove that attachment edge"):
         validation_attachments_module.reconcile_revision_attachments(
             original, entries_by_node={"extract_1": {}}, retargeted_node_ids=frozenset({"extract_1"}),
         )

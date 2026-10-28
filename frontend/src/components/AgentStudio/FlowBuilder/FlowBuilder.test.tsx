@@ -3018,6 +3018,33 @@ describe('FlowBuilder', () => {
     expect(serviceMocks.createFlow).not.toHaveBeenCalled()
   })
 
+  it('allows an ordinary supervisor-callable validator as a control-flow step', async () => {
+    agentMetadataMocks.agents = {
+      chemical_validation: {
+        category: 'Validation', subcategory: 'Data Validation',
+        supervisor_tool: 'ask_chemical_validation_specialist',
+      },
+    }
+    const onFlowChange = vi.fn()
+    render(<FlowBuilder onFlowChange={onFlowChange} />)
+    await screen.findByText('1 step')
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320, clientY: 220,
+      dataTransfer: { getData: vi.fn((format: string) => format === 'application/reactflow'
+        ? JSON.stringify({ type: 'agent', agentId: 'chemical_validation',
+            agentName: 'Chemical Ontology Agent', agentDescription: 'Look up chemicals' }) : '') },
+    })
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+    React.act(() => { reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' }) })
+    await waitFor(() => {
+      const state = onFlowChange.mock.calls.at(-1)?.[0]
+      expect(state.edges).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'node_0', target: 'node_1', role: 'control_flow' }),
+      ]))
+    })
+    expect(screen.queryByText(/Separate validator connections are not supported/)).not.toBeInTheDocument()
+  })
+
   it('rejects validator overrides while retaining the existing opt-out', async () => {
 
     agentMetadataMocks.agents = {

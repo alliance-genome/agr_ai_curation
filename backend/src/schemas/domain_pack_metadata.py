@@ -295,8 +295,8 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
     def serialize_selector(self, handler):
         result = handler(self)
         # A literal null is data, not an absent optional schema field.
-        if self.source == "literal":
-            result["value"] = self.value
+        if self.source == "literal" and "value" not in result:
+            result["value"] = None
         return result
 
     @field_validator("path", "field_path")

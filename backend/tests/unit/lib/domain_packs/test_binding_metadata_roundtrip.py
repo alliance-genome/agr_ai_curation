@@ -89,3 +89,10 @@ def test_routed_binding_rejects_top_level_execution_fields(field, value, bucket)
     binding[field] = value
     with pytest.raises(ValidationError):
         DomainPackValidatorBindings.model_validate({bucket: [binding]})
+
+
+def test_literal_serializer_keeps_json_mode_conversion():
+    from datetime import date
+    from src.schemas.domain_pack_metadata import DomainPackInputSelector
+    selector = DomainPackInputSelector(source="literal", value=date(2026, 10, 28))
+    assert selector.model_dump(mode="json", exclude_none=True)["value"] == "2026-10-28"

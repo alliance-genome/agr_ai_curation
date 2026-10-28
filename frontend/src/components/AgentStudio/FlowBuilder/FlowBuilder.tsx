@@ -1811,7 +1811,8 @@ function FlowBuilderInner({
         return
       }
 
-      if (targetNode && isValidationAgentDynamic(targetNode.data.agent_id)) {
+      if (targetNode && isValidationAgentDynamic(targetNode.data.agent_id)
+          && !agentMetadata[targetNode.data.agent_id]?.supervisor_tool) {
         setSnackbar({ message: "Validators run through the extractor's automatic checks. Separate validator connections are not supported.", severity: 'error' })
         return
       }
@@ -1829,6 +1830,7 @@ function FlowBuilderInner({
       edges,
       canSourceOutputAttachmentDynamic,
       isValidationAgentDynamic,
+      agentMetadata,
       readOnly,
     ]
   )

@@ -1201,6 +1201,13 @@ async def test_routed_plan_replays_both_specialists_with_distinct_execution_pins
     await item.adapter.initial()
     await item.adapter.initial()
     assert sorted(calls) == ["one", "two"]
+    # Unselected healthy answers need no extra freshness probes merely to
+    # determine whether an operational-unavailability blocker exists.
+    from src.lib.validation_history import selections
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_attempt_is_current", lambda *a, **kw: pytest.fail("Unnecessary outage freshness probe"))
+        manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+        assert not any(row["code"] == "configured_validator_unavailable" for row in manifest["blockers"])
     with store.SessionLocal() as db:
         pins = list(db.scalars(select(ValidationFact).where(
             ValidationFact.artifact_id == item.aid, ValidationFact.kind == "review_validator_config")))
