@@ -82,7 +82,7 @@ For a custom output structure, attach compatible validators to individual detail
 
 #### Custom validator steps
 
-When supported, a custom validator node can replace or supplement validation for an extraction step. Review which source and validation it targets. Its steering prompt adds guidance for this use of the validator. Ask AI Chat to inspect the available options; naming a field in a prompt alone does not create a compatible validator attachment.
+Validators run through each extraction step's automatic checks. You can turn off checks only where the step permits it. Separate replacement or supplemental validator steps are not supported. If an older saved flow has a validator attachment, remove that connection and the unused validator step before saving or running the flow. Previously saved results and their review history remain available. Custom extraction agents and their saved output-structure validation mappings are unchanged.
 
 #### Output steps
 

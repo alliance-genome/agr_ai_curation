@@ -162,7 +162,9 @@ def _minimal_flow_definition_payload() -> dict:
     }
 
 
-def test_flow_definition_payload_defaults_saved_edges_to_control_flow():
+def test_flow_definition_payload_defaults_saved_edges_to_control_flow(monkeypatch):
+    # The synthetic agent has no installed database row; do not contact a real DB.
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service._get_db_agent_row", lambda *a, **kw: None)
     payload = flows._validated_flow_definition_payload(
         FlowDefinition.model_validate(_minimal_flow_definition_payload())
     )
@@ -757,11 +759,11 @@ def test_flow_definition_payload_rejects_attachment_only_validator_control_flow(
         )
 
     assert exc.value.status_code == 422
-    assert "attachment-only validator" in str(exc.value.detail)
+    assert "runs through automatic extraction checks" in str(exc.value.detail)
     assert "e1" in str(exc.value.detail)
 
 
-def test_flow_definition_payload_allows_attachment_only_validator_sidecar(
+def test_flow_definition_payload_rejects_validator_sidecar_even_if_hydrator_bypassed(
     monkeypatch,
 ):
     payload = _minimal_flow_definition_payload()
@@ -805,12 +807,11 @@ def test_flow_definition_payload_allows_attachment_only_validator_sidecar(
         ),
     )
 
-    result = flows._validated_flow_definition_payload(
-        FlowDefinition.model_validate(payload),
-        enforce_agent_step_policy=True,
-    )
-
-    assert result["edges"][1]["role"] == "validation_attachment"
+    with pytest.raises(HTTPException) as error:
+        flows._validated_flow_definition_payload(
+            FlowDefinition.model_validate(payload), enforce_agent_step_policy=True)
+    assert error.value.status_code == 422
+    assert "unsupported_validator_override" in str(error.value.detail)
 
 
 def test_flow_definition_payload_allows_supervisor_enabled_validator_step(

@@ -1718,9 +1718,8 @@ class TestDbUserIdPropagation:
                 "agent_id": "allele_validation",
                 "agent_name": "Allele Validation Agent",
                 "reason": (
-                    "Allele Validation Agent is an attachment-only validator. Add it "
-                    "as a validation attachment on an extraction step so it receives "
-                    "a structured extraction envelope and DomainValidationRequest."
+                    "Allele Validation Agent runs through automatic extraction checks. "
+                    "Separate replacement or supplemental validator attachments are not supported."
                 ),
                 "reason_code": "attachment_only_validator",
             }
@@ -2067,8 +2066,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
         mock_streaming.side_effect = make_tool
         flow = _make_flow([_agent_node("source", "gene", validation_groups=[{
-            "group_id": "custom", "state": "replaced", "binding_id": "fixture.identifier",
-            "validator_node_id": "custom-node",
+            "group_id": "automatic", "state": "automatic", "binding_id": "fixture.identifier",
         }])])
         tools, _ = get_all_agent_tools(flow)
         # Extraction must refuse missing durable identity before invoking a model.
@@ -2637,13 +2635,17 @@ class TestGetAllAgentToolsStepOrderRuntime:
         self, mock_get_agent, mock_streaming, monkeypatch
     ):
         """Flow projection_plan is guidance for the real formatter, not an executor bypass."""
+        monkeypatch.setattr(
+            "src.lib.curation_workspace.extraction_results.get_agent_curation_metadata",
+            lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
+        )
         formatter_contexts = []
         formatter_invocations = []
 
         def _fake_get_agent(agent_id, **kwargs):
             agent = MagicMock(spec=Agent, instructions="Base")
             agent.name = {
-                "pdf_extraction": "General PDF Extraction Agent",
+                "gene_expression": "Gene Expression Extraction Agent",
                 "json_formatter": "JSON File Formatter",
             }.get(agent_id, agent_id)
             agent.agent_id = agent_id
@@ -2674,7 +2676,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "src.lib.flows.executor.get_agent_metadata",
             lambda agent_id, **_kwargs: {
                 "display_name": {
-                    "pdf_extraction": "General PDF Extraction Agent",
+                    "gene_expression": "Gene Expression Extraction Agent",
                     "json_formatter": "JSON File Formatter",
                 }.get(agent_id, agent_id),
                 "description": "",
@@ -2686,18 +2688,19 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 ),
                 "output_schema_key": None,
                 "is_active": True,
-                "requires_document": agent_id == "pdf_extraction",
+                "requires_document": agent_id == "gene_expression",
                 "tool_name": {
-                    "pdf_extraction": "ask_pdf_extraction_specialist",
+                    "gene_expression": "ask_gene_expression_specialist",
                     "json_formatter": "ask_json_formatter_specialist",
                 }.get(agent_id),
-                "curation": None,
+                "curation": ({"adapter_key": "gene_expression", "launchable": True}
+                             if agent_id == "gene_expression" else None),
                 "curation_metadata": None,
             },
         )
 
         flow = _make_output_attachment_flow([
-            _agent_node("n1", "pdf_extraction", output_key="pdf_output"),
+            _agent_node("n1", "gene_expression", output_key="expression_output"),
             _agent_node(
                 "n2",
                 "json_formatter",
@@ -2727,12 +2730,10 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ],
         }
 
-        tools, _, _, execution_state = get_all_agent_tools(
+        stub_completed_review(monkeypatch, _structured_step_output("batch smoke finding"))
+        tools, _, _, execution_state = get_stub_review_step_tools(
             flow,
             include_unavailable=True,
-            flow_run_id="flow-run-123",
-            document_id="document-1",
-            doc_context=DocumentContext(document_id="document-1", user_id="user"),
         )
         tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))

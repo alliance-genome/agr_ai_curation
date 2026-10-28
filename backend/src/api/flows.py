@@ -230,7 +230,7 @@ def _validated_flow_definition(
     db_user_id: int | None = None,
     enforce_agent_references: bool = False,
     active_group_ids: list[str] | None = None,
-    tolerate_unresolvable_custom_agent_attachments: bool = False,
+    preserve_historical_attachments: bool = False,
     entries_by_node: dict[str, dict[str, Any] | None] | None = None,
 ) -> FlowDefinition:
     """Return a flow definition hydrated with metadata-backed validation defaults."""
@@ -247,7 +247,7 @@ def _validated_flow_definition(
         agent_registry = None
         unresolved_nodes = {node_id for node_id, entry in entries_by_node.items() if entry is None}
     validation_input = flow_definition
-    preserved_unresolvable_data: dict[
+    preserved_attachment_data: dict[
         str,
         tuple[
             list[FlowValidationAttachmentSelection],
@@ -255,14 +255,23 @@ def _validated_flow_definition(
         ],
     ] = {}
     preserved_edges = None
-    if tolerate_unresolvable_custom_agent_attachments and unresolved_nodes:
+    override_sources = {
+        edge.source for edge in flow_definition.edges
+        if edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
+    }
+    override_sources.update(
+        node.id for node in flow_definition.nodes
+        if any(group.state in {"replaced", "supplemental"} for group in node.data.validation_groups)
+    )
+    preserved_node_ids = unresolved_nodes | override_sources
+    if preserve_historical_attachments and preserved_node_ids:
         validation_input = flow_definition.model_copy(deep=True)
-        unresolvable_node_ids: set[str] = set()
+        attachment_node_ids: set[str] = set()
         for node in validation_input.nodes:
-            if node.id not in unresolved_nodes:
+            if node.id not in preserved_node_ids:
                 continue
-            unresolvable_node_ids.add(node.id)
-            preserved_unresolvable_data[node.id] = (
+            attachment_node_ids.add(node.id)
+            preserved_attachment_data[node.id] = (
                 node.data.validation_attachments,
                 node.data.validation_groups,
             )
@@ -274,7 +283,7 @@ def _validated_flow_definition(
             for edge in validation_input.edges
             if not (
                 edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE
-                and edge.source in unresolvable_node_ids
+                and edge.source in attachment_node_ids
             )
         ]
     try:
@@ -298,7 +307,7 @@ def _validated_flow_definition(
             active_group_ids=active_group_ids,
         )
     for node in validated.nodes:
-        preserved = preserved_unresolvable_data.get(node.id)
+        preserved = preserved_attachment_data.get(node.id)
         if preserved is None:
             continue
         node.data.validation_attachments, node.data.validation_groups = preserved
@@ -493,7 +502,7 @@ def _flow_to_response(
         resolved.definition,
         db_user_id=viewer_user_id,
         active_group_ids=active_group_ids,
-        tolerate_unresolvable_custom_agent_attachments=True,
+        preserve_historical_attachments=True,
         entries_by_node=resolved.entries_by_node,
     )
     missing_references = _missing_flow_agent_reference_messages(
@@ -507,6 +516,15 @@ def _flow_to_response(
                               code=finding.code, node_id=finding.node_id, path=finding.path)
         for finding in resolved.findings
     ]
+    if (any(edge.role == VALIDATION_ATTACHMENT_EDGE_ROLE for edge in flow_definition.edges)
+            or any(group.state in {"replaced", "supplemental"}
+                   for node in flow_definition.nodes for group in node.data.validation_groups)):
+        validation_warnings.append(FlowValidationWarning(
+            type="CRITICAL", code="unsupported_validator_override",
+            message=("Replacement and supplemental validators are not supported in flows. "
+                     "Remove the validator attachment connection and unused validator step, "
+                     "then use the extractor's automatic checks."),
+        ))
     if missing_references:
         validation_warnings.append(
             FlowValidationWarning(

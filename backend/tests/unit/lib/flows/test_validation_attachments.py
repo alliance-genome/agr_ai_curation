@@ -206,90 +206,6 @@ def test_apply_defaults_preserves_allowed_opt_out_selection():
     assert updated_attachment.enabled is False
 
 
-def test_validation_attachment_edges_resolve_validator_group_states(monkeypatch):
-    options = (
-        _option(
-            "identifier",
-            attachment_id="fixture:binding:identifier",
-            label="Identifier validator",
-            required=True,
-            blocking=True,
-        ),
-        _option(
-            "symbol",
-            attachment_id="fixture:binding:symbol",
-            label="Symbol validator",
-            default_enabled=True,
-            allow_opt_out=True,
-        ),
-        _option(
-            "quality",
-            attachment_id="fixture:binding:quality",
-            label="Quality validator",
-            default_enabled=True,
-        ),
-    )
-    monkeypatch.setattr(
-        validation_attachments_module,
-        "validation_attachment_options_for_agent",
-        lambda agent_id, agent_registry=None: options if agent_id == "fixture_extractor" else (),
-    )
-    initial = apply_flow_validation_attachment_defaults(
-        _flow_definition("fixture_extractor")
-    )
-    attachments = [
-        attachment.model_dump()
-        for attachment in initial.nodes[1].data.validation_attachments
-    ]
-    for attachment in attachments:
-        if attachment["validator_binding_id"] == "symbol":
-            attachment["enabled"] = False
-
-    hydrated = apply_flow_validation_attachment_defaults(
-        _flow_definition(
-            "fixture_extractor",
-            attachments=attachments,
-            extra_nodes=[
-                _validator_node("custom_identifier_validator", "custom_identifier"),
-                _validator_node("supplemental_validator", "supplemental"),
-            ],
-            edges=[
-                {"id": "e1", "source": "task_1", "target": "extract_1"},
-                {
-                    "id": "e2",
-                    "source": "extract_1",
-                    "target": "custom_identifier_validator",
-                    "role": "validation_attachment",
-                    "satisfies_binding_id": "identifier",
-                },
-                {
-                    "id": "e3",
-                    "source": "extract_1",
-                    "target": "supplemental_validator",
-                    "role": "validation_attachment",
-                    "satisfies_binding_id": "custom.supplemental",
-                },
-            ],
-        )
-    )
-
-    groups_by_binding = {
-        group.binding_id: group
-        for group in hydrated.nodes[1].data.validation_groups
-    }
-
-    assert groups_by_binding["identifier"].state == "replaced"
-    assert groups_by_binding["identifier"].validator_node_id == (
-        "custom_identifier_validator"
-    )
-    assert groups_by_binding["identifier"].blocking is True
-    assert groups_by_binding["symbol"].state == "skipped"
-    assert groups_by_binding["quality"].state == "automatic"
-    assert groups_by_binding["custom.supplemental"].state == "supplemental"
-    assert groups_by_binding["custom.supplemental"].blocking is False
-    assert "export_blocking" not in groups_by_binding[
-        "identifier"
-    ].model_dump()
 
 
 def test_validation_groups_keep_under_development_metadata_out_of_runtime_states(
@@ -339,114 +255,10 @@ def test_validation_groups_keep_under_development_metadata_out_of_runtime_states
     ]
 
 
-def test_validation_attachment_edges_require_direct_extraction_source(monkeypatch):
-    monkeypatch.setattr(
-        validation_attachments_module,
-        "validation_attachment_options_for_agent",
-        lambda agent_id, agent_registry=None: (
-            (_option("identifier"),)
-            if agent_id == "fixture_extractor"
-            else ()
-        ),
-    )
-
-    flow = _flow_definition(
-        "fixture_extractor",
-        extra_nodes=[_validator_node("custom_validator", "custom_validator")],
-        edges=[
-            {"id": "control", "source": "task_1", "target": "extract_1"},
-            {
-                "id": "e1",
-                "source": "task_1",
-                "target": "custom_validator",
-                "role": "validation_attachment",
-                "satisfies_binding_id": "identifier",
-            }
-        ],
-    )
-
-    with pytest.raises(FlowValidationAttachmentError, match="originate directly"):
-        apply_flow_validation_attachment_defaults(flow)
 
 
-def test_validation_attachment_edges_require_distinct_binding_ids(monkeypatch):
-    monkeypatch.setattr(
-        validation_attachments_module,
-        "validation_attachment_options_for_agent",
-        lambda agent_id, agent_registry=None: (
-            (_option("identifier"),)
-            if agent_id == "fixture_extractor"
-            else ()
-        ),
-    )
-
-    with pytest.raises(ValueError, match="duplicate_validation_binding"):
-        _flow_definition(
-            "fixture_extractor",
-            extra_nodes=[
-                _validator_node("custom_validator_1", "custom_validator_1"),
-                _validator_node("custom_validator_2", "custom_validator_2"),
-            ],
-            edges=[
-                {"id": "e1", "source": "task_1", "target": "extract_1"},
-                {
-                    "id": "e2",
-                    "source": "extract_1",
-                    "target": "custom_validator_1",
-                    "role": "validation_attachment",
-                    "satisfies_binding_id": "identifier",
-                },
-                {
-                    "id": "e3",
-                    "source": "extract_1",
-                    "target": "custom_validator_2",
-                    "role": "validation_attachment",
-                    "satisfies_binding_id": "identifier",
-                },
-            ],
-        )
 
 
-def test_validation_attachment_edge_rejects_disabled_replacement(monkeypatch):
-    options = (
-        _option(
-            "identifier",
-            attachment_id="fixture:binding:identifier",
-            allow_opt_out=True,
-        ),
-    )
-    monkeypatch.setattr(
-        validation_attachments_module,
-        "validation_attachment_options_for_agent",
-        lambda agent_id, agent_registry=None: options if agent_id == "fixture_extractor" else (),
-    )
-    initial = apply_flow_validation_attachment_defaults(
-        _flow_definition("fixture_extractor")
-    )
-    attachments = [
-        attachment.model_dump()
-        for attachment in initial.nodes[1].data.validation_attachments
-    ]
-    attachments[0]["enabled"] = False
-
-    flow = _flow_definition(
-        "fixture_extractor",
-        attachments=attachments,
-        extra_nodes=[_validator_node("custom_validator", "custom_validator")],
-        edges=[
-            {"id": "e1", "source": "task_1", "target": "extract_1"},
-            {
-                "id": "e2",
-                "source": "extract_1",
-                "target": "custom_validator",
-                "role": "validation_attachment",
-                "replaces_attachment_id": "fixture:binding:identifier",
-            },
-        ],
-    )
-
-    with pytest.raises(FlowValidationAttachmentError, match="disabled and replaced"):
-        apply_flow_validation_attachment_defaults(flow)
 
 
 def test_apply_defaults_rejects_unknown_attachment_ids():
@@ -467,85 +279,6 @@ def test_apply_defaults_rejects_unknown_attachment_ids():
         apply_flow_validation_attachment_defaults(flow)
 
 
-def test_validation_schedule_splits_active_opt_out_and_inactive_metadata():
-    schedule = validation_schedule_from_node_data(
-        {
-            "validation_attachments": [
-                {
-                    "attachment_id": "active",
-                    "domain_pack_id": "fixture",
-                    "validator_id": "shape",
-                    "validator_binding_id": "shape",
-                    "state": "active",
-                    "scope": "pack",
-                    "enabled": True,
-                },
-                {
-                    "attachment_id": "opt-out",
-                    "domain_pack_id": "fixture",
-                    "validator_id": "lookup",
-                    "validator_binding_id": "lookup",
-                    "state": "active",
-                    "scope": "field",
-                    "enabled": False,
-                    "required": True,
-                },
-                {
-                    "attachment_id": "future",
-                    "domain_pack_id": "fixture",
-                    "validator_id": "future",
-                    "state": "under_development",
-                    "scope": "pack",
-                    "enabled": False,
-                },
-                {
-                    "attachment_id": "replaced",
-                    "domain_pack_id": "fixture",
-                    "validator_id": "replaced",
-                    "validator_binding_id": "replaced-binding",
-                    "state": "active",
-                    "scope": "pack",
-                    "enabled": True,
-                },
-            ],
-            "validation_groups": [
-                {
-                    "group_id": "replaced",
-                    "state": "replaced",
-                    "binding_id": "replaced-binding",
-                    "attachment_id": "replaced",
-                    "edge_id": "edge-1",
-                    "validator_node_id": "custom_validator",
-                    "required": True,
-                    "blocking": True,
-                },
-                {
-                    "group_id": "edge:edge-2",
-                    "state": "supplemental",
-                    "binding_id": "custom.supplemental",
-                    "edge_id": "edge-2",
-                    "validator_node_id": "supplemental_validator",
-                },
-            ],
-        }
-    )
-
-    assert [item["attachment_id"] for item in schedule["scheduled_validators"]] == [
-        "active"
-    ]
-    assert [item["attachment_id"] for item in schedule["opt_outs"]] == ["opt-out"]
-    assert schedule["opt_outs"][0]["skipped_by_flow_configuration"] is True
-    assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
-        "future"
-    ]
-    assert [item["validator_binding_id"] for item in schedule["replacement_validators"]] == [
-        "replaced-binding"
-    ]
-    assert schedule["replacement_validators"][0]["validator_node_id"] == "custom_validator"
-    assert [
-        item["validator_binding_id"]
-        for item in schedule["supplemental_validators"]
-    ] == ["custom.supplemental"]
 
 
 def test_validation_schedule_rejects_unexpected_attachment_types():
@@ -638,7 +371,7 @@ def test_revision_reconciliation_does_not_drop_explicit_validator_edges(monkeypa
              "role": "validation_attachment", "replaces_attachment_id": old.attachment_id},
         ])
     monkeypatch.setattr(validation_attachments_module, "_options_for_agent_entry", lambda entry, db=None: (new,))
-    with pytest.raises(FlowValidationAttachmentError, match="reconnect the validator"):
+    with pytest.raises(FlowValidationAttachmentError, match="Remove that attachment edge"):
         validation_attachments_module.reconcile_revision_attachments(
             original, entries_by_node={"extract_1": {}}, retargeted_node_ids=frozenset({"extract_1"}),
         )
@@ -652,3 +385,45 @@ def test_revision_reconciliation_refuses_to_silently_enable_unmatched_optout(mon
         validation_attachments_module.reconcile_revision_attachments(
             original, entries_by_node={"extract_1": {}}, retargeted_node_ids=frozenset({"extract_1"}),
         )
+
+
+@pytest.mark.parametrize("agent", ["ca_saved_validator", "packaged_validator"])
+@pytest.mark.parametrize("edge_field", ["satisfies_binding_id", "replaces_attachment_id"])
+def test_override_edges_are_readable_but_rejected_without_mutating_saved_flow(agent, edge_field):
+    flow = _flow_definition("fixture_extractor", extra_nodes=[{
+        "id": "validator", "type": "agent", "position": {"x": 200, "y": 100},
+        "data": {"agent_id": agent, "agent_display_name": "Saved validator", "output_key": "validated"},
+    }], edges=[{"id": "control", "source": "task_1", "target": "extract_1", "role": "control_flow"}, {"id": "old-link", "source": "extract_1", "target": "validator",
+                "role": "validation_attachment", edge_field: "fixture-binding"}])
+    saved = flow.model_dump(mode="json")
+    # Parsing and displaying saved definitions remains possible; new execution is forbidden.
+    assert FlowDefinition.model_validate(saved).model_dump(mode="json") == saved
+    with pytest.raises(FlowValidationAttachmentError, match="Remove the validator attachment connection"):
+        apply_flow_validation_attachment_defaults(flow)
+    assert flow.model_dump(mode="json") == saved
+
+
+@pytest.mark.parametrize("state", ["replaced", "supplemental"])
+def test_saved_override_groups_without_edges_cannot_silently_become_automatic(state):
+    flow = _flow_definition("fixture_extractor")
+    from src.schemas.flows import FlowValidationAttachmentGroup
+    flow.nodes[1].data.validation_groups = [FlowValidationAttachmentGroup(
+        group_id="saved", binding_id="fixture", state=state, validator_node_id="old-validator",
+        attachment_id=None, edge_id=None, replaces_attachment_id=None, label=None)]
+    with pytest.raises(FlowValidationAttachmentError, match="not supported"):
+        apply_flow_validation_attachment_defaults(flow)
+    # Read-only schedule inspection can still show the unsupported saved choice.
+    validation_schedule_from_node_data(flow.nodes[1].data.model_dump())
+
+
+def test_schedule_retains_automatic_optout_and_inactive_metadata():
+    schedule = validation_schedule_from_node_data({"validation_attachments": [
+        {"attachment_id": "active", "validator_binding_id": "active", "state": "active", "enabled": True},
+        {"attachment_id": "disabled", "validator_binding_id": "disabled", "state": "active", "enabled": False},
+        {"attachment_id": "future", "state": "under_development", "enabled": False},
+    ]})
+    assert schedule["replacement_validators"] == schedule["supplemental_validators"] == []
+    assert [x["attachment_id"] for x in schedule["scheduled_validators"]] == ["active"]
+    assert [x["attachment_id"] for x in schedule["opt_outs"]] == ["disabled"]
+    assert schedule["opt_outs"][0]["skipped_by_flow_configuration"] is True
+    assert [x["attachment_id"] for x in schedule["inactive_metadata"]] == ["future"]

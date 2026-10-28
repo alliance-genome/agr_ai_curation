@@ -45,6 +45,23 @@ def planned(scope, tmp_path, monkeypatch, request):
     fixture_shape = fixture_options.get("shape") if isinstance(fixture_options, dict) else fixture_options
     admit_initial = fixture_options.get("admitted", True) if isinstance(fixture_options, dict) else True
     pack = _multivalued_dispatch_pack(tmp_path)
+    if fixture_shape == "routed":
+        from copy import deepcopy
+        from src.schemas.domain_pack_metadata import DomainPackMetadata
+        raw = pack.metadata.model_dump(mode="json", exclude_none=True)
+        original = raw["metadata"]["validator_bindings"]["active"][0]
+        route = {key: original.pop(key) for key in
+                 ("validator_agent", "input_fields", "expected_result_fields")}
+        for key in ("max_tool_calls", "custom_profile_reuse"):
+            original.pop(key, None)
+        original["route_by"] = {"source": "payload", "path": "kind"}
+        original["routes"] = {
+            name: {**deepcopy(route), "validator_agent": {
+                **route["validator_agent"], "agent_id": name}}
+            for name in ("one", "two")
+        }
+        raw["object_definitions"][0]["fields"].append({"field_path": "kind", "field_type": "string"})
+        pack = replace(pack, metadata=DomainPackMetadata.model_validate(raw))
     if fixture_shape == "nested-selector":
         from copy import deepcopy
         raw = deepcopy(pack.metadata.metadata)
@@ -119,6 +136,11 @@ def planned(scope, tmp_path, monkeypatch, request):
             )
         ],
     )
+    if fixture_shape == "routed":
+        env.extracted_objects = [CuratableObjectEnvelope(
+            object_type="Annotation", pending_ref_id=name,
+            payload={"kind": name, "evidence_code_curies": ["eco:" + name]})
+            for name in ("one", "two")]
     if fixture_shape == "absent":
         env.extracted_objects[0].payload = {"optional": {}}
     if fixture_shape == "three":
@@ -1152,3 +1174,113 @@ async def test_initial_drains_started_threads_and_leaves_queued_work(planned, mo
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["routed"], indirect=True)
+async def test_routed_plan_replays_both_specialists_with_distinct_execution_pins(planned, monkeypatch):
+    from copy import deepcopy
+    from src.lib.validation_review.validator_adapter import pin_validator_agent
+    item = planned
+    calls = []
+    def run(request, binding, **kwargs):
+        pin_validator_agent(Agent(name=binding.route_value, model="gpt-test",
+            instructions="Policy for " + binding.route_value),
+            binding.binding_id, route_value=binding.route_value)
+        calls.append(binding.route_value)
+        return {**_result_payload(request, resolved_values={"curie": "ECO:" + binding.route_value}), "resolved_objects": []}
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner", lambda: lambda *a, **kw: pytest.fail("Unexpected batch"))
+    assert item.adapter.plan["contracts"]
+    frozen = runtime.frozen_job_requests(item.plan.history_binding, item.plan.initial_jobs)
+    assert {request["route_value"] for request in frozen} == {"one", "two"}
+    changed = deepcopy(frozen[0])
+    changed["route_value"] = "two" if changed["route_value"] == "one" else "one"
+    with pytest.raises(store.HistoryAccessError):
+        item.adapter.job(changed)
+    await item.adapter.initial()
+    await item.adapter.initial()
+    assert sorted(calls) == ["one", "two"]
+    # Unselected healthy answers need no extra freshness probes merely to
+    # determine whether an operational-unavailability blocker exists.
+    from src.lib.validation_history import selections
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "_attempt_is_current", lambda *a, **kw: pytest.fail("Unnecessary outage freshness probe"))
+        manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+        assert not any(row["code"] == "configured_validator_unavailable" for row in manifest["blockers"])
+    with store.SessionLocal() as db:
+        pins = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == item.aid, ValidationFact.kind == "review_validator_config")))
+        assert len(pins) == 2
+    result = decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint_provider(item)(), operation_id="accept-both-routes", entries=entries_for(item, "accept"))
+    assert result["ready"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["routed"], indirect=True)
+async def test_runtime_unavailable_route_does_not_stop_independent_route(planned, monkeypatch):
+    from unittest.mock import Mock
+    from src.lib.agent_studio.catalog_service import AgentRuntimeUnavailable
+    from src.lib.domain_packs.validator_dispatch import _build_available_validator_agent
+    item = planned
+    monkeypatch.setenv("MAX_PARALLEL_VALIDATORS", "1")
+    unavailable = item.plan.initial_jobs[0].match.binding.route_value
+    calls = []
+    offline = {unavailable}
+    capture = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", capture)
+    def build(agent_key, **kwargs):
+        if agent_key in offline:
+            raise AgentRuntimeUnavailable("private curator text and database password must not escape")
+        return Agent(name=agent_key, model="gpt-test", instructions="Configured policy")
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service.get_agent_by_id", build)
+    def run(request, binding, **kwargs):
+        _build_available_validator_agent(binding.route_value)
+        calls.append(binding.route_value)
+        return {**_result_payload(request, resolved_values={"curie": "ECO:accepted"}), "resolved_objects": []}
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
+    result = await item.adapter.initial()
+    assert any(row.get("reason") == "configured_validator_unavailable" for row in result)
+    assert calls == [route for route in ("one", "two") if route != unavailable]
+    assert capture.call_count == 1
+    assert "password" not in str(capture.call_args.args[0])
+    assert capture.call_args.args[0].__cause__ is None
+    assert capture.call_args.args[0].__context__ is None
+    from src.lib.validation_history import selections
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    blocked = [row for row in manifest["blockers"] if row["code"] == "configured_validator_unavailable"]
+    assert len(blocked) == 1
+    assert blocked[0]["route_value"] == unavailable
+    assert not manifest["ready"]
+    with store.SessionLocal() as db:
+        completion = store._fact(db, item.aid, blocked[0]["completion_ref"]["fact_id"], kind="completion")
+        body = store._content(db, completion)
+        assert body["state"] == "failed"
+        assert body["result"] is None
+        assert body["diagnostics"]["operational_state"] == "not_admitted"
+    # Reconnect must not resubmit a completed operational refusal or duplicate capture.
+    await item.adapter.initial()
+    assert len(calls) == 1
+    assert capture.call_count == 1
+
+    checkpoint = checkpoint_provider(item)
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    healthy = [entry for entry in entries_for(item, "accept") if entry["target_id"] != blocked[0]["target_id"]]
+    accepted = decisions.record_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="accept-healthy-route", entries=healthy)
+    assert not accepted["ready"]
+    assert len(accepted["applied"]) == 1
+    deferred = decisions.record_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="defer-unavailable-route", entries=[entry for entry in entries_for(item, "defer")
+            if entry["target_id"] == blocked[0]["target_id"]])
+    from src.lib.validation_review import scheduling
+    offline.clear()
+    wid = scheduling.reconsider(context, operation_id="retry-now-available-route",
+        parent_decision_id=deferred["decision_id"], target_ids=[blocked[0]["target_id"]],
+        instructions="Retry the configured specialist after its runtime recovered", evidence_refs=[])
+    await item.adapter.execute(wid)
+    current = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert not any(row["code"] == "configured_validator_unavailable" for row in current["blockers"])
+    assert not current["ready"]  # The new answer still needs an explicit decision.
+    assert capture.call_count == 1

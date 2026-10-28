@@ -13,9 +13,9 @@ def group(binding="same", state="replaced", node="custom"):
     return {"binding_id": binding, "state": state, "validator_node_id": node}
 
 
-def test_custom_replaces_same_binding_but_preserves_distinct_target_bindings():
-    groups = [group(state="automatic"), group(), group("other", "automatic")]
-    assert effective_flow_validation_groups(groups) == groups[1:]
+def test_automatic_and_optout_choices_are_preserved():
+    groups = [group(state="automatic"), group("other", "skipped")]
+    assert effective_flow_validation_groups(groups) == groups
 
 
 @pytest.mark.parametrize("groups", [
@@ -32,7 +32,7 @@ def test_conflicting_choices_fail_before_dispatch(groups):
 @pytest.mark.asyncio
 async def test_choices_are_task_local_and_reset_on_failure():
     async def run(binding):
-        token = set_flow_validator_selections([group(binding)])
+        token = set_flow_validator_selections([group(binding, "skipped")])
         try:
             await asyncio.sleep(0)
             assert set(current_flow_validator_selections()) == {binding}

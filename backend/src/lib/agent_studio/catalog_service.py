@@ -2461,8 +2461,13 @@ def _attach_live_curation_metadata(runtime_agent, db_agent, output_schema):
         )
 
 
+class AgentRuntimeUnavailable(RuntimeError):
+    """The configured agent cannot be retrieved because its runtime store failed."""
+
+
 def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
     """Look up an active agent row by key from the unified agents table."""
+    from sqlalchemy.exc import OperationalError, TimeoutError as DatabaseTimeoutError
     from src.models.sql.database import SessionLocal
     from src.lib.agent_studio.agent_service import get_agent_by_key
 
@@ -2482,9 +2487,9 @@ def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:
             from src.lib.agent_studio.custom_agent_service import saved_export_metadata
             row._saved_export_metadata = saved_export_metadata(row)
         return row
-    except Exception:
-        logger.exception("[CatalogService] Failed DB lookup for agent '%s'", agent_id)
-        return None
+    except (OperationalError, DatabaseTimeoutError) as exc:
+        # Do not turn an outage into an absent/unauthorized agent, or log raw SQL.
+        raise AgentRuntimeUnavailable("Agent runtime lookup is temporarily unavailable") from exc
     finally:
         db.close()
 

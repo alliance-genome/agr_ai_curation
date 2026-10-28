@@ -147,7 +147,7 @@ def test_flow_authoring_rejects_profile_validator_sidecar(example, monkeypatch):
                 "role": "validation_attachment", "replaces_attachment_id": option.attachment_id}])
     definition.nodes[1].data.agent_revision_id = context.receipt.agent_revision_id
     definition.nodes[1].data.execution_receipt = context.receipt
-    with pytest.raises(validation_attachments.FlowValidationAttachmentError, match="pinned"):
+    with pytest.raises(validation_attachments.FlowValidationAttachmentError, match="not supported"):
         validation_attachments.apply_flow_validation_attachment_defaults(definition,
             entries_by_node={"extract_1": {}})
 

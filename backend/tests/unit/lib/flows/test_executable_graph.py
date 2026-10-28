@@ -462,10 +462,10 @@ def test_raw_formatter_control_nodes_are_rejected_for_every_flow_version(version
 
 
 @pytest.mark.asyncio
-async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
+async def test_multi_sidecar_api_create_rejects_unsupported_overrides(
     monkeypatch,
 ):
-    """CRUD persistence must retain the same topology and every sidecar binding."""
+    """New writes cannot persist historical override connections, even with a bypassed hydrator."""
 
     class _RoundTripDB:
         added: Any = None
@@ -523,33 +523,15 @@ async def test_multi_sidecar_api_create_load_round_trip_preserves_projection(
         lambda *_args, **_kwargs: [],
     )
 
-    created = await flows_api.create_flow(
-        request=CreateFlowRequest(
-            name="Topology parity",
-            description="Exercise API and executor topology parity.",
-            flow_definition=FlowDefinition.model_validate(_multi_sidecar_flow()),
-        ),
-        user={"sub": "curator-1"},
-        db=db,
-    )
-    monkeypatch.setattr(
-        flows_api,
-        "get_visible_flow",
-        lambda *_args, **_kwargs: db.stored,
-    )
-    loaded = await flows_api.get_flow(
-        flow_id=created.id,
-        user={"sub": "curator-1"},
-        db=db,
-    )
-
-    created_projection = project_executable_flow_graph(created.flow_definition)
-    loaded_projection = project_executable_flow_graph(loaded.flow_definition)
-    assert loaded_projection.to_dict() == created_projection.to_dict()
-    assert [
-        sidecar.binding_id for sidecar in loaded_projection.sidecars_for("extract")
-    ] == ["symbol", "identifier"]
-    assert loaded.flow_definition.model_dump() == created.flow_definition.model_dump()
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as error:
+        await flows_api.create_flow(
+            request=CreateFlowRequest(name="Unsupported overrides", description=None,
+                flow_definition=FlowDefinition.model_validate(_multi_sidecar_flow())),
+            user={"sub": "curator-1"}, db=db)
+    assert error.value.status_code == 422
+    assert "unsupported_validator_override" in str(error.value.detail)
+    assert db.added is None
 
 
 def test_unavailable_step_fixture_has_consistent_save_load_runtime_and_batch_diagnostics(

@@ -272,35 +272,11 @@ const flowFingerprintContext = (
   flow_definition: flowDefinitionContext(definition),
 })
 
-const activeValidationBindingOptions = (
-  node?: AgentNode
-): ValidationAttachmentSelection[] => (
-  node?.data.validation_attachments?.filter((attachment) => (
-    attachment.state === 'active'
-    && Boolean(attachment.validator_binding_id)
-    && attachment.enabled === true
-  )) ?? []
-)
-
 const edgeRole = (edge: FlowEdge): FlowEdgeRole =>
   edge.data?.role ?? 'control_flow'
 
 const isAnimatedEdgeRole = (role: FlowEdgeRole): boolean =>
   role !== 'validation_attachment'
-
-const validationEdgeLabel = (binding: ValidationAttachmentSelection): string =>
-  binding.target_label || binding.label
-
-const nextValidationEdgeId = (existingEdges: FlowEdge[]): string => {
-  let index = existingEdges.length + 1
-  let candidate = `validation_${index}`
-  const existingIds = new Set(existingEdges.map((edge) => edge.id))
-  while (existingIds.has(candidate)) {
-    index += 1
-    candidate = `validation_${index}`
-  }
-  return candidate
-}
 
 const nextOutputEdgeId = (existingEdges: FlowEdge[]): string => {
   let index = existingEdges.length + 1
@@ -827,10 +803,7 @@ function FlowBuilderInner({
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveDialogName, setSaveDialogName] = useState('')
   const [saveDialogMode, setSaveDialogMode] = useState<'save' | 'save_as'>('save')
-  const [bindingDialog, setBindingDialog] = useState<{
-    connection: Connection
-    bindings: ValidationAttachmentSelection[]
-  } | null>(null)
+
 
   const handleDeleteEdge = useCallback((edgeId: string) => {
     if (readOnly) return
@@ -1773,61 +1746,6 @@ function FlowBuilderInner({
     })
   }, [currentFlowId, setEdges, setNodes])
 
-  const addValidationAttachmentEdge = useCallback(
-    (connection: Connection, binding: ValidationAttachmentSelection) => {
-      if (!connection.source || !connection.target || !binding.validator_binding_id) return
-      const source = connection.source
-      const target = connection.target
-      const bindingId = binding.validator_binding_id
-      const existing = edges as FlowEdge[]
-
-      const duplicate = existing.some((edge) => (
-        edgeRole(edge) === 'validation_attachment'
-        && edge.source === source
-        && edge.data?.satisfies_binding_id === bindingId
-      ))
-      if (duplicate) {
-        setSnackbar({
-          message: `"${validationEdgeLabel(binding)}" already has a custom validator edge from this extractor.`,
-          severity: 'error',
-        })
-        return
-      }
-
-      const edge: FlowEdge = {
-        ...connection,
-        id: nextValidationEdgeId(existing),
-        source,
-        target,
-        type: 'deletable',
-        animated: false,
-        data: {
-          role: 'validation_attachment',
-          satisfies_binding_id: bindingId,
-          validationLabel: validationEdgeLabel(binding),
-        },
-      }
-      const nextEdges = [...existing, edge]
-      setFlowUnsaved(true)
-      setEdges(nextEdges)
-      setNodes((currentNodes) => rebuildValidationGroupsFromEdges(
-        currentNodes as AgentNode[],
-        nextEdges
-      ))
-    },
-    [setFlowUnsaved, edges, setEdges, setNodes]
-  )
-
-  const handleBindingDialogClose = useCallback(() => {
-    setBindingDialog(null)
-  }, [])
-
-  const handleBindingDialogSelect = useCallback((binding: ValidationAttachmentSelection) => {
-    if (!bindingDialog) return
-    addValidationAttachmentEdge(bindingDialog.connection, binding)
-    setBindingDialog(null)
-  }, [addValidationAttachmentEdge, bindingDialog])
-
   // Handle connection between nodes
   const onConnect = useCallback(
     (params: Connection) => {
@@ -1893,20 +1811,9 @@ function FlowBuilderInner({
         return
       }
 
-      const bindingOptions = activeValidationBindingOptions(sourceNode)
-      const shouldCreateValidationAttachmentEdge = Boolean(
-        sourceNode
-        && targetNode
-        && bindingOptions.length > 0
-        && isValidationAgentDynamic(targetNode.data.agent_id)
-      )
-
-      if (shouldCreateValidationAttachmentEdge) {
-        if (bindingOptions.length === 1) {
-          addValidationAttachmentEdge(params, bindingOptions[0])
-        } else {
-          setBindingDialog({ connection: params, bindings: bindingOptions })
-        }
+      if (targetNode && isValidationAgentDynamic(targetNode.data.agent_id)
+          && !agentMetadata[targetNode.data.agent_id]?.supervisor_tool) {
+        setSnackbar({ message: "Validators run through the extractor's automatic checks. Separate validator connections are not supported.", severity: 'error' })
         return
       }
 
@@ -1923,7 +1830,7 @@ function FlowBuilderInner({
       edges,
       canSourceOutputAttachmentDynamic,
       isValidationAgentDynamic,
-      addValidationAttachmentEdge,
+      agentMetadata,
       readOnly,
     ]
   )
@@ -2942,62 +2849,6 @@ function FlowBuilderInner({
           </Panel>
         </PanelGroup>
       </BuilderContent>
-
-      <Dialog
-        open={Boolean(bindingDialog)}
-        onClose={handleBindingDialogClose}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle sx={{ pb: 1 }}>
-          <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
-            Choose Validator Binding
-          </Typography>
-          <Typography
-            variant="caption"
-            sx={{
-              color: "text.secondary",
-              display: 'block',
-              mt: 0.35
-            }}>
-            This custom validator must name the domain-pack binding it satisfies.
-          </Typography>
-        </DialogTitle>
-        <DialogContent sx={{ pt: 1 }}>
-          <List dense disablePadding>
-            {bindingDialog?.bindings.map((binding) => (
-              <ListItem key={binding.attachment_id} disablePadding sx={{ mb: 0.75 }}>
-                <ListItemButton
-                  onClick={() => handleBindingDialogSelect(binding)}
-                  sx={{
-                    border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.75)}`,
-                    borderRadius: 1,
-                    alignItems: 'flex-start',
-                  }}
-                >
-                  <ListItemText
-                    primary={binding.label}
-                    secondary={[
-                      validationEdgeLabel(binding),
-                      binding.validator_package_id && binding.validator_agent_id
-                        ? `${binding.validator_package_id}:${binding.validator_agent_id}`
-                        : binding.validator_id,
-                      binding.blocking ? 'blocking' : null,
-                      binding.required ? 'required' : null,
-                    ].filter(Boolean).join(' / ')}
-                    slotProps={{
-                      primary: { sx: { fontSize: '0.82rem', fontWeight: 650 } },
-                      secondary: { sx: { fontSize: '0.7rem' } }
-                    }} />
-                </ListItemButton>
-              </ListItem>
-            ))}
-          </List>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleBindingDialogClose}>Cancel</Button>
-        </DialogActions>
-      </Dialog>
 
       <Dialog
         open={Boolean(pendingFlowReplacement)}

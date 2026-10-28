@@ -220,6 +220,9 @@ def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warn
             "agent_display_name": "Gene Extractor",
         }
     )
+    template_definition = flows.apply_flow_validation_attachment_defaults(
+        FlowDefinition.model_validate(template_definition)
+    ).model_dump()
     template_definition["nodes"].append(
         {
             "id": "validator_1",
@@ -241,9 +244,8 @@ def test_flow_response_preserves_unresolvable_custom_agent_attachments_with_warn
             "satisfies_binding_id": "custom.supplemental",
         }
     )
-    template_flow = flows.apply_flow_validation_attachment_defaults(
-        FlowDefinition.model_validate(template_definition)
-    )
+    # Historical override data is readable without reauthorizing its execution.
+    template_flow = FlowDefinition.model_validate(template_definition)
     inherited_attachments = [
         attachment.model_dump()
         for attachment in template_flow.nodes[1].data.validation_attachments
@@ -474,8 +476,7 @@ async def test_create_flow_accepts_inherited_custom_agent_validation_attachments
         }
     )
     template_flow = flows.apply_flow_validation_attachment_defaults(
-        FlowDefinition.model_validate(template_definition)
-    )
+        FlowDefinition.model_validate(template_definition))
     inherited_attachments = [
         attachment.model_dump()
         for attachment in template_flow.nodes[1].data.validation_attachments
@@ -884,3 +885,57 @@ async def test_delete_flow_marks_inactive(monkeypatch):
     assert flow_obj.is_active is False
     assert db.committed is True
     assert response.success is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["replaced", "supplemental"])
+async def test_get_saved_override_is_readable_and_can_be_repaired(monkeypatch, state):
+    from copy import deepcopy
+    from src.lib.flows import flow_service
+    owned = _flow()
+    owned.flow_definition["nodes"][1]["data"]["agent_id"] = "gene_extractor"
+    owned.flow_definition["nodes"][1]["data"]["validation_groups"] = [{
+        "group_id": "old-override", "state": state, "binding_id": "gene_identifier",
+        "edge_id": "old-link", "validator_node_id": "validator_1",
+    }]
+    owned.flow_definition["nodes"].append({
+        "id": "validator_1", "type": "agent", "position": {"x": 2, "y": 1},
+        "data": {"agent_id": "gene_validation", "agent_display_name": "Validator", "output_key": "validation"},
+    })
+    owned.flow_definition["edges"].append({
+        "id": "old-link", "source": "agent_1", "target": "validator_1", "role": "validation_attachment",
+        "satisfies_binding_id": "gene_identifier",
+    })
+    original = deepcopy(owned.flow_definition)
+    entry = {"name": "Gene Extractor", "category": "Extraction", "is_active": True,
+             "visible": True, "curation": {"domain_pack_id": "gene"}}
+    # Resolve executable nodes rather than taking the separate missing-revision
+    # preservation path. Exercise real hydration and canonical save validation.
+    def resolve(db, definition, **kwargs):
+        return SimpleNamespace(definition=definition, entries_by_node={
+            node.id: entry for node in definition.nodes if node.type == "agent"
+        }, findings=[], projection_catalogs={})
+    monkeypatch.setattr(flows, "resolve_flow_execution_revisions", resolve)
+    monkeypatch.setattr(flows, "get_visible_flow", lambda *a, **kw: owned)
+    monkeypatch.setattr(flows, "verify_flow_ownership", AsyncMock(return_value=owned))
+    monkeypatch.setattr(flows, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
+    monkeypatch.setattr(flow_service, "flag_modified", lambda *a: None)
+    db = Mock()
+    response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=db)
+    assert response.has_critical_issues
+    assert any(w.code == "unsupported_validator_override" for w in response.validation_warnings)
+    assert response.flow_definition.edges[-1].model_dump(exclude_none=True) == original["edges"][-1]
+    assert response.flow_definition.nodes[1].data.validation_groups[0].state == state
+    assert owned.flow_definition == original
+    with pytest.raises(HTTPException) as error:
+        await flows.update_flow(flow_id=owned.id, request=UpdateFlowRequest(flow_definition=original),
+                                user={"sub": "u1"}, db=db)
+    assert error.value.status_code == 422
+    repaired = deepcopy(original)
+    repaired["edges"] = repaired["edges"][:-1]
+    repaired["nodes"] = repaired["nodes"][:-1]
+    repaired["nodes"][1]["data"]["validation_groups"] = []
+    response = await flows.update_flow(flow_id=owned.id, request=UpdateFlowRequest(flow_definition=repaired),
+                                       user={"sub": "u1"}, db=db)
+    assert not response.has_critical_issues
+    db.commit.assert_called_once()

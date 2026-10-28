@@ -86,6 +86,7 @@ class PrerequisiteSelection(HistoryContract):
 
 
 class FrozenValidationInput(HistoryContract):
+    route_value: StrictStr | None = Field(default=None, exclude_if=lambda value: value is None)
     target_id: StrictStr = Field(min_length=1)
     binding_id: StrictStr = Field(min_length=1)
     request: dict[str, Any]

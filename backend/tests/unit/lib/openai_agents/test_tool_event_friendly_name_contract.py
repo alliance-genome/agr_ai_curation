@@ -1845,6 +1845,10 @@ async def test_allele_specialist_rejects_empty_evidence_after_section_label_reco
 
 @pytest.mark.asyncio
 async def test_specialist_accepts_schema_defined_retained_collection_without_items(monkeypatch, isolated_validation_history):
+    monkeypatch.setattr(
+        "src.lib.curation_workspace.extraction_results.get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "allele", "launchable": True},
+    )
     from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
     monkeypatch.setattr(streaming_tools, "_validator_runtime_context_for_chat",
                         lambda **kwargs: ValidatorRuntimeContext(user_id="unit-owner"))

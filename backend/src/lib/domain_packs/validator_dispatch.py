@@ -533,12 +533,12 @@ def prepare_validator_dispatch(
             selection = flow_selections.get(match.binding.binding_id)
             if selection is not None:
                 record_match_scheduling(history_binding, match,
-                    "opted_out" if selection["state"] == "skipped" else "custom_replacement", details={"selection": selection})
+                    "opted_out", details={"selection": selection})
                 suppressed_bindings.append({
                     "validator_binding_id": match.binding.binding_id,
                     "target": match.target_details(),
                     **selection,
-                    "reason": "flow_skip" if selection["state"] == "skipped" else "custom_replacement",
+                    "reason": "flow_skip",
                 })
                 continue
             if not _binding_has_dispatch_contract(match.binding):
@@ -1582,6 +1582,17 @@ def _remap_validator_result_for_request(
     return _finalize_validator_result(remapped, request=request)
 
 
+def _build_available_validator_agent(agent_key, **kwargs):
+    """Distinguish a runtime-store outage from configuration/authorization failure."""
+    from src.lib.agent_studio.catalog_service import get_agent_by_id, AgentRuntimeUnavailable
+    from src.lib.validation_review.admission import ReviewStopped
+
+    try:
+        return get_agent_by_id(agent_key, **kwargs)
+    except AgentRuntimeUnavailable as exc:
+        raise ReviewStopped("configured_validator_unavailable") from exc
+
+
 def run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
@@ -1592,7 +1603,6 @@ def run_package_scoped_validator_agent(
 
     from agents import AgentOutputSchema, function_tool
 
-    from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,
         get_agent_definition_for_package,
@@ -1616,15 +1626,13 @@ def run_package_scoped_validator_agent(
 
     benchmark_slot = f"validator:{request.validator_binding_id}"
     custom_pin = binding.raw.get("custom_validator")
-    flow_pin = binding.raw.get("flow_validator")
-    if flow_pin:
-        from src.lib.validation_review.flow_plan import build_validator
-        agent = build_validator(flow_pin, runtime_context)
-    elif custom_pin:
+    if binding.raw.get("flow_validator") is not None:
+        raise ValueError("Historical flow validator overrides cannot authorize new execution")
+    if custom_pin:
         from src.lib.agent_studio.custom_profile_validators import build_custom_validator_agent
         agent = build_custom_validator_agent(custom_pin, runtime_context, benchmark_slot=benchmark_slot)
     else:
-        agent = get_agent_by_id(
+        agent = _build_available_validator_agent(
             canonical_system_agent_key(agent_definition),
             **benchmark_route_kwargs(benchmark_slot),
             **(
@@ -1636,7 +1644,7 @@ def run_package_scoped_validator_agent(
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
     from src.lib.validation_review.validator_adapter import pin_validator_agent
-    pin_validator_agent(agent, request.validator_binding_id)
+    pin_validator_agent(agent, request.validator_binding_id, route_value=binding.route_value)
     if runtime_context is not None:
         agent.cost_boundary = {
             "document_id": runtime_context.document_id,
@@ -1831,7 +1839,6 @@ def run_package_scoped_validator_agent_batch(
 
     from agents import AgentOutputSchema, function_tool
 
-    from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,
         get_agent_definition_for_package,
@@ -1839,6 +1846,9 @@ def run_package_scoped_validator_agent_batch(
     from src.lib.openai_agents.runner import (
         run_agent_sync_with_owned_openai_resources,
     )
+
+    if any(job.match.binding.raw.get("flow_validator") is not None for job in jobs):
+        raise ValueError("Historical flow validator overrides cannot authorize new execution")
 
     representative_request = jobs[0].request
     agent_definition = get_agent_definition_for_package(
@@ -1864,7 +1874,7 @@ def run_package_scoped_validator_agent_batch(
     benchmark_kwargs = benchmark_route_kwargs(
         f"validator:{representative_request.validator_binding_id}"
     )
-    agent = get_agent_by_id(
+    agent = _build_available_validator_agent(
         canonical_system_agent_key(agent_definition),
         **benchmark_kwargs,
         **(
@@ -1876,7 +1886,10 @@ def run_package_scoped_validator_agent_batch(
     finalization_state = _ValidatorFinalizationState()
     agent = _copy_agent_for_validator_runtime(agent)
     from src.lib.validation_review.validator_adapter import pin_validator_agent
-    pin_validator_agent(agent, representative_request.validator_binding_id)
+    for binding_id, route_value in {
+        (job.request.validator_binding_id, job.match.binding.route_value) for job in jobs
+    }:
+        pin_validator_agent(agent, binding_id, route_value=route_value)
     if runtime_context is not None:
         agent.cost_boundary = {
             "document_id": runtime_context.document_id,

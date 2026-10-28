@@ -2912,8 +2912,7 @@ describe('FlowBuilder', () => {
     })
   }, 15000)
 
-  it('persists validation attachment edges with an explicit selected binding', async () => {
-    const user = userEvent.setup()
+  it('rejects new replacement validator connections without a binding dialog', async () => {
 
     agentMetadataMocks.agents = {
       allele_extractor: {
@@ -3012,102 +3011,41 @@ describe('FlowBuilder', () => {
       reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
     })
 
-    const bindingDialog = (await screen.findByText('Choose Validator Binding')).closest('[role="dialog"]')
-    expect(bindingDialog).not.toBeNull()
-    await user.click(within(bindingDialog as HTMLElement).getByText('Allele symbol lookup'))
+    expect(await screen.findByText(/Separate validator connections are not supported/)).toBeInTheDocument()
+    expect(screen.queryByText('Choose Validator Binding')).not.toBeInTheDocument()
+    const state = onFlowChange.mock.calls.at(-1)?.[0]
+    expect(state.edges.some((edge: { role: string }) => edge.role === 'validation_attachment')).toBe(false)
+    expect(serviceMocks.createFlow).not.toHaveBeenCalled()
+  })
 
+  it('allows an ordinary supervisor-callable validator as a control-flow step', async () => {
+    agentMetadataMocks.agents = {
+      chemical_validation: {
+        category: 'Validation', subcategory: 'Data Validation',
+        supervisor_tool: 'ask_chemical_validation_specialist',
+      },
+    }
+    const onFlowChange = vi.fn()
+    render(<FlowBuilder onFlowChange={onFlowChange} />)
+    await screen.findByText('1 step')
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320, clientY: 220,
+      dataTransfer: { getData: vi.fn((format: string) => format === 'application/reactflow'
+        ? JSON.stringify({ type: 'agent', agentId: 'chemical_validation',
+            agentName: 'Chemical Ontology Agent', agentDescription: 'Look up chemicals' }) : '') },
+    })
+    await waitFor(() => expect(reactFlowMocks.onConnect).toBeTypeOf('function'))
+    React.act(() => { reactFlowMocks.onConnect?.({ source: 'node_0', target: 'node_1' }) })
     await waitFor(() => {
-      const calls = onFlowChange.mock.calls
-      const latestFlowState = calls[calls.length - 1]?.[0]
-      expect(latestFlowState?.entry_node_id).toBe('node_0')
-      expect(latestFlowState?.edges).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          source: 'node_1',
-          target: 'node_2',
-          role: 'validation_attachment',
-          satisfies_binding_id: 'symbol',
-        }),
+      const state = onFlowChange.mock.calls.at(-1)?.[0]
+      expect(state.edges).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'node_0', target: 'node_1', role: 'control_flow' }),
       ]))
     })
+    expect(screen.queryByText(/Separate validator connections are not supported/)).not.toBeInTheDocument()
+  })
 
-    React.act(() => {
-      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })
-    })
-
-    const secondBindingDialog = (await screen.findByText('Choose Validator Binding')).closest('[role="dialog"]')
-    expect(secondBindingDialog).not.toBeNull()
-    await user.click(within(secondBindingDialog as HTMLElement).getByText('Allele identifier lookup'))
-
-    await waitFor(() => {
-      const calls = onFlowChange.mock.calls
-      const latestFlowState = calls[calls.length - 1]?.[0]
-      const extractorNode = latestFlowState?.nodes.find((node: { id: string }) => node.id === 'node_1')
-      expect(extractorNode?.validation_groups).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          attachment_id: 'allele:symbol',
-          binding_id: 'symbol',
-          state: 'replaced',
-          validator_node_id: 'node_2',
-        }),
-        expect.objectContaining({
-          attachment_id: 'allele:identifier',
-          binding_id: 'identifier',
-          state: 'replaced',
-          validator_node_id: 'node_3',
-        }),
-      ]))
-    })
-
-    await user.click(screen.getByText('File'))
-    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
-
-    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
-    await user.type(within(saveDialog).getByPlaceholderText('Flow name'), 'Validator Edge Flow')
-    await user.click(within(saveDialog).getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => {
-      expect(serviceMocks.createFlow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          flow_definition: expect.objectContaining({
-            edges: expect.arrayContaining([
-              expect.objectContaining({
-                source: 'node_1',
-                target: 'node_2',
-                role: 'validation_attachment',
-                satisfies_binding_id: 'symbol',
-              }),
-              expect.objectContaining({
-                source: 'node_1',
-                target: 'node_3',
-                role: 'validation_attachment',
-                satisfies_binding_id: 'identifier',
-              }),
-            ]),
-            nodes: expect.arrayContaining([
-              expect.objectContaining({
-                id: 'node_1',
-                data: expect.objectContaining({
-                  validation_attachments: expect.arrayContaining([
-                    expect.not.objectContaining({
-                      export_blocking: expect.anything(),
-                    }),
-                    expect.objectContaining({
-                      validator_binding_id: 'identifier',
-                      blocking: true,
-                      enabled: true,
-                    }),
-                  ]),
-                }),
-              }),
-            ]),
-          }),
-        })
-      )
-    })
-  }, 15000)
-
-  it('does not offer disabled validation bindings as custom replacement targets', async () => {
-    const user = userEvent.setup()
+  it('rejects validator overrides while retaining the existing opt-out', async () => {
 
     agentMetadataMocks.agents = {
       allele_extractor: {
@@ -3201,66 +3139,15 @@ describe('FlowBuilder', () => {
       reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
     })
 
+    expect(await screen.findByText(/Separate validator connections are not supported/)).toBeInTheDocument()
     expect(screen.queryByText('Choose Validator Binding')).not.toBeInTheDocument()
-
-    await waitFor(() => {
-      const calls = onFlowChange.mock.calls
-      const latestFlowState = calls[calls.length - 1]?.[0]
-      expect(latestFlowState?.edges).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          source: 'node_1',
-          target: 'node_2',
-          role: 'validation_attachment',
-          satisfies_binding_id: 'identifier',
-        }),
-      ]))
-      expect(latestFlowState?.edges).not.toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          source: 'node_1',
-          target: 'node_2',
-          role: 'validation_attachment',
-          satisfies_binding_id: 'symbol',
-        }),
-      ]))
-    })
-
-    await user.click(screen.getByText('File'))
-    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
-
-    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
-    await user.type(within(saveDialog).getByPlaceholderText('Flow name'), 'Enabled Binding Flow')
-    await user.click(within(saveDialog).getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => {
-      expect(serviceMocks.createFlow).toHaveBeenCalledWith(
-        expect.objectContaining({
-          flow_definition: expect.objectContaining({
-            edges: expect.arrayContaining([
-              expect.objectContaining({
-                source: 'node_1',
-                target: 'node_2',
-                role: 'validation_attachment',
-                satisfies_binding_id: 'identifier',
-              }),
-            ]),
-            nodes: expect.arrayContaining([
-              expect.objectContaining({
-                id: 'node_1',
-                data: expect.objectContaining({
-                  validation_attachments: expect.arrayContaining([
-                    expect.objectContaining({
-                      validator_binding_id: 'symbol',
-                      enabled: false,
-                    }),
-                  ]),
-                }),
-              }),
-            ]),
-          }),
-        })
-      )
-    })
-  }, 15000)
+    const state = onFlowChange.mock.calls.at(-1)?.[0]
+    expect(state.edges.some((edge: { role: string }) => edge.role === 'validation_attachment')).toBe(false)
+    const extractor = state.nodes.find((node: { id: string }) => node.id === 'node_1')
+    expect(extractor.validation_attachments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ validator_binding_id: 'symbol', enabled: false }),
+    ]))
+  })
 
   it('refreshes the flow list after creating a new flow and after saving an existing flow', async () => {
     const user = userEvent.setup()

@@ -354,6 +354,8 @@ def frozen_job_requests(binding, jobs, *, db=None):
             "target_id": target,
             "source_input_ref": reference(latest(db, binding.artifact_id, target)),
             "binding_id": j.request.validator_binding_id,
+            **({"route_value": j.match.binding.route_value}
+               if j.match.binding.route_value is not None else {}),
             "request": j.request.model_dump(mode="json"),
             "result_fields": [
                 *j.request.target.expected_fields,

@@ -28,7 +28,7 @@ def fixture(enabled=False):
 def test_producer_omits_unbound_metadata_even_with_agent_reference(enabled):
     attachment, _ = fixture(enabled)
     bound = attachment.model_copy(update={"attachment_id": "real", "validator_binding_id": "real"})
-    groups = _resolved_validation_groups([attachment, bound], ())
+    groups = _resolved_validation_groups([attachment, bound])
     assert len(groups) == 1
     assert groups[0].binding_id == "real"
     assert groups[0].state == ("automatic" if enabled else "skipped")
@@ -93,7 +93,7 @@ def test_real_allele_hydration_keeps_metadata_but_dispatches_only_real_bindings(
 def test_metadata_only_selection_cannot_create_effective_validation_groups():
     from src.lib.domain_packs.flow_validator_selection import effective_flow_validation_groups
     attachment, _ = fixture(True)
-    groups = _resolved_validation_groups([attachment], ())
+    groups = _resolved_validation_groups([attachment])
     assert effective_flow_validation_groups([g.model_dump(mode="json") for g in groups]) == []
 
 

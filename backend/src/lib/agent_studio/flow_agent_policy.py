@@ -66,7 +66,6 @@ def attachment_only_validator_reason(agent_name: str) -> str:
     """Explain why an attachment-only validator was rejected as a flow step."""
 
     return (
-        f"{agent_name} is an attachment-only validator. Add it as a validation "
-        "attachment on an extraction step so it receives a structured extraction "
-        "envelope and DomainValidationRequest."
+        f"{agent_name} runs through automatic extraction checks. "
+        "Separate replacement or supplemental validator attachments are not supported."
     )

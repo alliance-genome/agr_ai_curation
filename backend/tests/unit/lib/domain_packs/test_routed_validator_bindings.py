@@ -308,7 +308,7 @@ def test_for_payload_selects_the_route_a_stored_object_names(tmp_path: Path):
           package_id: fixture.validators
           agent_id: widget_validator
 """,
-            "declare validator_agent on each route",
+            "validator_agent: Extra inputs are not permitted",
         ),
         (
             """
@@ -316,7 +316,7 @@ def test_for_payload_selects_the_route_a_stored_object_names(tmp_path: Path):
           source: payload
           path: subject.kind
 """,
-            "route_by and routes together",
+            "routes: Field required",
         ),
         (
             """

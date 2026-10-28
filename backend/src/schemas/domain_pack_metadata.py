@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, ClassVar, Dict, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_serializer, model_validator
 
 from src.schemas.validation_history import DecisionUnit
 from .generic_extraction_profile import ValueSchema
@@ -291,6 +291,14 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
     allow_multiple: Optional[bool] = None
     context_only: bool = Field(default=False, exclude_if=lambda value: value is False)
 
+    @model_serializer(mode="wrap")
+    def serialize_selector(self, handler):
+        result = handler(self)
+        # A literal null is data, not an absent optional schema field.
+        if self.source == "literal" and "value" not in result:
+            result["value"] = None
+        return result
+
     @field_validator("path", "field_path")
     @classmethod
     def _validate_optional_paths(cls, value: Optional[str]) -> Optional[str]:
@@ -550,12 +558,6 @@ def _validate_binding_routes(binding: Any) -> None:
     unrouted value never falls back to another route.
     """
 
-    if (binding.route_by is None) != (binding.routes is None):
-        raise ValueError(
-            "validator_bindings entries must declare route_by and routes together"
-        )
-    if binding.routes is None:
-        return
     if not binding.routes:
         raise ValueError("validator_bindings.routes must not be empty")
     for route_value in binding.routes:
@@ -564,17 +566,6 @@ def _validate_binding_routes(binding: Any) -> None:
                 "validator_bindings.routes keys must be non-empty and carry no "
                 "surrounding whitespace"
             )
-    shared = sorted(
-        name
-        for name in ("validator_agent", "input_fields", "expected_result_fields",
-                     "max_tool_calls", "custom_profile_reuse")
-        if name in binding.model_fields_set
-    )
-    if shared:
-        raise ValueError(
-            "routed validator_bindings entries declare "
-            f"{', '.join(shared)} on each route, not on the binding"
-        )
     # The value that chose the route is never a validator result: a write-back
     # there would send the next run to another validator.
     route_path = _unindexed_path(binding.route_by.path)
@@ -601,11 +592,10 @@ def _unindexed_path(field_path: str) -> str:
     return re.sub(r"\[\d+\]", "", field_path.strip())
 
 
-class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
+class _ActiveValidatorBindingBase(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
     binding_id: str
-    custom_profile_reuse: Optional[CustomProfileValidatorReuse] = None
     display_name: Optional[str] = None
     description: str = ""
     curator_label: Optional[str] = Field(
@@ -623,13 +613,8 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         ),
     )
     definition_notes: list[str] = Field(default_factory=list)
-    validator_agent: Optional[DomainPackValidatorAgentRef] = None
     applies_to: DomainPackValidatorAppliesTo
-    input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     decision_units: list[DecisionUnit] | None = Field(default=None, exclude_if=lambda value: value is None)
-    expected_result_fields: dict[str, Any] = Field(default_factory=dict)
-    route_by: Optional[DomainPackValidatorRouteSelector] = None
-    routes: Optional[dict[str, DomainPackValidatorRoute]] = None
     optional_result_fields: Optional[dict[str, str]] = Field(
         default=None,
         description=(
@@ -644,7 +629,6 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
             "once their results are written"
         ),
     )
-    max_tool_calls: Optional[int] = Field(default=None, ge=0)
     preflight_policy: Optional[
         Literal["provider_taxon_mapping_required"]
     ] = None
@@ -665,17 +649,12 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         if self.decision_units:
             keys = [unit.key for unit in self.decision_units]
             fields = [field for unit in self.decision_units for field in unit.fields]
-            coverages = [set(self.expected_result_fields) | set(self.optional_result_fields or {})]
-            if self.routes:
+            coverages = [set(getattr(self, "expected_result_fields", {})) | set(self.optional_result_fields or {})]
+            if getattr(self, "routes", None):
                 coverages = [set(route.expected_result_fields) | set(self.optional_result_fields or {}) for route in self.routes.values()]
             if len(set(keys)) != len(keys) or len(set(fields)) != len(fields) or any(set(fields) != coverage for coverage in coverages):
                 raise ValueError("Decision units must partition the binding result coverage")
         return self
-
-    @field_validator("max_tool_calls", mode="before")
-    @classmethod
-    def _validate_max_tool_calls(cls, value: Any) -> Any:
-        return _resolve_env_backed_int(value, "validator_bindings.max_tool_calls")
 
     @field_validator("binding_id")
     @classmethod
@@ -739,8 +718,11 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_optional_result_fields_are_not_expected(self) -> "DomainPackActiveValidatorBinding":
-        overlap = sorted(set(self.optional_result_fields or {}) & set(self.expected_result_fields))
+    def validate_optional_result_fields_are_not_expected(self) -> "_ActiveValidatorBindingBase":
+        expected = set(getattr(self, "expected_result_fields", {}))
+        for route in (getattr(self, "routes", None) or {}).values():
+            expected.update(route.expected_result_fields)
+        overlap = sorted(set(self.optional_result_fields or {}) & expected)
         if overlap:
             raise ValueError(
                 "validator_bindings.optional_result_fields cannot repeat expected_result_fields: "
@@ -749,19 +731,7 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_routes(self) -> "DomainPackActiveValidatorBinding":
-        """An active binding runs one validator, either its own or its routes'."""
-
-        _validate_binding_routes(self)
-        if self.routes is None and self.validator_agent is None:
-            raise ValueError(
-                "validator_bindings.active entries must declare validator_agent "
-                "or route_by with routes"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def validate_blocking_policy(self) -> "DomainPackActiveValidatorBinding":
+    def validate_blocking_policy(self) -> "_ActiveValidatorBindingBase":
         """Require blocking validator policy to also be required."""
 
         if self.blocking and not self.required:
@@ -772,7 +742,7 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_when_off_policy(self) -> "DomainPackActiveValidatorBinding":
+    def validate_when_off_policy(self) -> "_ActiveValidatorBindingBase":
         """Only bindings a curator may turn off can describe that consequence."""
 
         if self.when_off is not None and not self.allow_opt_out:
@@ -783,33 +753,43 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
         return self
 
 
-class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
-    """Informational validator capability that must not affect runtime policy."""
+class DomainPackActiveValidatorBinding(_ActiveValidatorBindingBase):
+    """An active direct binding has exactly one configured specialist."""
 
-    binding_id: str
+    validator_agent: DomainPackValidatorAgentRef
     custom_profile_reuse: Optional[CustomProfileValidatorReuse] = None
-    display_name: str = Field(min_length=1)
-    description: str = ""
-    state_explanation: str = Field(min_length=1)
-    validator_agent: Optional[DomainPackValidatorAgentRef] = None
-    applies_to: Optional[DomainPackValidatorAppliesTo] = None
     input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
-    route_by: Optional[DomainPackValidatorRouteSelector] = None
-    routes: Optional[dict[str, DomainPackValidatorRoute]] = None
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
-    group_scope: Optional[DomainPackValidatorGroupScope] = None
-    definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
-
-    @model_validator(mode="after")
-    def validate_routes(self) -> "DomainPackUnderDevelopmentValidatorBinding":
-        _validate_binding_routes(self)
-        return self
 
     @field_validator("max_tool_calls", mode="before")
     @classmethod
     def _validate_max_tool_calls(cls, value: Any) -> Any:
         return _resolve_env_backed_int(value, "validator_bindings.max_tool_calls")
+
+
+class DomainPackActiveRoutedValidatorBinding(_ActiveValidatorBindingBase):
+    """An active routed binding declares execution fields only on its routes."""
+
+    route_by: DomainPackValidatorRouteSelector
+    routes: dict[str, DomainPackValidatorRoute]
+
+    @model_validator(mode="after")
+    def validate_routes(self):
+        _validate_binding_routes(self)
+        return self
+
+
+class _UnderDevelopmentValidatorBindingBase(DomainPackMetadataBaseModel):
+    """Informational validator capability that must not affect runtime policy."""
+
+    binding_id: str
+    display_name: str = Field(min_length=1)
+    description: str = ""
+    state_explanation: str = Field(min_length=1)
+    applies_to: Optional[DomainPackValidatorAppliesTo] = None
+    group_scope: Optional[DomainPackValidatorGroupScope] = None
+    definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
 
     @field_validator("binding_id")
     @classmethod
@@ -833,11 +813,38 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
         return value
 
 
+class DomainPackUnderDevelopmentValidatorBinding(_UnderDevelopmentValidatorBindingBase):
+    """Informational direct binding; its specialist may still be unimplemented."""
+
+    validator_agent: Optional[DomainPackValidatorAgentRef] = None
+    custom_profile_reuse: Optional[CustomProfileValidatorReuse] = None
+    input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
+    expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    max_tool_calls: Optional[int] = Field(default=None, ge=0)
+
+    @field_validator("max_tool_calls", mode="before")
+    @classmethod
+    def _validate_max_tool_calls(cls, value: Any) -> Any:
+        return _resolve_env_backed_int(value, "validator_bindings.max_tool_calls")
+
+
+class DomainPackUnderDevelopmentRoutedValidatorBinding(_UnderDevelopmentValidatorBindingBase):
+    """Informational routed binding, never an executable declaration."""
+
+    route_by: DomainPackValidatorRouteSelector
+    routes: dict[str, DomainPackValidatorRoute]
+
+    @model_validator(mode="after")
+    def validate_routes(self):
+        _validate_binding_routes(self)
+        return self
+
+
 class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
     """Target validator-binding bucket contract."""
 
-    active: list[DomainPackActiveValidatorBinding] = Field(default_factory=list)
-    under_development: list[DomainPackUnderDevelopmentValidatorBinding] = Field(
+    active: list[DomainPackActiveValidatorBinding | DomainPackActiveRoutedValidatorBinding] = Field(default_factory=list)
+    under_development: list[DomainPackUnderDevelopmentValidatorBinding | DomainPackUnderDevelopmentRoutedValidatorBinding] = Field(
         default_factory=list
     )
 
@@ -1561,8 +1568,10 @@ __all__ = [
     "DomainPackObjectDefinition",
     "DomainPackStatus",
     "DomainPackActiveValidatorBinding",
+    "DomainPackActiveRoutedValidatorBinding",
     "DomainPackValidatorGroupScope",
     "DomainPackUnderDevelopmentValidatorBinding",
+    "DomainPackUnderDevelopmentRoutedValidatorBinding",
     "DomainPackValidatorAgentRef",
     "DomainPackValidatorAppliesTo",
     "DomainPackValidatorBindings",

@@ -487,9 +487,10 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: fake_db)
     monkeypatch.setattr(
         "src.lib.agent_studio.agent_service.get_agent_by_key",
-        lambda _db, _agent_id, user_id=None: (_ for _ in ()).throw(RuntimeError("db fail")),
+        lambda _db, _agent_id, **kwargs: (_ for _ in ()).throw(RuntimeError("db fail")),
     )
-    assert catalog_service._get_db_agent_row("gene_validation", {}) is None
+    with pytest.raises(RuntimeError, match="db fail"):
+        catalog_service._get_db_agent_row("gene_validation", {})
 
     monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda _aid, _kwargs: SimpleNamespace())
     monkeypatch.setattr(catalog_service, "_create_db_agent", lambda _row, **_kwargs: None)
@@ -974,3 +975,29 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
     assert captured["settings"]["temperature"] == 0.0
     assert captured["settings"]["reasoning_effort"] == "minimal"
     assert captured["resolved_route"] == ("gpt-5.4-mini", "openrouter")
+
+
+@pytest.mark.parametrize("failure_kind", ["operational", "pool_timeout", "integrity"])
+def test_runtime_lookup_failure_is_not_masked_as_unknown_agent(monkeypatch, failure_kind):
+    from unittest.mock import Mock
+    from sqlalchemy.exc import OperationalError, TimeoutError, IntegrityError
+    errors = {
+        "operational": OperationalError("private SQL", {}, RuntimeError("private credential")),
+        "pool_timeout": TimeoutError("private connection details"),
+        "integrity": IntegrityError("private SQL", {}, RuntimeError("invalid data")),
+    }
+    db = SimpleNamespace(close=Mock())
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: db)
+    monkeypatch.setattr("src.lib.agent_studio.agent_service.get_agent_by_key", Mock(side_effect=errors[failure_kind]))
+    expected = IntegrityError if failure_kind == "integrity" else catalog_service.AgentRuntimeUnavailable
+    with pytest.raises(expected) as error:
+        catalog_service.get_agent_by_id("configured")
+    if failure_kind != "integrity":
+        assert "private" not in str(error.value)
+    db.close.assert_called_once()
+
+
+def test_missing_or_inaccessible_agent_remains_an_identity_failure(monkeypatch):
+    monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda *args: None)
+    with pytest.raises(ValueError, match="Unknown agent_id"):
+        catalog_service.get_agent_by_id("missing")
