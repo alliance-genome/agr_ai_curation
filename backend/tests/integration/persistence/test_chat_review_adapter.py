@@ -179,6 +179,8 @@ def planned(scope, tmp_path, monkeypatch, request):
         template = env.extracted_objects[0]
         env.extracted_objects = [template.model_copy(deep=True, update={"pending_ref_id": f"record-{index}"})
                                  for index in range(fixture_options["count"])]
+    if isinstance(fixture_options, dict) and fixture_options.get("mixed_prerequisites"):
+        env.extracted_objects[0].payload["optional"]["parents"] = ["ECO:parent"]
     env = runtime.capture_extraction(
         scope=scope,
         producer_id=uuid4().hex,
@@ -1854,3 +1856,33 @@ async def test_unmatched_prerequisite_orders_no_initial_work_or_absence_review(p
         entries = [absence_entry(item)]
     result = decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="review-first-wave", entries=entries)
     assert result["ready"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", [
+    {"shape": "unmatched-prerequisite", "count": 2, "mixed_prerequisites": True},
+    {"shape": "unmatched-prerequisite-absence", "count": 2, "mixed_prerequisites": True},
+], indirect=True)
+async def test_unmatched_prerequisite_on_one_record_does_not_wait_for_another(planned, monkeypatch):
+    item = planned
+    from src.lib.validation_history import selections
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
+        lambda: lambda request, **kwargs: {**_result_payload(request, resolved_values={"curie": "ECO:VALUE"}),
+                                          "resolved_objects": []})
+    await item.adapter.initial()
+    # Deliberately leave the first record's parent unreviewed.
+    outcomes = await item.adapter.advance(checkpoint_provider(item))
+    independent = next(result for result in outcomes if result["state"] != "awaiting_review"
+                       or result.get("reason") == "optional_inputs_absent")
+    target = independent["target"]
+    if independent.get("reason") == "optional_inputs_absent":
+        entries = [absence_entry(item, target_id=target)]
+    else:
+        assert independent["state"] == "completed"
+        entries = [entry for entry in entries_for(item, "accept") if entry["target_id"] == target]
+    assert len(entries) == 1
+    decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint_provider(item)(), operation_id="review-independent", entries=entries)
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert target not in {blocker["target_id"] for blocker in manifest["blockers"]}
+    assert not manifest["ready"]  # The other record still needs prerequisite review.

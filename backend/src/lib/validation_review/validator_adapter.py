@@ -994,7 +994,7 @@ class ValidatorAdapter:
             dependencies = _prerequisite_targets(match,
                 {other_id: self.match(other_id) for other_id in self.plan["matches"]},
                 self.selected_manifest["units"], self.target_parents)
-            if not dependencies:
+            if dependencies is None:
                 outcomes.append(
                     {
                         "state": "not_runnable",
@@ -1007,9 +1007,12 @@ class ValidatorAdapter:
             if selected.request is not None:
                 frozen = runtime.frozen_job_requests(self.binding, [
                     ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id)])
+                for request in frozen:
+                    request["requires_prerequisites"] = bool(dependencies)
             elif selected.absent_inputs:
                 from . import source_inputs
-                frozen = [source_inputs.absent_input(self._selected_match(tid, self.selected_sources), selected, tid)]
+                frozen = [source_inputs.absent_input(self._selected_match(tid, self.selected_sources), selected, tid,
+                    requires_prerequisites=bool(dependencies))]
             else:
                 frozen = []
 
