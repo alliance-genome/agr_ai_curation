@@ -1,3 +1,4 @@
+from tests.cancellation_test_support import install_cancel_reader
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -270,7 +271,7 @@ async def test_stop_interrupts_review_without_waiting_for_next_stream_event(
     async def check(session):
         return stopped.is_set()
 
-    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", check)
+    install_cancel_reader(monkeypatch, check)
 
     async def slow_review():
         started.set()
@@ -435,7 +436,7 @@ async def test_stop_inside_real_sdk_tool_survives_sdk_cancellation_handling(monk
     context = ChatReview("owner", "doc", "session", "turn", None, (), "Extract")
     context.resume = AsyncMock()
     context.supervisor_handoff = lambda: {"review_outcomes": []}
-    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=True))
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=True))
     called = []
 
     @function_tool

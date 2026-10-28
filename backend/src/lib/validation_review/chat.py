@@ -50,24 +50,32 @@ class ChatReview:
 
     async def until_stop(self, awaitable):
         """Stop interrupts non-streaming phases; submitted late answers stay durable."""
-        from src.lib.redis_client import check_cancel_signal
+        from src.lib.redis_client import cancellation_signal_reader
 
         shutdown = asyncio.Event()
 
         async def watch():
-            while not shutdown.is_set():
-                if await check_cancel_signal(self.session_id):
-                    return
-                # A dependency may consume task cancellation while returning a
-                # poll result. The owner still needs this watcher to finish.
-                if shutdown.is_set():
-                    return
-                await asyncio.sleep(
-                    0.2
-                )  # Internal cancellation polling, not an operational limit.
+            try:
+                async with cancellation_signal_reader(self.session_id) as read_signal:
+                    while not shutdown.is_set():
+                        if await read_signal():
+                            return
+                        # A dependency may consume cancellation while returning
+                        # a poll result. The owner still needs this task to end.
+                        if shutdown.is_set():
+                            return
+                        await asyncio.sleep(
+                            0.2
+                        )  # Internal polling, not an operational limit.
+            except Exception as error:
+                from .audit import report_operational_failure
+
+                report_operational_failure(error)
+                raise
 
         task = asyncio.ensure_future(awaitable)
         watcher = asyncio.create_task(watch())
+        primary_error = None
         try:
             done, _ = await asyncio.wait(
                 (task, watcher), return_when=asyncio.FIRST_COMPLETED
@@ -81,12 +89,21 @@ class ChatReview:
 
                 raise ReviewInterrupted("Curator stopped validation review")
             return await task
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
             shutdown.set()
             watcher.cancel()
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, watcher, return_exceptions=True)
+            # A close failure can arrive after the work finished. Reported by
+            # watch(), it must not turn into successful review completion.
+            if primary_error is None and not watcher.cancelled():
+                error = watcher.exception()
+                if error is not None:
+                    raise error
 
     async def direct_action(self, extractor, input_items):
         """The supervisor interprets intent; code can invoke only the bound extractor.

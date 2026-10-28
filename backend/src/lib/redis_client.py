@@ -5,8 +5,11 @@ that needs to be accessible across multiple worker processes,
 such as stream cancellation signals.
 """
 
+import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import redis.asyncio as redis
@@ -22,6 +25,12 @@ def get_redis_url() -> str:
     return os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 
+def _create_redis_client() -> redis.Redis:
+    return redis.from_url(
+        get_redis_url(), encoding="utf-8", decode_responses=True
+    )
+
+
 async def get_redis() -> redis.Redis:
     """Get or create the async Redis client.
 
@@ -31,13 +40,8 @@ async def get_redis() -> redis.Redis:
     global _redis_client
 
     if _redis_client is None:
-        redis_url = get_redis_url()
         logger.info('Connecting to Redis')
-        _redis_client = redis.from_url(
-            redis_url,
-            encoding="utf-8",
-            decode_responses=True
-        )
+        _redis_client = _create_redis_client()
 
     return _redis_client
 
@@ -56,6 +60,44 @@ async def close_redis() -> None:
 CANCEL_KEY_PREFIX = "chat:cancel:"
 OWNER_KEY_PREFIX = "chat:owner:"
 CANCEL_TTL_SECONDS = 300  # 5 minutes - cleanup stale keys
+
+
+@asynccontextmanager
+async def cancellation_signal_reader(
+    session_id: str,
+) -> AsyncIterator[Callable[[], Awaitable[bool]]]:
+    """Own one cancellation connection on the watcher's event loop.
+
+    Batch documents run on short-lived loops. They must never borrow the HTTP
+    loop's shared pool. Read failures propagate: an unreadable signal is not
+    evidence that the curator has not stopped the review.
+    """
+    client = _create_redis_client()
+
+    async def read() -> bool:
+        return await client.get(f"{CANCEL_KEY_PREFIX}{session_id}") is not None
+
+    body_failed = False
+    try:
+        yield read
+    except BaseException:
+        body_failed = True
+        raise
+    finally:
+        # Work completion and parent cancellation may both cancel the watcher.
+        # Drain the same close task before its document loop can disappear.
+        closing = asyncio.create_task(client.aclose())
+        cancelled = None
+        while not closing.done():
+            try:
+                await asyncio.shield(closing)
+            except asyncio.CancelledError as error:
+                cancelled = error
+        closing.result()
+        # A cancellation during close must not erase an earlier read failure
+        # before the review owner can report it and prevent false completion.
+        if cancelled is not None and not body_failed:
+            raise cancelled
 
 
 def _build_owner_value(user_id: str, stream_token: Optional[str]) -> str:

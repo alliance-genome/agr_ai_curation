@@ -1,5 +1,6 @@
 """Chat adapter uses real admission/history/checkpoints with fake validator answers."""
 
+from tests.cancellation_test_support import install_cancel_reader
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
@@ -38,9 +39,7 @@ def planned(scope, tmp_path, monkeypatch, request):
     # is tested separately; do not share Redis's loop-bound pool across cases.
     from unittest.mock import AsyncMock
 
-    monkeypatch.setattr(
-        "src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False)
-    )
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     fixture_options = getattr(request, "param", None)
     fixture_shape = fixture_options.get("shape") if isinstance(fixture_options, dict) else fixture_options
     admit_initial = fixture_options.get("admitted", True) if isinstance(fixture_options, dict) else True
@@ -359,9 +358,7 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
 
     from unittest.mock import AsyncMock
 
-    monkeypatch.setattr(
-        "src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False)
-    )
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
 
     pack = _multivalued_dispatch_pack(tmp_path)
     env = DomainEnvelope(

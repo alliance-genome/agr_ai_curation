@@ -1,5 +1,6 @@
 """Shared review judgments through real runtime producers and current CSV output."""
 
+from tests.cancellation_test_support import install_cancel_reader
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from uuid import uuid4
@@ -971,7 +972,7 @@ async def test_canonical_workspace_command_reviews_fresh_records_and_retains_his
         lambda: lambda subject: AuthPrincipal(subject=subject, provider="fixture", groups=[]),
     )
     monkeypatch.setattr(reviewer, "create_direct_supervisor", lambda **kwargs: canonical_models.supervisor)
-    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False))
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     def unexpected(error):
         raise error
     monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure", unexpected)

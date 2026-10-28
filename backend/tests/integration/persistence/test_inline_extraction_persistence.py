@@ -19,6 +19,7 @@ mocks; these tests use real DB sessions only.
 
 from __future__ import annotations
 
+from tests.cancellation_test_support import install_cancel_reader
 from agents import RunConfig as SDKRunConfig
 
 import copy
@@ -212,7 +213,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
     monkeypatch.setattr("src.lib.prompts.assembly.build_agent_prompt_layers",
                         lambda *a, **k: SimpleNamespace(layers=(), hash="fixture"))
-    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False))
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda *args: [])
 
     async def initial(adapter):

@@ -353,6 +353,14 @@ replaces routing instructions; no instruction requests unavailable routing or
 inspection tools. Prompt layers and actual tools are recorded for TraceReview.
 Stop polls the shared cancellation signal during non-streaming review and
 validator work; real answers that arrive after cancellation remain in history.
+Each watcher owns a Redis client on its current event loop, reuses it across
+polls, and joins connection cleanup before the loop can close. This prevents
+short-lived batch document loops from borrowing or contaminating the HTTP
+loop's shared connection pool. An unreadable stop signal is an operational
+failure, reported through the existing sanitized review reporter; it is not
+interpreted as permission to continue. Batch Cancel remains enforced by its
+persisted status and document checkpoints; this connection lifecycle does not
+add immediate interruption of in-flight batch provider calls.
 
 Direct extraction presentation uses the current selected checkpoint, scoped to
 the current extraction turn. Immutable originals are retained separately. The

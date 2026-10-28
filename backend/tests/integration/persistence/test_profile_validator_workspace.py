@@ -5,6 +5,7 @@ receipt triggers, envelope checkpoints, drafts, findings and snapshots are real.
 Fixtures use unique identities in the disposable test database. Each test removes
 its own live projections and retires its immutable audit history during teardown.
 """
+from tests.cancellation_test_support import install_cancel_reader
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -322,7 +323,7 @@ async def test_manual_profile_worker_selects_saved_answer_and_refreshes_draft(ma
     from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
     db, candidate, _ = manual_profile_record
     owner = _history_context(candidate).user_id
-    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", AsyncMock(return_value=False))
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     monkeypatch.setattr(validator_adapter, "binding_contract", lambda match: {"binding_id": match.binding.binding_id})
     requests = []
     def answer(request, **kwargs):

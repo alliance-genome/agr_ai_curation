@@ -1,5 +1,6 @@
 """Review work must finish even when cancellation polling absorbs cancellation."""
 
+from tests.cancellation_test_support import install_cancel_reader
 import asyncio
 
 import pytest
@@ -30,7 +31,7 @@ async def test_review_joins_watcher_after_work_finishes(
             absorbed_cancel.set()
             return False
 
-    monkeypatch.setattr("src.lib.redis_client.check_cancel_signal", check_cancel)
+    install_cancel_reader(monkeypatch, check_cancel)
 
     async def work():
         work_started.set()
