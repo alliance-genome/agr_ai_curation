@@ -233,3 +233,158 @@ def test_capacity_metrics_survive_secret_redaction(tmp_path, monkeypatch):
     finally:
         events.clear_extraction_trace_run()
     assert event["output_summary"]["preview"] == {**metrics, "access_token": "<redacted>"}
+
+
+def test_append_waits_for_other_file_owner(tmp_path, monkeypatch):
+    import fcntl
+    import threading
+
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    path = events.trace_event_path("locked")
+    started = threading.Event()
+
+    def append():
+        started.set()
+        events._append_jsonl("locked", {"event_id": "waiting"})
+
+    with path.open("a") as owner:
+        fcntl.flock(owner.fileno(), fcntl.LOCK_EX)
+        worker = threading.Thread(target=append)
+        worker.start()
+        try:
+            assert started.wait(5)
+            worker.join(0.2)
+            assert worker.is_alive(), "append ignored another writer's file lock"
+            assert path.read_bytes() == b""
+        finally:
+            fcntl.flock(owner.fileno(), fcntl.LOCK_UN)
+            worker.join(5)
+    assert not worker.is_alive()
+    assert [json.loads(line) for line in path.read_text().splitlines()] == [{"event_id": "waiting"}]
+
+
+def _append_mixed_events(directory, writer):
+    import os
+    os.environ["EXTRACTION_TRACE_EVENT_DIR"] = directory
+    for index in range(30):
+        events._append_jsonl("concurrent", {
+            "event_id": f"{writer}:{index}",
+            "schema_version": events.SCHEMA_VERSION,
+            "trace_id": "concurrent",
+            "payload": "x" * (40000 if index % 2 else 100),
+        })
+
+
+def test_concurrent_threads_and_processes_preserve_every_record(tmp_path, monkeypatch):
+    import multiprocessing
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    ctx = multiprocessing.get_context("spawn")
+    processes = [ctx.Process(target=_append_mixed_events, args=(str(tmp_path), f"process-{i}")) for i in range(2)]
+    for process in processes:
+        process.start()
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda i: _append_mixed_events(str(tmp_path), f"thread-{i}"), range(4)))
+        for process in processes:
+            process.join(30)
+            assert process.exitcode == 0
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(5)
+    raw = events.trace_event_path("concurrent").read_bytes()
+    assert raw.endswith(b"\n")
+    rows = [json.loads(line) for line in raw.splitlines()]
+    expected = {f"{kind}-{i}:{j}" for kind, count in (("thread", 4), ("process", 2)) for i in range(count) for j in range(30)}
+    assert len(rows) == len(expected)
+    assert {row["event_id"] for row in rows} == expected
+    # Use the real standalone reader without importing its conflicting src package.
+    from pathlib import Path
+    reader_root = next(parent / "trace_review/backend/src" for parent in Path(__file__).resolve().parents
+                       if (parent / "trace_review/backend/src/analyzers").is_dir())
+    monkeypatch.syspath_prepend(str(reader_root))
+    from importlib import import_module
+    analyzer = import_module("analyzers.extraction_timeline").ExtractionTimelineAnalyzer
+    loaded = analyzer.load_durable_events("concurrent")
+    assert len(loaded) == len(expected)
+    assert {row["event_id"] for row in loaded} == expected
+    for row in rows:
+        index = int(row["event_id"].split(":")[1])
+        assert row["payload"] == "x" * (40000 if index % 2 else 100)
+
+
+def test_lock_failure_reports_safely_and_still_mirrors(tmp_path, monkeypatch):
+    from src.lib.observability import runtime
+
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    captured, mirrored = [], []
+    monkeypatch.setattr(runtime, "report_runtime_exception", lambda exc, **kw: captured.append((str(exc), kw)))
+    monkeypatch.setattr(events, "_mirror_to_langfuse", mirrored.append)
+
+    def fail_lock(*args):
+        raise OSError("private-path-secret")
+
+    monkeypatch.setattr(events.fcntl, "flock", fail_lock)
+    events.start_extraction_trace_run(trace_id="lock-failed")
+    try:
+        result = events.write_extraction_trace_event(event_type="test.failure")
+    finally:
+        events.clear_extraction_trace_run()
+    assert mirrored == [result]
+    assert len(captured) == 1
+    assert captured[0][1]["operation"] == "write_failed"
+    assert "private-path-secret" not in str(captured)
+    assert events.trace_event_path("lock-failed").read_bytes() == b""
+
+
+def test_flush_failure_keeps_lock_until_close_and_releases_it(tmp_path, monkeypatch):
+    import fcntl
+    from pathlib import Path
+    import pytest
+    from src.lib.observability import runtime
+
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    path = events.trace_event_path("flush-failure")
+    original_open = Path.open
+    captured, checkpoints = [], []
+    monkeypatch.setattr(runtime, "report_runtime_exception", lambda exc, **kw: captured.append(kw))
+
+    def assert_locked():
+        with original_open(path, "a") as contender:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    class FailingFlush:
+        def __enter__(self):
+            self.handle = original_open(path, "a", encoding="utf-8")
+            return self
+
+        def fileno(self):
+            return self.handle.fileno()
+
+        def write(self, line):
+            return self.handle.write(line)
+
+        def flush(self):
+            assert_locked()
+            checkpoints.append("flush")
+            raise OSError("sensitive flush detail")
+
+        def __exit__(self, *args):
+            try:
+                assert_locked()
+                checkpoints.append("close")
+            finally:
+                self.handle.close()
+
+    monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: FailingFlush())
+    events._append_jsonl("flush-failure", {"event_id": "one"})
+    assert checkpoints == ["flush", "close"]
+    assert len(captured) == 1 and captured[0]["operation"] == "write_failed"
+    with original_open(path, "a") as contender:
+        fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with original_open(path) as reader:
+        assert json.load(reader) == {"event_id": "one"}

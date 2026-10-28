@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
@@ -446,10 +447,14 @@ def _domain_pack_id_from_one(payload: Any) -> str | None:
 def _append_jsonl(trace_id: str, event: dict[str, Any]) -> None:
     path = trace_event_path(trace_id)
     try:
+        line = json.dumps(event, sort_keys=True, default=str) + "\n"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, sort_keys=True, default=str))
-            handle.write("\n")
+            # Separate open handles serialize threads and processes per trace.
+            # Keep the lock through flush/close, including exceptional cleanup.
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            handle.write(line)
+            handle.flush()
     except Exception as exc:
         try:
             from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
