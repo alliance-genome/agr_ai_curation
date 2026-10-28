@@ -68,7 +68,7 @@ def test_validator_runner_receives_history_and_locked_independence_prompt(phase_
         "scope": HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"), "artifact_id": "artifact",
         "packet_bytes": 2048, "protocol": RECONSIDERATION_PROTOCOL})
     try:
-        binding = SimpleNamespace(raw={}, max_tool_calls=None)
+        binding = SimpleNamespace(raw={}, max_tool_calls=None, route_value=None)
         if batch:
             run_package_scoped_validator_agent_batch(
                 [SimpleNamespace(request=request, match=SimpleNamespace(binding=binding))], binding=binding)
