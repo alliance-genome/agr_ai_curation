@@ -1594,3 +1594,235 @@ async def test_review_compaction_on_websocket_client_never_hides_http_retries(mo
         assert published[-1]["provider_usage"]["status"] == "not_reported"
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_drains_settlement_and_publishes_before_owner_exit(monkeypatch):
+    from threading import Event
+    from src.lib.validation_review import provider
+    from src.lib.validation_history.store import HistoryScope
+
+    entered, release = Event(), Event()
+    budget = provider.ExecutionBudget(HistoryScope("owner", None, "session"), "episode", "initial_tokens", False)
+    order = []
+    measured = {"_review_reservation": "reservation", "prompt_cache": {}}
+
+    def settle(reservation, usage):
+        if reservation is not None:
+            entered.set()
+            assert release.wait(5)
+            assert budget.execution.capture_owner_active
+            order.append("settled")
+
+    def publish(item):
+        assert budget.execution.capture_owner_active
+        item["_published"] = True
+        order.append("published")
+
+    monkeypatch.setattr(provider, "settle", settle)
+    monkeypatch.setattr(measurement_module, "_publish", publish)
+
+    async def own():
+        with provider.budget_scope(budget):
+            await measurement_module._record_outcome_async(measured, outcome="completed",
+                usage={"status": "reported", "input_tokens": 12, "output_tokens": 3})
+
+    task = asyncio.create_task(own())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        delivered = asyncio.get_running_loop().create_future()
+        asyncio.get_running_loop().call_soon(delivered.set_result, None)
+        await delivered
+        assert not task.done(), "Settlement detached from its accounting owner"
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
+        assert order == ["settled", "published"]
+        assert measured["_published"]
+        assert not budget.execution.capture_owner_active
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("provider_failed", [False, True])
+async def test_received_model_history_finishes_before_cancel_propagates(monkeypatch, published, streaming, provider_failed):
+    from src.lib.validation_review import provider
+    from src.lib.validation_history.store import HistoryScope
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    archived = []
+    response = _final("exact late answer")
+    error = RuntimeError("fixture provider failure")
+    model = FakeResponsesWSModel([error if provider_failed else response])
+    measured = measurement_module.MeasuredModel(model, agent=None, provider_hint="openai")
+    budget = provider.ExecutionBudget(HistoryScope("owner", None, "session"), "episode", "initial_tokens", False)
+    monkeypatch.setattr(provider.admission, "reserve", lambda *a, **kw: "reservation")
+    settled = []
+    monkeypatch.setattr(provider.admission, "reconcile", lambda *a, **kw: settled.append(kw["actual"]))
+    monkeypatch.setattr(provider, "remaining_seconds", lambda _: None)
+
+    async def archive(handle, kind, payload, **kwargs):
+        if kind == ("model_error" if provider_failed else "model_output"):
+            entered.set()
+            await release.wait()
+            assert budget.execution.capture_owner_active
+            archived.append((kind, payload))
+
+    monkeypatch.setattr("src.lib.openai_agents.run_history.record_model_history", archive)
+
+    async def owned():
+        with provider.budget_scope(budget):
+            if streaming:
+                async for _ in measured.stream_response("policy", "input", ModelSettings(), [], None, [], None):
+                    pass
+            else:
+                await measured.get_response("policy", "input", ModelSettings(), [], None, [], None)
+
+    task = asyncio.create_task(owned())
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        delivered = asyncio.get_running_loop().create_future()
+        asyncio.get_running_loop().call_soon(delivered.set_result, None)
+        await delivered
+        assert not task.done()
+        task.cancel()
+        release.set()
+        with pytest.raises(RuntimeError if provider_failed else asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
+        assert len(archived) == 1
+        if not provider_failed:
+            assert archived[0][1] == response.output
+        assert len(settled) == 1
+        assert len(published) == 1
+        assert not budget.execution.capture_owner_active
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["stream_close", "compact_settlement"])
+async def test_cleanup_cancel_preserves_existing_provider_failure(monkeypatch, surface):
+    from threading import Event
+    from src.lib.validation_review import provider
+    from src.lib.validation_history.store import HistoryScope
+
+    entered, release = Event(), Event()
+    failed = RuntimeError("original provider failure")
+    budget = provider.ExecutionBudget(HistoryScope("owner", None, "session"), "episode", "initial_tokens", False)
+    monkeypatch.setattr(provider.admission, "reserve", lambda *a, **kw: "reservation")
+    monkeypatch.setattr(provider, "remaining_seconds", lambda _: None)
+
+    def reconcile(*args, **kwargs):
+        if surface == "compact_settlement":
+            entered.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(provider.admission, "reconcile", reconcile)
+
+    class BrokenStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed
+
+        async def aclose(self):
+            entered.set()
+            assert await asyncio.to_thread(release.wait, 5)
+
+    class BrokenModel(FakeResponsesWSModel):
+        def stream_response(self, *args, **kwargs):
+            return BrokenStream()
+
+    async def compact(**kwargs):
+        raise failed
+
+    async def run():
+        with provider.budget_scope(budget):
+            if surface == "compact_settlement":
+                await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
+                    kwargs={"model": "gpt-test", "input": []}, call=compact)
+            else:
+                model = measurement_module.MeasuredModel(BrokenModel(), agent=None, provider_hint="openai")
+                async for _ in model.stream_response("policy", "input", ModelSettings(), [], None, [], None):
+                    pass
+
+    task = asyncio.create_task(run())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        task.cancel()
+        delivered = asyncio.get_running_loop().create_future()
+        asyncio.get_running_loop().call_soon(delivered.set_result, None)
+        await delivered
+        task.cancel()
+        release.set()
+        with pytest.raises(RuntimeError) as caught:
+            await asyncio.wait_for(task, 5)
+        assert caught.value is failed
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_early_stream_close_keeps_sdk_span_context(monkeypatch):
+    from contextvars import ContextVar
+    from contextlib import contextmanager
+    from agents.models.interface import ModelTracing
+    import agents.models.openai_responses as sdk_responses
+
+    current = ContextVar("test_sdk_stream_span", default=None)
+    closed = []
+
+    @contextmanager
+    def span(**kwargs):
+        token = current.set("owned-span")
+        try:
+            yield SimpleNamespace(set_error=lambda error: None, span_data=SimpleNamespace())
+        finally:
+            current.reset(token)  # SDK span tokens must reset in their own context.
+            closed.append(True)
+
+    async def chunks():
+        yield SimpleNamespace(type="response.created")
+
+    async def fetch(*args, **kwargs):
+        return chunks()
+
+    model = OpenAIResponsesModel(model="gpt-test", openai_client=AsyncOpenAI(api_key="test", max_retries=0))
+    monkeypatch.setattr(sdk_responses, "response_span", span)
+    monkeypatch.setattr(model, "_fetch_response", fetch)
+    measured = measurement_module.MeasuredModel(model, agent=None, provider_hint="openai")
+    stream = measured.stream_response("policy", "input", ModelSettings(), [], None, [], ModelTracing.ENABLED)
+    assert (await anext(stream)).type == "response.created"
+    assert current.get() == "owned-span"
+    await stream.aclose()
+    assert closed == [True]
+    assert current.get() is None
+
+
+@pytest.mark.asyncio
+async def test_early_close_generator_exit_does_not_swallow_new_cancellation():
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def finish():
+        entered.set()
+        await release.wait()
+
+    task = asyncio.create_task(measurement_module._await_finalization(finish(), prior_error=GeneratorExit()))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 5)
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)

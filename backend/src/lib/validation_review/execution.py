@@ -42,7 +42,9 @@ async def execute(
     def details():
         with store.SessionLocal() as db:
             row = db.get(ValidationReviewWork, work_id)
-            ep, _ = admission.lock_episode(db, scope, row.episode_id)
+            from src.models.sql.validation_review import ValidationReviewEpisode
+            ep = db.get(ValidationReviewEpisode, row.episode_id)
+            store._artifact(db, ep.artifact_id, scope)
             return ep.id, ep.artifact_id, ep.policy["lease_seconds"]
 
     episode_id, artifact_id, lease_seconds = await asyncio.to_thread(details)
@@ -59,13 +61,16 @@ async def execute(
         ),
     }
     budget = ExecutionBudget(
-        scope, episode_id, payload["token_pool"], reviewer=False, work_id=work_id
+        scope, episode_id, payload["token_pool"], reviewer=False, work_id=work_id, lease_token=claim["lease_token"]
     )
-    await asyncio.to_thread(work.mark_submitted, scope, work_id, claim["lease_token"])
+    async def invoke():
+        await work.submit_owned(scope, work_id, claim["lease_token"], execution=budget.execution)
+        return await guarded_await(call(payload))
+
     try:
         with budget_scope(budget):
             results = await _while_owned(
-                guarded_await(call(payload)),
+                invoke(),
                 scope,
                 work_id,
                 claim["lease_token"],
@@ -94,6 +99,10 @@ async def execute(
         )
         return {"state": "completed", "work_id": work_id, **outcome}
     except BaseException as error:
+        if not budget.execution.submitted:
+            # No delivery committed: preserve claimed-work recovery and never
+            # invent completions or report an ordinary pre-submission stop.
+            raise
         from .stops import review_stop
 
         stopped = review_stop(error)

@@ -223,3 +223,60 @@ async def test_explicit_deadline_still_interrupts(setup, monkeypatch):
     with p.budget_scope(budget), pytest.raises(TimeoutError) as caught:
         await p.guarded_await(asyncio.Event().wait())
     assert caught.value._review_deadline_expired
+
+
+@pytest.mark.asyncio
+async def test_cancelled_admission_drains_and_records_unsent_usage(setup, monkeypatch):
+    import asyncio
+    from threading import Event
+
+    budget, _, _, reconcile = setup
+    entered, release = Event(), Event()
+
+    def reserve(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return "reserved-before-cancellation"
+
+    monkeypatch.setattr(p.admission, "reserve", reserve)
+    with p.budget_scope(budget):
+        task = asyncio.create_task(p.register_provider_call(operation="responses", model="fixture"))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            task.cancel()
+            delivered = asyncio.get_running_loop().create_future()
+            asyncio.get_running_loop().call_soon(delivered.set_result, None)
+            await delivered
+            assert not task.done()
+            task.cancel()  # repeated cancellation cannot detach the reservation
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 5)
+            assert budget.execution.provider_admitted
+            assert budget.execution.owner_stopped
+            reconcile.assert_called_once_with(budget.scope, budget.episode_id,
+                "reserved-before-cancellation", actual={"reviewer_tokens": 0})
+            with pytest.raises(p.admission.ReviewStopped, match="cancelled"):
+                await p.register_provider_call(operation="responses", model="fixture")
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_owner_stop_on_another_thread_prevents_reserved_call_from_being_sent(setup, monkeypatch):
+    budget, _, _, reconcile = setup
+
+    def reserve(*args, **kwargs):
+        # Simulates the owning event loop stopping a validator while its own
+        # event loop is awaiting SQL, without cancelling that worker loop.
+        budget.execution.owner_stopped = True
+        return "unsent"
+
+    monkeypatch.setattr(p.admission, "reserve", reserve)
+    with p.budget_scope(budget):
+        with pytest.raises(p.admission.ReviewStopped, match="cancelled"):
+            await p.register_provider_call(operation="responses", model="fixture")
+    assert budget.execution.provider_admitted
+    reconcile.assert_called_once_with(budget.scope, budget.episode_id, "unsent",
+                                      actual={"reviewer_tokens": 0})

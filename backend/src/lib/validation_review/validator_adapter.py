@@ -690,9 +690,35 @@ class ValidatorAdapter:
         if changed:
             raise admission.ReviewStopped("configured_validator_changed")
         # Custom revisions are reauthorized by the existing package runner.
-        return await asyncio.get_running_loop().run_in_executor(
-            _VALIDATOR_POOL, partial(copy_context().run, self._call, payload, jobs)
-        )
+        submitted = _VALIDATOR_POOL.submit(copy_context().run, self._call, payload, jobs)
+        pending = asyncio.wrap_future(submitted)
+        try:
+            # Cancelling the wrapper must not detach an already-running thread.
+            return await asyncio.shield(pending)
+        except asyncio.CancelledError:
+            from .provider import ACTIVE_BUDGET
+            budget = ACTIVE_BUDGET.get()
+            if budget is not None:
+                budget.execution.owner_stopped = True
+            if submitted.cancel():
+                # A queued job must never start after its owner stops.
+                pending.cancel()
+            else:
+                while not pending.done():
+                    try:
+                        await asyncio.shield(pending)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not pending.cancelled():
+                    error = pending.exception()
+                    if error is not None:
+                        from .stops import review_stop
+                        if review_stop(error) is None:
+                            from .audit import report_operational_failure
+                            report_operational_failure(error)
+            raise
 
     def _call(self, payload, jobs):
         request_ref = self.plan["envelope"]["metadata"].get("workspace_review_request")

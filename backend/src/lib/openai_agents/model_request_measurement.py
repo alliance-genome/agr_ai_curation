@@ -980,15 +980,27 @@ def record_outcome(
     _publish(measurement)
 
 
+async def _await_finalization(awaitable, *, prior_error=None):
+    """Finish owned accounting/archive work before propagating cancellation."""
+    pending = asyncio.ensure_future(awaitable)
+    cancelled = None
+    while not pending.done():
+        try:
+            await asyncio.shield(pending)
+        except asyncio.CancelledError as error:
+            cancelled = error
+    result = pending.result()
+    if cancelled is not None:
+        if prior_error is not None and not isinstance(prior_error, GeneratorExit):
+            raise prior_error
+        raise cancelled
+    return result
+
+
 async def _record_outcome_async(measurement, **kwargs):
-    # Keep existing telemetry behavior, but never block the event loop on the
-    # review quota transaction. Direct synchronous callers retain record_outcome.
-    from src.lib.validation_review.provider import settle
-    reservation = measurement.get("_review_reservation")
-    if reservation is not None and not measurement.get("_published"):
-        await asyncio.to_thread(settle, reservation, kwargs.get("usage"))
-        measurement["_review_reservation"] = None
-    record_outcome(measurement, **kwargs)
+    # Settlement, the runtime ledger and publication are one owned boundary.
+    # SQL must not block the model's event loop or outlive its accounting owner.
+    await _await_finalization(asyncio.to_thread(record_outcome, measurement, **kwargs))
 
 
 def _publish(measurement: dict[str, Any]) -> None:
@@ -1350,24 +1362,28 @@ class MeasuredModel(Model):
                 ))
         except BaseException as exc:
             from .run_history import record_model_history
-            await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
-            self._observe_tool_surface(measurement, None)
-            await _record_outcome_async(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
+            async def finalize_failure(error: BaseException):
+                self._observe_tool_surface(measurement, None)
+                await _record_outcome_async(measurement, outcome=_failure_outcome(error), error_type=type(error).__name__)
+                await record_model_history(self._history, "model_error", {"error_type": type(error).__name__, "message": str(error)}, outcome="raised")
+            await _await_finalization(finalize_failure(exc), prior_error=exc)
             raise
         from .run_history import record_model_history
         self._observe_tool_surface(measurement, response)
-        await _record_outcome_async(
-            measurement,
-            outcome="completed",
-            usage=usage_from_model_response(response),
-            raw_usage=measurement.get("_raw_provider_usage", getattr(response, "usage", None)),
-            sdk_normalized_usage="_raw_provider_usage" not in measurement,
-            response_id=getattr(response, "response_id", None),
-            provider_request_id=getattr(response, "request_id", None),
-        )
-        # Provider usage remains billable even if durable history fails. Record it
-        # before enforcing the archive barrier; never return unsaved output to the SDK.
-        await record_model_history(self._history, "model_output", getattr(response, "output", None), outcome="completed")
+        async def finalize_response():
+            await _record_outcome_async(
+                measurement,
+                outcome="completed",
+                usage=usage_from_model_response(response),
+                raw_usage=measurement.get("_raw_provider_usage", getattr(response, "usage", None)),
+                sdk_normalized_usage="_raw_provider_usage" not in measurement,
+                response_id=getattr(response, "response_id", None),
+                provider_request_id=getattr(response, "request_id", None),
+            )
+            # Provider usage remains billable even if durable history fails. Record it
+            # before enforcing the archive barrier; never return unsaved output to the SDK.
+            await record_model_history(self._history, "model_output", getattr(response, "output", None), outcome="completed")
+        await _await_finalization(finalize_response())
         return response
 
     async def stream_response(
@@ -1425,6 +1441,7 @@ class MeasuredModel(Model):
         )
         terminal_response: Any = None
         terminal_type: str | None = None
+        stream_error: BaseException | None = None
         from src.lib.cost_ledger.runtime_writes import runtime_attempt_scope, reserve_runtime_request
         try:
             measurement["_runtime_accounting"] = reserve_runtime_request(measurement)
@@ -1437,43 +1454,57 @@ class MeasuredModel(Model):
                     terminal_response = getattr(event, "response", None)
                     terminal_type = event_type
                     from .run_history import record_model_history
-                    await record_model_history(self._history, "model_output", getattr(terminal_response, "output", None), outcome=event_type)
+                    await _await_finalization(record_model_history(self._history, "model_output", getattr(terminal_response, "output", None), outcome=event_type))
                     if measurement.get("api") == "responses":
                         _observe_service_tier(measurement, event)
                 yield event
                 with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
                     event = await guarded_await(anext(stream, _STREAM_END))
         except BaseException as exc:
+            stream_error = exc
             from .run_history import record_model_history
-            await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
-            if terminal_response is None:
-                self._observe_tool_surface(measurement, None)
-                await _record_outcome_async(
-                    measurement,
-                    outcome=_failure_outcome(exc),
-                    error_type=type(exc).__name__,
-                )
+            async def finalize_stream_failure(error: BaseException):
+                if terminal_response is None:
+                    self._observe_tool_surface(measurement, None)
+                    await _record_outcome_async(
+                        measurement,
+                        outcome=_failure_outcome(error),
+                        error_type=type(error).__name__,
+                    )
+                await record_model_history(self._history, "model_error", {"error_type": type(error).__name__, "message": str(error)}, outcome="raised")
+            await _await_finalization(finalize_stream_failure(exc), prior_error=exc)
             raise
         finally:
-            if terminal_response is not None:
-                self._observe_tool_surface(measurement, terminal_response)
-                await _record_outcome_async(
-                    measurement,
-                    outcome=(terminal_type or "response.completed").removeprefix("response."),
-                    usage=usage_from_provider_payload(getattr(terminal_response, "usage", None)),
-                    raw_usage=measurement.get("_raw_provider_usage", getattr(terminal_response, "usage", None)),
-                    sdk_normalized_usage=("_raw_provider_usage" not in measurement
-                                          and measurement.get("api") == "chat_completions"),
-                    response_id=getattr(terminal_response, "id", None),
-                    provider_request_id=getattr(terminal_response, "_request_id", None),
-                )
-            else:
-                self._observe_tool_surface(measurement, None)
-                await _record_outcome_async(measurement, outcome="stream_closed_without_terminal_event")
-            aclose = getattr(stream, "aclose", None)
-            if callable(aclose):
-                with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
-                    await aclose()
+            async def finalize_stream():
+                if terminal_response is not None:
+                    self._observe_tool_surface(measurement, terminal_response)
+                    await _record_outcome_async(
+                        measurement,
+                        outcome=(terminal_type or "response.completed").removeprefix("response."),
+                        usage=usage_from_provider_payload(getattr(terminal_response, "usage", None)),
+                        raw_usage=measurement.get("_raw_provider_usage", getattr(terminal_response, "usage", None)),
+                        sdk_normalized_usage=("_raw_provider_usage" not in measurement
+                                              and measurement.get("api") == "chat_completions"),
+                        response_id=getattr(terminal_response, "id", None),
+                        provider_request_id=getattr(terminal_response, "_request_id", None),
+                    )
+                else:
+                    self._observe_tool_surface(measurement, None)
+                    await _record_outcome_async(measurement, outcome="stream_closed_without_terminal_event")
+            try:
+                await _await_finalization(finalize_stream(), prior_error=stream_error)
+            finally:
+                # SDK async generators reset span tokens created by anext in
+                # this task. Closing in a copied Context raises ValueError.
+                aclose = getattr(stream, "aclose", None)
+                if callable(aclose):
+                    try:
+                        with runtime_attempt_scope(measurement.get("_runtime_accounting")), provider_measurement_scope(measurement):
+                            await aclose()
+                    except asyncio.CancelledError:
+                        if stream_error is not None and not isinstance(stream_error, (GeneratorExit, asyncio.CancelledError)):
+                            raise stream_error
+                        raise
 
 
 def _span_identity(measurement: Mapping[str, Any]) -> dict[str, Any]:
@@ -1714,7 +1745,10 @@ async def call_measured_direct_request(
             if api == "responses.compact" else call(**kwargs)
         )
     except BaseException as exc:
-        await _record_outcome_async(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
+        await _await_finalization(
+            _record_outcome_async(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__),
+            prior_error=exc,
+        )
         raise
     _observe_service_tier(measurement, response)
     await _record_outcome_async(

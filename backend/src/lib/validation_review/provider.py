@@ -22,6 +22,8 @@ class _ExecutionState:
     clock_initialized: bool = False
     clock_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     provider_admitted: bool = False
+    owner_stopped: bool = False
+    submitted: bool = False
     capture_owner_active: bool = False
 
 
@@ -33,6 +35,7 @@ class ExecutionBudget:
     reviewer: bool
     reviewer_agent_id: str | None = None
     work_id: str | None = None
+    lease_token: str | None = None
     execution: _ExecutionState = field(default_factory=_ExecutionState, compare=False)
 
     def __post_init__(self):
@@ -161,13 +164,70 @@ async def register_provider_call(*, operation, model, reviewer_turn=False):
     charges = {budget.token_pool: 0}
     if reviewer_turn:
         charges["reviewer_turns"] = 1
-    rid = await asyncio.to_thread(
+    if budget.execution.owner_stopped:
+        raise admission.ReviewStopped("cancelled")
+    fence = ({"work_id": budget.work_id, "lease_token": budget.lease_token}
+             if budget.work_id is not None else {})
+    registering = asyncio.create_task(asyncio.to_thread(
         admission.reserve, budget.scope, budget.episode_id,
         operation_id="provider:" + str(uuid4()), charges=charges,
         request={"work_id": budget.work_id, "model": model, "operation": operation,
-                 "usage_metered": True, "token_pool": budget.token_pool},
-    )
+                 "usage_metered": True, "token_pool": budget.token_pool}, **fence,
+    ))
+    try:
+        rid = await asyncio.shield(registering)
+    except asyncio.CancelledError:
+        budget.execution.owner_stopped = True
+        # A cancelled asyncio wrapper cannot cancel a running SQL transaction.
+        # Resolve it before classifying work or releasing its accounting owner.
+        while not registering.done():
+            try:
+                await asyncio.shield(registering)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        error = registering.exception()
+        if error is None:
+            rid = registering.result()
+            budget.execution.provider_admitted = True
+            # This function never returned the reservation, so no provider
+            # invocation used it. Record known zero tokens, not missing usage.
+            settling = asyncio.create_task(asyncio.to_thread(
+                admission.reconcile, budget.scope, budget.episode_id, rid,
+                actual=charges,
+            ))
+            while not settling.done():
+                try:
+                    await asyncio.shield(settling)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            error = settling.exception()
+        if error is not None:
+            from .stops import review_stop
+            if review_stop(error) is None:
+                from .audit import report_operational_failure
+                report_operational_failure(error)
+        raise
     budget.execution.provider_admitted = True
+    if budget.execution.owner_stopped:
+        # Cancellation can arrive from the owner on a different event loop
+        # while this worker waits for SQL. Never send the newly reserved call.
+        closing = asyncio.create_task(asyncio.to_thread(
+            admission.reconcile, budget.scope, budget.episode_id, rid, actual=charges,
+        ))
+        cancelled = None
+        while not closing.done():
+            try:
+                await asyncio.shield(closing)
+            except asyncio.CancelledError as error:
+                cancelled = error
+        closing.result()
+        if cancelled is not None:
+            raise cancelled
+        raise admission.ReviewStopped("cancelled")
     return budget, rid, charges
 
 

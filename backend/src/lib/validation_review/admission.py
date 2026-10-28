@@ -541,16 +541,16 @@ def reserve_in_transaction(
     return reservation
 
 
-def reserve(history_scope, episode_id, *, operation_id, charges, request):
+def reserve(history_scope, episode_id, *, operation_id, charges, request, work_id=None, lease_token=None):
     with store.SessionLocal.begin() as db:
-        return reserve_in_transaction(
-            db,
-            history_scope,
-            episode_id,
-            operation_id=operation_id,
-            charges=charges,
-            request=request,
-        ).id
+        reservation = reserve_in_transaction(
+            db, history_scope, episode_id, operation_id=operation_id,
+            charges=charges, request=request,
+        )
+        if work_id is not None:
+            from .work import require_provider_ownership
+            require_provider_ownership(db, episode_id, work_id, lease_token)
+        return reservation.id
 
 
 def reconcile(history_scope, episode_id, reservation_id, *, actual):
