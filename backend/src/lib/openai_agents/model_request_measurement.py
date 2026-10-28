@@ -1362,11 +1362,11 @@ class MeasuredModel(Model):
                 ))
         except BaseException as exc:
             from .run_history import record_model_history
-            async def finalize_failure():
+            async def finalize_failure(error: BaseException):
                 self._observe_tool_surface(measurement, None)
-                await _record_outcome_async(measurement, outcome=_failure_outcome(exc), error_type=type(exc).__name__)
-                await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
-            await _await_finalization(finalize_failure(), prior_error=exc)
+                await _record_outcome_async(measurement, outcome=_failure_outcome(error), error_type=type(error).__name__)
+                await record_model_history(self._history, "model_error", {"error_type": type(error).__name__, "message": str(error)}, outcome="raised")
+            await _await_finalization(finalize_failure(exc), prior_error=exc)
             raise
         from .run_history import record_model_history
         self._observe_tool_surface(measurement, response)
@@ -1463,16 +1463,16 @@ class MeasuredModel(Model):
         except BaseException as exc:
             stream_error = exc
             from .run_history import record_model_history
-            async def finalize_stream_failure():
+            async def finalize_stream_failure(error: BaseException):
                 if terminal_response is None:
                     self._observe_tool_surface(measurement, None)
                     await _record_outcome_async(
                         measurement,
-                        outcome=_failure_outcome(exc),
-                        error_type=type(exc).__name__,
+                        outcome=_failure_outcome(error),
+                        error_type=type(error).__name__,
                     )
-                await record_model_history(self._history, "model_error", {"error_type": type(exc).__name__, "message": str(exc)}, outcome="raised")
-            await _await_finalization(finalize_stream_failure(), prior_error=exc)
+                await record_model_history(self._history, "model_error", {"error_type": type(error).__name__, "message": str(error)}, outcome="raised")
+            await _await_finalization(finalize_stream_failure(exc), prior_error=exc)
             raise
         finally:
             async def finalize_stream():
