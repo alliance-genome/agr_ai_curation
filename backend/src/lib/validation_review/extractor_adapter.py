@@ -6,6 +6,17 @@ from src.lib.validation_history import projection, selections
 from . import admission, extraction_scheduling, extraction_execution
 
 
+def followup_blocker(agent_key, contract) -> str | None:
+    """Check saved follow-up structure without constructing an agent."""
+    if not agent_key or not contract:
+        return "saved_extractor_contract_unavailable"
+    from .extractor_phase import TARGETED_EXTRACTION_PROTOCOL, TargetedFollowupTransport
+    if (contract.get("followup_protocol") != TARGETED_EXTRACTION_PROTOCOL
+            or contract.get("followup_transport_schema") != TargetedFollowupTransport.model_json_schema()):
+        return "fresh_extraction_required"
+    return None
+
+
 class ExtractorAdapter:
     def __init__(self, context, artifact_id, *, authenticated_groups, checkpoint_provider, source_agent=None):
         self.context = context
@@ -45,13 +56,9 @@ class ExtractorAdapter:
 
     async def request(self, *, operation_id, parent_decision_id, entry_ids, instructions):
         def prepare():
-            if not self.receipt["contract"]:
-                raise admission.ReviewStopped("saved_extractor_contract_unavailable")
-            from .extractor_phase import TARGETED_EXTRACTION_PROTOCOL, TargetedFollowupTransport
-            pinned = self.receipt["contract"]
-            if (pinned.get("followup_protocol") != TARGETED_EXTRACTION_PROTOCOL
-                    or pinned.get("followup_transport_schema") != TargetedFollowupTransport.model_json_schema()):
-                raise admission.ReviewStopped("fresh_extraction_required")
+            blocker = followup_blocker(self.receipt["agent_key"], self.receipt["contract"])
+            if blocker is not None:
+                raise admission.ReviewStopped(blocker)
             checkpoint = self.checkpoint_provider()
             with store.SessionLocal.begin() as db:
                 source = projection.source_envelope_in_transaction(

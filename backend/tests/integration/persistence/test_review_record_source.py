@@ -15,7 +15,7 @@ from tests.integration.persistence.test_validation_history import (
 from tests.integration.persistence.test_selected_value_authority import episode
 
 
-def setup_record(scope, *, historical=False, evidence=None, origin=None):
+def setup_record(scope, *, historical=False, evidence=None, origin=None, provenance=None):
     record = {"object_id": "one", "object_type": "fixture", "payload": {"term": "α"},
               "evidence_record_ids": ["e1"], "object_refs": []}
     evidence = evidence if evidence is not None else [
@@ -27,7 +27,7 @@ def setup_record(scope, *, historical=False, evidence=None, origin=None):
     aid = h.capture_baseline(scope, producer_id=uuid4().hex,
         subject_kind="historical" if historical else "extracted",
         typed=None if historical else {"original": "α"}, normalized=normalized,
-        provenance={"test": "source"})
+        provenance={"test": "source"} if provenance is None else provenance)
     obj = h.register_target(scope, aid, identity="object:one", original={
         "object_ref": "one", "origin": origin if origin is not None else {"baseline_target": True}})
     field = h.register_target(scope, aid, identity="field:one", original={"initial_path": "term", "value": "α"}, parent_target_id=obj)

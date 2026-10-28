@@ -240,15 +240,16 @@ def outstanding(scope, episode_id, *, cursor=None):
                 target = targets[unit_id]
                 body = store._content(db, target)
                 parent = target.parent_id if body.get("decision_unit") is not None else target.id
+                decidable = row["code"] != "historical_review_unknown"
                 row.update(target_id=parent, decision_unit_id=unit_id,
                     expected_version=unit["version"], mode=obligations[unit_id]["mode"],
-                    agent_may_decide=obligations[unit_id]["mode"] != "curator",
+                    agent_may_decide=obligations[unit_id]["mode"] != "curator" and decidable,
                     record_target_id=source_record(unit_id),
                     unit_ref={"fact_id": target.id, "sha256": target.body_sha})
                 source = source_inputs.latest(db, ep.artifact_id, parent)
                 if source is not None and source_inputs.is_absence(store._content(db, source)):
                     row["applicability_ref"] = source_inputs.reference(source)
-                if obligations[unit_id]["mode"] == "extraction_only":
+                if obligations[unit_id]["mode"] == "extraction_only" and decidable:
                     row["extraction_ref"] = artifact.baseline_sha
             # Each answer remains independently reachable, even for one unit.
             key = json.dumps([unit_id or "", blocker["code"],
