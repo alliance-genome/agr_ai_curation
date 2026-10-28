@@ -331,6 +331,10 @@ def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
         unit_reviewed_answers = reviewed_answers[episode.id] | reviewed_answers[origin]
         if origin != episode.id:
             unit["retained_review_episode_id"] = origin
+        if (unit["reason"] == "unreviewed" and obligation["mode"] == "extraction_only"
+                and (artifact.subject_kind == "historical"
+                     or not store._has_baseline_subject(db, artifact_id, unit["target_id"]))):
+            unit["reason"] = "historical_review_unknown"
         if not unit["eligible"]:
             blockers.append({"target_id": unit["target_id"], "code": unit["reason"]})
         elif unit["review"] != "accept" or unit["selection_id"] not in unit_dispositions:

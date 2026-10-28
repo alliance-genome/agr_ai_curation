@@ -395,6 +395,14 @@ cancellation exception; the outer chat wrapper still reports interruption.
 
 ## Targeted extractor follow-up (ALL-1444)
 
+Historical extraction-only units without an attested original report
+`historical_review_unknown`; the review tools do not offer baseline decisions
+or automatic continuation for those units. Saved historical data remains intact.
+Fresh captures without a supported saved extractor configuration also do not
+receive automatic continuation for targeted extraction or validation of an
+extraction contribution. Independent validation reconsideration remains available.
+
+
 The supervisor owns scientific decisions and the large-scale review. It cannot
 read/search the paper itself. It can ask the original configured extractor to
 investigate existing entries with specialized instructions. The default

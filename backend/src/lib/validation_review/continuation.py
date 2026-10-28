@@ -118,6 +118,10 @@ def inspect(context, tool_names):
         works = list(db.scalars(select(ValidationReviewWork).where(
             ValidationReviewWork.episode_id == ep.id)))
         from .extraction_scheduling import attempt_counts
+        from .extractor_adapter import followup_blocker
+        provenance = store._artifact(db, ep.artifact_id, scope).provenance
+        followup_ok = followup_blocker(
+            provenance.get("agent_key"), provenance.get("extractor_contract")) is None
         def source_entry(tid):
             while tid in targets:
                 if "object_ref" in bodies[tid]:
@@ -145,10 +149,10 @@ def inspect(context, tool_names):
             used = attempted.get(root, 0)
             can_attempt = used < ep.policy["attempts_per_target"] and (not used or extra_available)
             repair = can_attempt and (
-                "validate_selected_extraction_source" in tool_names
+                (followup_ok and "validate_selected_extraction_source" in tool_names)
                 or (used > 0 and "request_validation_reconsideration" in tool_names))
             entry = entry_roots[tid]
-            can_investigate = (entry is not None and "request_targeted_extraction" in tool_names
+            can_investigate = (followup_ok and entry is not None and "request_targeted_extraction" in tool_names
                                and extraction_counts[entry] < ep.policy["extraction_attempts_per_entry"])
             units[tid] = {
                 "mode": mode,
