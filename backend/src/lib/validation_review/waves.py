@@ -1,5 +1,7 @@
 """Resume dependent bindings inside the same artifact and review episode."""
 
+from uuid import uuid4
+
 from .admission import lock_episode
 from . import source_inputs
 from .scheduling import _enqueue, _existing
@@ -53,7 +55,7 @@ def advance(
         absences = {request["target_id"]: {**request, "prerequisites": pins}
                     for request in requests if source_inputs.is_absence(request)}
         if absences:
-            source_inputs.update(db, ep.artifact_id, operation_id="dependent-absence:" + operation_id,
+            source_inputs.update(db, ep.artifact_id, operation_id="dependent-absence:" + str(uuid4()),
                                  before={}, after=absences)
             requests = [request for request in requests if not source_inputs.is_absence(request)]
             if not requests:

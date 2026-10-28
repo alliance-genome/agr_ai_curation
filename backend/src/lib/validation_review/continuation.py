@@ -59,7 +59,8 @@ def classify(blockers, units):
                                              if item["code"] == "execution_pending" else {})})
             continue
         if ("answer_review_pending" in codes or "episode_review_pending" in codes
-                or ("unreviewed" in codes and unit["has_subject"])):
+                or ("unreviewed" in codes and unit["has_subject"])
+                or ("stale" in codes and unit["has_current_absence"])):
             eligible.add(target)
         elif unit["can_repair"]:
             eligible.add(target)
@@ -151,6 +152,7 @@ def inspect(context, tool_names):
                                and extraction_counts[entry] < ep.policy["extraction_attempts_per_entry"])
             units[tid] = {
                 "mode": mode,
+                "has_current_absence": absent,
                 "has_subject": mode == "extraction_only" or absent or any(
                     tid in bodies[aid]["coverage"] and bodies[completion.id]["state"] == "completed"
                     for aid, completion in completions.items()),
@@ -179,10 +181,19 @@ def inspect(context, tool_names):
                 if entry["target_id"] == unit["target_id"]:
                     assessments[unit["target_id"]] = {key: entry.get(key) for key in
                                                      ("absence_assessment", "unresolved_fields")}
+        def scientific_subject(unit):
+            selected = unit["selected"]
+            body = bodies.get(selected)
+            if body is not None and source_inputs.is_absence(body):
+                # Prerequisite reacceptance must refresh exact stored references,
+                # but that alone is not new scientific work for continuation.
+                return source_inputs.absence_scientific_content(body)
+            return selected
+
         # Exclude head versions, selection IDs/generations, operation IDs and
         # audit facts. Bounded real attempts/contributions remain exact identities.
         scientific = {
-            "units": [(u["target_id"], u["selected"], u["review"], u["reason"])
+            "units": [(u["target_id"], scientific_subject(u), u["review"], u["reason"])
                       for u in manifest["units"] if u["target_id"] in permitted],
             "blockers": blockers,
             "assessments": assessments,

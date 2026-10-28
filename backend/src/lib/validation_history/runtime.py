@@ -369,6 +369,7 @@ def frozen_job_requests(binding, jobs, *, db=None):
             "review_episode_id": j.history_episode_id or j.match.envelope.metadata.get("review_episode_id"),
             "available_prior_completions": list(j.history_prior_completions),
             "prerequisites": list(j.history_prerequisites),
+            "requires_prerequisites": bool(j.match.binding.runs_after),
         }
         for j in jobs
         for target in [binding_target(binding, j.match, db=db)]

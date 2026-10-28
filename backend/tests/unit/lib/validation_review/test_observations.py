@@ -83,3 +83,28 @@ def test_followup_refusals_keep_exact_subject_identity(arguments):
     assert seen.snapshot()[1]
     seen.record_tool("followup", arguments, {"state": "completed"})
     assert not seen.snapshot()[1]
+
+
+def test_nested_dependent_refusal_survives_successful_parent_and_clears_per_child():
+    seen = Observations()
+    seen.record_tool("record_validation_review", {"entries": [{"target_id": "parent"}]}, {
+        "ready": False, "dependent_work": [{"target": "child", "state": "not_runnable",
+                                             "reason": "required_inputs_unavailable"}]})
+    assert seen.snapshot()[1] == [{"tool": "dependent_validation", "target_id": "child",
+                                  "code": "required_inputs_unavailable", "resource": None}]
+    seen.record_tool("record_validation_review", {"entries": [{"target_id": "parent"}]}, {
+        "ready": False, "dependent_work": [{"target": "other-child", "state": "completed"}]})
+    assert len(seen.snapshot()[1]) == 1
+    seen.record_tool("record_validation_review", {"entries": [{"target_id": "parent"}]}, {
+        "ready": False, "dependent_work": [{"target": "child", "state": "completed"}]})
+    assert not seen.snapshot()[1]
+
+
+def test_complete_normalized_source_read_ignores_bookkeeping_byte_width():
+    seen = Observations()
+    seen.record_read("validation_source_input", {**page(content="generation 9"), "next_offset": None})
+    assert seen.progress("same-scientific-state")
+    seen.record_read("validation_source_input", {**page(content="generation 10"), "next_offset": None})
+    assert not seen.progress("same-scientific-state")
+    seen.record_read("validation_source_input", {**page(sha="changed-science", content="new evidence"), "next_offset": None})
+    assert seen.progress("same-scientific-state")

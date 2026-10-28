@@ -10,7 +10,7 @@ from src.lib.validation_review.provider import ACTIVE_BUDGET
 
 
 def unit(**changes):
-    return {"mode": "validation", "has_subject": True, "can_repair": False,
+    return {"mode": "validation", "has_subject": True, "has_current_absence": False, "can_repair": False,
             "repair_blocker": "required_inputs_unavailable", "work_states": [], **changes}
 
 
@@ -173,3 +173,9 @@ async def test_persistent_typed_tool_refusal_survives_ordinary_final(runtime, mo
     assert result["reason"] == "saved_extractor_contract_unavailable"
     assert not result["review"]["ready"] and result["causes"][0]["target_id"] == "source-entry"
     r.reports.assert_not_called()
+
+
+def test_verified_current_absence_can_replace_stale_selection_without_a_new_attempt():
+    blockers = [{"target_id": "a", "code": "stale"}]
+    assert continuation.classify(blockers, {"a": unit(has_current_absence=True)}) == ({"a"}, [])
+    assert continuation.classify(blockers, {"a": unit()})[0] == set()

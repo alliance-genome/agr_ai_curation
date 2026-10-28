@@ -166,13 +166,18 @@ def read(scope, episode_id, *, fact_id, sha256, offset=0):
         fact = store._fact(db, ep.artifact_id, fact_id)
         if fact.body_sha != sha256:
             raise store.HistoryConflict("History reference SHA mismatch")
-        return record_read(fact.kind, exact_page(
-            store._content(db, fact),
-            fact_id=fact.id,
-            sha256=sha256,
-            offset=offset,
-            limit=ep.policy["packet_bytes"],
-        ))
+        body = store._content(db, fact)
+        page = exact_page(body, fact_id=fact.id, sha256=sha256,
+                          offset=offset, limit=ep.policy["packet_bytes"])
+        from . import source_inputs
+        if fact.kind == "validation_source_input" and source_inputs.is_absence(body):
+            # Observe scientific content, not fresh prerequisite selection IDs.
+            # The caller still receives the untouched hash-pinned history page.
+            content = source_inputs.absence_scientific_content(body)
+            digest = store.canonical(content)[0]
+            record_read(fact.kind, {**page, "sha256": digest})
+            return page
+        return record_read(fact.kind, page)
 
 
 def outstanding(scope, episode_id, *, cursor=None):

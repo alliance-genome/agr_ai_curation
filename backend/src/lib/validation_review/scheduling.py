@@ -338,8 +338,8 @@ def _refresh_prerequisites(db, context, ep, frozen, refresh_inputs):
         db, context.history_scope, ep.artifact_id, unchanged
     ):
         raise store.HistoryConflict("Reconsideration target lineage is stale")
-    targets = [pin["target_id"] for pin in request["prerequisites"]]
-    if not targets and source_changed:
+    targets = request.get("prerequisite_targets") or [pin["target_id"] for pin in request["prerequisites"]]
+    if not targets and source_changed and not request.get("requires_prerequisites"):
         return request
     if not targets or refresh_inputs is None:
         raise ReviewStopped("fresh_prerequisite_adapter_required")
@@ -356,7 +356,7 @@ def _refresh_prerequisites(db, context, ep, frozen, refresh_inputs):
         if selected in {"baseline", "curator"}:
             raise ReviewStopped("non_validator_prerequisite", resource=tid)
         sources[tid] = store._content(
-            db, store._fact(db, ep.artifact_id, selected, kind="completion")
+            db, store._fact(db, ep.artifact_id, selected)
         )
     if not isinstance(request["request"].get("selected_inputs"), dict):
         raise ValueError("Dependent requests require a selected_inputs mapping")

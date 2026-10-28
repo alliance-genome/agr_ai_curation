@@ -34,7 +34,10 @@ class Observations:
         if kind not in SCIENTIFIC_READ_KINDS or not page["content"]:
             return
         # Body identity, not newly allocated snapshot IDs, defines the receipt.
-        key = (page["sha256"], page["offset"], page["offset"] + len(page["content"]))
+        # Complete-body reads stay the same receipt when a normalized source
+        # changes only bookkeeping byte width (e.g. prerequisite generation 9→10).
+        end = None if page["offset"] == 0 and page.get("next_offset") is None else page["offset"] + len(page["content"])
+        key = (page["sha256"], page["offset"], end)
         with self._lock:
             self.reads.add(key)
 
@@ -56,13 +59,17 @@ class Observations:
         keys = [(name, identity) for identity in sorted(identities)] or [(name, None)]
         with self._lock:
             for key in keys:
-                if result.get("state") in {"not_applied", "conflict"}:
+                if result.get("state") in {"not_applied", "conflict", "not_runnable"}:
                     self.refusals[key] = {
                         "tool": name, "target_id": key[1],
-                        "code": result["code"], "resource": result.get("resource"),
+                        "code": result.get("code") or result["reason"], "resource": result.get("resource"),
                     }
                 else:
                     self.refusals.pop(key, None)
+        for outcome in result.get("dependent_work", []):
+            # Parent decisions may succeed while a specific dependent cannot
+            # run. Track and clear those typed outcomes by the child binding.
+            self.record_tool("dependent_validation", {"target_id": outcome["target"]}, outcome)
 
     def snapshot(self):
         with self._lock:

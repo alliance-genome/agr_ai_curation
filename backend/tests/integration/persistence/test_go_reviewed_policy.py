@@ -20,7 +20,7 @@ from tests.contract.alliance.domain_packs.test_go_domain_pack import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("policy_resolved", [True, False])
-@pytest.mark.parametrize("with_from_unresolved", [True, False])
+@pytest.mark.parametrize("with_from_unresolved", [True, False, "empty"])
 async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, monkeypatch, policy_resolved, with_from_unresolved):
     from agr_ai_curation_alliance.domain_packs.go.values import (
         gene_product_value, go_term_value, reference_value, with_from_value,
@@ -34,7 +34,8 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
     payload["go_term"] = go_term_value("extracellular fraction", proposed_curie=None,
                                     aspect=payload["go_term"]["aspect"])
     payload["reference_curie"] = reference_value("Lta secretion in rat", proposed_curie="PMID:12345678")
-    payload["with_from"] = [with_from_value("UniProtKB:P01374", proposed_curie="UniProtKB:P01374")]
+    payload["with_from"] = ([] if with_from_unresolved == "empty" else
+        [with_from_value("UniProtKB:P01374", proposed_curie="UniProtKB:P01374")])
     original = copy.deepcopy(payload)
     source = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
         typed=source.model_dump(mode="json"), envelope=source, provenance={})
@@ -53,7 +54,7 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
     base_runner = _go_runner(requests, policy_resolved=policy_resolved)
 
     def run(request, *, binding, **kwargs):
-        if with_from_unresolved and binding.binding_id == "go_with_from_gene_validation":
+        if with_from_unresolved is True and binding.binding_id == "go_with_from_gene_validation":
             requests.append(request)
             return {**_identity_result(request, {}), "status": "unresolved",
                 "lookup_attempts": [{"provider": "agr_curation_query", "method": "search_genes",
@@ -82,13 +83,16 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
     await adapter.advance(checkpoint)
     policy_requests = [request for request in requests if request.validator_binding_id == "rgd_go_evidence_policy_validation"]
     assert len(policy_requests) == 1
+    if with_from_unresolved == "empty":
+        assert "with_from" not in policy_requests[0].selected_inputs
+        assert "go_with_from_gene_validation" not in by_binding
     policy = policy_requests[0].selected_inputs
     assert (policy["gene_product"]["curie"], policy["gene_product"]["label"]) == ("RGD:3023", "Lta")
     assert policy["resolution_state"] == "resolved"
     assert (policy["go_term"]["curie"], policy["go_term"]["resolution_state"]) == ("GO:0005615", "resolved")
     assert policy["reference_curie"]["curie"] == "AGRKB:101000000400377"
     assert (policy["reference_curie"]["pmid"], policy["reference_curie"]["doi"]) == ("PMID:12345678", None)
-    if with_from_unresolved:
+    if with_from_unresolved is True:
         assert policy["with_from"][0]["lookup_outcome"] == "not_found"
     assert policy["evidence_code"]["code"] == "IDA"
     assert policy["provider_context"]["provider_key"] == "RGD"
@@ -116,7 +120,7 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
     assert first_wave  # Parent and per-field findings all retain the same audit.
     assert all(entry.details["validation_metadata"]["dispatch_context"] == {
         "authenticated_groups": ["RGD"], "group_context_identity": '["RGD"]'} for entry in first_wave)
-    if with_from_unresolved:
+    if with_from_unresolved is True:
         value = selected.extracted_objects[0].payload["with_from"][0]
         assert (value["resolution_state"], value["lookup_outcome"], value["curie"]) == ("unresolved", "not_found", None)
         assert value["mention"] == value["proposed_curie"] == "UniProtKB:P01374"
@@ -138,7 +142,7 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
     assert replayed_audits["go_gene_product_validation"] == first_wave[0].details["validation_metadata"]["dispatch_context"]
     assert replayed_audits["rgd_go_evidence_policy_validation"] == finding.details["validation_metadata"]["dispatch_context"]
 
-    if with_from_unresolved and policy_resolved:
+    if with_from_unresolved is True and policy_resolved:
         # Simulate an unsupported historical recipe at the read boundary;
         # immutable database facts themselves must never be rewritten.
         original_content = store._content

@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, model_validator
 
 
 class HistoryContract(BaseModel):
@@ -103,6 +103,8 @@ class FrozenValidationInput(HistoryContract):
     result_anchors: dict[StrictStr, StableValueAnchor] = Field(default_factory=dict)
     decision_units: list[DecisionUnit] = Field(default_factory=list)
     prerequisites: list[PrerequisiteSelection] = Field(default_factory=list)
+    requires_prerequisites: StrictBool = Field(default=False, exclude_if=lambda value: not value)
+    prerequisite_targets: list[StrictStr] = Field(default_factory=list, exclude_if=lambda value: not value)
     dispatch_wave: StrictInt | None = Field(default=None, ge=0)
     review_episode_id: StrictStr | None = None
     available_prior_completions: list[StrictStr] = Field(default_factory=list)

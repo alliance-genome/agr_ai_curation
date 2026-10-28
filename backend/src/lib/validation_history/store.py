@@ -516,6 +516,8 @@ def begin_execution_in_transaction(db, scope, artifact_id, *, operation_id, rece
         # snapshotting and grouped selection updates atomic without lock cycles.
         if any(p["artifact_id"] != artifact_id for p in request["prerequisites"]):
             raise HistoryConflict("Prerequisites must belong to the same artifact")
+        if request.get("requires_prerequisites") and not request["prerequisites"]:
+            raise HistoryConflict("Dependent validation requires reviewed prerequisites")
         _prerequisites_current(db, scope, request["prerequisites"])
         for fact_id in request["available_prior_completions"]:
             _fact(db, artifact_id, fact_id, kind="completion")

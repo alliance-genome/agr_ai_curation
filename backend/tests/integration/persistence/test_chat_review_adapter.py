@@ -99,24 +99,29 @@ def planned(scope, tmp_path, monkeypatch, request):
         text = text.replace("    fields:\n", "    fields:\n      - field_path: genes\n        field_type: string\n        metadata:\n          multivalued: true\n")
         pack.metadata_path.write_text(text)
         pack = replace(pack, metadata=load_domain_pack_metadata(pack.metadata_path))
-    if fixture_shape in {"absent", "optional-absence", "absence-dependent-optional", "absence-dependent-required"}:
+    if fixture_shape in {"absent", "optional-absence", "optional-composite-absence", "absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent"}:
         from copy import deepcopy
         raw = deepcopy(pack.metadata.metadata)
         binding = raw["validator_bindings"]["active"][0]
         binding["applies_to"]["field_paths"] = ["optional.term"]
         binding["input_fields"] = {"query": {"source": "literal", "value": "fixture lookup"}}
-        if fixture_shape != "absent":
+        if fixture_shape not in {"absent", "dependent-writeback"}:
             binding["input_fields"] = {"query": {"source": "payload", "path": "optional.term", "required": False}}
         binding["expected_result_fields"] = {"curie": "optional.term"}
+        if fixture_shape == "optional-composite-absence":
+            binding["decision_units"] = [{"key": "identity", "fields": ["curie"]}]
         field = pack.metadata.object_definitions[0].fields[0].model_copy(
             update={"field_path": "optional.term", "metadata": {}})
         fields = [field]
-        if fixture_shape in {"absence-dependent-optional", "absence-dependent-required"}:
+        if fixture_shape in {"absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent"}:
             dependent = deepcopy(binding)
             dependent.update(binding_id="fixture.dependent", runs_after=[binding["binding_id"]])
             dependent["applies_to"]["field_paths"] = ["optional.other"]
             dependent["expected_result_fields"] = {"curie": "optional.other"}
-            dependent["input_fields"]["query"]["required"] = fixture_shape == "absence-dependent-required"
+            dependent["input_fields"] = {"query": {"source": "payload", "path": "optional.term",
+                "required": fixture_shape == "absence-dependent-required"}}
+            if fixture_shape == "absence-runnable-dependent":
+                dependent["input_fields"] = {"query": {"source": "literal", "value": "Supplied optional policy context"}}
             raw["validator_bindings"]["active"].append(dependent)
             fields.append(field.model_copy(update={"field_path": "optional.other"}))
         definition = pack.metadata.object_definitions[0].model_copy(update={"fields": fields})
@@ -154,7 +159,7 @@ def planned(scope, tmp_path, monkeypatch, request):
             object_type="Annotation", pending_ref_id=name,
             payload={"kind": name, "evidence_code_curies": ["eco:" + name]})
             for name in ("one", "two")]
-    if fixture_shape in {"absent", "optional-absence", "absence-dependent-optional", "absence-dependent-required"}:
+    if fixture_shape in {"absent", "optional-absence", "optional-composite-absence", "absence-dependent-optional", "absence-dependent-required", "dependent-writeback", "absence-runnable-dependent"}:
         env.extracted_objects[0].payload = {"optional": {}}
     if fixture_shape == "three":
         env.extracted_objects = [CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=name,
@@ -449,13 +454,18 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
     )
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
     reviewer_calls = []
+    monkeypatch.setenv("VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS", "1")
+    reports = []
+    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure", reports.append)
     concern = "The extraction omitted an observation. Ask the curator before starting fresh extraction."
 
     async def fake_reviewer(agent, input, **kwargs):
         reviewer_calls.append(agent.name)
         if review_kind == "operational_refusal":
             raise admission.ReviewStopped("configured_validator_changed")
-        return SimpleNamespace(final_output=concern)
+        return SimpleNamespace(final_output=concern, to_input_list=lambda: [
+            *(input if isinstance(input, list) else [{"role": "user", "content": input}]),
+            {"role": "assistant", "content": concern}])
 
     monkeypatch.setattr(
         "src.lib.openai_agents.runner.run_agent_with_owned_openai_resources",
@@ -475,7 +485,9 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
         status=delivery_status,
         original="old extractor prose",
     )
-    assert expected_note in replay and len(reviewer_calls) == 1
+    expected_calls = 2 if review_kind == "extraction_concern" else 1
+    assert expected_note in replay and len(reviewer_calls) == expected_calls
+    assert len(reports) == (1 if review_kind == "extraction_concern" else 0)
     assert chat.supervisor_handoff()["review_outcomes"][0]["outcome"][
         "output" if review_kind == "extraction_concern" else "reason"
     ] == (
@@ -488,7 +500,7 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
         chat.turn_id, supervisor, (), "Extract",
     )
     await reconnected.resume()
-    assert len(reviewer_calls) == 1
+    assert len(reviewer_calls) == expected_calls
     assert reconnected.review_notes() == chat.review_notes()
     with store.SessionLocal() as db:
         summaries = db.scalars(
@@ -1386,24 +1398,34 @@ def test_optional_absence_decisions_reject_inexact_or_ambiguous_subjects(planned
         assert store._current(db, item.aid, entry["target_id"])["version"] == 0
 
 
-@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+@pytest.mark.parametrize("planned", [{"shape": "optional-absence", "count": 2}], indirect=True)
 def test_absence_assessment_stales_on_changed_supplied_evidence(planned):
     from dataclasses import replace
     from src.lib.domain_packs.input_selectors import build_domain_validation_request
     from src.lib.validation_history import selections
     item = planned
+    checkpoint = checkpoint_provider(item)
     entry = absence_entry(item)
     decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
-        checkpoint_request=checkpoint_provider(item)(), operation_id="accept-absence", entries=[entry])
+        checkpoint_request=checkpoint(), operation_id="accept-absence", entries=[entry])
     match = item.plan.matches[0]
     result = build_domain_validation_request(match)
     assert runtime.record_absent_source_input(item.plan.history_binding, match, result) == entry["applicability_ref"]
-    assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
+    assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["units"][0]["eligible"]
     changed = replace(result, evidence=[{"evidence_record_id": "new-evidence", "quote": "New supplied evidence"}])
     assert runtime.record_absent_source_input(item.plan.history_binding, match, changed) != entry["applicability_ref"]
     manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
     assert not manifest["ready"]
     assert manifest["units"][0]["reason"] == "stale"
+    from src.lib.validation_review import continuation
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    # No validator/extractor repair tool is offered: this fresh scientific
+    # subject can be assessed without spending another provider attempt.
+    view = continuation.inspect(context, {"record_validation_review"})
+    assert entry["decision_unit_id"] in view["eligible"]
+    decisions.record_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="assess-fresh-absence", entries=[absence_entry(item)])
+    assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["units"][0]["eligible"]
 
 
 @pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
@@ -1459,16 +1481,25 @@ async def test_dependent_absence_requires_reviewed_prerequisite_and_respects_sel
             original_ref = source_inputs.reference(fact)
         repeated = await item.adapter.advance(checkpoint)
         assert repeated[0]["applicability_refs"][child] == original_ref
-        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-dependent-absence",
-            entries=[absence_entry(item, target_id=child)])
-        assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
+        # Refresh the prerequisite while the dependent unit is still pending,
+        # so this remains the same active review episode.
         with store.SessionLocal.begin() as db:
             store.apply_decisions_in_transaction(db, item.scope, item.aid, operation_id="revoke-prerequisite",
                 actor={"type": "agent", "id": "supervisor"}, entries=[{
                     "target_id": parent, "expected_version": store._current(db, item.aid, parent)["version"],
                     "action": "revoke", "reason": "Reconsider source"}])
-        manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
-        assert next(unit for unit in manifest["units"] if unit["target_id"] == child)["reason"] == "stale"
+        with store.SessionLocal() as db:
+            with pytest.raises(store.HistoryConflict, match="Prerequisite"):
+                source_inputs.require_absence(db, item.aid, child, original_ref["fact_id"], scope=item.scope)
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="reaccept-parent-absence",
+            entries=[absence_entry(item, target_id=parent)])
+        refreshed = await item.adapter.advance(checkpoint)
+        fresh_ref = refreshed[0]["applicability_refs"][child]
+        assert fresh_ref != original_ref
+        assert (await item.adapter.advance(checkpoint))[0]["applicability_refs"][child] == fresh_ref
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-dependent-absence",
+            entries=[absence_entry(item, target_id=child)])
+        assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
 
 
 @pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
@@ -1586,3 +1617,211 @@ def test_continuation_accept_revoke_accept_returns_to_seen_scientific_state(plan
     decisions.record_decisions(context, checkpoint_request=checkpoint(),
         operation_id="accept-again", entries=[absence_entry(item)])
     assert continuation.inspect(context, {"record_validation_review"})["signature"] == accepted
+
+
+@pytest.mark.parametrize("planned", [{"shape": "optional-absence", "count": 3}], indirect=True)
+def test_focused_outstanding_and_progress_do_not_expand_record_scope(planned):
+    from src.lib.validation_history import selections
+    from src.lib.validation_review import continuation, reads
+    item = planned
+    with store.SessionLocal() as db:
+        original = store._content(db, store._fact(db, item.aid, item.ep))
+    obligations = original["obligations"]
+    chosen = obligations[1]["target_id"]
+    neighbor = obligations[0]["target_id"]
+    ep = selections.start_episode(item.scope, item.aid, episode={
+        "episode_id": uuid4().hex, "reason": "Explicit curator request for one record",
+        "obligations": obligations, "review_target_ids": [chosen],
+        "retained_episode_ids": {o["target_id"]: item.ep for o in obligations if o["target_id"] != chosen},
+    })
+    sid = admission.create_scope(item.scope, operation_id=uuid4().hex, kind="document_run", targets=1, episodes=1)
+    admission.attach_episode(item.scope, artifact_id=item.aid, episode_id=ep, scope_id=sid)
+    context = decisions.ReviewContext(item.scope, ep, "supervisor")
+    first = continuation.inspect(context, {"record_validation_review"})
+    page = reads.outstanding(item.scope, ep)
+    assert {row["decision_unit_id"] for row in page["rows"]} == {chosen}
+    assert first["eligible"] == {chosen}
+    checkpoint = checkpoint_provider(item)
+    with store.SessionLocal.begin() as db:
+        store.apply_decisions_in_transaction(db, item.scope, item.aid, operation_id="outside-scoped-review",
+            actor={"type": "curator", "id": item.scope.owner_id}, entries=[{
+                "target_id": neighbor, "expected_version": store._current(db, item.aid, neighbor)["version"],
+                "action": "defer", "reason": "Curator independently revisited the neighboring record"}])
+    assert continuation.inspect(context, {"record_validation_review"})["signature"] == first["signature"]
+    with pytest.raises(store.HistoryAccessError, match="outside"):
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="cannot-review-neighbor",
+                                   entries=[absence_entry(item, target_id=neighbor)])
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="review-requested-record",
+                               entries=[absence_entry(item, target_id=chosen)])
+    complete = reads.outstanding(item.scope, ep)
+    assert complete["ready"] and not complete["artifact_ready"]
+    assert complete["rows"] == []  # The remaining unrequested record is still pending.
+
+
+@pytest.mark.parametrize("planned", ["optional-composite-absence"], indirect=True)
+def test_composite_absence_uses_parent_source_and_exact_child_decision_unit(planned):
+    from src.lib.validation_review import continuation, reads
+    from src.lib.validation_history.assessments import FINDING_CODE
+    item = planned
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    checkpoint = checkpoint_provider(item)
+    page = reads.outstanding(item.scope, item.ep)
+    assert len(page["rows"]) == 1
+    row = page["rows"][0]
+    assert row["target_id"] != row["decision_unit_id"]
+    assert continuation.inspect(context, {"record_validation_review"})["eligible"] == {row["decision_unit_id"]}
+    entry = {key: row[key] for key in ("target_id", "decision_unit_id", "expected_version", "applicability_ref")}
+    entry.update(action="accept", absence_assessment="unresolved", reason="Supplied source cannot resolve the optional identity")
+    result = decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="assess-component", entries=[entry])
+    assert result["ready"]
+    assert reads.outstanding(item.scope, item.ep)["rows"] == []
+    envelope = checkpoint().envelope
+    assert envelope.extracted_objects[0].payload == {"optional": {}}
+    findings = [f for f in envelope.validation_findings if f.code == FINDING_CODE]
+    assert len(findings) == 1
+    assert findings[0].field_ref.field_path == "optional.term"
+    assert findings[0].details["review_assessment"]["applicability_ref"] == entry["applicability_ref"]
+
+
+@pytest.mark.parametrize("planned", ["optional-absence"], indirect=True)
+def test_absence_acceptance_never_releases_curator_value_even_with_revalidation_intent(planned):
+    from src.lib.validation_history import curator_authority
+    item = planned
+    envelope = item.plan.envelope
+    obj = envelope.extracted_objects[0]
+    root = obj.metadata["validation_history"]["target_id"]
+    with store.SessionLocal.begin() as db:
+        overlay = curator_authority.record_patch(db, item.scope, item.aid, event_id=uuid4().hex,
+            actor_id=item.scope.owner_id, body=curator_authority.bind_patch_anchors(envelope, {
+                "target_id": root, "object_id": "one", "value_path": "optional.term", "action": "override",
+                "changes": [{"target_id": root, "path": "optional.term", "present": True,
+                             "value": "Curator supplied term"}]}))
+    curator_authority.record_revalidation_intent(item.plan.history_binding, envelope=envelope,
+        episode_id=item.ep, object_id="one", field_paths=["optional.term"], actor_id=item.scope.owner_id)
+    checkpoint = checkpoint_provider(item)
+    decisions.record_decisions(decisions.ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint(), operation_id="assess-with-curator-overlay", entries=[absence_entry(item)])
+    assert checkpoint().envelope.extracted_objects[0].payload["optional"]["term"] == "Curator supplied term"
+    with store.SessionLocal() as db:
+        assert [fact.id for fact, _ in curator_authority.active_overlays(db, item.aid)] == [overlay]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", [{"shape": "absence-dependent-optional", "count": 2}], indirect=True)
+async def test_dependent_absence_reference_refresh_is_not_new_scientific_progress(planned):
+    from src.lib.validation_review import continuation, reads
+    from src.lib.validation_review.observations import Observations, observation_scope
+    from src.lib.validation_history import selections
+    item = planned
+    checkpoint = checkpoint_provider(item)
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    first_object = item.plan.envelope.extracted_objects[0].metadata["validation_history"]["target_id"]
+    matches = [m for m in item.plan.matches if m.object_envelope.metadata["validation_history"]["target_id"] == first_object]
+    parent = runtime.binding_target(item.plan.history_binding, next(m for m in matches if not m.binding.runs_after))
+    child = runtime.binding_target(item.plan.history_binding, next(m for m in matches if m.binding.runs_after))
+    signatures, subjects = [], []
+    observations = Observations()
+    progress = []
+    for round_index in range(2):
+        if round_index:
+            entry = absence_entry(item, action="revoke", target_id=parent)
+            entry.pop("applicability_ref")
+            decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="revoke-parent", entries=[entry])
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id=f"parent-{round_index}",
+            entries=[absence_entry(item, target_id=parent)])
+        await item.adapter.advance(checkpoint)
+        child_entry = absence_entry(item, target_id=child)
+        subjects.append(child_entry["applicability_ref"])
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id=f"child-{round_index}",
+            entries=[child_entry])
+        assert not selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
+        signatures.append(continuation.inspect(context, {"record_validation_review"})["signature"])
+        with observation_scope(observations):
+            offset = 0
+            while True:
+                page = reads.read(item.scope, item.ep, **child_entry["applicability_ref"], offset=offset)
+                assert page["sha256"] == child_entry["applicability_ref"]["sha256"]
+                offset = page["next_offset"]
+                if offset is None:
+                    break
+        progress.append(observations.progress(signatures[-1]))
+    assert subjects[0] != subjects[1]  # Exact prerequisite histories remain distinct.
+    assert signatures[0] == signatures[1]  # No new source, science or provider attempt.
+    assert progress == [True, False]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["absence-runnable-dependent"], indirect=True)
+async def test_reconsideration_refreshes_an_accepted_absence_prerequisite(planned, monkeypatch):
+    from src.lib.validation_review import scheduling
+    from src.lib.validation_review.attempt_lineage import counts
+    item = planned
+    checkpoint = checkpoint_provider(item)
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    parent_match = next(m for m in item.plan.matches if not m.binding.runs_after)
+    child_match = next(m for m in item.plan.matches if m.binding.runs_after)
+    parent = runtime.binding_target(item.plan.history_binding, parent_match)
+    child = runtime.binding_target(item.plan.history_binding, child_match)
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
+        lambda: lambda request, **kwargs: {**_result_payload(request, resolved_values={"curie": "ECO:CHILD"}),
+                                          "resolved_objects": []})
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+    from src.lib.domain_packs.validator_dispatch import ValidatorDispatchJob
+    pending = runtime.frozen_job_requests(item.plan.history_binding, [ValidatorDispatchJob(
+        child_match, build_domain_validation_request(child_match).request, history_episode_id=item.ep)])
+    assert pending[0]["requires_prerequisites"] and not pending[0]["prerequisites"]
+    with pytest.raises(store.HistoryConflict, match="reviewed prerequisites"):
+        store.begin_execution(item.scope, item.aid, operation_id="reject-unpinned-child", receipt={}, requests=pending)
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-absent-parent",
+        entries=[absence_entry(item, target_id=parent)])
+    assert (await item.adapter.advance(checkpoint))[0]["state"] == "completed"
+    deferred = decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="review-first-child",
+        entries=entries_for(item, "defer", binding_id="fixture.dependent"))
+    revoke = absence_entry(item, action="revoke", target_id=parent)
+    revoke.pop("applicability_ref")
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="reconsider-absent-parent", entries=[revoke])
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="reaccept-absent-parent",
+        entries=[absence_entry(item, target_id=parent)])
+    item.adapter.prepare_inputs(checkpoint)
+    wid = scheduling.reconsider(context, operation_id="retry-child", parent_decision_id=deferred["decision_id"],
+        target_ids=[child], instructions="Use the newly reviewed omission", evidence_refs=[],
+        refresh_inputs=item.adapter.refresh_inputs, rebind_receipt=item.adapter.rebind_receipt)
+    assert (await item.adapter.execute(wid))["state"] == "completed"
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-second-child",
+        entries=entries_for(item, "accept", binding_id="fixture.dependent")[-1:])
+    with store.SessionLocal.begin() as db:
+        ep, _ = admission.lock_episode(db, item.scope, item.ep, require_open=False)
+        assert counts(db, ep, [child])[child] == 2
+
+
+@pytest.mark.parametrize("planned", [{"packet_bytes": 2400}], indirect=True)
+def test_outstanding_pages_keep_multiple_answers_and_global_blockers(planned):
+    from uuid import UUID
+    from src.lib.validation_review import reads
+    item = planned
+    request = item.adapter.plan["initial_requests"][0]
+    expected = set()
+    for ordinal in range(2):
+        invocation = store.begin_execution(item.scope, item.aid, operation_id=f"original-answer-{ordinal}",
+            receipt={}, requests=[request])
+        expected.add(store.complete_attempt(item.scope, item.aid, invocation["attempt_ids"][0],
+            state="completed", result={"answer": ordinal}, diagnostics={}))
+    cursor, seen, pages = None, set(), 0
+    while True:
+        page = reads.outstanding(item.scope, item.ep, cursor=cursor)
+        pages += 1
+        assert not page["ready"] and reads._wire_size(page) <= 2400
+        for row in page["rows"]:
+            if row["code"] == "answer_review_pending":
+                assert row["decision_unit_id"] == request["target_id"]
+                seen.add(row["completion_ref"]["fact_id"])
+        cursor = page["next_cursor"]
+        if cursor is None:
+            assert page["scan_complete"] and page["remaining_rows"] == 0
+            break
+    assert pages > 1 and seen == expected
+    with store.SessionLocal.begin() as db:
+        assert store.retire_document_history(db, UUID(item.scope.document_id)) == 1
+    retired = reads.outstanding(item.scope, item.ep)
+    assert not retired["ready"]
+    assert retired["global_blockers"]["document_retired"] == 1

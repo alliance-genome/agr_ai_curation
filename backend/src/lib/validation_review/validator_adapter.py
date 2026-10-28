@@ -41,6 +41,40 @@ REGISTRY = TypeAdapter(DomainPackValidationRegistry)
 BINDING = TypeAdapter(ValidatorBinding)
 
 
+def _prerequisite_targets(match, matches, units, parents):
+    """Resolve all units of matching prerequisites; empty collections add no unit."""
+    dependencies = []
+    for other_id, other in matches.items():
+        same_object = (match.object_envelope is None or other.object_envelope is None
+            or match.object_envelope.metadata["validation_history"]["target_id"]
+            == other.object_envelope.metadata["validation_history"]["target_id"])
+        if same_object and other.binding.binding_id in match.binding.runs_after:
+            covered = [unit["target_id"] for unit in units
+                       if unit["target_id"] == other_id or parents.get(unit["target_id"]) == other_id]
+            if not covered:
+                return []
+            dependencies.extend(covered)
+    return dependencies
+
+
+
+def _match_on_envelope(match, envelope):
+    from dataclasses import replace
+
+    obj = None
+    if match.object_envelope is not None:
+        identity = match.object_envelope.metadata["validation_history"]["target_id"]
+        found = [
+            obj
+            for obj in envelope.extracted_objects
+            if obj.metadata["validation_history"]["target_id"] == identity
+        ]
+        if len(found) != 1:
+            raise store.HistoryConflict("Dependent validator source target changed")
+        obj = found[0]
+    return replace(match, envelope=envelope, object_envelope=obj)
+
+
 def attach_reconsideration_context(agent, provider_payload):
     """Install the locked protocol and exact supplied-history reader on real calls."""
     supplied = RECONSIDERATION_INPUT.get()
@@ -218,11 +252,16 @@ class ValidatorAdapter:
 
         checkpoint = checkpoint_provider()
         registry = REGISTRY.validate_python(self.plan["registry"])
+        from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+        domain_pack = resolve_curation_domain_pack_by_id(registry.domain_pack.pack_id)
+        if domain_pack is None:
+            raise admission.ReviewStopped("configured_validator_changed")
         resolved_matches = {}
 
         def rebuild(db, envelope):
             from . import source_inputs
             resolved_matches.clear()
+            selected_envelope = None
             jobs = []
             absences = {}
             original_matches = [MATCH.validate_python(item) for item in self.original_matches.values()]
@@ -245,13 +284,38 @@ class ValidatorAdapter:
                     raise admission.ReviewStopped("configured_validator_changed")
                 target = runtime.binding_target(self.binding, match, db=db)
                 resolved_matches[target] = match
-                selected = build_domain_validation_request(match)
+                input_match = match
+                if match.binding.runs_after:
+                    if selected_envelope is None:
+                        manifest = selections.manifest_in_transaction(db, self.scope, self.artifact_id, episode_id=self.episode_id)
+                        from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+                        profile = resolve_envelope_profile_validation(envelope, domain_pack,
+                            db=db, user_id=self.scope.owner_id, active_group_ids=self.context.authenticated_groups)
+                        selected_envelope = projection.rebuild_selected_envelope(db, self.scope, self.artifact_id,
+                            envelope=envelope, manifest=manifest, domain_pack=domain_pack, profile_context=profile)
+                    input_match = _match_on_envelope(match, selected_envelope)
+                selected = build_domain_validation_request(input_match)
                 if selected.request is not None:
-                    jobs.append(ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id))
+                    jobs.append(ValidatorDispatchJob(input_match, selected.request, history_episode_id=self.episode_id))
                 elif selected.absent_inputs:
-                    absences[target] = source_inputs.absent_input(match, selected, target)
-            return {**absences, **{request["target_id"]: request
+                    absences[target] = source_inputs.absent_input(input_match, selected, target)
+            requests = {**absences, **{request["target_id"]: request
                 for request in runtime.frozen_job_requests(self.binding, jobs, db=db)}}
+            if any(resolved_matches[target].binding.runs_after for target in requests):
+                manifest = selections.manifest_in_transaction(db, self.scope, self.artifact_id, episode_id=self.episode_id)
+                units = manifest["units"]
+                parents = {unit["target_id"]: store._fact(db, self.artifact_id, unit["target_id"], kind="target").parent_id
+                           for unit in units}
+                blocked = {item["target_id"] for item in manifest["blockers"]}
+                for target, frozen in requests.items():
+                    if not resolved_matches[target].binding.runs_after:
+                        continue
+                    dependencies = _prerequisite_targets(resolved_matches[target], resolved_matches, units, parents)
+                    if frozen["request"] is not None:
+                        frozen["prerequisite_targets"] = dependencies
+                    if dependencies and not blocked.intersection(dependencies):
+                        frozen["prerequisites"] = selections.selected_prerequisites(manifest, dependencies)
+            return requests
 
         def publish(db, envelope, requests, changed, selection_id):
             obligations = []
@@ -285,10 +349,10 @@ class ValidatorAdapter:
                       "matches": {target: serialize_match(match) for target, match in resolved_matches.items()}})
             manifest = selections.manifest_in_transaction(db, self.scope, self.artifact_id, episode_id=self.episode_id)
             from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
-            profile = resolve_envelope_profile_validation(envelope, registry.domain_pack,
+            profile = resolve_envelope_profile_validation(envelope, domain_pack,
                 db=db, user_id=self.scope.owner_id, active_group_ids=self.context.authenticated_groups)
             projected = projection.rebuild_selected_envelope(db, self.scope, self.artifact_id,
-                envelope=envelope, manifest=manifest, domain_pack=registry.domain_pack, profile_context=profile)
+                envelope=envelope, manifest=manifest, domain_pack=domain_pack, profile_context=profile)
             projected = projection.pin_publication_in_transaction(db, self.scope, self.artifact_id,
                 operation_id="source:" + selection_id, manifest=manifest, envelope=projected,
                 envelope_revision=checkpoint.expected_revision + 1)
@@ -882,25 +946,11 @@ class ValidatorAdapter:
         return build_domain_validation_request(self._selected_match(target_id, sources))
 
     def _selected_match(self, target_id, sources):
-        from dataclasses import replace
-
         if any(self.selected_sources.get(tid) != body for tid, body in sources.items()):
             raise store.HistoryConflict(
                 "Selected prerequisites changed; refresh the review packet"
             )
-        match = self.match(target_id)
-        obj = None
-        if match.object_envelope is not None:
-            identity = match.object_envelope.metadata["validation_history"]["target_id"]
-            found = [
-                obj
-                for obj in self.selected_envelope.extracted_objects
-                if obj.metadata["validation_history"]["target_id"] == identity
-            ]
-            if len(found) != 1:
-                raise store.HistoryConflict("Dependent validator source target changed")
-            obj = found[0]
-        return replace(match, envelope=self.selected_envelope, object_envelope=obj)
+        return _match_on_envelope(self.match(target_id), self.selected_envelope)
 
     def refresh_inputs(self, frozen_request, sources):
         found = []
@@ -931,22 +981,9 @@ class ValidatorAdapter:
             if (not match.binding.runs_after or tid in self.attempted_targets
                     or await asyncio.to_thread(self.retained_ready, tid)):
                 continue
-            dependencies = []
-            for other_id in self.plan["matches"]:
-                other = self.match(other_id)
-                same_object = (
-                    match.object_envelope is None
-                    or other.object_envelope is None
-                    or match.object_envelope.metadata["validation_history"]["target_id"]
-                    == other.object_envelope.metadata["validation_history"]["target_id"]
-                )
-                if same_object and other.binding.binding_id in match.binding.runs_after:
-                    dependencies.extend(
-                        unit["target_id"]
-                        for unit in self.selected_manifest["units"]
-                        if unit["target_id"] == other_id
-                        or self.target_parents[unit["target_id"]] == other_id
-                    )
+            dependencies = _prerequisite_targets(match,
+                {other_id: self.match(other_id) for other_id in self.plan["matches"]},
+                self.selected_manifest["units"], self.target_parents)
             if not dependencies:
                 outcomes.append(
                     {
@@ -996,7 +1033,7 @@ class ValidatorAdapter:
             )
             if scheduled["state"] == "queued":
                 scheduled = await self.execute(scheduled["work_id"])
-            outcomes.append(scheduled)
+            outcomes.append({**scheduled, "target": tid})
         return outcomes
 
 

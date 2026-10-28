@@ -457,6 +457,12 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
             status = yield _tool_call("get_validation_review_status", "status")
             assert status["ready"] is (action == "accept")
             yield _final("Reviewed")
+            if action == "reject":
+                # A rejected answer is still pending scientific work. Exercise
+                # correction reminders and the real no-progress stop instead
+                # of pretending the first ordinary final completes the review.
+                while True:
+                    yield _final("Reviewed; no further scientific work performed")
 
     model = ScriptedReviewer()
 
@@ -477,12 +483,13 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
     monkeypatch.setattr(reviewer, "create_direct_supervisor", supervisor)
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
 
-    def unexpected(error):
-        raise error
+    reported = []
 
-    monkeypatch.setattr(
-        "src.lib.validation_review.audit.report_operational_failure", unexpected
-    )
+    def capture(error, **kwargs):
+        reported.append((error, kwargs))
+        return True
+
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", capture)
     sid, cid = candidate
     # Establish a real admitted, zero-decision predecessor, as in the historical
     # acceptance failure. The fixture's initial declaration alone is not admission.
@@ -525,6 +532,12 @@ async def test_worker_finishes_real_runner_admission_and_publication_with_fake_m
             .order_by(ValidationFact.sequence))]
 
     await operations._execute(saved["operation_id"], "test-lease", "test-trace")
+    assert len(reported) == (1 if action == "reject" else 0)
+    if reported:
+        error, tags = reported[0]
+        assert str(error) == "Validation review operational failure (ReviewerStalled)"
+        assert error.__cause__ is None and error.__context__ is None
+        assert tags == {"component": "validation_review", "operation": "execute_review_work"}
     with h.SessionLocal() as db:
         from src.models.sql.validation_review import ValidationReviewEpisode
         row = db.get(WorkspaceReviewOperation, saved["operation_id"])

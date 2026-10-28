@@ -30,6 +30,7 @@ def absent_input(match, result, target_id):
         raise ValueError("An absence fact requires a configured validator")
     content = {
         "binding_id": match.binding.binding_id,
+        "runs_after": list(match.binding.runs_after),
         "absent_inputs": list(result.absent_inputs),
         "validator_agent": match.binding.validator_agent.to_dict(),
         "selected_inputs": deepcopy(result.selected_inputs),
@@ -52,6 +53,12 @@ def is_absence(body):
             and bool(content.get("absent_inputs")))
 
 
+def absence_scientific_content(body):
+    """Progress identity excludes prerequisite bookkeeping; stored history stays exact."""
+    return {"input": {key: value for key, value in body["input"].items() if key != "prerequisites"},
+            "lineage_generations": body["lineage_generations"]}
+
+
 def require_absence(db, artifact_id, unit_id, fact_id, *, scope, sha256=None):
     """Verify exact latest source identity and binding coverage, not its meaning."""
     unit = store._fact(db, artifact_id, unit_id, kind="target")
@@ -67,7 +74,10 @@ def require_absence(db, artifact_id, unit_id, fact_id, *, scope, sha256=None):
         raise store.HistoryConflict("Optional-absence source is stale or outside this binding unit")
     if body["lineage_generations"] != store._target_lineage(db, artifact_id, parent_id):
         raise store.HistoryConflict("Optional-absence source lineage has changed")
-    store._prerequisites_current(db, scope, body["input"].get("prerequisites", []))
+    pins = body["input"].get("prerequisites", [])
+    if body["input"]["runs_after"] and not pins:
+        raise store.HistoryConflict("Optional-absence source is awaiting prerequisite review")
+    store._prerequisites_current(db, scope, pins)
     return fact
 
 
@@ -86,6 +96,8 @@ def scientific_input(frozen):
             content["prerequisites"] = deepcopy(frozen["prerequisites"])
         return content
     return {"binding_id": frozen["binding_id"],
+            **({"requires_prerequisites": True, "prerequisite_targets": frozen.get("prerequisite_targets", [])}
+               if frozen.get("requires_prerequisites") else {}),
             "validator_agent": request.get("validator_agent"),
             "selected_inputs": request.get("selected_inputs", {}),
             "input_selectors": request.get("input_selectors", {}),
