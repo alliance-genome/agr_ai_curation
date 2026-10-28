@@ -12,6 +12,7 @@ import yaml
 
 from src.lib.openai_agents.config import (
     get_batch_zip_metadata_chunk_size,
+    get_max_parallel_validators,
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
 )
@@ -1130,3 +1131,16 @@ def test_workspace_review_concurrency_deployment_parity(monkeypatch):
     assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "1"
     monkeypatch.setenv(key, "3")
     assert get_workspace_review_concurrency() == 3
+
+
+@pytest.mark.parametrize("configured,expected", [(None, 8), ("3", 3)])
+def test_validator_worker_capacity_reaches_all_consumers(monkeypatch, configured, expected):
+    key = "MAX_PARALLEL_VALIDATORS"
+    for service in ("backend", "benchmark_worker"):
+        assert _load_compose()["services"][service]["environment"][key] == "${MAX_PARALLEL_VALIDATORS:-8}"
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "8"
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
+    assert get_max_parallel_validators() == expected

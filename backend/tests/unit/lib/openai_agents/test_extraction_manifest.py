@@ -408,7 +408,8 @@ def test_resolved_validator_notes_are_visible_without_marking_result_outstanding
     assert original["result"]["unresolved_questions"] == raw["unresolved_questions"]
 
 
-def test_binding_saved_reference_preserves_prevalidated_manifest():
+@pytest.mark.parametrize("result_view", [None, "accepted"])
+def test_binding_saved_reference_preserves_prevalidated_manifest(result_view):
     payload = _payload(5)
     payload["validation_findings"] = [{
         "severity": "info", "status": "resolved", "message": "Resolved",
@@ -421,7 +422,7 @@ def test_binding_saved_reference_preserves_prevalidated_manifest():
     }]
     page = build_extraction_manifest_page(payload, limit=2)
     original = json.loads(json.dumps(page))
-    bound = bind_extraction_manifest_reference(page, "saved-result")
+    bound = bind_extraction_manifest_reference(page, "saved-result", result_view=result_view)
     assert page == original
     assert bound["result_ref"] == "extraction-result:saved-result"
     assert bound["extraction_result_id"] == "saved-result"
@@ -431,3 +432,21 @@ def test_binding_saved_reference_preserves_prevalidated_manifest():
     assert bound["validator_results"]["results"]
     for entry in bound["validator_results"]["results"]:
         assert entry["read"]["result_ref"] == bound["result_ref"]
+    followup_calls = [action for action in bound["next_actions"] if "inspect_results(" in action]
+    assert followup_calls
+    if result_view is not None:
+        assert all('result_view="accepted"' in action for action in followup_calls)
+        assert bound["validator_results"]["inspect"]["result_view"] == "accepted"
+        assert all(entry["read"]["result_view"] == "accepted" for entry in bound["validator_results"]["results"])
+    else:
+        assert all("result_view" not in action for action in followup_calls)
+        assert "result_view" not in bound["validator_results"]["inspect"]
+
+
+def test_empty_selected_manifest_does_not_claim_original_extraction_was_empty():
+    page = bind_extraction_manifest_reference(build_extraction_manifest_page(_payload(0)),
+        "selected-empty", result_view="accepted")
+    assert "current selected result has zero retained objects" in render_extraction_manifest_page(page)
+    assert "extractor returned zero" not in render_extraction_manifest_page(page)
+    assert "preserve its explanation" in render_extraction_manifest_page(page)
+    assert 'inspect result_view="original"' in render_extraction_manifest_page(page)

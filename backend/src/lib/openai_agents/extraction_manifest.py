@@ -105,7 +105,9 @@ def build_extraction_manifest_page(
     return page
 
 
-def bind_extraction_manifest_reference(page: Mapping[str, Any], extraction_result_id: str) -> dict[str, Any]:
+def bind_extraction_manifest_reference(
+    page: Mapping[str, Any], extraction_result_id: str, *, result_view: str | None = None,
+) -> dict[str, Any]:
     """Bind a prevalidated manifest to its actual durable result, without reloading configuration."""
     bound = deepcopy(dict(page))
     ref = _result_ref(extraction_result_id)
@@ -114,9 +116,15 @@ def bind_extraction_manifest_reference(page: Mapping[str, Any], extraction_resul
     bound["validator_results"]["inspect"]["result_ref"] = ref
     for entry in bound["validator_results"]["results"]:
         entry["read"]["result_ref"] = ref
+    if result_view is not None:
+        bound["result_view"] = result_view
+        bound["validator_results"]["inspect"]["result_view"] = result_view
+        for entry in bound["validator_results"]["results"]:
+            entry["read"]["result_view"] = result_view
     bound["next_actions"] = _next_actions(
         result_ref=ref, has_objects=bool(bound["object_count"]),
         next_cursor=bound["page"]["next_cursor"],
+        result_view=result_view,
     )
     return bound
 
@@ -686,10 +694,16 @@ def _next_actions(
     result_ref: str | None,
     has_objects: bool,
     next_cursor: str | None,
+    result_view: str | None = None,
 ) -> list[str]:
     if not has_objects:
         return [
-            "Report that the extractor returned zero retained objects and preserve its explanation. An explained empty result can fully answer the request.",
+            (
+                'Report that the current selected result has zero retained objects and preserve its explanation. '
+                'This alone does not establish whether the original extraction was empty; inspect result_view="original" before describing the original output.'
+                if result_view == "accepted" else
+                "Report that the extractor returned zero retained objects and preserve its explanation. An explained empty result can fully answer the request."
+            ),
             "Ask for clarification or make one better-scoped retry only when the missing scope is clear.",
         ]
 
@@ -697,19 +711,20 @@ def _next_actions(
         "Answer from this manifest when it satisfies the user's request. A non-empty extractor result is usually enough to answer; do not rerun an extractor merely to gain confidence.",
     ]
     if result_ref:
+        view_arg = f", result_view={json.dumps(result_view)}" if result_view is not None else ""
         if next_cursor is not None:
             actions.append(
-                f'Use inspect_results(result_ref="{result_ref}", action="objects", cursor="{next_cursor}") for more objects.'
+                f'Use inspect_results(result_ref="{result_ref}"{view_arg}, action="objects", cursor="{next_cursor}") for more objects.'
             )
         else:
             actions.append(
-                f'Use inspect_results(result_ref="{result_ref}", action="objects") for the manifest objects.'
+                f'Use inspect_results(result_ref="{result_ref}"{view_arg}, action="objects") for the manifest objects.'
             )
         actions.append(
-            f'Use inspect_results(result_ref="{result_ref}", action="evidence", object_ref="<object_ref>") for evidence.'
+            f'Use inspect_results(result_ref="{result_ref}"{view_arg}, action="evidence", object_ref="<object_ref>") for evidence.'
         )
         actions.append(
-            f'For generic/custom objects, use inspect_results(result_ref="{result_ref}", action="details", object_ref="<object_ref>") to read saved attributes and nested parts. Follow paths and cursors; do not call the extractor again to inspect prior results.'
+            f'For generic/custom objects, use inspect_results(result_ref="{result_ref}"{view_arg}, action="details", object_ref="<object_ref>") to read saved attributes and nested parts. Follow paths and cursors; do not call the extractor again to inspect prior results.'
         )
         actions.append(
             "Use the matching CSV/TSV/JSON formatter specialist only if the user "

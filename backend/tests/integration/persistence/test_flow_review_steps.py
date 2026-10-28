@@ -61,6 +61,15 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     from types import SimpleNamespace
 
     item = planned
+    definition = item.pack.metadata.object_definitions[0]
+    definition.metadata.update({
+        "object_role": "curatable_unit",
+        "supervisor_manifest": {"summary_fields": ["evidence_code_curies[0]", "evidence_code_curies[1]"]},
+    })
+    definition.fields.extend([
+        definition.fields[0].model_copy(update={"field_path": f"evidence_code_curies[{index}]", "metadata": {}})
+        for index in range(2)
+    ])
     run_id = uuid4().hex
     supervisor = Agent(name="Configured Flow Supervisor", model="test", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
@@ -94,9 +103,6 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner",
                         lambda: lambda *args, **kwargs: pytest.fail("Unexpected batch"))
-    # The fixture domain pack has no production adapter; preserve its exact source
-    # when constructing the checkpoint, using the same persisted-row loader.
-    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
     if selection != "automatic":
         with pytest.raises(ValueError, match="not supported"):
             await flow.receive(env, item.pack, agent_key="fixture", adapter_key="fixture", tool_name="specialist-label",
@@ -125,8 +131,9 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     envelope = DomainEnvelope.model_validate(flow.record.payload_json)
     fixture = SimpleNamespace(scope=source_scope, aid=ref["artifact_id"], ep=ref["episode_id"],
         plan=SimpleNamespace(envelope=envelope))
-    checkpoint = checkpoint_provider(fixture)
-    monkeypatch.setattr(flow, "checkpoint", lambda record: checkpoint())
+    checkpoint = lambda: flow.checkpoint(flow.record)
+    assert checkpoint().flow_run_id == run_id
+    assert checkpoint().source_extraction_result_id == flow.record.extraction_result_id
     async def review(record):
         decisions.record_decisions(flow.context(record), checkpoint_request=checkpoint(), operation_id="accept-flow",
             entries=entries_for(fixture, "accept"))
@@ -140,6 +147,7 @@ async def test_flow_capture_has_one_validator_pipeline_then_real_review_gate(pla
     with store.SessionLocal.begin() as db:
         refreshed = republish_curator_checkpoint(db, result, revision=99, authenticated_groups=())
     assert refreshed.extracted_objects[0].payload == result.extracted_objects[0].payload
+    await _assert_scoped_bootstrap(flow, item, monkeypatch)
     assert len(calls) == 2
     with store.SessionLocal() as db:
         row = db.get(FlowReviewStep, step["step_id"])
@@ -166,7 +174,7 @@ def test_discovered_batch_credits_are_shared_and_never_refill(planned):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('accept', [True, False, 'commit_failure', 'budget_exhausted', 'extractor_turns', 'extractor_timeout'])
+@pytest.mark.parametrize('accept', [True, False, 'empty', 'no_publication', 'unset', 'unresolved', 'accepted_manifest_failure', 'commit_failure', 'budget_exhausted', 'extractor_turns', 'extractor_timeout'])
 async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned, monkeypatch, accept):
     """Real wrapper, source persistence, validators and decisions; only providers are fake."""
     import json
@@ -181,10 +189,19 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
     from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext
     from src.lib.observability.cost_context import attach_agent_cost_identity
     from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
-    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider, entries_for
+    from tests.integration.persistence.test_chat_review_adapter import entries_for
     from tests.unit.lib.flows.test_executor import _make_flow, _agent_node, _metadata_from_registry
 
     item = planned
+    definition = item.pack.metadata.object_definitions[0]
+    definition.metadata.update({
+        "object_role": "curatable_unit",
+        "supervisor_manifest": {"summary_fields": ["evidence_code_curies[0]", "evidence_code_curies[1]"]},
+    })
+    definition.fields.extend([
+        definition.fields[0].model_copy(update={"field_path": f"evidence_code_curies[{index}]", "metadata": {}})
+        for index in range(2)
+    ])
     run_id = uuid4().hex
     source_scope = store.HistoryScope(item.scope.owner_id, item.scope.document_id, uuid4().hex)
     supervisor = Agent(name='Configured supervisor', model='test', instructions='Review')
@@ -192,6 +209,13 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
     env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=item.pack.pack_id,
         extracted_objects=[CuratableObjectEnvelope(object_type='Annotation', pending_ref_id='one',
             payload={'evidence_code_curies': ['eco:1', 'eco:2']})])
+    if accept == 'unset':
+        env.extracted_objects[0].payload['evidence_code_curies'][0] = None
+        item.pack.metadata.metadata['validator_bindings']['active'][0]['input_fields']['curie'] = {
+            'source': 'literal', 'value': 'fixture paper evidence',
+        }
+    if accept == 'empty':
+        env.extracted_objects = []
     env = runtime.capture_extraction(scope=source_scope, producer_id=uuid4().hex,
         envelope=env, typed=env.model_dump(mode='json'), provenance={})
     calls = []
@@ -204,6 +228,9 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         monkeypatch.setattr(runtime, 'capture_extraction', lambda **kw: env)
     def validate(request, binding, **kwargs):
         calls.append('validate')
+        if accept == 'unresolved' and request.selected_inputs['curie'] == 'eco:2':
+            return {**_result_payload(request, status='unresolved', resolved_values={},
+                missing_expected_fields=['curie'], outcome='not_found'), 'resolved_objects': []}
         return {**_result_payload(request, resolved_values={'curie': 'ECO:chosen'}), 'resolved_objects': []}
     monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner', lambda: validate)
     monkeypatch.setattr('src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner',
@@ -215,10 +242,19 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         ref = review.reference(review.record)
         return SimpleNamespace(scope=source_scope, aid=ref['artifact_id'], ep=ref['episode_id'],
             plan=SimpleNamespace(envelope=DomainEnvelope.model_validate(review.record.payload_json)))
-    monkeypatch.setattr(FlowReview, 'checkpoint', lambda self, record: checkpoint_provider(fixture(self))())
     async def review(self, record):
         calls.append('review')
-        if accept:
+        if accept == 'empty':
+            from src.lib.validation_review import reads
+            review_context = self.context(record)
+            rows = reads.outstanding(review_context.history_scope, review_context.episode_id)['rows']
+            entries = [{**{key: row[key] for key in
+                ('target_id', 'decision_unit_id', 'expected_version', 'extraction_ref')},
+                'action': 'accept', 'reason': 'The saved empty extraction covers the requested scope'}
+                for row in rows]
+            decisions.record_decisions(review_context, checkpoint_request=self.checkpoint(record),
+                operation_id='accept-empty', entries=entries)
+        elif accept and accept != 'no_publication':
             from sqlalchemy import event
             from sqlalchemy.orm import Session
             def reject_commit(session):
@@ -268,13 +304,14 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         return invoke
     monkeypatch.setattr(executor, '_create_streaming_tool', streaming)
     extract = _agent_node('extract', 'gene')
-    extract['data']['validation_groups'] = [{'state': 'automatic', 'binding_id': item.plan.matches[0].binding.binding_id}]
+    extract['data']['validation_groups'] = ([] if accept == 'no_publication' else
+        [{'state': 'automatic', 'binding_id': item.plan.matches[0].binding.binding_id}])
     flow = _make_flow([extract, _agent_node('next', 'configured_analysis')])
     from src.lib.document_context import DocumentContext
     tools, _, _, state = executor.get_all_agent_tools(flow, include_unavailable=True,
         doc_context=DocumentContext(document_id=item.scope.document_id, user_id=item.scope.owner_id),
         document_id=item.scope.document_id, user_id=item.scope.owner_id, session_id=item.scope.session_id,
-        flow_run_id=run_id, enable_result_inspection=False)
+        flow_run_id=run_id, enable_result_inspection=True)
     state['supervisor'] = supervisor
     context = SimpleNamespace(tool_name='step', run_config=None)
     if accept in ('extractor_turns', 'extractor_timeout'):
@@ -298,6 +335,65 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
             assert db.get(FlowReviewStep, pending.step_id).state == 'review_pending'
         from src.lib.validation_review.flow_outcome import status_for_reason
         assert status_for_reason(stopped.value.reason) == 'review_exhausted'
+    elif accept == 'accepted_manifest_failure':
+        from copy import deepcopy
+        from traceback import format_exception
+        from sqlalchemy import select
+        from src.lib.curation_workspace.models import CurationExtractionResultRecord, DomainEnvelopeModel
+        from src.models.sql.validation_history import ValidationFact
+
+        sensitive = 'FAKE_SENSITIVE_SELECTED_MANIFEST_CONTENT'
+        original_builder = executor.build_extraction_manifest_page
+        build_payloads, reports, retained = [], [], {}
+
+        def snapshot():
+            with store.SessionLocal() as db:
+                source = db.scalar(select(CurationExtractionResultRecord).where(
+                    CurationExtractionResultRecord.flow_run_id == run_id))
+                artifact_id = source.extraction_metadata['flow_review']['artifact_id']
+                facts = {fact.id: (fact.body_sha, store._content(db, fact))
+                    for fact in db.scalars(select(ValidationFact).where(
+                        ValidationFact.artifact_id == artifact_id))}
+                checkpoint = db.get(DomainEnvelopeModel, env.envelope_id)
+                return deepcopy({'original': source.payload_json, 'facts': facts,
+                    'checkpoint': checkpoint.envelope_json, 'revision': checkpoint.revision})
+
+        def build(payload, **kwargs):
+            build_payloads.append(deepcopy(payload))
+            if len(build_payloads) == 1:
+                return original_builder(payload, **kwargs)
+            assert len(build_payloads) == 2
+            assert payload['metadata']['selected_projection']
+            retained.update(snapshot())
+            raise executor.ExtractionManifestError(sensitive)
+
+        def report(error, **kwargs):
+            assert error.__cause__ is None and error.__context__ is None
+            assert sensitive not in ''.join(format_exception(error))
+            reports.append((error, kwargs))
+            return True
+
+        monkeypatch.setattr(executor, 'build_extraction_manifest_page', build)
+        monkeypatch.setattr(executor, 'report_runtime_exception', report)
+        with pytest.raises(RuntimeError, match='^Flow selected result inspection manifest is unavailable$') as failed:
+            await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert failed.value.__cause__ is None and failed.value.__context__ is None
+        assert sensitive not in ''.join(format_exception(failed.value))
+        assert reports == [(failed.value, {
+            'component': 'flow_executor', 'operation': 'inspection_manifest_failed',
+        })]
+        assert len(build_payloads) == 2
+        assert build_payloads[0]['extracted_objects'][0]['payload']['evidence_code_curies'] == ['eco:1', 'eco:2']
+        assert build_payloads[1]['extracted_objects'][0]['payload']['evidence_code_curies'] == ['ECO:chosen', 'ECO:chosen']
+        assert snapshot() == retained
+        assert retained['original']['extracted_objects'][0]['payload']['evidence_code_curies'] == ['eco:1', 'eco:2']
+        assert retained['checkpoint']['extracted_objects'][0]['payload']['evidence_code_curies'] == ['ECO:chosen', 'ECO:chosen']
+        assert state['next_tool_index'] == 0 and not state['completed_steps']
+        assert 'step order is strict' in (await tools[1].on_invoke_tool(context, json.dumps({'query': 'next'}))).lower()
+        assert calls == ['extract', 'validate', 'validate', 'review']
+        with store.SessionLocal() as db:
+            saved_step = db.scalar(select(FlowReviewStep).where(FlowReviewStep.run_id == run_id))
+            assert saved_step.state == 'completed'  # Durable review finished before rendering failed.
     elif accept == 'commit_failure':
         with pytest.raises(RuntimeError, match='fixture review checkpoint commit rejected'):
             await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
@@ -314,12 +410,59 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
             assert checkpoint_row is None or checkpoint_row.revision == 1
             saved_step = db.scalar(select(FlowReviewStep).where(FlowReviewStep.run_id == run_id))
             assert saved_step.state != 'completed'
-    elif accept:
-        await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+    elif accept == 'no_publication':
+        from src.lib.openai_agents.result_inspection_views import accepted_view, InspectionViewUnavailable
+        with pytest.raises(admission.ReviewStopped, match='flow_review_pending'):
+            await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert not state['completed_steps'] and state['next_tool_index'] == 0
+        with pytest.raises(InspectionViewUnavailable, match='awaiting explicit review'):
+            accepted_view(state['pending_review'].record, user_id=item.scope.owner_id)
+        assert calls == ['extract', 'review']
+    elif accept == 'empty':
+        handoff = await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert 'Current selected result (result_view="accepted")' in handoff
+        assert 'Recommended supervisor action: report_empty_result' in handoff
+        assert 'Objects found: 0' in handoff
         assert state['next_tool_index'] == 1
         await tools[1].on_invoke_tool(context, json.dumps({'query': 'next'}))
+        assert calls == ['extract', 'review', 'next']
+    elif accept:
+        handoff = await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert 'Current selected result (result_view="accepted")' in handoff
+        assert 'ECO:chosen' in handoff
+        assert 'eco:1' not in handoff
+        if accept == 'unresolved':
+            assert 'eco:2' in handoff
+            assert '"unresolved"' in handoff
+        else:
+            assert 'eco:2' not in handoff
+        assert 'Post-validation view:' not in handoff
+        handles = [line for line in handoff.splitlines() if 'inspect_results(' in line]
+        assert handles and all('result_view="accepted"' in line for line in handles)
+        assert state['next_tool_index'] == 1
+        from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool
+        completed = state['completed_steps'][0]
+        result_ref = completed['inspection_result_ref']
+        inspector = make_result_inspection_tool(scope_provider=lambda: {
+            result_ref: completed['inspection_scope'],
+        })
+        from src.lib.context import _current_session_id, _current_user_id
+        session_token = _current_session_id.set(item.scope.session_id)
+        user_token = _current_user_id.set(item.scope.owner_id)
+        try:
+            inspected = await inspector.on_invoke_tool(context, json.dumps({
+                'action': 'objects', 'result_ref': result_ref, 'result_view': 'accepted',
+            }))
+        finally:
+            _current_user_id.reset(user_token)
+            _current_session_id.reset(session_token)
+        page = json.loads(inspected)
+        assert page['status'] == 'ok', page
+        assert 'ECO:chosen' in inspected and 'eco:1' not in inspected
+        await tools[1].on_invoke_tool(context, json.dumps({'query': 'next'}))
         assert calls == ['extract', 'validate', 'validate', 'review', 'next']
-        assert state['completed_steps'][0]['validated_candidate'].payload_json['extracted_objects'][0]['payload']['evidence_code_curies'] == ['ECO:chosen', 'ECO:chosen']
+        expected_values = ['ECO:chosen', 'eco:2' if accept == 'unresolved' else 'ECO:chosen']
+        assert state['completed_steps'][0]['validated_candidate'].payload_json['extracted_objects'][0]['payload']['evidence_code_curies'] == expected_values
     else:
         with pytest.raises(admission.ReviewStopped, match='flow_review_pending'):
             await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
@@ -353,3 +496,65 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
             assert row.extraction_metadata['agent_name'] == _metadata_from_registry('gene')['display_name']
             assert row.extraction_metadata['tool_name'] == 'ask_gene_specialist'
             assert row.extraction_metadata['payload_hash'] == _canonical_payload_hash(row.payload_json)
+
+
+async def _assert_scoped_bootstrap(flow, item, monkeypatch):
+    """Exercise the public bootstrap with only the fixture adapter registration added."""
+    from dataclasses import replace
+    from sqlalchemy import select
+    from src.lib.curation_workspace import adapter_registry, curation_prep_service, pipeline
+    from src.lib.curation_workspace.bootstrap_service import bootstrap_document_session
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord, DomainEnvelopeModel
+    from src.lib.domain_envelopes.persistence import (
+        DomainEnvelopePersistenceError, write_domain_envelope_checkpoint,
+    )
+    from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+    from src.models.sql.validation_history import ValidationFact
+    from src.schemas.curation_workspace import CurationDocumentBootstrapRequest
+
+    registry = adapter_registry.load_curation_adapter_registry()
+    materializer = DomainPackMetadataReviewRowMaterializer(item.pack.metadata)
+
+    class FixtureRegistry:
+        def get_review_row_materializer(self, key):
+            return materializer if key == "fixture" else registry.get_review_row_materializer(key)
+
+        def get_review_row_materializer_for_domain_pack(self, key):
+            return materializer if key == item.pack.pack_id else registry.get_review_row_materializer_for_domain_pack(key)
+
+        def __getattr__(self, key):
+            return getattr(registry, key)
+
+    monkeypatch.setattr(adapter_registry, "load_curation_adapter_registry", lambda: FixtureRegistry())
+    monkeypatch.setattr(curation_prep_service, "load_curation_adapter_registry", lambda: FixtureRegistry())
+    monkeypatch.setattr(pipeline, "resolve_curation_domain_pack_by_id", lambda _: item.pack)
+    checkpoint = flow.checkpoint(flow.record)
+    assert checkpoint.flow_run_id == flow.flow_run_id
+    # Null is never a wildcard; stale pre-fix scope and genuine other-flow scope
+    # are rejected by the same real checkpoint writer before any mutation.
+    for wrong_run in (None, uuid4().hex):
+        with store.SessionLocal.begin() as db:
+            with pytest.raises(DomainEnvelopePersistenceError, match="different flow_run_id"):
+                write_domain_envelope_checkpoint(db, replace(checkpoint, flow_run_id=wrong_run))
+
+    ref = flow.reference(flow.record)
+    with store.SessionLocal() as db:
+        original = db.get(CurationExtractionResultRecord, flow.record.extraction_result_id).payload_json
+        facts = {row.id: row.body_sha for row in db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == ref["artifact_id"]))}
+        request = CurationDocumentBootstrapRequest(adapter_key="fixture",
+            flow_run_id=flow.flow_run_id, origin_session_id=flow.session_id)
+        first = await bootstrap_document_session(item.scope.document_id, request,
+            current_user_id=item.scope.owner_id, active_groups=(), db=db)
+        second = await bootstrap_document_session(item.scope.document_id, request,
+            current_user_id=item.scope.owner_id, active_groups=(), db=db)
+        assert first.created and not second.created
+        assert first.session.session_id == second.session.session_id
+        db.expire_all()
+        assert db.get(CurationExtractionResultRecord, flow.record.extraction_result_id).payload_json == original
+        row = db.get(DomainEnvelopeModel, checkpoint.envelope.envelope_id)
+        assert row.flow_run_id == flow.flow_run_id
+        assert row.envelope_json["extracted_objects"][0]["payload"]["evidence_code_curies"] == ["ECO:chosen", "ECO:chosen"]
+        after = {row.id: row.body_sha for row in db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == ref["artifact_id"]))}
+        assert all(after[fact_id] == digest for fact_id, digest in facts.items())

@@ -49,6 +49,27 @@ async def test_followup_context_retains_actual_previous_input_and_scopes_reads(p
     reader = specialist_context.create_history_reader(item.scope, item.aid,
         records=packet["history"]["records"], packet_bytes=2048)
     ref = packet["history"]["records"][0]
+    from sqlalchemy import select
+    from src.models.sql.validation_history import ValidationFact
+    with store.SessionLocal() as db:
+        before_facts = set(db.scalars(select(ValidationFact.id).where(ValidationFact.artifact_id == item.aid)))
+    denied_references = [
+        unrelated_reference,
+        {"fact_id": "baseline", "sha256": context["baseline_sha"]},
+        context["previous_validation"][0]["answer_reference"],
+        {**ref, "sha256": "0" * 64},
+    ]
+    for denied in denied_references:
+        # Model-correctable requests do not grant access or kill the invocation.
+        result = await reader.on_invoke_tool(
+            ToolContext(context=None, tool_name="read_supplied_history", tool_call_id="denied", tool_arguments="{}"),
+            json.dumps({**denied, "offset": 0}),
+        )
+        refusal = result if isinstance(result, dict) else json.loads(result)
+        assert refusal["status"] == "not_supplied"
+        assert set(refusal) == {"status", "message"}
+        assert "MUST_NOT_BE_VISIBLE" not in json.dumps(refusal)
+        assert explanation not in json.dumps(refusal)
     offset = 0
     chunks = []
     while offset is not None:
@@ -57,10 +78,23 @@ async def test_followup_context_retains_actual_previous_input_and_scopes_reads(p
         chunks.append(page["content"])
         offset = page["next_offset"]
     assert json.loads("".join(chunks)) == context
+    with store.SessionLocal() as db:
+        assert set(db.scalars(select(ValidationFact.id).where(ValidationFact.artifact_id == item.aid))) == before_facts
+    # Supplying a valid capability cannot bypass actual owner authorization.
+    denied_scope = store.HistoryScope("not-the-owner", item.scope.document_id, item.scope.session_id)
+    denied_reader = specialist_context.create_history_reader(denied_scope, item.aid,
+        records=packet["history"]["records"], packet_bytes=2048)
     with pytest.raises(store.HistoryAccessError):
-        await reader.on_invoke_tool(ToolContext(context=None, tool_name="read_supplied_history", tool_call_id="test", tool_arguments="{}"), json.dumps({**unrelated_reference, "offset": 0}))
-    with pytest.raises(store.HistoryAccessError):
-        await reader.on_invoke_tool(ToolContext(context=None, tool_name="read_supplied_history", tool_call_id="test", tool_arguments="{}"), json.dumps({"fact_id": "baseline", "sha256": context["baseline_sha"], "offset": 0}))
+        await denied_reader.on_invoke_tool(ToolContext(context=None, tool_name="read_supplied_history", tool_call_id="test", tool_arguments="{}"), json.dumps({**ref, "offset": 0}))
+    # Integrity errors after authorization are still fatal, not argument refusals.
+    original_fact = store._fact
+    def changed_fact(*args, **kwargs):
+        from types import SimpleNamespace
+        fact = original_fact(*args, **kwargs)
+        return SimpleNamespace(body_sha="changed") if fact.id == ref["fact_id"] else fact
+    monkeypatch.setattr(store, "_fact", changed_fact)
+    with pytest.raises(store.HistoryConflict, match="identity changed"):
+        await reader.on_invoke_tool(ToolContext(context=None, tool_name="read_supplied_history", tool_call_id="test", tool_arguments="{}"), json.dumps({**ref, "offset": 0}))
 
 
 @pytest.mark.parametrize("planned", ["three"], indirect=True)

@@ -8,7 +8,8 @@ its binding from that plan, including saved custom validator revision pins.
 from __future__ import annotations
 
 import asyncio
-from contextvars import ContextVar
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar, copy_context
 from functools import partial
 from dataclasses import asdict
 from pydantic_core import to_jsonable_python
@@ -32,6 +33,14 @@ from src.lib.validation_history import store, runtime
 from src.schemas.domain_validator import DomainValidationRequest
 from . import admission, execution, scheduling
 from .audit import append_fact
+from src.lib.openai_agents.config import get_max_parallel_validators
+
+# Long provider calls must not occupy the default executor used by both lease
+# heartbeats. Threads start lazily; this process-wide pool keeps the existing
+# concurrency setting and Python executor shutdown/cancellation semantics.
+_VALIDATOR_POOL = ThreadPoolExecutor(
+    max_workers=get_max_parallel_validators(), thread_name_prefix="review-validator",
+)
 
 RECONSIDERATION_INPUT: ContextVar[dict | None] = ContextVar(
     "review_reconsideration_input", default=None
@@ -629,7 +638,7 @@ class ValidatorAdapter:
                 )
 
         work_ids = await asyncio.to_thread(pending_work)
-        # Do not orphan running to_thread validators when a sibling fails.
+        # Do not orphan running validator threads when a sibling fails.
         # Outer cancellation still propagates promptly for explicit curator Stop;
         # the existing adapter retains answers from threads that finish later.
         results = await asyncio.gather(*(run(wid) for wid in work_ids), return_exceptions=True)
@@ -681,7 +690,9 @@ class ValidatorAdapter:
         if changed:
             raise admission.ReviewStopped("configured_validator_changed")
         # Custom revisions are reauthorized by the existing package runner.
-        return await asyncio.to_thread(self._call, payload, jobs)
+        return await asyncio.get_running_loop().run_in_executor(
+            _VALIDATOR_POOL, partial(copy_context().run, self._call, payload, jobs)
+        )
 
     def _call(self, payload, jobs):
         request_ref = self.plan["envelope"]["metadata"].get("workspace_review_request")

@@ -2015,12 +2015,14 @@ def get_figure_locator_resolution_batch_max_chars() -> int:
 # --- Validator dispatch ---
 
 def get_max_parallel_validators() -> int:
-    """Max validator jobs the dispatcher runs concurrently (MAX_PARALLEL_VALIDATORS).
+    """Validator dispatch fan-out and process-wide review worker capacity.
 
-    Caps the thread/async fan-out for parallel validator binding execution.
-    Higher = more concurrent LLM/DB load; lower = slower but gentler on the
-    provider and database. Default 8 (raised from 4 to speed up condition-heavy
-    validation by running more batch chunks at once).
+    MAX_PARALLEL_VALIDATORS bounds each dispatch and the shared synchronous
+    review-validator pool across chat, flows and workspace operations. Pool
+    capacity is read at process startup; restart after changing it. Running
+    calls retain their slots across event loops until they finish, including
+    late answers after cancellation. Higher increases provider/DB load; lower
+    reduces parallelism without limiting scientific records. Default 8.
     """
     return max(1, _get_env_int_with_fallback("MAX_PARALLEL_VALIDATORS", 8))
 
