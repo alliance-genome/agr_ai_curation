@@ -142,10 +142,10 @@ def planned(scope, tmp_path, monkeypatch, request):
         binding["input_fields"].update({
             key: {"source": "literal", "value": value}
             for key, value in {
-                "label": "mid-trunk myotome boundary defects",
-                "data_provider": "ZFIN", "taxon_id": "NCBITaxon:7955",
+                "label": "fixture term",
+                "data_provider": "FIXTURE_UNSUPPORTED", "taxon_id": "NCBITaxon:1001",
                 "provider_taxon_ontology_mappings": [
-                    {"data_provider": "WB", "taxon_id": "NCBITaxon:6239", "ontology_term_type": "WBPhenotype"}
+                    {"data_provider": "FIXTURE_SUPPORTED", "taxon_id": "NCBITaxon:1002", "ontology_term_type": "FixtureTerm"}
                 ],
             }.items()
         })
@@ -1922,7 +1922,7 @@ async def test_unsupported_lookup_is_reviewable_unresolved_without_execution(pla
             body = store._content(db, fact)
             assert source_inputs.is_applicability(body)
             assert "absent_inputs" not in body["input"]
-            assert "ZFIN" in body["input"]["unsupported_preflight"]["explanation"]
+            assert "FIXTURE_UNSUPPORTED" in body["input"]["unsupported_preflight"]["explanation"]
         assert not list(db.scalars(select(ValidationFact).where(
             ValidationFact.artifact_id == item.aid, ValidationFact.kind.in_(["attempt", "completion"]))))
     checkpoint = checkpoint_provider(item)
