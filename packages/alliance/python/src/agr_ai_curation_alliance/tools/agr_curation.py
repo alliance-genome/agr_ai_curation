@@ -3447,13 +3447,6 @@ def _clean_string(value: Any) -> Optional[str]:
     return text or None
 
 
-def _gene_expression_candidate_id(workspace: Any, pending_ref_id: str) -> str:
-    for candidate in workspace.candidates.values():
-        if pending_ref_id in candidate.pending_ref_ids:
-            return candidate.candidate_id
-    return f"gex-candidate-{len(workspace.candidates) + 1}"
-
-
 def _gene_expression_validation_result(
     *,
     message: str,
@@ -4117,12 +4110,11 @@ def _stage_gene_expression_observation_impl(
         )
 
     workspace = get_active_extraction_builder_workspace()
-    candidate_id = _gene_expression_candidate_id(workspace, stage_input.pending_ref_id)
     payload = _stage_payload_from_gene_expression_input(stage_input, controlled_values)
-    candidate = workspace.upsert_candidate(
-        candidate_id=candidate_id,
+    candidate = workspace.stage_candidate(
+        id_prefix="gex-candidate",
+        pending_ref_id=stage_input.pending_ref_id,
         staged_fields=payload,
-        pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
         status=CANDIDATE_STATUS_VALID,
     )

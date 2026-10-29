@@ -238,3 +238,93 @@ def test_revisions_cover_patch_validation_discard_and_finalization(captured_even
     snapshot = workspace.snapshot(redact_payload=False)
     assert snapshot["workspace_revision"] == 6
     assert snapshot["candidates"][1]["status"] == "discarded"
+
+
+def test_concurrent_staging_retains_distinct_references_and_evidence(captured_events):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    workspace = _workspace()
+    start = Barrier(8, timeout=10)
+
+    def stage(index):
+        start.wait()
+        return workspace.stage_candidate(
+            id_prefix="candidate",
+            pending_ref_id=f"pending-{index}",
+            staged_fields={"value": index},
+            evidence_record_ids=[f"evidence-{index}"],
+            status=builder.CANDIDATE_STATUS_VALID,
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        candidates = list(pool.map(stage, range(8)))
+
+    assert len(workspace.candidates) == 8
+    assert len({candidate.candidate_id for candidate in candidates}) == 8
+    assert workspace.revision == 8
+    for index, candidate in enumerate(candidates):
+        assert candidate.pending_ref_ids == [f"pending-{index}"]
+        assert candidate.evidence_record_ids == [f"evidence-{index}"]
+        assert candidate.staged_fields == {"value": index}
+    assert len(captured_events) == 8
+
+
+def test_staging_same_reference_updates_and_revives_discarded_draft(captured_events):
+    workspace = _workspace()
+    first = workspace.stage_candidate(
+        id_prefix="candidate", pending_ref_id="pending-1",
+        staged_fields={"value": "first"}, evidence_record_ids=["evidence-1"],
+    )
+    workspace.discard_candidate(first.candidate_id, reason="draft correction")
+    updated = workspace.stage_candidate(
+        id_prefix="candidate", pending_ref_id="pending-1",
+        staged_fields={"value": "second"}, evidence_record_ids=["evidence-2"],
+        status=builder.CANDIDATE_STATUS_VALID,
+    )
+    assert updated is first
+    assert len(workspace.candidates) == 1
+    assert updated.revision == 3
+    assert updated.status == builder.CANDIDATE_STATUS_VALID
+    assert updated.staged_fields == {"value": "second"}
+    assert updated.evidence_record_ids == ["evidence-2"]
+
+
+def test_staging_without_reference_creates_distinct_candidates(captured_events):
+    workspace = _workspace()
+    candidates = [workspace.stage_candidate(
+        id_prefix="generic-candidate", pending_ref_id=None,
+        staged_fields={"value": index},
+    ) for index in range(2)]
+    assert [candidate.candidate_id for candidate in candidates] == [
+        "generic-candidate-1", "generic-candidate-2",
+    ]
+    assert all(candidate.pending_ref_ids == [] for candidate in candidates)
+
+
+def test_staging_does_not_overwrite_an_occupied_numbered_id(captured_events):
+    workspace = _workspace()
+    original = workspace.upsert_candidate(
+        candidate_id="candidate-2", staged_fields={"value": "original"},
+        pending_ref_ids=["existing"],
+    )
+    added = workspace.stage_candidate(
+        id_prefix="candidate", pending_ref_id="new", staged_fields={"value": "new"},
+    )
+    assert added.candidate_id == "candidate-3"
+    assert original.staged_fields == {"value": "original"}
+    assert len(workspace.candidates) == 2
+
+
+def test_finalized_workspace_rejects_staging_without_mutation(captured_events):
+    workspace = _workspace()
+    candidate = workspace.stage_candidate(
+        id_prefix="candidate", pending_ref_id="pending-1", staged_fields={"value": 1},
+    )
+    workspace.finalize(candidate_ids=[candidate.candidate_id])
+    before = workspace.snapshot()
+    with pytest.raises(builder.ExtractionBuilderFinalizedError):
+        workspace.stage_candidate(
+            id_prefix="candidate", pending_ref_id="pending-2", staged_fields={"value": 2},
+        )
+    assert workspace.snapshot() == before

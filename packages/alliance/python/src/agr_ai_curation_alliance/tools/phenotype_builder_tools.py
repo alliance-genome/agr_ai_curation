@@ -469,13 +469,6 @@ def _phenotype_validation_result(
     )
 
 
-def _phenotype_candidate_id(workspace: Any, pending_ref_id: str) -> str:
-    for candidate in workspace.candidates.values():
-        if pending_ref_id in candidate.pending_ref_ids:
-            return candidate.candidate_id
-    return f"phenotype-candidate-{len(workspace.candidates) + 1}"
-
-
 def _staged_condition_relations(
     condition_relations: Sequence[ConditionRelationInput],
 ) -> List[dict[str, Any]]:
@@ -630,12 +623,11 @@ def _stage_phenotype_observation_impl(
         )
 
     workspace = get_active_extraction_builder_workspace()
-    candidate_id = _phenotype_candidate_id(workspace, stage_input.pending_ref_id)
     payload = _stage_payload_from_phenotype_input(stage_input)
-    candidate = workspace.upsert_candidate(
-        candidate_id=candidate_id,
+    candidate = workspace.stage_candidate(
+        id_prefix="phenotype-candidate",
+        pending_ref_id=stage_input.pending_ref_id,
         staged_fields=payload,
-        pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
         status=CANDIDATE_STATUS_VALID,
     )
