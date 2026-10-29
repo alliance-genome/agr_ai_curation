@@ -148,7 +148,7 @@ function MessageActions({
         if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)
       }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape' && !menuOpen) {
+        if (event.key === 'Escape' && !menuOpen && expanded) {
           event.stopPropagation()
           dismissToolbar(true)
         }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Dialog } from '@mui/material'
+import FeedbackDialog from './FeedbackDialog'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@/test/test-utils'
@@ -162,24 +162,28 @@ describe('MessageActions', () => {
     expect(document.getElementById(id!)).toBeInTheDocument()
   })
 
-  it('restores focus after feedback closes without targeting an unmounted menu item', async () => {
+  it('opens the real modeless feedback field and lets Escape pass through a collapsed toolbar', async () => {
     const user = userEvent.setup()
     function FeedbackFixture() {
       const [open, setOpen] = useState(false)
       return <>
         <MessageActions messageContent="message" onFeedbackClick={() => setOpen(true)} />
-        <Dialog open={open} onClose={() => setOpen(false)}>
-          <Button onClick={() => setOpen(false)}>Close feedback</Button>
-        </Dialog>
+        <FeedbackDialog open={open} onClose={() => setOpen(false)} sessionId="session" onSubmit={async () => {}} />
       </>
     }
     render(<FeedbackFixture />)
     await user.click(screen.getByRole('button', { name: 'Show message actions' }))
     await user.click(screen.getByRole('button', { name: 'more actions' }))
     await user.click(screen.getByRole('menuitem', { name: 'Provide Feedback' }))
-    await user.click(await screen.findByRole('button', { name: 'Close feedback' }))
+    const field = await screen.findByPlaceholderText(/enter your detailed feedback here/i)
+    await waitFor(() => expect(field).toHaveFocus())
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Show message actions' })
+    fireEvent.focus(toggle)
+    await user.keyboard('{Escape}')
+    toggle.focus()
+    await user.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    expect(screen.getByRole('button', { name: 'Show message actions' })).toHaveFocus()
   })
 
 })
