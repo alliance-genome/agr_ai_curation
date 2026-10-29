@@ -399,10 +399,14 @@ class NativeCapacityRequest:
     def set_settings(self, settings):
         self.kwargs["model_settings"] = settings
 
+    def prepare_input(self, items):
+        from .tool_surface import align_history_tool_namespaces
+        return align_history_tool_namespaces(items, self.kwargs["tools"])
+
     def _wire(self, items):
         from openai import Omit, NotGiven
         from .model_context_view import ContextRecoveryError
-        wire = self.model._build_response_create_kwargs(input=deepcopy(items), **self.kwargs)
+        wire = self.model._build_response_create_kwargs(input=self.prepare_input(items), **self.kwargs)
         extra = wire.get("extra_body") or {}
         if not isinstance(extra, dict):
             raise ContextRecoveryError("Responses extra_body must be a mapping.")
@@ -436,7 +440,7 @@ class NativeCapacityRequest:
     async def compact(self, items):
         if self.compact_call is None:
             raise RuntimeError("Capacity compaction requires the measured provider callback")
-        response = await self.compact_call(items, model=self.effective_model, instructions=self.effective_instructions)
+        response = await self.compact_call(self.prepare_input(items), model=self.effective_model, instructions=self.effective_instructions)
         # /compact returns the whole canonical window. Do not extract only the
         # opaque compaction item or prune retained user/assistant messages.
         return [item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in response.output]
