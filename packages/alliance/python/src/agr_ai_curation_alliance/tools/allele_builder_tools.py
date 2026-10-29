@@ -248,13 +248,6 @@ def _allele_validation_result(
     )
 
 
-def _allele_candidate_id(workspace: Any, pending_ref_id: str) -> str:
-    for candidate in workspace.candidates.values():
-        if pending_ref_id in candidate.pending_ref_ids:
-            return candidate.candidate_id
-    return f"allele-candidate-{len(workspace.candidates) + 1}"
-
-
 def _stage_payload_from_allele_input(stage_input: AlleleStageInput) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "domain_pack_id": ALLELE_DOMAIN_PACK_ID,
@@ -333,12 +326,11 @@ def _stage_allele_observation_impl(
         )
 
     workspace = get_active_extraction_builder_workspace()
-    candidate_id = _allele_candidate_id(workspace, stage_input.pending_ref_id)
     payload = _stage_payload_from_allele_input(stage_input)
-    candidate = workspace.upsert_candidate(
-        candidate_id=candidate_id,
+    candidate = workspace.stage_candidate(
+        id_prefix="allele-candidate",
+        pending_ref_id=stage_input.pending_ref_id,
         staged_fields=payload,
-        pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=stage_input.evidence_record_ids,
         status=CANDIDATE_STATUS_VALID,
     )

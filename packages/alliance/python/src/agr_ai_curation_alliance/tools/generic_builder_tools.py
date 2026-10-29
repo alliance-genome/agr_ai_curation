@@ -390,14 +390,6 @@ def _generic_validation_result(
     )
 
 
-def _generic_candidate_id(workspace: Any, pending_ref_id: str | None) -> str:
-    if pending_ref_id:
-        for candidate in workspace.candidates.values():
-            if pending_ref_id in candidate.pending_ref_ids:
-                return candidate.candidate_id
-    return f"generic-candidate-{len(workspace.candidates) + 1}"
-
-
 def _stage_payload_from_generic_input(
     stage_input: GenericStageInput,
     *,
@@ -625,18 +617,17 @@ def _stage_generic_object_impl(
             attempted_query=attempted_query,
         )
 
-    candidate_id = _generic_candidate_id(workspace, stage_input.pending_ref_id)
-    notices = [] if profile is not None else _generic_attribute_key_notices(
-        workspace,
-        candidate_id=candidate_id,
-        stage_input=stage_input,
-    )
-    candidate = workspace.upsert_candidate(
-        candidate_id=candidate_id,
+    candidate = workspace.stage_candidate(
+        id_prefix="generic-candidate",
+        pending_ref_id=stage_input.pending_ref_id,
         staged_fields=staged_payload,
-        pending_ref_ids=[stage_input.pending_ref_id] if stage_input.pending_ref_id else [],
         evidence_record_ids=list(stage_input.evidence_record_ids),
         status=CANDIDATE_STATUS_VALID,
+    )
+    notices = [] if profile is not None else _generic_attribute_key_notices(
+        workspace,
+        candidate_id=candidate.candidate_id,
+        stage_input=stage_input,
     )
     summary = {
         "candidate_id": candidate.candidate_id,

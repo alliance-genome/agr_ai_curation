@@ -400,13 +400,6 @@ def _go_validation_result(
     )
 
 
-def _go_candidate_id(workspace: Any, pending_ref_id: str) -> str:
-    for candidate in workspace.candidates.values():
-        if pending_ref_id in candidate.pending_ref_ids:
-            return candidate.candidate_id
-    return f"rgd-go-candidate-{len(workspace.candidates) + 1}"
-
-
 def _stage_payload(stage_input: GOStageInput) -> dict[str, Any]:
     return {
         "domain_pack_id": GO_DOMAIN_PACK_ID,
@@ -562,11 +555,10 @@ def _stage_go_recommendation_impl(
 
     staged_fields = _stage_payload(stage_input)
     workspace = get_active_extraction_builder_workspace()
-    candidate_id = _go_candidate_id(workspace, stage_input.pending_ref_id)
-    candidate = workspace.upsert_candidate(
-        candidate_id=candidate_id,
+    candidate = workspace.stage_candidate(
+        id_prefix="rgd-go-candidate",
+        pending_ref_id=stage_input.pending_ref_id,
         staged_fields=staged_fields,
-        pending_ref_ids=[stage_input.pending_ref_id],
         evidence_record_ids=list(stage_input.evidence_record_ids),
         status=CANDIDATE_STATUS_VALID,
     )

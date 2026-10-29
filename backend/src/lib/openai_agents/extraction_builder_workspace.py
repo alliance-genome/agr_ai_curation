@@ -157,6 +157,39 @@ class ExtractionBuilderWorkspace:
         self.updated_at = self.created_at
 
     @_synchronized_workspace
+    def stage_candidate(
+        self,
+        *,
+        id_prefix: str,
+        pending_ref_id: str | None,
+        staged_fields: Mapping[str, Any],
+        evidence_record_ids: Iterable[Any] | None = None,
+        status: str = CANDIDATE_STATUS_DRAFT,
+    ) -> ExtractionBuilderCandidate:
+        """Allocate and upsert a draft under the same lock as its journal write."""
+        self._ensure_mutable()
+        prefix = _required_string(id_prefix, "id_prefix")
+        candidate_id = None
+        if pending_ref_id:
+            for candidate in self.candidates.values():
+                if pending_ref_id in candidate.pending_ref_ids:
+                    candidate_id = candidate.candidate_id
+                    break
+        if candidate_id is None:
+            number = len(self.candidates) + 1
+            candidate_id = f"{prefix}-{number}"
+            while candidate_id in self.candidates:
+                number += 1
+                candidate_id = f"{prefix}-{number}"
+        return self.upsert_candidate(
+            candidate_id=candidate_id,
+            staged_fields=staged_fields,
+            pending_ref_ids=[pending_ref_id] if pending_ref_id else [],
+            evidence_record_ids=evidence_record_ids,
+            status=status,
+        )
+
+    @_synchronized_workspace
     def upsert_candidate(
         self,
         *,
