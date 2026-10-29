@@ -140,9 +140,9 @@ def inspect(context, tool_names):
             mode = obligations[tid]["mode"]
             source = sources.get(root)
             absent = False
-            if source is not None and source_inputs.is_absence(bodies[source.id]):
+            if source is not None and source_inputs.is_applicability(bodies[source.id]):
                 try:
-                    source_inputs.require_absence(db, ep.artifact_id, tid, source.id, scope=scope)
+                    source_inputs.require_applicability(db, ep.artifact_id, tid, source.id, scope=scope)
                     absent = True
                 except store.HistoryConflict:
                     pass
@@ -188,10 +188,10 @@ def inspect(context, tool_names):
         def scientific_subject(unit):
             selected = unit["selected"]
             body = bodies.get(selected)
-            if body is not None and source_inputs.is_absence(body):
+            if body is not None and source_inputs.is_applicability(body):
                 # Prerequisite reacceptance must refresh exact stored references,
                 # but that alone is not new scientific work for continuation.
-                return source_inputs.absence_scientific_content(body)
+                return source_inputs.applicability_scientific_content(body)
             return selected
 
         # Exclude head versions, selection IDs/generations, operation IDs and

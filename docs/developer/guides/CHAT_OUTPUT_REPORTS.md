@@ -54,3 +54,20 @@ file finalization is unchanged. This does not add a saved-report editor or fix
 missing extraction/validator inputs. Before release, inspect saved-agent prompt
 pins and custom instructions through the agent-upgrade gate; updating the
 packaged prompt alone does not establish adoption by every saved flow.
+
+### File-export evidence setting
+
+Editable CSV/TSV/JSON flow exports receive the resolved `include_evidence`
+setting as typed runtime context as well as instructions. When enabled (the
+flow formatter default), object-row plans must select
+`object.supporting_evidence` when that field is available. Default plans include
+it; the existing shared constraint check gives a repairable error for submitted
+plans that omit it. Validation, preview and saving use the same rule and existing
+evidence joins. This checks field selection, not scientific relevance.
+
+The enabled setting takes precedence over narrower custom prose for editable
+file exports. Curator-fixed `selected_fields` layouts retain their exact fields
+and precedence, including direct export. Explicit false does not activate this
+requirement. Evidence-row plans, chat report sections and ordinary chat are not
+subject to this file-only rule. No model-written evidence is substituted for the
+saved source records.

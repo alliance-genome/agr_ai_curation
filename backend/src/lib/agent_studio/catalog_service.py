@@ -1292,6 +1292,7 @@ class ToolExecutionContext:
     formatter_output_format: Optional[str] = None
     formatter_agent_id: Optional[str] = None
     formatter_projection_plan: Optional[Any] = None
+    formatter_include_evidence: Optional[bool] = None
 
 
 def _resolve_runtime_formatter_tool(
@@ -1319,6 +1320,7 @@ def _resolve_runtime_formatter_tool(
         formatter_agent_id=formatter_agent_id,
         save_projected_output=save_projected_file_output,
         configured_plan=execution_context.formatter_projection_plan,
+        require_evidence=execution_context.formatter_include_evidence,
         deliver_chat_output=deliver_projected_chat_output,
     )
     for tool in tools:
@@ -1870,6 +1872,7 @@ def _build_tool_execution_context(
         formatter_output_format=formatter_output_format,
         formatter_agent_id=formatter_agent_id,
         formatter_projection_plan=kwargs.get("formatter_projection_plan"),
+        formatter_include_evidence=kwargs.get("formatter_include_evidence"),
     )
 
 

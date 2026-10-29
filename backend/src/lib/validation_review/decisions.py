@@ -48,10 +48,10 @@ class ReviewEntry(BaseModel):
     ))
     extraction_ref: StrictStr | None = None
     applicability_ref: HistoryFactReference | None = Field(default=None, description=(
-        "Exact source-input fact and hash declaring optional-input absence. Use instead of an attempt or extraction reference."
+        "Exact source-input fact and hash declaring optional-input absence or an unsupported lookup. Use instead of an attempt or extraction reference."
     ))
     absence_assessment: Literal["omission_supported", "unresolved"] | None = Field(default=None, description=(
-        "Required only when accepting optional-input absence: omission_supported or unresolved, with an evidence-grounded reason."
+        "Required when accepting applicability: optional absence permits omission_supported or unresolved; unsupported lookups require unresolved. Explain the reason."
     ))
     unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
         "Only with accept of extraction-only content: exact plain payload field paths "
@@ -147,11 +147,11 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
             elif applicability_ref:
                 from . import source_inputs
                 if action == "acknowledge_failure":
-                    raise ValueError("Optional absence is not an execution failure")
-                fact = source_inputs.require_absence(db, episode.artifact_id, unit.id,
+                    raise ValueError("An applicability fact is not an execution failure")
+                fact = source_inputs.require_applicability(db, episode.artifact_id, unit.id,
                     applicability_ref["fact_id"], scope=context.history_scope, sha256=applicability_ref["sha256"])
                 if fact.target_id != target.id:
-                    raise store.HistoryConflict("Absence source belongs to another named target")
+                    raise store.HistoryConflict("Applicability source belongs to another named target")
                 subject = fact.id
             elif attempt_id:
                 attempt = store._fact(
@@ -201,9 +201,9 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
             absence_assessment = entry.get("absence_assessment")
             if action == "accept" and applicability_ref:
                 if absence_assessment is None:
-                    raise ValueError("Accepting optional absence requires an explicit assessment")
+                    raise ValueError("Accepting applicability requires an explicit assessment")
             elif absence_assessment is not None:
-                raise ValueError("Absence assessment requires optional-absence acceptance")
+                raise ValueError("Applicability assessment requires applicability acceptance")
             assessments = entry.get("unresolved_fields")
             if assessments is not None:
                 if action != "accept" or subject != "baseline":

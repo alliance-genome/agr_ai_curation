@@ -53,13 +53,13 @@ def advance(
         if not requests:
             return {"state": "not_runnable", "reason": "required_inputs_unavailable"}
         absences = {request["target_id"]: {**request, "prerequisites": pins}
-                    for request in requests if source_inputs.is_absence(request)}
+                    for request in requests if source_inputs.is_applicability(request)}
         if absences:
             source_inputs.update(db, ep.artifact_id, operation_id="dependent-absence:" + str(uuid4()),
                                  before={}, after=absences)
-            requests = [request for request in requests if not source_inputs.is_absence(request)]
+            requests = [request for request in requests if not source_inputs.is_applicability(request)]
             if not requests:
-                return {"state": "awaiting_review", "reason": "optional_inputs_absent",
+                return {"state": "awaiting_review", "reason": "applicability_review_required",
                         "targets": list(absences), "applicability_refs": {
                             target: source_inputs.reference(source_inputs.latest(db, ep.artifact_id, target))
                             for target in absences}}

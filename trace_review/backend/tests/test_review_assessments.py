@@ -54,3 +54,20 @@ def test_optional_absence_decision_and_outstanding_page_preserve_exact_reference
         if name == "record_validation_review":
             assert call["validation_review_decisions"]["arguments"]["entries"] == entries
             assert "absence_assessment=unresolved" in call["validation_review_decisions"]["note"]
+
+
+def test_unsupported_lookup_history_is_preserved_without_a_validator_answer():
+    fact = {"fact_id": "unsupported-source", "sha256": "exact-hash"}
+    body = {"request": None, "input": {"binding_id": "term-lookup",
+        "unsupported_preflight": {"policy": "provider_taxon_mapping_required",
+                                  "explanation": "No configured mapping for this input"},
+        "selected_inputs": {"data_provider": "example-provider"}}}
+    output = {"reference": fact, "content": body, "next_offset": None}
+    calls = ToolCallAnalyzer.extract_tool_calls([
+        {"id": "call", "type": "GENERATION", "output": [{"type": "function_call",
+            "name": "read_validation_history", "call_id": "c", "arguments": json.dumps(fact)}]},
+        {"id": "result", "type": "GENERATION", "input": [{"type": "function_call_output",
+            "call_id": "c", "output": json.dumps(output)}]},
+    ])["tool_calls"]
+    assert calls[0]["tool_result"]["parsed"]["json_data"] == output
+    assert calls[0]["input"] == fact

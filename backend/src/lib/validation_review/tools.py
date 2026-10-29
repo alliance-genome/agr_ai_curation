@@ -102,7 +102,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     @function_tool(failure_error_function=None)
     @_recoverable_tool
     async def get_outstanding_validation_reviews(cursor: str | None = None) -> dict:
-        """Find current outstanding units and exact answer/optional-absence references.
+        """Find current outstanding units and exact answer/applicability references.
 
         Pass next_cursor to continue the live keyset scan; completed earlier rows
         do not shift later pages. Start a fresh scan after changing source/coverage
@@ -167,10 +167,11 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Omitted targets remain pending. Accept caveated/unresolved complete answers
         when appropriate. For extraction-only acceptance, unresolved_fields names
         uncertain plain payload paths and explanations; it does not alter source values.
-        For declared optional-input absence, use the exact applicability_ref fact/hash
+        For declared optional-input absence or unsupported lookup, use the exact applicability_ref fact/hash
         instead of an attempt or baseline, with its binding target and covered unit.
         Acceptance requires absence_assessment (omission_supported or unresolved)
-        and your reason; optionality alone is not justification. No value is invented.
+        and your reason; unsupported lookups require unresolved. Optionality alone
+        is not justification. No value is invented.
         Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """

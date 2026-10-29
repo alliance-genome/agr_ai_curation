@@ -1481,3 +1481,66 @@ async def test_all_retired_source_saves_an_explicit_empty_file(monkeypatch):
     assert result["projection_summary"]["empty_reason"] == "all_records_retired"
     assert len(saved) == 1 and saved[0].rows == []
     assert saved[0].columns[0].header == "Name"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_format", ["csv", "tsv", "json"])
+async def test_evidence_requirement_defaults_repairs_and_rendered_files(output_format, published_formatter_sources):
+    from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
+    step = _completed_gene_step()
+    step["candidate"].payload_json["metadata"] = {"evidence_records": [
+        {"evidence_record_id": "ev-1", "verified_quote": "First gene evidence", "page": 2},
+        {"evidence_record_id": "ev-2", "verified_quote": "Second supporting passage", "page": 3},
+        {"evidence_record_id": "ev-3", "verified_quote": "MAPK evidence", "page": 4},
+    ]}
+    bundle = build_flow_output_artifact_bundle(completed_steps=[step], flow_name="Evidence",
+        flow_run_id="flow-1", document_id="doc-1", output_format=output_format)
+    saved = []
+
+    async def save(fmt, projection, filename_hint, formatter_agent_id):
+        saved.append(_projection_content_for_file_type(output_format=fmt, projection=projection))
+        return {"status": "ok", "file_id": "evidence-test-file"}
+
+    tools = build_output_formatter_tools(bundle=bundle, output_format=output_format,
+        formatter_agent_id="formatter", save_projected_output=save, require_evidence=True)
+    default = await _invoke(_tool_by_name(tools, "build_default_projection_plan"))
+    assert default["status"] == "ok"
+    plan = default["plan"]
+    assert any(c.get("field_ref") == "object.supporting_evidence" for c in plan["columns"])
+    incomplete = deepcopy(plan)
+    incomplete["columns"] = [c for c in incomplete["columns"] if c.get("field_ref") != "object.supporting_evidence"]
+    for name in ("validate_output_projection", "preview_output_projection", "finalize_and_save"):
+        result = await _invoke(_tool_by_name(tools, name), {"plan_json": json.dumps(incomplete)})
+        assert result["status"] == "invalid"
+        assert "object.supporting_evidence" in json.dumps(result)
+    assert not saved
+    result = await _invoke(_tool_by_name(tools, "finalize_and_save"), {})
+    assert result["status"] == "ok", result
+    assert len(saved) == 1
+    for content in saved:
+        assert "First gene evidence" in content
+        assert "Second supporting passage" in content
+        assert "MAPK evidence" in content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("locked,required", [(True, True), (False, False), (False, None)])
+async def test_evidence_policy_preserves_fixed_layout_and_disabled_requirement(locked, required):
+    plan = {"format": "csv", "row_source": "object",
+            "columns": [{"key": "label", "field_ref": "object.label"}]}
+    bundle = _bundle()
+    if locked:
+        artifact = bundle.artifacts[0]
+        plan.update(selection_mode="selected_fields", row_strategy="wide_union",
+                    selected_sources=[{"node_id": artifact.node_id, "schema_fingerprint": artifact.export_schema_fingerprint}])
+        plan["columns"][0].update(source_node_id=artifact.node_id,
+                                  field_ref=artifact.declared_fields[0].ref)
+    async def unused_save(*args):
+        pytest.fail("Validation must not save a file")
+
+    tools = build_output_formatter_tools(bundle=bundle, output_format="csv",
+        formatter_agent_id="formatter", save_projected_output=unused_save,
+        require_evidence=required, configured_plan=plan if locked else None)
+    result = await _invoke(_tool_by_name(tools, "validate_output_projection"), {"plan_json": json.dumps(plan)})
+    assert result["status"] == "ok"
+    assert len(result["plan"]["columns"]) == 1

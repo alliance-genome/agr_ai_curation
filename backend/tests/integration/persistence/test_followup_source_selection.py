@@ -421,7 +421,7 @@ async def test_evidence_selection_never_bypasses_dependent_absence_prerequisites
         assert fact is not None
         if writeback:
             body = store._content(db, fact)
-            assert not source_inputs.is_absence(body)
+            assert not source_inputs.is_applicability(body)
             assert body["request"]["request"]["selected_inputs"]["query"] == "ECO:SELECTED"
             assert body["request"]["requires_prerequisites"]
             assert body["request"]["prerequisite_targets"] == [parent]
@@ -429,7 +429,7 @@ async def test_evidence_selection_never_bypasses_dependent_absence_prerequisites
         else:
             assert store._content(db, fact)["input"]["runs_after"] == list(matches["fixture.dependent"].binding.runs_after)
             with pytest.raises(store.HistoryConflict):
-                source_inputs.require_absence(db, item.aid, child, fact.id, scope=item.scope)
+                source_inputs.require_applicability(db, item.aid, child, fact.id, scope=item.scope)
     if writeback:
         from src.lib.validation_review import scheduling
         with pytest.raises(admission.ReviewStopped, match="prerequisite_reconsideration_required"):
@@ -458,3 +458,40 @@ async def test_evidence_selection_never_bypasses_dependent_absence_prerequisites
         entries=[absence_entry(item, target_id=child)])
     assert selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["ready"]
     assert checkpoint().envelope.extracted_objects[0].payload == {"optional": {}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["unsupported-preflight"], indirect=True)
+async def test_selected_source_retains_unsupported_applicability_without_dispatch(planned):
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    from src.lib.validation_review import source_inputs
+    item = planned
+    await item.adapter.initial()
+    original = store.read_baseline(item.scope, item.aid)
+    context, contribution = retained_proposal(item)
+    checkpoint = checkpoint_provider(item)
+    with store.SessionLocal() as db:
+        digest = selections.source_state_digest(db, item.aid)
+    result = await item.adapter.select_source(context, checkpoint,
+        operation_id="unsupported-source-selection", contribution_ref=contribution,
+        field_paths=["evidence_code_curies"], evidence_ids=[], expected_source_sha=digest,
+        reason="Read the new paper clarification")
+    assert result["affected_bindings"]
+    with store.SessionLocal() as db:
+        for affected in result["affected_bindings"]:
+            fact = source_inputs.latest(db, item.aid, affected["target_id"])
+            body = store._content(db, fact)
+            assert body["request"] is None
+            assert body["input"]["unsupported_preflight"]
+        assert not list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == item.aid, ValidationFact.kind == "attempt")))
+    target = result["affected_bindings"][0]["target_id"]
+    with store.SessionLocal() as db:
+        selected_ref = source_inputs.reference(source_inputs.latest(db, item.aid, target))
+    await item.adapter.initial()
+    with store.SessionLocal() as db:
+        assert source_inputs.reference(source_inputs.latest(db, item.aid, target)) == selected_ref
+    with pytest.raises(admission.ReviewStopped, match="required_inputs_unavailable"):
+        await item.adapter.assess_source(context, operation_id="cannot-run-unsupported",
+            selection_id=result["selection_id"], target_ids=[target], instructions="Check again")
+    assert store.read_baseline(item.scope, item.aid) == original

@@ -1119,3 +1119,58 @@ def test_patch_rejects_boolean_in_wrong_value_slot(active_builder_context, updat
     _stage(negated=False)
     assert _patch([update]).status != "ok"
     assert workspace.get_candidate("gex-candidate-1").staged_fields["negated"] is False
+
+
+@pytest.mark.parametrize("mention", [
+    "Folliculin regulates embryonic brain development",
+    "PMID:39550471",
+    "doi:10.1242/dev.201234",
+])
+def test_stage_and_patch_preserve_reference_wording(active_builder_context, mention):
+    workspace, _ = active_builder_context
+    assert _stage(reference={"mention": mention}).status == "ok"
+    reference = workspace.candidates["gex-candidate-1"].staged_fields["single_reference"]
+    assert reference == agr_curation._gene_expression_reference_value(mention)
+    assert reference["reference_id"] is None
+    title = "A second paper title without an identifier"
+    assert _patch([{"field_path": "reference", "string_value": title}]).status == "ok"
+    reference = workspace.candidates["gex-candidate-1"].staged_fields["single_reference"]
+    assert reference["mention"] == title
+    assert reference.get("pmid") is None and reference.get("doi") is None
+    assert reference["reference_id"] is None
+
+
+def test_reference_wording_cannot_be_empty_on_stage_or_patch(active_builder_context):
+    workspace, _ = active_builder_context
+    assert _stage(reference={"mention": "   "}).status != "ok"
+    assert not workspace.candidates
+    assert _stage().status == "ok"
+    before = deepcopy(workspace.candidates["gex-candidate-1"].staged_fields)
+    assert _patch([{"field_path": "reference", "string_value": "   "}]).status != "ok"
+    assert workspace.candidates["gex-candidate-1"].staged_fields == before
+
+
+def test_staged_title_reaches_reference_validator_request(active_builder_context):
+    from agr_ai_curation_alliance.domain_packs.gene_expression.conversion import gene_expression_extraction_output_to_pending_envelope
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry, ValidationBindingState
+    from src.lib.domain_packs.input_selectors import build_domain_validation_request
+
+    workspace, _ = active_builder_context
+    _stage_materializable_observation()
+    title = "Folliculin regulates embryonic brain development"
+    assert _patch([{"field_path": "reference", "string_value": title}]).status == "ok"
+    assert _finalize(["gex-candidate-1"]).status == "ok"
+    envelope = gene_expression_extraction_output_to_pending_envelope(
+        workspace.finalization.payload, envelope_id="title-regression", document_id="doc-1")
+    pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    assert pack is not None
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    matches = [match for match in registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+               if match.binding.binding_id == "source_reference_validation"]
+    assert matches
+    for match in matches:
+        result = build_domain_validation_request(match)
+        assert result.request is not None
+        assert result.request.selected_inputs["reference_mention"] == title
+        assert not result.request.selected_inputs.get("reference_id")

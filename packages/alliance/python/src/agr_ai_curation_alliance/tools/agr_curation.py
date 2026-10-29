@@ -291,9 +291,8 @@ class GeneExpressionSubjectInput(_StrictToolModel):
 class GeneExpressionReferenceInput(_StrictToolModel):
     mention: StrictStr = Field(
         description=(
-            "The identifier of the paper the observation came from, as given by the paper "
-            "or its metadata: a PMID (for example 'PMID:39550471'), a DOI, or another "
-            "reference identifier. The reference validator looks it up."
+            "The paper's own reference wording: title, citation, PMID or DOI as printed. "
+            "The reference validator looks it up; this mention is not a confirmed identifier."
         )
     )
 
@@ -3455,27 +3454,6 @@ def _gene_expression_candidate_id(workspace: Any, pending_ref_id: str) -> str:
     return f"gex-candidate-{len(workspace.candidates) + 1}"
 
 
-def _reference_id_validation_issue(mention: str) -> Optional[Dict[str, Any]]:
-    normalized = mention.strip()
-    if not normalized:
-        return {
-            "field_path": "reference.mention",
-            "reason": "missing_reference_id",
-            "message": "reference.mention is required.",
-        }
-    if (
-        ":" not in normalized
-        and not normalized.upper().startswith("PMID")
-        and not _DOI_REFERENCE_PATTERN.fullmatch(normalized)
-    ):
-        return {
-            "field_path": "reference.mention",
-            "reason": "invalid_reference_id",
-            "message": "reference.mention must include a concrete identifier prefix.",
-        }
-    return None
-
-
 def _gene_expression_validation_result(
     *,
     message: str,
@@ -4104,9 +4082,6 @@ def _stage_gene_expression_observation_impl(
         )
 
     issues: List[Dict[str, Any]] = []
-    reference_issue = _reference_id_validation_issue(stage_input.reference.mention)
-    if reference_issue:
-        issues.append(reference_issue)
 
     controlled_values: List[Tuple[str, Dict[str, Any]]] = []
     single_valued_paths: set[str] = set()
@@ -4264,11 +4239,6 @@ def _patch_gene_expression_observation_impl(
             continue
         if update.field_path in _GENE_EXPRESSION_MENTION_PATCH_TARGETS:
             mention = update.string_value or ""
-            if update.field_path == "reference":
-                reference_issue = _reference_id_validation_issue(mention)
-                if reference_issue:
-                    issues.append(reference_issue)
-                    continue
             target_path = _GENE_EXPRESSION_MENTION_PATCH_TARGETS[update.field_path]
             payload[target_path] = _gene_expression_mention_value(target_path, mention)
             continue
