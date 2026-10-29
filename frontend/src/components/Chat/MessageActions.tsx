@@ -1,8 +1,8 @@
-import React, { useState } from 'react'
+import React, { useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { IconButton, Menu, MenuItem, Tooltip, Divider } from '@mui/material'
-import { alpha } from '@mui/material/styles'
+import { Box, ClickAwayListener, IconButton, Menu, MenuItem, Tooltip, Divider } from '@mui/material'
 import type { SxProps, Theme } from '@mui/material/styles'
+import MoreHorizIcon from '@mui/icons-material/MoreHoriz'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import FingerprintIcon from '@mui/icons-material/Fingerprint'
@@ -24,30 +24,13 @@ interface MessageActionsProps {
 }
 
 const actionButtonSx: SxProps<Theme> = (theme) => ({
-  backgroundColor: alpha(theme.palette.secondary.contrastText, 0.1),
-  border: `1px solid ${alpha(theme.palette.secondary.contrastText, 0.2)}`,
-  color: alpha(theme.palette.secondary.contrastText, 0.72),
-  '&:hover': {
-    backgroundColor: alpha(theme.palette.secondary.contrastText, 0.2),
-    color: theme.palette.secondary.contrastText,
-    transform: 'scale(1.1)'
-  },
-  transition: 'all 0.2s',
-  padding: '0.25rem'
-})
-
-const traceActionButtonSx: SxProps<Theme> = (theme) => ({
-  backgroundColor: alpha(theme.palette.secondary.contrastText, 0.05),
-  border: `1px solid ${alpha(theme.palette.secondary.contrastText, 0.12)}`,
-  color: alpha(theme.palette.secondary.contrastText, 0.72),
-  '&:hover': {
-    backgroundColor: alpha(theme.palette.secondary.contrastText, 0.2),
-    color: theme.palette.secondary.contrastText,
-    transform: 'scale(1.1)',
-    borderColor: alpha(theme.palette.secondary.contrastText, 0.3)
-  },
-  transition: 'all 0.2s',
-  padding: '0.25rem'
+  color: theme.palette.text.primary,
+  borderRadius: '5px',
+  width: 40,
+  height: 40,
+  '&:hover': { backgroundColor: theme.palette.action.hover },
+  '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: '-2px' },
+  '@media (hover: none)': { width: 44, height: 44 },
 })
 
 const menuSx: SxProps<Theme> = (theme) => ({
@@ -69,8 +52,44 @@ function MessageActions({
   const navigate = useNavigate()
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const menuOpen = Boolean(anchorEl)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const disclosureRef = useRef<HTMLButtonElement>(null)
+  const feedbackPendingRef = useRef(false)
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [pinned, setPinned] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const menuId = useId()
+  const toolbarId = useId()
+  const expanded = menuOpen || (!dismissed && (hovered || focused || pinned))
+
+  // Hover belongs to the whole message; controls retain their own focus/pin lifecycle.
+  useEffect(() => {
+    const message = rootRef.current?.closest('.assistant-message')
+    if (!message) return
+    const enter = (event: Event) => {
+      if ((event as PointerEvent).pointerType !== 'mouse') return
+      setHovered(true)
+      setDismissed(false)
+    }
+    const leave = () => setHovered(false)
+    message.addEventListener('pointerenter', enter)
+    message.addEventListener('pointerleave', leave)
+    return () => {
+      message.removeEventListener('pointerenter', enter)
+      message.removeEventListener('pointerleave', leave)
+    }
+  }, [])
+
+  const dismissToolbar = (restoreFocus = false) => {
+    setPinned(false)
+    setDismissed(true)
+    if (restoreFocus) disclosureRef.current?.focus()
+  }
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    setPinned(true)
+    setDismissed(false)
     setAnchorEl(event.currentTarget)
   }
 
@@ -79,26 +98,24 @@ function MessageActions({
   }
 
   const handleCopyMessage = () => {
-    copyText(messageContent).then(() => {
-      handleMenuClose()
-    }).catch(err => {
+    copyText(messageContent).catch(err => {
       console.error('Failed to copy:', err)
     })
   }
   
   const handleCopyTraceId = () => {
     if (traceId) {
-      copyText(traceId).then(() => {
-        handleMenuClose()
-      }).catch(err => {
+      handleMenuClose()
+      copyText(traceId).catch(err => {
         console.error('Failed to copy trace ID:', err)
       })
     }
   }
 
   const handleProvideFeedback = () => {
+    // Finish menu focus restoration before opening another feedback surface.
+    feedbackPendingRef.current = true
     handleMenuClose()
-    onFeedbackClick()
   }
 
   const handleOpenInAgentStudio = () => {
@@ -118,18 +135,57 @@ function MessageActions({
   }
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        bottom: '0.5rem',
-        left: '0.5rem',
-        display: 'flex',
-        gap: '0.25rem',
-        opacity: 0,
-        transition: 'opacity 0.2s'
-      }}
+    <ClickAwayListener onClickAway={() => { if (!menuOpen) dismissToolbar() }}>
+    <Box
+      ref={rootRef}
       className="message-actions"
+      onFocus={(event) => {
+        if (!event.currentTarget.contains(event.target)) return
+        setFocused(true)
+        if (!event.currentTarget.contains(event.relatedTarget)) setDismissed(false)
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && !menuOpen) {
+          event.stopPropagation()
+          dismissToolbar(true)
+        }
+      }}
+      sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, mt: 1.5 }}
     >
+      <IconButton
+        ref={disclosureRef}
+        aria-label={pinned ? 'Hide message actions' : 'Show message actions'}
+        aria-expanded={expanded}
+        aria-controls={toolbarId}
+        onClick={() => {
+          if (pinned) dismissToolbar(true)
+          else { setPinned(true); setDismissed(false) }
+        }}
+        sx={(theme) => ({
+          color: theme.palette.secondary.contrastText,
+          backgroundColor: theme.palette.secondary.dark,
+          border: `1px solid ${theme.palette.secondary.light}`,
+          borderRadius: '6px', width: 32, height: 40,
+          '&:hover': { backgroundColor: theme.palette.secondary.dark },
+          '&:focus-visible': { outline: `2px solid ${theme.palette.secondary.contrastText}`, outlineOffset: 2 },
+          '@media (hover: none)': { width: 44, height: 44 },
+        })}
+      >
+        <MoreHorizIcon fontSize="small" />
+      </IconButton>
+      <Box
+        id={toolbarId}
+        role="group"
+        aria-label="Message actions"
+        sx={(theme) => ({
+          visibility: expanded ? 'visible' : 'hidden',
+          display: 'flex', flexShrink: 0, gap: 0.5, p: 0.5, borderRadius: '8px',
+          backgroundColor: theme.palette.background.paper,
+        })}
+      >
       {reviewAndCurateTarget && (
         <ReviewAndCurateButton
           sessionId={reviewAndCurateTarget.sessionId}
@@ -144,20 +200,8 @@ function MessageActions({
         />
       )}
 
-      {/* Triple-dot menu button */}
-      <IconButton
-        size="small"
-        onClick={handleMenuOpen}
-        aria-label="more actions"
-        aria-controls={menuOpen ? 'message-actions-menu' : undefined}
-        aria-haspopup="true"
-        aria-expanded={menuOpen ? 'true' : undefined}
-        sx={actionButtonSx}
-      >
-        <MoreVertIcon fontSize="small" />
-      </IconButton>
-
       {/* Copy button */}
+      <Tooltip title="Copy message">
       <IconButton
         size="small"
         onClick={handleCopyMessage}
@@ -166,24 +210,34 @@ function MessageActions({
       >
         <ContentCopyIcon fontSize="small" />
       </IconButton>
+      </Tooltip>
 
-      {/* Trace ID Copy button - only show if traceId exists */}
-      {traceId && (
-        <Tooltip title="Copy Debug ID">
-          <IconButton
-            size="small"
-            onClick={handleCopyTraceId}
-            aria-label="copy debug id"
-            sx={traceActionButtonSx}
-          >
-            <FingerprintIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      )}
+      {/* Triple-dot menu button */}
+      <IconButton
+        size="small"
+        onClick={handleMenuOpen}
+        aria-label="more actions"
+        aria-controls={menuOpen ? menuId : undefined}
+        aria-haspopup="true"
+        aria-expanded={menuOpen ? 'true' : undefined}
+        sx={actionButtonSx}
+      >
+        <MoreVertIcon fontSize="small" />
+      </IconButton>
+
+      </Box>
 
       {/* Menu for actions */}
       <Menu
-        id="message-actions-menu"
+        id={menuId}
+        disableEnforceFocus
+        slotProps={{ transition: { onExited: () => {
+          if (feedbackPendingRef.current) {
+            feedbackPendingRef.current = false
+            dismissToolbar(true)
+            onFeedbackClick()
+          }
+        } } }}
         anchorEl={anchorEl}
         open={menuOpen}
         onClose={handleMenuClose}
@@ -206,8 +260,15 @@ function MessageActions({
           <AutoAwesomeIcon fontSize="small" sx={{ mr: 1 }} />
           Open in Agent Studio
         </MenuItem>
+        {traceId && (
+          <MenuItem onClick={handleCopyTraceId}>
+            <FingerprintIcon fontSize="small" sx={{ mr: 1 }} />
+            Copy Debug ID
+          </MenuItem>
+        )}
       </Menu>
-    </div>
+    </Box>
+    </ClickAwayListener>
   )
 }
 

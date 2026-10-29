@@ -46,12 +46,21 @@ export default function EvidenceNavigationQuoteCard({
   const chatSurfaceColor = theme.palette.secondary.main
   const chatSurfaceTextColor = theme.palette.getContrastText(chatSurfaceColor)
   const chatAccentColor = accentColor ?? alpha(theme.palette.info.main, 0.72)
-  const copyChatAccentColor = accentColor ?? theme.palette.info.main
   const workspaceAccentColor = accentColor ?? theme.palette.success.main
   const visibleAccentColor = isChatAppearance ? chatAccentColor : workspaceAccentColor
 
   return (
-    <Box sx={{ position: 'relative' }}>
+    <Box sx={{
+      backgroundColor: isChatAppearance
+        ? theme.palette.mode === 'dark'
+          ? alpha(chatSurfaceTextColor, 0.08)
+          : alpha(theme.palette.background.paper, 0.72)
+        : alpha(theme.palette.primary.main, 0.08),
+      borderRadius: '8px',
+      border: isChatAppearance ? 0 : `1px solid ${alpha(theme.palette.primary.main, 0.42)}`,
+      borderLeft: `3px solid ${visibleAccentColor}`,
+      overflowWrap: 'anywhere',
+    }}>
       <Box
         aria-label={ariaLabel}
         component="button"
@@ -60,24 +69,17 @@ export default function EvidenceNavigationQuoteCard({
           ? () => dispatchEvidenceNavigationCommand(command, debugContext)
           : undefined}
         sx={{
-          backgroundColor: isChatAppearance
-            ? theme.palette.mode === 'dark'
-              ? alpha(chatSurfaceTextColor, 0.08)
-              : alpha(theme.palette.background.paper, 0.72)
-            : alpha(theme.palette.primary.main, 0.08),
+          backgroundColor: 'transparent',
           borderRadius: '8px',
-          border: isChatAppearance ? 0 : `1px solid ${alpha(theme.palette.primary.main, 0.42)}`,
+          border: 0,
           px: '12px',
           py: '10px',
-          pr: onCopy ? '44px' : '12px',
-          pb: footerText ? (onCopy ? '34px' : '30px') : '10px',
-          borderLeft: `3px solid ${visibleAccentColor}`,
           cursor: command ? 'pointer' : 'not-allowed',
           display: 'block',
           font: 'inherit',
           textAlign: 'left',
           width: '100%',
-          transition: 'background-color 140ms ease, transform 140ms ease',
+          transition: 'background-color 140ms ease',
           color: theme.palette.text.primary,
           '&:hover:not(:disabled)': {
             backgroundColor: isChatAppearance
@@ -85,7 +87,6 @@ export default function EvidenceNavigationQuoteCard({
                 ? alpha(chatSurfaceTextColor, 0.12)
                 : alpha(theme.palette.background.paper, 0.9)
               : alpha(theme.palette.primary.main, 0.12),
-            transform: 'translateX(2px)',
           },
           '&:focus-visible': {
             outline: `2px solid ${visibleAccentColor}`,
@@ -134,38 +135,29 @@ export default function EvidenceNavigationQuoteCard({
       </Box>
 
       {onCopy && copyButtonAriaLabel ? (
-        <Tooltip title="Copy evidence quote">
-          <IconButton
-            aria-label={copyButtonAriaLabel}
-            onClick={onCopy}
-            size="small"
-            sx={{
-              position: 'absolute',
-              right: '8px',
-              bottom: '8px',
-              backgroundColor: isChatAppearance
-                ? theme.palette.mode === 'dark'
-                  ? alpha(chatSurfaceTextColor, 0.08)
-                  : alpha(theme.palette.background.paper, 0.76)
-                : alpha(theme.palette.success.main, 0.08),
-              border: isChatAppearance
-                ? `1px solid ${alpha(copyChatAccentColor, 0.2)}`
-                : `1px solid ${alpha(theme.palette.success.main, 0.16)}`,
-              color: isChatAppearance
-                ? theme.palette.text.secondary
-                : alpha(theme.palette.success.main, 0.84),
-              '&:hover': {
-                backgroundColor: isChatAppearance
-                  ? alpha(copyChatAccentColor, theme.palette.mode === 'dark' ? 0.16 : 0.12)
-                  : alpha(theme.palette.success.main, 0.14),
-                color: isChatAppearance ? theme.palette.text.primary : theme.palette.success.dark,
-              },
-            }}
-            type="button"
-          >
-            <ContentCopyIcon fontSize="inherit" />
-          </IconButton>
-        </Tooltip>
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: '8px', pb: '8px' }}>
+          <Tooltip title="Copy evidence quote">
+            <IconButton
+              aria-label={copyButtonAriaLabel}
+              onClick={onCopy}
+              size="small"
+              sx={{
+                backgroundColor: theme.palette.background.paper,
+                color: theme.palette.text.primary,
+                border: `1px solid ${theme.palette.divider}`,
+                borderRadius: '6px',
+                width: 40,
+                height: 40,
+                '&:hover': { backgroundColor: theme.palette.background.paper, color: theme.palette.primary.main },
+                '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 2 },
+                '@media (hover: none)': { width: 44, height: 44 },
+              }}
+              type="button"
+            >
+              <ContentCopyIcon fontSize="inherit" />
+            </IconButton>
+          </Tooltip>
+        </Box>
       ) : null}
     </Box>
   )
