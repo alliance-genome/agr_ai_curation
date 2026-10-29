@@ -534,7 +534,6 @@ class ValidatorAdapter:
         def scheduled_targets():
             from sqlalchemy import select
             from src.models.sql.validation_review import ValidationReviewWork
-            from src.models.sql.validation_history import ValidationFact
 
             with store.SessionLocal() as db:
                 store._artifact(db, self.artifact_id, self.scope)
@@ -544,12 +543,7 @@ class ValidatorAdapter:
                         ValidationReviewWork.kind == "validator",
                     )
                 )
-                selected_targets = set(db.scalars(select(ValidationFact.target_id).where(
-                    ValidationFact.artifact_id == self.artifact_id,
-                    ValidationFact.kind == "validation_source_input",
-                    ValidationFact.parent_id.is_not(None),
-                )))
-                return selected_targets | {
+                return {
                     item["target_id"]
                     for row in rows
                     for item in row.payload["requests"]
@@ -568,7 +562,8 @@ class ValidatorAdapter:
             if unsupported is None:
                 executable.append(job)
             else:
-                await asyncio.to_thread(source_inputs.record_initial, self.binding, unsupported)
+                await asyncio.to_thread(source_inputs.record_initial, self.binding, unsupported,
+                                        episode_id=self.episode_id)
         jobs = executable
         by_target = {item["target_id"]: item for item in frozen}
         grouped = _dedupe_validator_jobs(jobs)

@@ -72,7 +72,7 @@ def unsupported_input(match, request, target_id, *, requires_prerequisites=None)
             "input": content, "request": None}
 
 
-def record_initial(binding, frozen):
+def record_initial(binding, frozen, *, episode_id):
     """Initialize applicability without replacing a later selected-source fact."""
     from uuid import uuid4
     from src.models.sql.validation_history import ValidationArtifact
@@ -82,10 +82,12 @@ def record_initial(binding, frozen):
         db.scalar(select(ValidationArtifact.id).where(
             ValidationArtifact.id == binding.artifact_id).with_for_update())
         target = frozen["target_id"]
+        episode = store._fact(db, binding.artifact_id, episode_id, kind="review_episode")
         previous = latest(db, binding.artifact_id, target)
-        if previous is not None and previous.parent_id is not None:
-            # Source selection owns subsequent inputs; initial-plan replay cannot
-            # replace them with the original request, even when both are unsupported.
+        if (previous is not None and previous.parent_id is not None
+                and previous.sequence > episode.sequence):
+            # Selection supersedes initialization within this round. Earlier
+            # rounds must not suppress a new explicit curator revalidation.
             return reference(previous)
         update(db, binding.artifact_id, operation_id="applicability:" + str(uuid4()),
                before={}, after={target: frozen})

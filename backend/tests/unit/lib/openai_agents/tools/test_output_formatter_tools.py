@@ -1517,10 +1517,33 @@ async def test_evidence_requirement_defaults_repairs_and_rendered_files(output_f
     result = await _invoke(_tool_by_name(tools, "finalize_and_save"), {})
     assert result["status"] == "ok", result
     assert len(saved) == 1
-    for content in saved:
-        assert "First gene evidence" in content
-        assert "Second supporting passage" in content
-        assert "MAPK evidence" in content
+    import csv
+    import io
+    evidence_column = next(c for c in plan["columns"] if c.get("field_ref") == "object.supporting_evidence")
+    content = saved[0]
+    if output_format == "json":
+        rows = json.loads(content)
+        records = [row[evidence_column["key"]] for row in rows]
+    else:
+        rows = list(csv.DictReader(io.StringIO(content), delimiter="\t" if output_format == "tsv" else ","))
+        cells = [row[evidence_column.get("header") or evidence_column["key"]] for row in rows]
+        # Delimited files use the shared readable value display; JSON retains
+        # structured evidence. Check association on each row in both formats.
+        expected_quotes = [("First gene evidence", "Second supporting passage"), (), ("MAPK evidence",)]
+        all_quotes = {quote for quotes in expected_quotes for quote in quotes}
+        assert len(cells) == 3
+        for cell, quotes in zip(cells, expected_quotes):
+            assert {quote for quote in all_quotes if quote in cell} == set(quotes)
+        assert cells[1] == ""
+        assert "page: 2" in cells[0] and "page: 3" in cells[0]
+        assert "page: 4" in cells[2]
+        return
+    assert len(rows) == 3
+    assert [[(record["verified_quote"], record["page"]) for record in row] for row in records] == [
+        [("First gene evidence", 2), ("Second supporting passage", 3)],
+        [],
+        [("MAPK evidence", 4)],
+    ]
 
 
 @pytest.mark.asyncio

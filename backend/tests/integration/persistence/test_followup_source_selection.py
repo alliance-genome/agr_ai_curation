@@ -495,3 +495,91 @@ async def test_selected_source_retains_unsupported_applicability_without_dispatc
         await item.adapter.assess_source(context, operation_id="cannot-run-unsupported",
             selection_id=result["selection_id"], target_ids=[target], instructions="Check again")
     assert store.read_baseline(item.scope, item.aid) == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", [None, "unsupported-preflight"], indirect=True)
+async def test_explicit_curator_round_is_not_suppressed_by_prior_selected_source(planned, monkeypatch):
+    from datetime import datetime, timezone
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+    from src.lib.curation_workspace import review_operations as ops
+    from src.lib.curation_workspace.models import CurationCandidate, CurationReviewSession, DomainEnvelopeModel
+    from src.models.sql.validation_review import WorkspaceReviewOperation
+    from src.schemas.curation_workspace import CurationCandidateSource
+    from src.lib.validation_review.validator_adapter import ValidatorAdapter, RECONSIDERATION_INPUT
+    from src.lib.validation_review import source_inputs
+    from auth_runtime.base import AuthPrincipal
+
+    item = planned
+    calls = []
+    def run(request, binding, **kwargs):
+        calls.append((dict(request.selected_inputs), RECONSIDERATION_INPUT.get()))
+        return {**_result_payload(request, resolved_values={"curie": "ECO:confirmed"}), "resolved_objects": []}
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
+    await item.adapter.initial()
+    unsupported = not calls
+    context, contribution = retained_proposal(item)
+    checkpoint = checkpoint_provider(item)
+    with store.SessionLocal() as db:
+        digest = selections.source_state_digest(db, item.aid)
+    selected = await item.adapter.select_source(context, checkpoint,
+        operation_id="first-round-source", contribution_ref=contribution,
+        field_paths=["evidence_code_curies"], evidence_ids=[], expected_source_sha=digest,
+        reason="Use the extractor clarification")
+    target = selected["affected_bindings"][0]["target_id"]
+    with store.SessionLocal() as db:
+        old_ref = source_inputs.reference(source_inputs.latest(db, item.aid, target))
+    # A real workspace operation declares the fresh episode, same artifact,
+    # stable binding targets, explicit curator intent and new guidance.
+    with store.SessionLocal.begin() as db:
+        session = CurationReviewSession(adapter_key="fixture", document_id=item.scope.document_id,
+            created_by_id=item.scope.owner_id, prepared_at=datetime.now(timezone.utc))
+        db.add(session)
+        db.flush()
+        model = db.get(DomainEnvelopeModel, item.plan.envelope.envelope_id)
+        model.session_id = session.id
+        obj = checkpoint().envelope.extracted_objects[0]
+        candidate = CurationCandidate(session=session, adapter_key="fixture", source=CurationCandidateSource.MANUAL,
+            envelope_id=model.envelope_id, object_id=obj.object_id or obj.pending_ref_id,
+            envelope_revision=model.revision)
+        db.add(candidate)
+        db.flush()
+        submitted = ops.submit(db, owner_id=item.scope.owner_id, session_id=str(session.id),
+            request_id=str(uuid4()), candidate_ids=[str(candidate.id)], guidance="Please revalidate the clarified record", groups=[])
+        operation = db.get(WorkspaceReviewOperation, submitted["operation_id"])
+        operation.state, operation.lease_token = "preparing", "review-regression"
+    monkeypatch.setattr("src.lib.curation_workspace.review_authorization.get_current_subject_resolver",
+        lambda: lambda subject: AuthPrincipal(subject=subject, provider="fixture", groups=[]))
+    _, groups, artifacts = ops.prepare(submitted["operation_id"], "review-regression")
+    current = artifacts[0]
+    adapter = ValidatorAdapter(item.scope, item.aid, current["episode_id"], current["plan_ref"], authenticated_groups=groups)
+    assert adapter.episode_id != item.ep
+    assert any(request["target_id"] == target for request in adapter.plan["initial_requests"])
+    before = len(calls)
+    classified = []
+    classify = source_inputs.unsupported_input
+    def classify_current(match, request, target_id, **kwargs):
+        classified.append((target_id, dict(request.selected_inputs)))
+        return classify(match, request, target_id, **kwargs)
+    monkeypatch.setattr(source_inputs, "unsupported_input", classify_current)
+    await adapter.initial()
+    assert any(target_id == target for target_id, _ in classified)
+    if unsupported:
+        assert len(calls) == before
+        with store.SessionLocal() as db:
+            fact = source_inputs.latest(db, item.aid, target)
+            body = store._content(db, fact)
+            assert source_inputs.is_applicability(body)
+            assert body["input"]["selected_inputs"]["label"] == "eco:new"
+            assert source_inputs.reference(fact) != old_ref
+            with pytest.raises(store.HistoryConflict):
+                source_inputs.require_applicability(db, item.aid, target, old_ref["fact_id"],
+                    scope=item.scope, sha256=old_ref["sha256"])
+    else:
+        assert len(calls) > before
+        assert any(inputs.get("curie") == "eco:new" for inputs, _ in calls[before:])
+        assert "Please revalidate the clarified record" in str(calls[-1][1])
+    after = len(calls)
+    await adapter.initial()
+    assert len(calls) == after
