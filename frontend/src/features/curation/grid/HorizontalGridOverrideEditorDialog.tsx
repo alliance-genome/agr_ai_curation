@@ -191,8 +191,9 @@ export default function HorizontalGridOverrideEditorDialog({
               {accepting
                 ? 'Accepting keeps this identity as it stands and sets it by curator override: '
                 : 'Saving sets this value by curator override: '}
-              it counts as validated, and a validator that disagrees later adds a warning
-              instead of changing it.
+              it counts as validated. If you choose Revalidate record or Revalidate all
+              records, an accepted answer may replace it. Edits made after that request
+              remain protected.
               {value.curator_override ? ' Removing the override returns the value to unresolved.' : ''}
             </Typography>
           </Stack>
