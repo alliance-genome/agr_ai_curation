@@ -200,7 +200,9 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "Validator-agent inspection workflow" in prompt
     assert "read `validator_bindings[].validator_agent.agent_id`" in prompt
     assert "validation_attachments[].validator_agent_id" in prompt
-    assert 'get_prompt(agent_id, group_id, view="summary")' in prompt
+    assert "get_prompt(agent_id, group_id, view, layer_id, layer_index, cursor, max_chars)" in prompt
+    assert 'Start with content-free `view="summary"`' in prompt
+    assert 'through `next_cursor` until `complete=true`' in prompt
     assert "Extractor and validator responsibilities are deliberately separate" in prompt
     assert "Extractors must not search databases" in prompt
     assert "`agr_species_context_lookup` is the narrow context tool" in prompt
