@@ -43,3 +43,31 @@ manifest eligibility is checked before validation or extraction writes.
 All benchmark runs are excluded from this new inspection registration, including
 benchmark routes without a supervisor snapshot. Frozen runs retain their captured
 tools and instructions. Extending benchmark inspection is separate work.
+
+## Agent Studio review history
+
+Studio uses `get_domain_envelope_review_history` for the durable validation ledger,
+separately from the materialized `get_domain_envelope_state` history. It accepts an
+owned envelope ID even when no curation-workspace candidate has been created.
+Artifact/document/session authorization remains in the shared history store.
+
+Start with `summary`: it returns fact-kind counts, an observed sequence boundary and the
+typed baseline reference. Check `subject_kind` and `original_available`: a historical
+baseline is a later snapshot, not an original extraction; a curator-authored
+baseline is the curator's content. Use `list` with that `through_sequence` and a relevant
+`kind`, then `detail` with the returned fact ID and SHA. Follow `next_call` to read
+all exact JSON chunks. Baseline detail uses the same hash-pinned read contract.
+The existing `VALIDATION_HISTORY_PAGE_SIZE` and `VALIDATION_REVIEW_PACKET_BYTES`
+settings control pagination; the reader does not create a second history store.
+
+A `target_id` list filter matches direct fact anchors only. Decisions may contain
+multiple target references in their bodies: do not filter them out and claim a
+complete per-record history. Use current envelope reads for current materialized
+values and trace tools for the historical prompts/tool calls. Missing historical
+metadata is reported explicitly rather than returned as empty history. Inspection
+never creates candidates, writes review facts, reruns validation or restores records.
+
+The sequence boundary excludes later sequence allocations, but is not a database
+transaction snapshot: an in-flight earlier allocation may commit during paging.
+For questions involving a concurrently active run, refresh the summary after it
+settles rather than claiming that a paged read proves no later decision exists.

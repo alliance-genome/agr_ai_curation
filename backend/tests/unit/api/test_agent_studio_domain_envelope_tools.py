@@ -503,3 +503,26 @@ def test_every_pack_plan_page_remains_provider_visible(monkeypatch, domain_pack_
             if page["complete"]:
                 break
             cursor = page["next_cursor"]
+
+
+@pytest.mark.parametrize("tab", ["agents", "flows", "agent_workshop"])
+def test_durable_history_is_available_and_dispatches_authenticated_scope(monkeypatch, tab):
+    from src.lib.agent_studio import review_history_tools
+    captured = {}
+    def read(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "items": []}
+    monkeypatch.setattr(review_history_tools, "inspect_history", read)
+    context = ChatContext(active_tab=tab)
+    names = {tool["name"] for tool in api_module._get_all_opus_tools(context)}
+    assert "get_domain_envelope_review_history" in names
+    result = asyncio.run(api_module._handle_tool_call(
+        tool_name="get_domain_envelope_review_history",
+        tool_input={"envelope_id": "env", "action": "list", "kind": "decision",
+                    "through_sequence": 20, "user_auth_sub": "spoofed"},
+        context=context, user_email="curator@example.org", user_auth_sub="owner", messages=[],
+    ))
+    assert result["success"]
+    assert captured["user_auth_sub"] == "owner"
+    assert captured["kind"] == "decision" and captured["through_sequence"] == 20
+    assert captured["session_factory"] is api_module.SessionLocal

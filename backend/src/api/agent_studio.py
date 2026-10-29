@@ -1656,6 +1656,7 @@ _DOMAIN_REFERENCE_KEYS = {
     "validator_id",
 }
 _DOMAIN_REFERENCE_TOOL_NAMES = {
+    "get_domain_envelope_review_history",
     "get_current_flow",
     "get_domain_envelope_review_rows",
     "get_domain_envelope_state",
@@ -3190,6 +3191,17 @@ async def _execute_tool_call(
             domain_pack_id=tool_input.get("domain_pack_id"),
             limit=tool_input.get("limit"),
             cursor=tool_input.get("cursor"),
+        )
+
+    elif tool_name == "get_domain_envelope_review_history":
+        from src.lib.agent_studio.review_history_tools import inspect_history
+        return inspect_history(
+            session_factory=SessionLocal, user_auth_sub=user_auth_sub,
+            envelope_id=tool_input.get("envelope_id"),
+            **{key: tool_input[key] for key in (
+                "action", "after", "through_sequence", "kind", "target_id",
+                "fact_id", "sha256", "offset",
+            ) if key in tool_input},
         )
 
     elif tool_name == "get_domain_envelope_state":
