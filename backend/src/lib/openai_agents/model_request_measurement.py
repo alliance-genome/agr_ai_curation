@@ -1264,8 +1264,11 @@ class MeasuredModel(Model):
         from .context_compaction import native_compaction_settings
         from .model_context_view import ContextRecoveryError
         settings = native_compaction_settings(self._inner, settings, provider_hint=self._provider_hint)
-        if self._context_policy is None or describe_model(self._inner, provider_hint=self._provider_hint)[:2] != ("openai", "responses"):
+        if describe_model(self._inner, provider_hint=self._provider_hint)[:2] != ("openai", "responses"):
             return input, settings
+        if self._context_policy is None:
+            from .tool_surface import align_history_tool_namespaces
+            return (input if isinstance(input, str) else align_history_tool_namespaces(input, tools)), settings
         if previous_response_id or conversation_id:
             raise ContextRecoveryError("Use application-owned working context without server-managed conversation chaining.")
         if self._history is not None and not self._history.healthy:
@@ -1301,7 +1304,8 @@ class MeasuredModel(Model):
             raise
         write_extraction_trace_event(event_type="runtime.context_capacity", output_summary={
             **self._context_policy.metrics, "outcome": "prepared"})
-        return prepared
+        items, prepared_settings = prepared
+        return request.prepare_input(items), prepared_settings
 
     async def get_response(
         self,

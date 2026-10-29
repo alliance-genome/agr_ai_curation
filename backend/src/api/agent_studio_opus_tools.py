@@ -1146,6 +1146,30 @@ GET_DOMAIN_ENVELOPE_STATE_TOOL = {
     },
 }
 
+GET_DOMAIN_ENVELOPE_REVIEW_HISTORY_TOOL = {
+    "name": "get_domain_envelope_review_history",
+    "description": "Read owned durable validation/review history without creating workspace records. "
+        "Summary returns available fact kinds, a sequence boundary and typed baseline reference. Historical baselines are later snapshots, not original extractions; curator baselines are curator-authored content. Check subject_kind and original_available. "
+        "List relevant kinds, then read exact hash-pinned bodies including answers, decisions, follow-ups "
+        "and retirement. Follow next_call; this performs no writes or reruns. "
+        "target_id filters direct anchors only, not target references nested inside decisions.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "envelope_id": {"type": "string"},
+            "action": {"type": "string", "enum": ["summary", "list", "detail"]},
+            "after": {"type": "integer", "minimum": 0},
+            "through_sequence": {"type": "integer", "minimum": 0},
+            "kind": {"type": "string"},
+            "target_id": {"type": "string"},
+            "fact_id": {"type": "string", "description": "Reference from list, or baseline from summary."},
+            "sha256": {"type": "string"},
+            "offset": {"type": "integer", "minimum": 0},
+        },
+        "required": ["envelope_id"],
+    },
+}
+
 GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
     "name": "get_domain_pack_validation_plan",
     "description": (
@@ -1348,6 +1372,7 @@ COMMON_TOOLS = {
     READ_STUDIO_GUIDE_TOOL_NAME,
 }
 DOMAIN_ENVELOPE_TOOLS = {
+    "get_domain_envelope_review_history",
     "list_domain_envelopes",
     "get_domain_envelope_state",
     "get_domain_pack_validation_plan",
@@ -1448,6 +1473,7 @@ _BUILTIN_OPUS_TOOLS = (
     GET_SERVICE_LOGS_TOOL,
     LIST_DOMAIN_ENVELOPES_TOOL,
     GET_DOMAIN_ENVELOPE_STATE_TOOL,
+    GET_DOMAIN_ENVELOPE_REVIEW_HISTORY_TOOL,
     GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL,
     GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL,
     GET_EXPORT_SUBMISSION_READINESS_TOOL,

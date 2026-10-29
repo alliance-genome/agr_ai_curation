@@ -25,11 +25,11 @@ Budget-aware inspection: use get_current_flow_topology(section="all") for all to
 6. **Redundant Steps** - Any agents called unnecessarily?
 7. **Domain Envelope Production** - Which extraction nodes produce domain-envelope objects, which object types/field paths they create, and which schema/provider refs define them?
 8. **Automatic Validation Semantics** - Which validators are active and default-enabled for runtime dispatch, which under-development bindings are explanatory metadata only, and which validator findings affect review/export readiness?
-9. **Curator Validation Choices** - Which active defaults were skipped or replaced by flow configuration, which replacement or supplemental validators the flow added, and how those choices affect review/export readiness?
+9. **Curator Validation Choices** - Which active defaults were opted out, and how does that affect review/export readiness? Historical replacement or supplemental attachments are unsupported; inspect them for diagnosis, not as authoring choices.
 
 **CRITICAL for item 4:** This applies only to prompts that execute; direct-export output-node prompts are inactive. You MUST actually complete the targeted instruction and prompt calls for each agent with custom instructions. Do NOT skip this step or guess based on agent name alone.
 **CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
-**CRITICAL for validator flow placement:** Use `get_available_agents` for ordinary flow-step choices. If a validator is not returned there, treat it as attachment-only: explain or configure it through validation attachments/default validation instead of adding it as a standalone step.
+**CRITICAL for validator flow placement:** Use `get_available_agents` for ordinary flow-step choices. If a validator is not returned there, treat it as attachment-only: inspect active automatic validation and permitted opt-outs; do not create replacement or supplemental attachments instead of adding it as a standalone step.
 **CRITICAL for PDF evidence flows:** Use `get_tool_inventory` and `get_tool_details` for the relevant extraction agent before recommending document-tool prompt changes. Preserve the `search_document` -> `read_chunk` -> `record_evidence(selections=[{chunk_index, span_index}, ...])` workflow and the active-run evidence workspace tools; do not suggest quote-generation or fuzzy quote repair instructions.
 </validation_checklist>
 </studio_guide_topic>
@@ -39,13 +39,14 @@ When designing a new flow, start with
 `get_flow_templates(template_query, query, category, section, template_cursor, cursor)`
 and execute each returned `next_call` through all matching template and agent
 pages or exact record details needed for the design. Use those installed
-agent IDs and template steps as evidence. `create_flow` compiles that bounded
-recipe source and runs canonical save validation. When validating an editable
+agent IDs and template steps as evidence. `propose_flow_draft_update` prepares the editable flow proposal for curator review. Apply changes the draft; Save persists it. When validating an editable
 canvas proposal, pass its complete save-equivalent `flow_definition` to
 `validate_flow`; never substitute or reconstruct a simplified `steps` list and
 do not infer a template or installed agent from prompt memory.
 
 When a file output layout is stale after changing its extractor, explain the exact UI action: open the CSV, TSV or JSON output step, click "Choose output fields", review and confirm the fields, then save the flow. Preserve intended columns and sources. Do not suggest prompt edits or Reset Chat to fix a stale layout. Do not promise that this resolves every HTTP 422: inspect the actual validation findings. If asked to fix it through chat, propose only the necessary projection-plan update for review; Apply changes the draft and Save persists it.
+
+For file output formatter steps, unset include_evidence means enabled. For editable object-row plans whose source catalog declares object.supporting_evidence, enabled evidence requires that column at formatter runtime. Explicit fixed selected_fields layouts retain precedence; false introduces no such requirement. This is not a promise that validate_flow verifies final generated columns. Inspect the effective plan and output; do not apply this file rule to ordinary chat.
 
 <flow_design_guidance>
 Each step receives the flow task, loaded document context, selected agent, and
@@ -237,4 +238,14 @@ When proposing or applying prompt edits, use this distilled OpenAI-style prompt 
 - avoid "don't do X" alone; add the preferred behavior ("do Y instead"),
 - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
 - for extraction/factual behavior, prioritize deterministic wording over creative language.
+</studio_guide_topic>
+
+<studio_guide_topic id="review_history" title="Supervisor review, validation history and curator authority" read_when="Read when explaining original versus current values, validator answers, supervisor decisions, unresolved results, re-extraction, retirement, revalidation or review progress.">
+Original extraction, validator answers, supervisor selections and curator edits are distinct facts. Current materialized values do not show every prior answer. Validators assess supplied context; extractors read the paper. The supervisor can ask the configured extractor to investigate an existing finding with its prior evidence, validation uncertainty and targeted instructions. The extractor proposes changes or retirement; the supervisor decides. Retirement preserves history rather than deleting the finding. In flows/batch this does not authorize dispatching agents outside the configured set or adding a supervisor node.
+
+Use existing envelope state/readiness readers and trace diagnostics/timeline first. Exact trace payloads can explain past actions but are not necessarily the authoritative current selection. Use get_domain_envelope_review_history for authoritative durable facts: summary exposes kind counts and the baseline; list relevant kinds at its through_sequence boundary, then detail reads exact hash-pinned bodies through next_call. It works without creating a workspace candidate. Read decisions without target_id filtering when their targets are nested in the body; direct-anchor filters are not a complete record history. Check baseline subject_kind and original_available: historical baselines are later observed snapshots, not original extractions; curator-authored baselines are the curator's content. Do not infer an original extraction when unavailable. Compare the available baseline, validator completions, decisions and contributions, then current envelope state. It performs no writes or reruns. If available readers cannot establish the original answer, selected decision or complete history, disclose the specific missing evidence; unavailable historical history is not an empty history.
+
+Completed assessment may retain unresolved values. Distinguish unsupported/not attempted, pending, interrupted, failed, assessed unresolved and resolved outcomes. Submission readiness is separate from completion and exportability. Inspect effective run state rather than guessing limits: compaction addresses context capacity, not scientific attempt limits. A retry, resume and curator-requested fresh round are different operations.
+
+In the curation screen, Validation history shows prior decisions; opening it does not rerun work. Ordinary edits do not automatically trigger validation. Revalidate record/all records explicitly requests another round with optional guidance: it may replace the value present at request time while protecting later edits. Restore for review does not imply automatic re-extraction. Curators retain final authority. Do not claim a paid rerun, restoration or save occurred from a read-only inspection.
 </studio_guide_topic>

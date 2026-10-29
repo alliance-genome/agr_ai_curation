@@ -514,6 +514,34 @@ def run_config_for_tool_surface(run_config: Any, surface: ToolSurface) -> Any:
 _TOOL_SEARCH_ITEM_TYPES = frozenset({"tool_search_call", "tool_search_output"})
 
 
+def align_history_tool_namespaces(items: Sequence[Any], tools: Sequence[Any]) -> list[Any]:
+    """Project prior calls onto the current authorized function-tool surface.
+
+    A forced tool can move out of its namespace for one turn and back on the
+    next. Responses requires historical calls to match the current declaration.
+    Only unambiguous, exact function names are eligible; unknown or ambiguous
+    names retain their original routing. This copy never changes saved history,
+    call identities, arguments, results, or the available tools.
+    """
+    namespaces: dict[str, set[str | None]] = {}
+    for tool in tools:
+        if isinstance(tool, FunctionTool):
+            namespaces.setdefault(tool.name, set()).add(getattr(tool, "_tool_namespace", None))
+    projected = copy.deepcopy(list(items))
+    for item in projected:
+        if not isinstance(item, dict) or item.get("type") != "function_call":
+            continue
+        choices = namespaces.get(item.get("name"), set())
+        if len(choices) != 1:
+            continue
+        namespace = next(iter(choices))
+        if namespace is None:
+            item.pop("namespace", None)
+        else:
+            item["namespace"] = namespace
+    return projected
+
+
 def replay_input_without_tool_search(
     items: Sequence[Any],
 ) -> tuple[list[Any], dict[str, int]]:

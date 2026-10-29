@@ -156,7 +156,7 @@ def test_moved_reference_material_is_reachable_through_the_guide():
     template = _alliance_template()
     always_sent, _topics = studio_guide.prepare_studio_prompt_template(template)
     moved_phrases = {
-        "trace_investigation": "execute this workflow AUTOMATICALLY",
+        "trace_investigation": "When a curator shares a trace or run ID:",
         "token_budget": "The runtime measures the actual model request",
         "domain_envelopes": "PDF evidence is span-backed:",
         "inspection_tools": "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
