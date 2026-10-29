@@ -60,6 +60,12 @@ export default function EvidenceNavigationQuoteCard({
       border: isChatAppearance ? 0 : `1px solid ${alpha(theme.palette.primary.main, 0.42)}`,
       borderLeft: `3px solid ${visibleAccentColor}`,
       overflowWrap: 'anywhere',
+      '@media (hover: hover) and (pointer: fine)': {
+        '& .evidence-quote-copy': { visibility: 'hidden' },
+        '&:hover .evidence-quote-copy, &:focus-within .evidence-quote-copy': {
+          visibility: 'visible',
+        },
+      },
     }}>
       <Box
         aria-label={ariaLabel}
@@ -135,9 +141,18 @@ export default function EvidenceNavigationQuoteCard({
       </Box>
 
       {onCopy && copyButtonAriaLabel ? (
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: '8px', pb: '8px' }}>
+        <Box
+          role="group"
+          aria-label="Evidence quote actions"
+          tabIndex={0}
+          sx={{
+            display: 'flex', justifyContent: 'flex-end', px: '8px', pb: '8px',
+            '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, outlineOffset: 2 },
+          }}
+        >
           <Tooltip title="Copy evidence quote">
             <IconButton
+              className="evidence-quote-copy"
               aria-label={copyButtonAriaLabel}
               onClick={onCopy}
               size="small"
