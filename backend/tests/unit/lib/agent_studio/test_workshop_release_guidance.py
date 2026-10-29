@@ -68,3 +68,20 @@ def test_curator_domain_docs_match_shipped_scope():
     assert "complete term list" in phenotype
     assert "contributes_to" not in disease
     assert "subject validation routes separately" in disease
+
+
+@pytest.mark.parametrize("package", ["core", "alliance"])
+def test_review_history_is_available_on_demand_for_each_package(package):
+    template = (ROOT / f"packages/{package}/config/agent_studio_system_prompt.md").read_text()
+    always_sent, topics = prepare_studio_prompt_template(template)
+    assert "review_history" in {topic.topic_id for topic in topics}
+    result = read_studio_guide(
+        template=template, render_diagnostic_tools=str, topic="review_history",
+    )
+    assert result["success"] and result["complete"]
+    assert result["content"] not in always_sent
+    assert "review_history" in {
+        item["topic"] for item in read_studio_guide(
+            template=template, render_diagnostic_tools=str, query="revalidation",
+        )["topics"]
+    }

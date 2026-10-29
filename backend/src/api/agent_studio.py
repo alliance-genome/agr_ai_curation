@@ -1541,24 +1541,6 @@ def _format_conversation_context(messages: Optional[List[dict]]) -> Optional[str
     return prompt_builder.format_conversation_context(messages)
 
 
-def _parse_markdown_heading(line: str) -> Optional[Dict[str, Any]]:
-    """Parse a markdown heading line into level/text metadata."""
-    return prompt_builder.parse_markdown_heading(line)
-
-
-def _find_section_bounds(prompt: str, section_heading: str) -> Optional[Dict[str, Any]]:
-    """Find byte-range bounds for a markdown section by heading text."""
-    return prompt_builder.find_section_bounds(prompt, section_heading)
-
-
-def _apply_targeted_workshop_edits(
-    base_prompt: str,
-    edits: List[Any],
-) -> Dict[str, Any]:
-    """Apply targeted edit operations against a workshop prompt draft."""
-    return prompt_builder.apply_targeted_workshop_edits(base_prompt, edits)
-
-
 def _parse_optional_datetime(value: Any) -> datetime | None:
     """Parse an optional ISO-ish timestamp."""
 
