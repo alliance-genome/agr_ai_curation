@@ -963,3 +963,21 @@ def test_direct_validator_constructor_refuses_paper_tools_before_resolution(monk
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda *args: pytest.fail("forbidden tool was resolved"))
     with pytest.raises(ValueError, match="cannot read papers"):
         catalog_service._create_db_agent(fake_row, document_id="doc", user_id="owner")
+
+
+@pytest.mark.asyncio
+async def test_runtime_formatter_context_enforces_enabled_evidence():
+    import json
+    bundle = _formatter_bundle()
+    context = catalog_service._build_tool_execution_context({
+        "database_url": "unused", "formatter_bundle": bundle,
+        "formatter_output_format": "csv", "formatter_agent_id": "csv_formatter",
+        "formatter_include_evidence": True,
+    })
+    tool = catalog_service.resolve_tools(["validate_output_projection"], context)[0]
+    plan = {"format": "csv", "row_source": "object",
+            "columns": [{"key": "label", "field_ref": "object.label"}]}
+    raw = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name), json.dumps({"plan_json": json.dumps(plan)}))
+    result = json.loads(raw)
+    assert result["status"] == "invalid"
+    assert "object.supporting_evidence" in json.dumps(result)

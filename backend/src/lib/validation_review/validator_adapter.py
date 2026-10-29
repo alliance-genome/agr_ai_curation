@@ -305,7 +305,11 @@ class ValidatorAdapter:
                     input_match = _match_on_envelope(match, selected_envelope)
                 selected = build_domain_validation_request(input_match)
                 if selected.request is not None:
-                    jobs.append(ValidatorDispatchJob(input_match, selected.request, history_episode_id=self.episode_id))
+                    unsupported = source_inputs.unsupported_input(input_match, selected.request, target)
+                    if unsupported is not None:
+                        absences[target] = unsupported
+                    else:
+                        jobs.append(ValidatorDispatchJob(input_match, selected.request, history_episode_id=self.episode_id))
                 elif selected.absent_inputs:
                     absences[target] = source_inputs.absent_input(input_match, selected, target)
             requests = {**absences, **{request["target_id"]: request
@@ -548,29 +552,18 @@ class ValidatorAdapter:
         scheduled = await asyncio.to_thread(scheduled_targets)
         jobs = [self.job(item) for item in frozen if item["target_id"] not in scheduled
                 and not await asyncio.to_thread(self.retained_ready, item["target_id"])]
-        from src.lib.domain_packs.validator_dispatch import (
-            preflight_unresolved_validator_result,
-        )
+        from . import source_inputs
 
         executable = []
         for job in jobs:
-            blocked = preflight_unresolved_validator_result(
-                job.request, policy=job.match.binding.preflight_policy
+            unsupported = source_inputs.unsupported_input(
+                job.match, job.request, runtime.request_target(self.binding, job)
             )
-            if blocked is None:
+            if unsupported is None:
                 executable.append(job)
             else:
-                # Missing configured lookup inputs are a structural scheduling gap,
-                # never a fabricated scientific answer from a validator.
-                await asyncio.to_thread(
-                    store.record_scheduling,
-                    self.scope,
-                    self.artifact_id,
-                    operation_id="chat-preflight:"
-                    + runtime.request_target(self.binding, job),
-                    outcome="unsupported_preflight",
-                    details={"binding_id": job.match.binding.binding_id},
-                )
+                await asyncio.to_thread(source_inputs.record_initial, self.binding, unsupported,
+                                        episode_id=self.episode_id)
         jobs = executable
         by_target = {item["target_id"]: item for item in frozen}
         grouped = _dedupe_validator_jobs(jobs)
@@ -1042,10 +1035,17 @@ class ValidatorAdapter:
                 continue
             selected = self.selected_input_result(tid, self.selected_sources)
             if selected.request is not None:
-                frozen = runtime.frozen_job_requests(self.binding, [
-                    ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id)])
-                for request in frozen:
-                    request["requires_prerequisites"] = bool(dependencies)
+                from . import source_inputs
+                unsupported = source_inputs.unsupported_input(
+                    self._selected_match(tid, self.selected_sources), selected.request, tid,
+                    requires_prerequisites=bool(dependencies))
+                if unsupported is not None:
+                    frozen = [unsupported]
+                else:
+                    frozen = runtime.frozen_job_requests(self.binding, [
+                        ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id)])
+                    for request in frozen:
+                        request["requires_prerequisites"] = bool(dependencies)
             elif selected.absent_inputs:
                 from . import source_inputs
                 frozen = [source_inputs.absent_input(self._selected_match(tid, self.selected_sources), selected, tid,

@@ -17,8 +17,11 @@ CORE_GENERATED_BUDGET = 2500
 # Outstanding-work navigation, explicit optional-absence assessment, and awaited
 # execution guidance add 592 reviewed characters, bringing it to 7529. Keep
 # only 71 characters of headroom for accidental source growth.
+# The reviewed unsupported-lookup guidance adds 171 characters (7700 total),
+# distinguishing accepted unresolved applicability from a confirmed identity.
+# Keep 100 characters of headroom; the protocol itself is never truncated.
 # This is a source-growth regression ceiling, not a runtime truncation limit.
-AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 7600}
+AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 7800}
 
 
 def test_core_generated_within_budget_for_all_agents():

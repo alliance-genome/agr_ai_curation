@@ -507,7 +507,10 @@ def _build_flow_step_instruction_prefix(
             "from earlier steps whenever it is available. Keep that evidence clearly tied to "
             "the corresponding output item, preserve concrete quote or location details when "
             "present, and never invent evidence or citations. If no supporting evidence is "
-            "available for a result, say that plainly instead of fabricating it."
+            "available for a result, say that plainly instead of fabricating it. "
+            "For editable file exports, include object.supporting_evidence even when custom "
+            "instructions request a narrower layout; correct missing-field errors before saving. "
+            "Preserve curator-fixed selected_fields layouts exactly."
         )
     elif include_evidence is False:
         sections.append(
@@ -906,6 +909,7 @@ def _make_flow_runtime_formatter_tool(
     document_id: str | None,
     node_data: Mapping[str, Any],
     source_node_ids: Sequence[str] | None = None,
+    include_evidence: bool | None = None,
 ):
     @function_tool(
         name_override=tool_name,
@@ -952,6 +956,7 @@ def _make_flow_runtime_formatter_tool(
                 "formatter_output_format": output_format,
                 "formatter_agent_id": agent_id,
                 "formatter_projection_plan": node_data.get("projection_plan"),
+                "formatter_include_evidence": include_evidence,
                 "additional_runtime_context": runtime_contexts,
             }
         )
@@ -3059,6 +3064,7 @@ def get_all_agent_tools(
                     specialist_name=specialist_name,
                     base_context=agent_kwargs,
                     step_instruction_prefix=step_instruction_prefix,
+                    include_evidence=include_evidence,
                     completed_steps=execution_state["completed_steps"],
                     flow_name=flow.name,
                     flow_run_id=flow_run_id,

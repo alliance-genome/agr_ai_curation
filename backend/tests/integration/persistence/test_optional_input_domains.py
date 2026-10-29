@@ -38,9 +38,9 @@ def test_real_gene_expression_cellular_component_can_be_assessed_without_fabrica
     target = runtime.binding_target(plan.history_binding, match)
     with store.SessionLocal() as db:
         fact = source_inputs.latest(db, aid, target)
-        assert source_inputs.is_absence(store._content(db, fact))
+        assert source_inputs.is_applicability(store._content(db, fact))
         reference = source_inputs.reference(fact)
-        source_inputs.require_absence(db, aid, target, fact.id, scope=scope)
+        source_inputs.require_applicability(db, aid, target, fact.id, scope=scope)
     manifest = selections.read_manifest(scope, aid, episode_id=ep)
     unit = next(u for u in manifest["units"] if u["target_id"] == target)
     checkpoint = checkpoint_provider(SimpleNamespace(scope=scope, aid=aid, ep=ep, plan=plan))

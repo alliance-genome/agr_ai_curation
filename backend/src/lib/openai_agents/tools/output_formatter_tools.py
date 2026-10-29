@@ -456,8 +456,13 @@ def _transform_literal_payload_errors(
 def _formatter_plan_constraint_errors(
     plan: FlowOutputProjectionPlan,
     columns: Sequence[FlowOutputColumnSpec],
+    *,
+    require_evidence: bool = False,
 ) -> list[str]:
     errors: list[str] = []
+    if (require_evidence and plan.row_source == "object"
+            and not any(column.field_ref == "object.supporting_evidence" for column in columns)):
+        errors.append("Evidence inclusion is enabled. Add object.supporting_evidence to this projection.")
     errors.extend(_literal_value_errors(plan.missing_value, context="Projection missing_value"))
     source_ref_count = 0
     for column in columns:
@@ -967,7 +972,19 @@ def _default_projection_plan_for_formatter(
     row_source: FlowOutputRowSource,
     row_strategy: FlowOutputRowStrategy | None,
     source_ref: str | None,
+    require_evidence: bool = False,
 ) -> FlowOutputProjectionPlan:
+    def complete_default(plan: FlowOutputProjectionPlan) -> FlowOutputProjectionPlan:
+        if (require_evidence and plan.row_source == "object"
+                and not any(column.field_ref == "object.supporting_evidence" for column in plan.columns)):
+            keys = {column.key for column in plan.columns}
+            key = "supporting_evidence"
+            while key in keys:
+                key += "_evidence"
+            return plan.model_copy(update={"columns": [*plan.columns, FlowOutputColumnSpec(
+                key=key, header="Supporting evidence", field_ref="object.supporting_evidence")]})
+        return plan
+
     resolved_source_ref = str(source_ref or "").strip()
     if (
         not resolved_source_ref
@@ -985,8 +1002,8 @@ def _default_projection_plan_for_formatter(
             row_source=row_source,
         )
         if row_strategy is None:
-            return plan
-        return plan.model_copy(
+            return complete_default(plan)
+        return complete_default(plan.model_copy(
             update={
                 "row_strategy": row_strategy,
                 "columns": default_columns_for_row_source(
@@ -995,7 +1012,7 @@ def _default_projection_plan_for_formatter(
                     row_strategy=row_strategy,
                 ),
             }
-        )
+        ))
 
     rows, source_update = _rows_for_source_ref(
         bundle,
@@ -1008,7 +1025,7 @@ def _default_projection_plan_for_formatter(
         output_format=output_format,
     )
     available_refs = {str(field_ref) for row in rows for field_ref in row}
-    return FlowOutputProjectionPlan(
+    return complete_default(FlowOutputProjectionPlan(
         format=output_format,
         row_source=row_source,
         row_strategy=selected_strategy,
@@ -1024,7 +1041,7 @@ def _default_projection_plan_for_formatter(
             "source_extraction_result_ids", []
         ),
         source_keys=source_update.get("source_keys", []),
-    )
+    ))
 
 
 def _apply_bundle_default_source(
@@ -1315,6 +1332,7 @@ def build_output_formatter_tools(
     formatter_agent_id: str,
     save_projected_output: FormatterSaveCallback | None = None,
     configured_plan: Any = None,
+    require_evidence: bool | None = None,
     deliver_chat_output: ChatDeliveryCallback | None = None,
 ) -> list[Any]:
     """Build runtime-bound formatter tools over a saved artifact bundle.
@@ -1343,6 +1361,11 @@ def build_output_formatter_tools(
         if errors:
             raise ValueError("; ".join(errors))
 
+    require_evidence = bool(
+        require_evidence is True and not is_chat and locked_plan is None
+        and any(field.ref == "object.supporting_evidence" for field in bundle.field_catalog)
+    )
+
     def enforce_selection(plan: FlowOutputProjectionPlan) -> FlowOutputProjectionPlan:
         if locked_plan is not None and plan != locked_plan:
             raise ValueError("The curator selected fixed output fields. Use build_default_projection_plan and keep that exact plan; edit the flow to change it.")
@@ -1356,7 +1379,7 @@ def build_output_formatter_tools(
 
         errors, warnings, columns = validate_projection_plan(bundle, plan)
         if not errors:
-            errors.extend(_formatter_plan_constraint_errors(plan, columns))
+            errors.extend(_formatter_plan_constraint_errors(plan, columns, require_evidence=require_evidence))
         base = {
             "status": "invalid" if errors else "ok",
             "errors": [_bounded_text(error) for error in errors[:_MAX_LIST_ITEMS]],
@@ -1414,12 +1437,13 @@ def build_output_formatter_tools(
             row_source=bundle.default_row_source,
             row_strategy=None,
             source_ref=None,
+            require_evidence=require_evidence,
         )
 
     def final_plan_errors(plan: FlowOutputProjectionPlan) -> tuple[list[str], list[str]]:
         errors, warnings, columns = validate_projection_plan(bundle, plan)
         if not errors:
-            errors.extend(_formatter_plan_constraint_errors(plan, columns))
+            errors.extend(_formatter_plan_constraint_errors(plan, columns, require_evidence=require_evidence))
         if (
             not errors
             and not bundle.rows_for_source(plan.row_source)
@@ -1923,6 +1947,7 @@ def build_output_formatter_tools(
                 row_source=selected_row_source,
                 row_strategy=selected_row_strategy,
                 source_ref=source_ref,
+                require_evidence=require_evidence,
             )
             return plan_response(plan, cursor)
         except Exception as exc:
@@ -1969,7 +1994,7 @@ def build_output_formatter_tools(
             plan = resolve_final_plan(plan_json)
             errors, warnings, columns = validate_projection_plan(bundle, plan)
             if not errors:
-                errors.extend(_formatter_plan_constraint_errors(plan, columns))
+                errors.extend(_formatter_plan_constraint_errors(plan, columns, require_evidence=require_evidence))
             if errors:
                 return _tool_json(
                     {

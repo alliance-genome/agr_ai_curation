@@ -412,7 +412,7 @@ def _prerequisites_current(db, scope, references):
             completion = _fact(db, aid, pinned["selected"])
             if completion.kind == "validation_source_input":
                 from src.lib.validation_review import source_inputs
-                source_inputs.require_absence(db, aid, tid, completion.id, scope=scope)
+                source_inputs.require_applicability(db, aid, tid, completion.id, scope=scope)
                 continue
             if completion.kind != "completion":
                 raise HistoryConflict("Prerequisite has an unsupported subject")
@@ -856,14 +856,17 @@ def apply_decisions_in_transaction(
                     raise HistoryAccessError("Only the owner can select an attested curator source")
             elif _fact(db, artifact_id, subject).kind == "validation_source_input":
                 from src.lib.validation_review import source_inputs
-                source_inputs.require_absence(db, artifact_id, target.id, subject, scope=scope)
+                applicability = source_inputs.require_applicability(db, artifact_id, target.id, subject, scope=scope)
+                if (action == "accept" and _content(db, applicability)["input"].get("unsupported_preflight")
+                        and entry.get("absence_assessment") != "unresolved"):
+                    raise HistoryConflict("Unsupported preflight acceptance requires an unresolved assessment")
                 if action == "acknowledge_failure":
-                    raise HistoryConflict("Optional absence is not an execution failure")
+                    raise HistoryConflict("An applicability fact is not an execution failure")
                 if action == "accept" and entry.get("absence_assessment") is None:
-                    raise HistoryConflict("Optional absence acceptance requires an explicit assessment")
+                    raise HistoryConflict("Applicability acceptance requires an explicit assessment")
             else:
                 if entry.get("absence_assessment") is not None:
-                    raise HistoryConflict("Absence assessment requires an optional-absence source")
+                    raise HistoryConflict("Applicability assessment requires an applicability source")
                 completion = _fact(db, artifact_id, subject, kind="completion")
                 attempt = _fact(db, artifact_id, completion.parent_id, kind="attempt")
                 attempt_content = _content(db, attempt)

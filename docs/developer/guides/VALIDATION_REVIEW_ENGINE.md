@@ -584,3 +584,20 @@ turn charge. Reconciliation of genuinely sent requests remains allowed after
 ownership loss. No lease extension changes a frozen scientific deadline or grants
 another attempt. The frontend Stop response remains immediate; backend cleanup
 can wait for the current provider invocation to finish.
+
+### Unsupported configured lookups
+
+A configured preflight refusal is a reviewable `validation_source_input` fact,
+not a validator answer or absent biological data. Its `unsupported_preflight`
+discriminator records the policy and explanation alongside the selected input.
+Initial dispatch, selected-source rebuilding and dependent waves all apply the
+same preflight before scheduling a provider call. Supported requests still run.
+
+The supervisor reads the existing `applicability_ref` and can accept the
+limitation only with `absence_assessment="unresolved"`. This completes review
+while retaining field-level uncertainty; it does not confirm an identity or
+waive submission requirements. `omission_supported` and `acknowledge_failure`
+cannot finalize an unsupported lookup. Exact fact/hash, current lineage and
+prerequisite checks apply just as they do to optional-input applicability.
+Source changes are reevaluated; no synthetic completion or historical conversion
+is created. TraceReview retains the fact content and explicit decision.

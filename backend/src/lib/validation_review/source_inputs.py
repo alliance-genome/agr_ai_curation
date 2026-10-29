@@ -47,37 +47,84 @@ def absent_input(match, result, target_id, *, requires_prerequisites=None):
             "input": content, "request": None}
 
 
-def is_absence(body):
-    """Old no-request tombstones are not attestations of optional absence."""
+def unsupported_input(match, request, target_id, *, requires_prerequisites=None):
+    """Freeze an actual configured preflight refusal, never a validator answer."""
+    from src.lib.domain_packs.validator_dispatch import preflight_unresolved_validator_result
+
+    result = preflight_unresolved_validator_result(request, policy=match.binding.preflight_policy)
+    if result is None:
+        return None
+    content = {
+        "binding_id": match.binding.binding_id,
+        "runs_after": list(match.binding.runs_after),
+        "requires_prerequisites": (bool(match.binding.runs_after) if requires_prerequisites is None else requires_prerequisites),
+        "unsupported_preflight": {"policy": match.binding.preflight_policy, "explanation": result.explanation},
+        "validator_agent": request.validator_agent.model_dump(mode="json"),
+        "selected_inputs": deepcopy(request.selected_inputs),
+        "input_selectors": deepcopy(request.input_selectors),
+        "evidence": deepcopy(request.evidence),
+        "validation_guidance": request.validation_guidance,
+        "source_provenance": [],
+    }
+    if match.binding.route_value is not None:
+        content["route_value"] = match.binding.route_value
+    return {"target_id": target_id, "binding_id": match.binding.binding_id,
+            "input": content, "request": None}
+
+
+def record_initial(binding, frozen, *, episode_id):
+    """Initialize applicability without replacing a later selected-source fact."""
+    from uuid import uuid4
+    from src.models.sql.validation_history import ValidationArtifact
+
+    with store.SessionLocal.begin() as db:
+        store._artifact(db, binding.artifact_id, binding.scope)
+        db.scalar(select(ValidationArtifact.id).where(
+            ValidationArtifact.id == binding.artifact_id).with_for_update())
+        target = frozen["target_id"]
+        episode = store._fact(db, binding.artifact_id, episode_id, kind="review_episode")
+        previous = latest(db, binding.artifact_id, target)
+        if (previous is not None and previous.parent_id is not None
+                and previous.sequence > episode.sequence):
+            # Selection supersedes initialization within this round. Earlier
+            # rounds must not suppress a new explicit curator revalidation.
+            return reference(previous)
+        update(db, binding.artifact_id, operation_id="applicability:" + str(uuid4()),
+               before={}, after={target: frozen})
+        return reference(latest(db, binding.artifact_id, target))
+
+
+def is_applicability(body):
+    """Only explicit absence or unsupported-preflight facts are reviewable."""
     content = body.get("input")
     return (body.get("request") is None and isinstance(content, dict)
-            and bool(content.get("absent_inputs")))
+            and bool(content.get("absent_inputs") or content.get("unsupported_preflight")))
 
 
-def absence_scientific_content(body):
+def applicability_scientific_content(body):
     """Progress identity excludes prerequisite bookkeeping; stored history stays exact."""
     return {"input": {key: value for key, value in body["input"].items() if key != "prerequisites"},
             "lineage_generations": body["lineage_generations"]}
 
 
-def require_absence(db, artifact_id, unit_id, fact_id, *, scope, sha256=None):
+def require_applicability(db, artifact_id, unit_id, fact_id, *, scope, sha256=None):
     """Verify exact latest source identity and binding coverage, not its meaning."""
     unit = store._fact(db, artifact_id, unit_id, kind="target")
     store._require_active_target(db, artifact_id, unit_id)
     fact = store._fact(db, artifact_id, fact_id, kind="validation_source_input")
     body = store._content(db, fact)
-    if not is_absence(body) or (sha256 is not None and fact.body_sha != sha256):
-        raise store.HistoryConflict("Review requires an exact optional-absence source fact")
+    if not is_applicability(body) or (sha256 is not None and fact.body_sha != sha256):
+        raise store.HistoryConflict("Review requires an exact applicability source fact")
     unit_body = store._content(db, unit)
     parent_id = unit.parent_id if unit_body.get("decision_unit") is not None else unit.id
     if (fact.target_id != parent_id or unit_body.get("binding_id") != body["input"]["binding_id"]
             or reference(latest(db, artifact_id, parent_id)) != reference(fact)):
-        raise store.HistoryConflict("Optional-absence source is stale or outside this binding unit")
+        raise store.HistoryConflict("Applicability source is stale or outside this binding unit")
     if body["lineage_generations"] != store._target_lineage(db, artifact_id, parent_id):
-        raise store.HistoryConflict("Optional-absence source lineage has changed")
+        raise store.HistoryConflict("Applicability source lineage has changed")
     pins = body["input"].get("prerequisites", [])
     if body["input"]["requires_prerequisites"] and not pins:
-        raise store.HistoryConflict("Optional-absence source is awaiting prerequisite review")
+        raise store.HistoryConflict("Applicability source is awaiting prerequisite review")
     store._prerequisites_current(db, scope, pins)
     return fact
 
@@ -90,8 +137,8 @@ def scientific_input(frozen):
     """
     request = frozen["request"]
     if request is None:
-        if not is_absence(frozen):
-            raise ValueError("No-request inputs require a verified absence marker")
+        if not is_applicability(frozen):
+            raise ValueError("No-request inputs require a verified applicability marker")
         content = deepcopy(frozen["input"])
         if frozen.get("prerequisites"):
             content["prerequisites"] = deepcopy(frozen["prerequisites"])
@@ -123,7 +170,7 @@ def update(db, artifact_id, *, operation_id, before, after, selection_id=None):
         if target != frozen["target_id"]:
             raise store.HistoryConflict("Binding input map has a mismatched target")
         content = scientific_input(frozen)
-        absence = is_absence(frozen)
+        absence = is_applicability(frozen)
         lineage = store._target_lineage(db, artifact_id, target) if absence else None
         previous = latest(db, artifact_id, target)
         if previous is not None:
@@ -131,7 +178,7 @@ def update(db, artifact_id, *, operation_id, before, after, selection_id=None):
             if (previous_body["input"] == content
                     and (not absence or previous_body.get("lineage_generations") == lineage)):
                 continue
-        if (previous is None and not is_absence(frozen) and target in before
+        if (previous is None and not is_applicability(frozen) and target in before
                 and scientific_input(before[target]) == content):
             continue
         fact = append_fact(db, artifact_id,

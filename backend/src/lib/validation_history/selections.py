@@ -226,7 +226,7 @@ def _selected_unit(db, scope, artifact_id, target_id):
     if completion.kind == "validation_source_input":
         from src.lib.validation_review import source_inputs
         try:
-            source_inputs.require_absence(db, artifact_id, target_id, completion.id, scope=scope)
+            source_inputs.require_applicability(db, artifact_id, target_id, completion.id, scope=scope)
         except store.HistoryConflict:
             unit["reason"] = "stale"
             return unit

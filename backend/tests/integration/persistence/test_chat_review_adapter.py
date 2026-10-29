@@ -77,7 +77,7 @@ def planned(scope, tmp_path, monkeypatch, request):
                        "readiness_default": False, "readiness_allowed": [False]},
         }
         pack = replace(pack, metadata=pack.metadata.model_copy(update={"metadata": raw}))
-    if fixture_shape == "dependent":
+    if fixture_shape in {"dependent", "unsupported-dependent"}:
         from copy import deepcopy
 
         raw = deepcopy(pack.metadata.metadata)
@@ -131,6 +131,26 @@ def planned(scope, tmp_path, monkeypatch, request):
         definition = pack.metadata.object_definitions[0].model_copy(update={"fields": fields})
         pack = replace(pack, metadata=pack.metadata.model_copy(update={
             "metadata": raw, "object_definitions": [definition]}))
+    if fixture_shape in {"unsupported-preflight", "unsupported-dependent"}:
+        from copy import deepcopy
+        raw = deepcopy(pack.metadata.metadata)
+        binding = raw["validator_bindings"]["active"][0]
+        if fixture_shape == "unsupported-dependent":
+            binding = raw["validator_bindings"]["active"][1]
+        binding["preflight_policy"] = "provider_taxon_mapping_required"
+        binding["input_fields"] = {}
+        binding["input_fields"].update({
+            key: {"source": "literal", "value": value}
+            for key, value in {
+                "label": "fixture term",
+                "data_provider": "FIXTURE_UNSUPPORTED", "taxon_id": "NCBITaxon:1001",
+                "provider_taxon_ontology_mappings": [
+                    {"data_provider": "FIXTURE_SUPPORTED", "taxon_id": "NCBITaxon:1002", "ontology_term_type": "FixtureTerm"}
+                ],
+            }.items()
+        })
+        binding["input_fields"]["label"] = {"source": "payload", "path": "evidence_code_curies"}
+        pack = replace(pack, metadata=pack.metadata.model_copy(update={"metadata": raw}))
     groups = ()
     if fixture_shape == "authorized":
         from copy import deepcopy
@@ -1339,10 +1359,10 @@ def test_optional_absence_is_saved_once_without_a_validator_attempt(planned):
             ValidationFact.artifact_id == item.aid, ValidationFact.kind == "validation_source_input")))
         assert len(facts) == 1
         body = store._content(db, facts[0])
-        assert source_inputs.is_absence(body)
+        assert source_inputs.is_applicability(body)
         assert body["request"] is None
         assert body["input"]["input_selectors"]["query"]["path"] == "optional.term"
-        assert not source_inputs.is_absence({"input": None, "request": None})
+        assert not source_inputs.is_applicability({"input": None, "request": None})
         assert not list(db.scalars(select(ValidationFact).where(
             ValidationFact.artifact_id == item.aid, ValidationFact.kind == "attempt")))
     manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
@@ -1479,7 +1499,7 @@ async def test_dependent_absence_requires_reviewed_prerequisite_and_respects_sel
         with store.SessionLocal() as db:
             assert source_inputs.latest(db, item.aid, child) is None
     else:
-        assert after[0]["reason"] == "optional_inputs_absent"
+        assert after[0]["reason"] == "applicability_review_required"
         with store.SessionLocal() as db:
             fact = source_inputs.latest(db, item.aid, child)
             body = store._content(db, fact)
@@ -1496,7 +1516,7 @@ async def test_dependent_absence_requires_reviewed_prerequisite_and_respects_sel
                     "action": "revoke", "reason": "Reconsider source"}])
         with store.SessionLocal() as db:
             with pytest.raises(store.HistoryConflict, match="Prerequisite"):
-                source_inputs.require_absence(db, item.aid, child, original_ref["fact_id"], scope=item.scope)
+                source_inputs.require_applicability(db, item.aid, child, original_ref["fact_id"], scope=item.scope)
         decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="reaccept-parent-absence",
             entries=[absence_entry(item, target_id=parent)])
         refreshed = await item.adapter.advance(checkpoint)
@@ -1870,9 +1890,9 @@ async def test_unmatched_prerequisite_on_one_record_does_not_wait_for_another(pl
     # Deliberately leave the first record's parent unreviewed.
     outcomes = await item.adapter.advance(checkpoint_provider(item))
     independent = next(result for result in outcomes if result["state"] != "awaiting_review"
-                       or result.get("reason") == "optional_inputs_absent")
+                       or result.get("reason") == "applicability_review_required")
     target = independent["target"]
-    if independent.get("reason") == "optional_inputs_absent":
+    if independent.get("reason") == "applicability_review_required":
         entries = [absence_entry(item, target_id=target)]
     else:
         assert independent["state"] == "completed"
@@ -1883,3 +1903,73 @@ async def test_unmatched_prerequisite_on_one_record_does_not_wait_for_another(pl
     manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
     assert target not in {blocker["target_id"] for blocker in manifest["blockers"]}
     assert not manifest["ready"]  # The other record still needs prerequisite review.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["unsupported-preflight"], indirect=True)
+async def test_unsupported_lookup_is_reviewable_unresolved_without_execution(planned):
+    from src.lib.validation_review import source_inputs
+    from src.lib.validation_history import selections
+    item = planned
+    await item.adapter.initial()
+    await item.adapter.initial()
+    with store.SessionLocal() as db:
+        facts = list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == item.aid,
+            ValidationFact.kind == "validation_source_input")))
+        assert len(facts) == len(item.plan.initial_jobs)
+        for fact in facts:
+            body = store._content(db, fact)
+            assert source_inputs.is_applicability(body)
+            assert "absent_inputs" not in body["input"]
+            assert "FIXTURE_UNSUPPORTED" in body["input"]["unsupported_preflight"]["explanation"]
+        assert not list(db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == item.aid, ValidationFact.kind.in_(["attempt", "completion"]))))
+    checkpoint = checkpoint_provider(item)
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    units = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["units"]
+    response = None
+    for unit in units:
+        invalid = absence_entry(item, assessment="omission_supported", target_id=unit["target_id"])
+        with pytest.raises(store.HistoryConflict, match="unresolved assessment"):
+            decisions.record_decisions(context, checkpoint_request=checkpoint(),
+                operation_id=uuid4().hex, entries=[invalid])
+        entry = absence_entry(item, assessment="unresolved", target_id=unit["target_id"])
+        invalid_hash = {**entry, "applicability_ref": {**entry["applicability_ref"], "sha256": "wrong"}}
+        with pytest.raises(store.HistoryConflict):
+            decisions.record_decisions(context, checkpoint_request=checkpoint(),
+                operation_id=uuid4().hex, entries=[invalid_hash])
+        response = decisions.record_decisions(context, checkpoint_request=checkpoint(),
+            operation_id=uuid4().hex, entries=[entry])
+    assert response is not None and response["ready"]
+    assert any(finding.code == "validation_review.assessment_unresolved" and finding.field_ref is not None
+               for finding in checkpoint().envelope.validation_findings)
+    assert all(unit["eligible"] for unit in selections.read_manifest(item.scope, item.aid, episode_id=item.ep)["units"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["unsupported-dependent"], indirect=True)
+async def test_dependent_unsupported_lookup_never_calls_provider(planned, monkeypatch):
+    item = planned
+    calls = []
+    def run(request, binding, **kwargs):
+        assert binding.binding_id != "fixture.dependent"
+        calls.append(request.request_id)
+        return {**_result_payload(request, resolved_values={"curie": "ECO:SELECTED"}), "resolved_objects": []}
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner", lambda: run)
+    checkpoint = checkpoint_provider(item)
+    await item.adapter.initial()
+    assert len(calls) == 2
+    context = decisions.ReviewContext(item.scope, item.ep, "supervisor")
+    decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="parent-review",
+        entries=entries_for(item, "accept", binding_id="fixture.evidence_lookup"))
+    after = await item.adapter.advance(checkpoint)
+    assert after and all(outcome["state"] == "awaiting_review" for outcome in after)
+    assert all(outcome["reason"] == "applicability_review_required" for outcome in after)
+    response = None
+    for outcome in after:
+        entry = absence_entry(item, assessment="unresolved", target_id=outcome["target"])
+        response = decisions.record_decisions(context, checkpoint_request=checkpoint(),
+            operation_id=uuid4().hex, entries=[entry])
+    assert response is not None and response["ready"]
+    assert len(calls) == 2

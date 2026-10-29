@@ -170,10 +170,10 @@ def read(scope, episode_id, *, fact_id, sha256, offset=0):
         page = exact_page(body, fact_id=fact.id, sha256=sha256,
                           offset=offset, limit=ep.policy["packet_bytes"])
         from . import source_inputs
-        if fact.kind == "validation_source_input" and source_inputs.is_absence(body):
+        if fact.kind == "validation_source_input" and source_inputs.is_applicability(body):
             # Observe scientific content, not fresh prerequisite selection IDs.
             # The caller still receives the untouched hash-pinned history page.
-            content = source_inputs.absence_scientific_content(body)
+            content = source_inputs.applicability_scientific_content(body)
             digest = store.canonical(content)[0]
             record_read(fact.kind, {**page, "sha256": digest})
             return page
@@ -247,7 +247,7 @@ def outstanding(scope, episode_id, *, cursor=None):
                     record_target_id=source_record(unit_id),
                     unit_ref={"fact_id": target.id, "sha256": target.body_sha})
                 source = source_inputs.latest(db, ep.artifact_id, parent)
-                if source is not None and source_inputs.is_absence(store._content(db, source)):
+                if source is not None and source_inputs.is_applicability(store._content(db, source)):
                     row["applicability_ref"] = source_inputs.reference(source)
                 if obligations[unit_id]["mode"] == "extraction_only" and decidable:
                     row["extraction_ref"] = artifact.baseline_sha

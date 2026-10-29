@@ -166,6 +166,7 @@ async def test_runtime_file_formatter_tool_binds_visible_agent_to_completed_bund
         specialist_name="CSV File Formatter",
         base_context={"active_groups": ["demo_group"]},
         step_instruction_prefix="Step-local custom instructions: compact export",
+        include_evidence=True,
         completed_steps=completed_steps,
         flow_name="Formatter Flow",
         flow_run_id="flow-run-123",
@@ -211,7 +212,7 @@ async def test_runtime_file_formatter_tool_binds_visible_agent_to_completed_bund
     assert captured["query"] == "Create the CSV export."
     assert captured["streaming"]["kwargs"]["inline_chat_persistence"] is False
     assert captured["streaming"]["kwargs"]["propagate_errors"] is True
-
+    assert captured["kwargs"]["formatter_include_evidence"] is True
 
 @pytest.mark.asyncio
 async def test_runtime_file_formatter_rejects_empty_bundle_before_agent(monkeypatch):
