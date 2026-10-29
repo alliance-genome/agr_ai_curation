@@ -412,6 +412,7 @@ export function getEventLabel(event: AuditEvent): string {
 
     case 'AGENT_COMPLETE': {
       const agentComplete = event.details as AgentCompleteDetails
+      if (agentComplete.message) return agentComplete.message
       const agentLabel = agentComplete.agentDisplayName || agentComplete.agentRole
       const crew = agentComplete.crewName ? ` (${agentComplete.crewName})` : ''
       return `Agent completed: ${agentLabel}${crew}`

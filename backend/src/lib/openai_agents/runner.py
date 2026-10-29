@@ -19,7 +19,7 @@ import os
 import time
 import uuid
 from collections import deque
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import aclosing, asynccontextmanager, nullcontext
 from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -1024,6 +1024,35 @@ def _chat_review_terminal(event, status):
         "response": response, "response_length": len(response)}}, note
 
 
+async def _stream_chat_review(review_context):
+    """Forward progress while a non-streaming review is still running."""
+    from src.lib.openai_agents.streaming_tools import get_live_event_list, set_live_event_list
+
+    previous = get_live_event_list()
+    events = []
+    set_live_event_list(events)
+    task = asyncio.create_task(review_context.resume())
+    cursor = 0
+    try:
+        while True:
+            while cursor < len(events):
+                event = events[cursor]
+                cursor += 1
+                yield event
+            if task.done():
+                await task
+                break
+            # Internal delivery poll, matching the SDK stream's event interleave.
+            await asyncio.wait({task}, timeout=0.05)
+    finally:
+        if not task.done():
+            task.cancel()
+        try:
+            await asyncio.gather(task, return_exceptions=True)
+        finally:
+            set_live_event_list(previous)
+
+
 async def _run_agent_with_chat_review(*, review_context, **kwargs):
     """Keep chat-only capability out of flow, benchmark and Studio execution."""
     from src.lib.validation_review.stops import ReviewInterrupted
@@ -1038,7 +1067,9 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
             assert review_context is not None
             action = await review_context.direct_action(kwargs["agent"], kwargs.get("input_items", []))
             if action.action == "continue_review":
-                await review_context.resume()
+                async with aclosing(_stream_chat_review(review_context)) as review_stream:
+                    async for review_event in review_stream:
+                        yield review_event
                 selected, status = await asyncio.to_thread(review_context.direct_delivery)
                 response = action.explanation + "\n\n" + selected
                 terminal, _ = _chat_review_terminal(
@@ -1047,7 +1078,9 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
                 yield terminal
                 return
         elif review_context is not None:
-            await review_context.resume()
+            async with aclosing(_stream_chat_review(review_context)) as review_stream:
+                async for review_event in review_stream:
+                    yield review_event
             if kwargs.get("direct_chat_context") is None:
                 handoff = await asyncio.to_thread(review_context.supervisor_handoff)
                 if handoff["review_outcomes"]:
@@ -1063,7 +1096,9 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
             direct_dispatch = await asyncio.to_thread(chat_dispatch.claim, review_context,
                 "direct:" + get_agent_cost_identity(kwargs["agent"])["agent_id"], kwargs["user_message"])
             if not direct_dispatch["claimed"]:
-                await review_context.resume()
+                async with aclosing(_stream_chat_review(review_context)) as review_stream:
+                    async for review_event in review_stream:
+                        yield review_event
                 if direct_dispatch["state"] == "completed":
                     terminal = direct_dispatch["result"]
                 else:
@@ -1091,7 +1126,9 @@ async def _run_agent_with_chat_review(*, review_context, **kwargs):
                     # on every delivery, including a reconnect after later review.
                     if direct_dispatch is not None:
                         await asyncio.to_thread(chat_dispatch.complete, review_context, direct_dispatch["id"], event)
-                    await review_context.resume()
+                    async with aclosing(_stream_chat_review(review_context)) as review_stream:
+                        async for review_event in review_stream:
+                            yield review_event
                     if direct_dispatch is not None:
                         selected, status = await asyncio.to_thread(review_context.direct_delivery, current_turn_only=True)
                         event = {**event, "data": {**event["data"], "response": selected}}

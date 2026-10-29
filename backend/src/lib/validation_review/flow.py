@@ -82,7 +82,7 @@ class FlowReview(ChatReview):
         adapter = ValidatorAdapter(binding.scope, binding.artifact_id, episode_id, plan_ref,
             authenticated_groups=self.authenticated_groups, event_emitter=event_emitter)
         try:
-            await self.until_stop(adapter.initial())
+            await self.initial_validation(adapter, event_emitter)
         except Exception as error:
             from .stops import review_stop
             stopped = review_stop(error)

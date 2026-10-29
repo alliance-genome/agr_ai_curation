@@ -572,7 +572,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
               <AuditEventItem
                 key={event.id}
                 event={event}
-                isLatest={index === events.length - 1}
+                isLatest={isStreaming && index === events.length - 1}
               />
             ))}
             <div ref={messagesEndRef} />
