@@ -762,7 +762,7 @@ export function useChatController({
       }
 
       // T026: Filter audit events for chat progress display
-      if (shouldShowInChat(parsed.type)) {
+      if (shouldShowInChat(parsed.type, parsed.details)) {
         const friendlyMessage = getFriendlyProgressMessage(parsed)
         debug.log('[AUDIT->CHAT] Showing filtered audit event in chat progress:', parsed.type, friendlyMessage)
         const needsAttention = ['DOMAIN_SKIPPED', 'PENDING_USER_INPUT', 'DOMAIN_WARNING'].includes(parsed.type)

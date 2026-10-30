@@ -24,6 +24,9 @@ const animatedDotsStyle = `
 .audit-animated-dots span:nth-child(1) { animation-delay: 0s; }
 .audit-animated-dots span:nth-child(2) { animation-delay: 0.2s; }
 .audit-animated-dots span:nth-child(3) { animation-delay: 0.4s; }
+@media (prefers-reduced-motion: reduce) {
+  .audit-animated-dots span { animation: none; opacity: 1; }
+}
 `
 
 // Inject the style once when the module loads

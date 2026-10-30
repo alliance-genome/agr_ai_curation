@@ -4422,3 +4422,59 @@ def test_generic_finalizer_does_not_require_ceremonial_lookup_for_judgment(_repo
         output_type_name="ScientificAssessment", finalization_config=_finalization_config("ask_allele_validation_specialist"),
         tool_calls=[])
     assert errors == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome,label,severity", [
+    ("empty", "No initial validator requests", "success"),
+    ("requests", "Initial validation checks finished", "success"),
+    ("stopped", "Initial validation paused; supervisor review remains pending", "warning"),
+    ("error", "Initial validation failed", "error"),
+    ("cancel", "Initial validation stopped", "warning"),
+])
+async def test_chat_initial_validation_reports_exact_outcome(monkeypatch, outcome, label, severity):
+    from src.lib.curation_workspace import extraction_results
+    from src.lib.validation_review.chat import ACTIVE_CHAT_REVIEW
+    from src.lib.validation_review.stops import ReviewInterrupted
+
+    events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
+    monkeypatch.setattr(extraction_results, "_get_agent_curation_metadata",
+                        lambda _: {"adapter_key": "gene", "launchable": True})
+    envelope = SimpleNamespace(metadata={}, domain_pack_id="gene", extracted_objects=[])
+    monkeypatch.setattr(domain_envelope_normalization, "domain_envelope_from_extraction_result",
+                        lambda *a, **kw: envelope)
+    monkeypatch.setattr(adapter_registry, "resolve_curation_domain_pack_by_id", lambda _: object())
+    failure = RuntimeError("private failure") if outcome == "error" else ReviewInterrupted("stop")
+    async def receive(*a, event_emitter, **kw):
+        if outcome in {"error", "cancel"}:
+            raise failure
+        event_emitter({"event": "initial_validation_complete",
+                       "status": "stopped" if outcome == "stopped" else "complete",
+                       "request_count": 2 if outcome == "requests" else 0})
+        return "retained source"
+    token = ACTIVE_CHAT_REVIEW.set(SimpleNamespace(receive=receive))
+    async def dispatch():
+        return await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            json.dumps({"summary": "source", "curatable_objects": [{"object_type": "gene_mention_evidence"}], "metadata": {}, "run_summary": {"candidate_count": 1}}),
+            history_scope_id="unit-run", producer_id="unit-invocation",
+            runtime_context=ValidatorRuntimeContext(user_id="unit-owner",
+                document_id="00000000-0000-0000-0000-000000000001", authenticated_groups=None),
+            expected_output_type=GeneExtractionResultEnvelope, specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist")
+    try:
+        if outcome in {"error", "cancel"}:
+            expected_error = streaming_tools.SpecialistOutputError if outcome == "error" else type(failure)
+            with pytest.raises(expected_error) as exc:
+                await dispatch()
+            assert (exc.value.__cause__ if outcome == "error" else exc.value) is failure
+        else:
+            assert await dispatch() == "retained source"
+    finally:
+        ACTIVE_CHAT_REVIEW.reset(token)
+    boundaries = [e for e in events if e["type"] in {"TOOL_START", "TOOL_COMPLETE"}]
+    assert [e["type"] for e in boundaries] == ["TOOL_START", "TOOL_COMPLETE"]
+    assert boundaries[-1]["details"]["friendlyName"] == "Gene Extraction: " + label
+    assert boundaries[-1]["details"]["severity"] == severity
+    assert "paused or finished" not in str(events)
+    assert "private failure" not in str(boundaries)

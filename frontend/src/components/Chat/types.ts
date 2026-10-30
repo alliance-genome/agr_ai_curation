@@ -29,11 +29,9 @@ export type ChatCssVariables = CSSProperties & {
   '--chat-assistant-bg': string
   '--chat-assistant-color': string
   '--chat-message-shadow': string
-  '--chat-action-bg': string
+  '--chat-action-solid-bg': string
   '--chat-action-border': string
-  '--chat-action-color': string
   '--chat-action-hover-bg': string
-  '--chat-action-hover-color': string
   '--chat-input-border': string
   '--chat-input-focus-border': string
   '--chat-input-placeholder': string
