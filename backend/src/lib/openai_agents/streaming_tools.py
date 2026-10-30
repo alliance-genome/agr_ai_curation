@@ -3920,6 +3920,18 @@ async def _dispatch_domain_envelope_validators_for_chat(
 
         def _emit_validator_dispatch_event(event: dict[str, Any]) -> None:
             event_name = str(event.get("event") or "")
+            if event_name == "initial_validation_complete":
+                stopped = event.get("status") == "stopped"
+                label = ("Initial validation paused; supervisor review remains pending" if stopped else
+                         "No initial validator requests" if not event.get("request_count") else
+                         "Initial validation checks finished")
+                add_specialist_event({"type": "TOOL_COMPLETE",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "details": {"toolName": "dispatch_active_validator_bindings",
+                                "friendlyName": f"{specialist_name}: {label}",
+                                "severity": "warning" if stopped else "success", "reviewPhase": "initial_validation",
+                                "stopReason": event.get("reason"), "isSpecialistInternal": True}})
+                return
             is_start = event_name == "validator_batch_start"
             is_complete = event_name == "validator_batch_complete"
             if not is_start and not is_complete:
@@ -4000,12 +4012,16 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     source_metadata={**dict(source_metadata or {}), "specialist_name": specialist_name,
                                      "domain_pack_id": envelope.domain_pack_id},
                     event_emitter=_emit_validator_dispatch_event, source_agent=source_agent)
-            finally:
+            except BaseException as error:
+                from src.lib.validation_review.stops import review_stop
+                stopped = review_stop(error) is not None
                 add_specialist_event({"type": "TOOL_COMPLETE",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "details": {"toolName": "dispatch_active_validator_bindings",
-                                "friendlyName": f"{specialist_name}: Validator dispatch paused or finished; consult review status",
-                                "isSpecialistInternal": True}})
+                                "friendlyName": f"{specialist_name}: Initial validation {'stopped' if stopped else 'failed'}",
+                                "severity": "warning" if stopped else "error", "hasError": not stopped,
+                                "reviewPhase": "initial_validation", "isSpecialistInternal": True}})
+                raise
 
         core_dispatch_started_at = time.monotonic()
         dispatch_kwargs: Dict[str, Any] = {

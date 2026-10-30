@@ -120,6 +120,8 @@ export interface CrewStartDetails {
 }
 
 export interface AgentCompleteDetails {
+  message?: string           // Explicit review outcome, when provided
+  success?: boolean
   agentRole: string           // Agent role that completed (from AgentExecutionCompletedEvent)
   agentDisplayName?: string   // User-friendly name from backend dispatch dictionary (e.g., "Disease Ontology Agent")
   crewName?: string           // Which crew this agent belongs to

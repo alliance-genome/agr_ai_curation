@@ -45,3 +45,27 @@ describe('chatProgress', () => {
     )
   })
 })
+
+describe('supervisor review progress', () => {
+  it('shows phase-level progress without exposing token-level events', () => {
+    expect(shouldShowInChat('AGENT_GENERATING')).toBe(false)
+    expect(shouldShowInChat('AGENT_GENERATING', { reviewPhase: 'supervisor_review' })).toBe(true)
+    expect(getFriendlyProgressMessage({ type: 'AGENT_GENERATING', details: {
+      message: 'Reviewing extracted findings and validation results',
+    } })).toBe('Reviewing extracted findings and validation results')
+  })
+
+  it.each([
+    { reviewPhase: 'initial_validation' }, { severity: 'warning' }, { error: 'failure' },
+    { success: false }, { hasError: true },
+  ])('does not turn an explicit phase outcome into a success label: %j', (details) => {
+    expect(getFriendlyProgressMessage({ type: 'TOOL_COMPLETE', details: {
+      ...details, friendlyName: 'Initial validation stopped',
+    } })).toBe('Initial validation stopped')
+  })
+})
+
+it('does not describe terminal review events as active when message is absent', () => {
+  expect(getFriendlyProgressMessage({ type: 'AGENT_COMPLETE' })).toBe('Supervisor review ended')
+  expect(getFriendlyProgressMessage({ type: 'SUPERVISOR_ERROR' })).toBe('Supervisor review failed')
+})

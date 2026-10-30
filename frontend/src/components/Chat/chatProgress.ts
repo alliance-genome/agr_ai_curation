@@ -10,7 +10,10 @@ const NON_RENDERED_METADATA_EVENTS = [
  * LLM_CALL, SUPERVISOR_COMPLETE, DOMAIN_SKIPPED, DOMAIN_WARNING,
  * PENDING_USER_INPUT, and STOP_CONFIRMED.
  */
-export function shouldShowInChat(eventType: string): boolean {
+export function shouldShowInChat(eventType: string, details?: SSEEvent['details']): boolean {
+  if (['AGENT_GENERATING', 'AGENT_COMPLETE', 'SUPERVISOR_ERROR'].includes(eventType)) {
+    return details?.reviewPhase === 'supervisor_review'
+  }
   const chatEvents = [
     'SUPERVISOR_START',
     'CREW_START',
@@ -38,6 +41,13 @@ export function isNonRenderedMetadataEvent(eventType: string): boolean {
  */
 export function getFriendlyProgressMessage(event: SSEEvent): string {
   switch (event.type) {
+    case 'AGENT_GENERATING':
+      return event.details?.message || 'Reviewing extracted findings…'
+    case 'AGENT_COMPLETE':
+      return event.details?.message || 'Supervisor review ended'
+    case 'SUPERVISOR_ERROR':
+      return event.details?.message || 'Supervisor review failed'
+
     case 'SUPERVISOR_START':
       return event.details?.message || 'Starting...'
     case 'STOP_CONFIRMED':
@@ -52,6 +62,7 @@ export function getFriendlyProgressMessage(event: SSEEvent): string {
     case 'TOOL_COMPLETE':
       if (event.details?.friendlyName) {
         const name = event.details.friendlyName
+        if (event.details.reviewPhase || event.details.severity === 'warning' || event.details.error || event.details.hasError || event.details.success === false) return name
         return name.toLowerCase().endsWith('complete') ? name : `${name} complete`
       }
       return 'Tool complete'

@@ -9,12 +9,12 @@ vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ user: { uid: 'user-1' } }),
 }))
 
-function renderAuditPanel(isStreaming: boolean) {
+function renderAuditPanel(isStreaming: boolean, sseEvents: any[] = []) {
   return render(
     <ThemeProvider theme={theme}>
       <AuditPanel
         sessionId="session-1"
-        sseEvents={[]}
+        sseEvents={sseEvents}
         eventStreamVersion={0}
         durableReconciliationVersion={0}
         isStreaming={isStreaming}
@@ -36,5 +36,14 @@ describe('AuditPanel active run indicator', () => {
     renderAuditPanel(false)
 
     expect(screen.queryByRole('status', { name: 'Curation run in progress' })).not.toBeInTheDocument()
+  })
+})
+
+
+describe('AuditPanel review activity rows', () => {
+  it.each([true, false])('gates latest-row animation on live streaming=%s', (isStreaming) => {
+    const { container } = renderAuditPanel(isStreaming, [{ type: 'AGENT_GENERATING', session_id: 'session-1',
+      timestamp: new Date().toISOString(), details: { agentRole: 'supervisor', message: 'Reviewing findings' } }])
+    expect(Boolean(container.querySelector('.audit-animated-dots'))).toBe(isStreaming)
   })
 })

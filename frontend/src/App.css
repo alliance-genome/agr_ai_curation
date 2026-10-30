@@ -269,39 +269,49 @@
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  padding-bottom: 1.5rem; /* Consistent spacing for all messages */
+
+}
+
+.user-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+  border-radius: 6px;
 }
 
 .copy-button {
-  position: absolute;
-  bottom: 0.5rem;
-  right: 0.5rem;
-  background-color: var(--chat-action-bg);
+  background: var(--chat-action-solid-bg);
+  color: var(--chat-text-primary);
   border: 1px solid var(--chat-action-border);
-  border-radius: 4px;
-  padding: 0.25rem;
-  cursor: pointer;
+  border-radius: 6px;
+  width: 40px;
+  height: 40px;
+  padding: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
-  opacity: 0;
-  color: var(--chat-action-color);
+  cursor: pointer;
+  visibility: hidden;
 }
 
-.message:hover .copy-button {
-  opacity: 1;
+@media (hover: hover) {
+  .user-message:hover .copy-button { visibility: visible; }
 }
 
-.message:hover .message-actions {
-  opacity: 1 !important;
+.user-message-actions:focus-within .copy-button { visibility: visible; }
+
+.copy-button:hover { background: var(--chat-action-hover-bg); }
+
+.user-message-actions:focus-visible,
+.copy-button:focus-visible {
+  outline: 2px solid var(--chat-input-focus-border);
+  outline-offset: 2px;
 }
 
-.copy-button:hover {
-  background-color: var(--chat-action-hover-bg);
-  color: var(--chat-action-hover-color);
-  transform: scale(1.1);
+@media (hover: none) {
+  .copy-button { visibility: visible; width: 44px; height: 44px; }
 }
+
 
 .copy-button:active {
   transform: scale(0.95);

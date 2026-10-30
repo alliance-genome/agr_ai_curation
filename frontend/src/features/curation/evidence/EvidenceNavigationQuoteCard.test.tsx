@@ -34,3 +34,20 @@ it('renders a disabled unavailable state when no navigation command exists', () 
   expect(navigateEvidence).not.toHaveBeenCalled()
   unsubscribe()
 })
+
+for (const appearance of ['chat', 'workspace'] as const) {
+  it(`keeps ${appearance} copy separate and available without PDF navigation`, () => {
+    const copy = vi.fn()
+    render(<ThemeProvider theme={theme}><EvidenceNavigationQuoteCard
+      appearance={appearance} ariaLabel="Unavailable evidence" command={null}
+      quote="A long quote" copyButtonAriaLabel="Copy evidence" onCopy={copy}
+    /></ThemeProvider>)
+    const nav = screen.getByRole('button', { name: 'Unavailable evidence' })
+    const button = screen.getByRole('button', { name: 'Copy evidence' })
+    expect(nav).toBeDisabled()
+    expect(nav.contains(button)).toBe(false)
+    expect(button.parentElement?.previousElementSibling).toBe(nav)
+    fireEvent.click(button)
+    expect(copy).toHaveBeenCalledOnce()
+  })
+}

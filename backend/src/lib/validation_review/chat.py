@@ -244,6 +244,23 @@ class ChatReview:
             episodes=0,
         )
 
+    async def initial_validation(self, adapter, event_emitter):
+        """Describe the initial pass without implying that review is finished."""
+        from .stops import review_stop, stop_reason
+
+        try:
+            await self.until_stop(adapter.initial())
+        except Exception as error:
+            stopped = review_stop(error)
+            if stopped is not None and event_emitter is not None:
+                event_emitter({"event": "initial_validation_complete",
+                               "status": "stopped", "reason": stop_reason(stopped)})
+            raise
+        else:
+            if event_emitter is not None:
+                event_emitter({"event": "initial_validation_complete", "status": "complete",
+                               "request_count": len(adapter.plan["initial_requests"])})
+
     async def receive(
         self,
         envelope,
@@ -341,7 +358,7 @@ class ChatReview:
             event_emitter=event_emitter,
         )
         try:
-            await self.until_stop(adapter.initial())
+            await self.initial_validation(adapter, event_emitter)
         except Exception as error:
             from .stops import review_stop
 
@@ -403,6 +420,8 @@ class ChatReview:
         if saved is not None:
             return saved
         ref = self.reference(record)
+        from .progress import review_progress
+
         adapter = ValidatorAdapter(
             context.history_scope,
             ref["artifact_id"],
@@ -414,58 +433,61 @@ class ChatReview:
         def checkpoint():
             return self.checkpoint(record)
 
-        try:
-            await adapter.initial()
-            await adapter.advance(checkpoint)
-            extractor = self.extractor_adapter(context, ref["artifact_id"], checkpoint)
-            agent = reviewer.create_supervisor_phase(
-                context,
-                supervisor=self.supervisor,
-                checkpoint_provider=checkpoint,
-                authenticated_groups=self.authenticated_groups,
-                execute_work=adapter.execute,
-                advance_work=lambda: adapter.advance(checkpoint),
-                prepare_inputs=lambda: adapter.prepare_inputs(checkpoint),
-                refresh_inputs=adapter.refresh_inputs,
-                request_extraction=extractor.request,
-                select_source=lambda **arguments: adapter.select_source(context, checkpoint, **arguments),
-                assess_source=lambda **arguments: adapter.assess_source(context, **arguments),
-            )
-            from src.lib.openai_agents.extraction_trace_events import (
-                write_extraction_trace_event,
-            )
+        with review_progress(context.episode_id) as progress:
+            try:
+                await adapter.initial()
+                await adapter.advance(checkpoint)
+                extractor = self.extractor_adapter(context, ref["artifact_id"], checkpoint)
+                agent = reviewer.create_supervisor_phase(
+                    context,
+                    supervisor=self.supervisor,
+                    checkpoint_provider=checkpoint,
+                    authenticated_groups=self.authenticated_groups,
+                    execute_work=adapter.execute,
+                    advance_work=lambda: adapter.advance(checkpoint),
+                    prepare_inputs=lambda: adapter.prepare_inputs(checkpoint),
+                    refresh_inputs=adapter.refresh_inputs,
+                    request_extraction=extractor.request,
+                    select_source=lambda **arguments: adapter.select_source(context, checkpoint, **arguments),
+                    assess_source=lambda **arguments: adapter.assess_source(context, **arguments),
+                )
+                from src.lib.openai_agents.extraction_trace_events import (
+                    write_extraction_trace_event,
+                )
 
-            write_extraction_trace_event(
-                event_type="validation_review.chat_phase",
-                output_summary={
-                    "actor_id": context.actor_id,
-                    "episode_id": context.episode_id,
-                    "artifact_id": ref["artifact_id"],
-                    "plan_ref": ref["plan_ref"],
-                    "phase": "supervisor_review",
-                    "tools": [tool.name for tool in agent.tools],
-                },
-            )
-            return await reviewer.run(
-                context,
-                agent,
-                input=json.dumps(
-                    {
-                        "user_request": self.user_request,
-                        "instruction": "Review this saved extraction. Find outstanding work with get_outstanding_validation_reviews, then read its exact source and answer references. Record explicit decisions. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
-                        "result_ref": (
-                            "extraction-result:" + record.extraction_result_id
-                        ),
-                    }
-                ),
-            )
-        except Exception as error:
-            from .stops import review_stop
+                write_extraction_trace_event(
+                    event_type="validation_review.chat_phase",
+                    output_summary={
+                        "actor_id": context.actor_id,
+                        "episode_id": context.episode_id,
+                        "artifact_id": ref["artifact_id"],
+                        "plan_ref": ref["plan_ref"],
+                        "phase": "supervisor_review",
+                        "tools": [tool.name for tool in agent.tools],
+                    },
+                )
+                progress["outcome"] = await reviewer.run(
+                    context,
+                    agent,
+                    input=json.dumps(
+                        {
+                            "user_request": self.user_request,
+                            "instruction": "Review this saved extraction. Find outstanding work with get_outstanding_validation_reviews, then read its exact source and answer references. Record explicit decisions. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
+                            "result_ref": (
+                                "extraction-result:" + record.extraction_result_id
+                            ),
+                        }
+                    ),
+                )
+                return progress["outcome"]
+            except Exception as error:
+                from .stops import review_stop
 
-            stopped = review_stop(error)
-            if stopped is not None:
-                return await reviewer._stopped_response(context, stopped)
-            raise
+                stopped = review_stop(error)
+                if stopped is not None:
+                    progress["outcome"] = await reviewer._stopped_response(context, stopped)
+                    return progress["outcome"]
+                raise
 
     async def resume(self):
         async with self.phase_lock:

@@ -1012,10 +1012,11 @@ describe('Chat persistence', () => {
       await screen.findByText('The assistant response that needs curator feedback.')
     ).toBeInTheDocument()
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Show message actions' }))
     fireEvent.click(screen.getByRole('button', { name: 'more actions' }))
     fireEvent.click(await screen.findByText('Provide Feedback'))
 
-    const dialog = screen.getByRole('dialog', { name: 'Provide Feedback' })
+    const dialog = await screen.findByRole('dialog', { name: 'Provide Feedback' })
     expect(dialog).toHaveAttribute('aria-modal', 'false')
     await waitFor(() => {
       expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
@@ -1653,7 +1654,8 @@ describe('Chat persistence', () => {
 
     openCurationWorkspaceMock.mockClear()
 
-    fireEvent.click(screen.getByRole('button', { name: /review & curate/i, hidden: true }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Show message actions' }))
+    fireEvent.click(screen.getByRole('button', { name: /review & curate/i }))
 
     await waitFor(() => {
       expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
