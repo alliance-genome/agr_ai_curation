@@ -108,11 +108,33 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Pass next_cursor to continue the live keyset scan; completed earlier rows
         do not shift later pages. Start a fresh scan after changing source/coverage
         and before finishing review. scan_complete only ends this scan; ready checks
-        the entire requested scope. Read exact evidence with read_validation_history
-        or get_validation_record_source before deciding; listing is not assessment.
+        the entire requested scope. Rows are ordered so records citing the same
+        evidence share an evidence_group and sit together. Read the records with
+        get_validation_record_sources before deciding; listing is not assessment.
         """
         return await asyncio.to_thread(reads.outstanding, context.history_scope,
                                       context.episode_id, cursor=cursor)
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def get_validation_record_sources(target_ids: list[str]) -> dict:
+        """Read related original records together, inline, with shared evidence once.
+
+        Supply record_target_id values from outstanding rows, preferably sharing an
+        evidence_group. Each record cites its evidence_record_ids in the evidence map;
+        own_evidence holds a differing record with the same ID. Call again with
+        not_returned for any remainder. too_large names records to read through
+        read_validation_history using their ref; unavailable explains the rest.
+        Scientific values are complete. Bookkeeping fields, empty provenance fields
+        and fragment text repeating the verified quote are left out; each record's
+        ref holds the exact complete source. This is the saved normalized source, not
+        current selected values or a new validation, and it does not read the paper.
+        """
+        from .record_source import group_snapshot
+
+        return await asyncio.to_thread(
+            group_snapshot, context.history_scope, context.episode_id, target_ids=target_ids
+        )
 
     @function_tool(failure_error_function=None)
     @_recoverable_tool
@@ -159,6 +181,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     ) -> dict:
         """Atomically record explicit decisions for exact target/answer components.
 
+        Send one call per reviewed group, with a reason specific to each record.
+        If any entry conflicts, nothing in the call applies: refresh and resend it.
         For answers, target_id is attempt input.target_id; decision_unit_id is a
         covered ID matching the manifest unit target_id. No component units means
         decision_unit_id equals target_id: null decision_unit / empty decision_units
@@ -327,6 +351,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     result = [
         get_validation_review_packet,
         get_outstanding_validation_reviews,
+        get_validation_record_sources,
         get_validation_record_source,
         read_validation_history,
         record_validation_review,

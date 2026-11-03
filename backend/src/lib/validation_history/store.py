@@ -915,7 +915,10 @@ def apply_decisions_in_transaction(
         target = _fact(db, artifact_id, entry["target_id"], kind="target")
         state = _current(db, artifact_id, target.id)
         if state["version"] != entry["expected_version"]:
-            raise HistoryConflict("Target version has changed")
+            raise HistoryConflict(
+                f"Target version has changed for {target.id}: expected "
+                f"{entry['expected_version']}, current {state['version']}"
+            )
         action = entry["action"]
         if action not in {
             "accept",

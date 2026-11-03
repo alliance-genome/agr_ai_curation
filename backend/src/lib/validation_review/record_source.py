@@ -1,6 +1,7 @@
 """Exact per-record views of immutable source; never a scientific selection."""
 
 from copy import deepcopy
+import json
 
 from sqlalchemy import select
 
@@ -34,50 +35,161 @@ def snapshot(scope, episode_id, *, target_id):
     with store.SessionLocal.begin() as db:
         episode, _ = lock_episode(db, scope, episode_id, require_open=False)
         artifact = store._artifact(db, episode.artifact_id, scope)
-        target, original = _object_target(db, artifact.id, target_id)
-        if not all(store._has_baseline_subject(db, artifact.id, identity)
-                   for identity in (target_id, target.id)):
-            raise store.HistoryConflict(
-                "Record has no baseline original; inspect its exact source contribution history"
-            )
-        operation_id = "review-record-source:" + artifact.baseline_sha + ":" + target.id
-        existing = db.scalar(select(ValidationFact).where(
-            ValidationFact.artifact_id == artifact.id,
-            ValidationFact.operation_id == operation_id,
-        ))
-        if existing is not None:
-            if existing.kind != "review_record_source" or existing.target_id != target.id:
-                raise store.HistoryConflict("Source record reference identity conflict")
-            return {"fact_id": existing.id, "sha256": existing.body_sha}
-        baseline = db.get(ValidationBody, artifact.baseline_sha).content
-        normalized = baseline["normalized"]
-        matches = [item for item in normalized["extracted_objects"]
-                   if (item.get("object_id") or item.get("pending_ref_id")) == original["object_ref"]]
-        if len(matches) != 1:
-            raise store.HistoryConflict("Original source record is missing or ambiguous")
-        obj = matches[0]
-        evidence_index = EvidenceSnapshot.from_payload(normalized, [obj])
-        evidence = []
-        for identity in dict.fromkeys(obj["evidence_record_ids"]):
-            record, error = evidence_index.resolve(identity)
-            if error is not None:
-                raise store.HistoryConflict("Original record evidence is " + error)
-            evidence.append(record)
-        fact = append_fact(
-            db, artifact.id,
-            operation_id=operation_id,
-            kind="review_record_source", target_id=target.id,
-            body={
-                "artifact_id": artifact.id,
-                "object_target": {"fact_id": target.id, "sha256": target.body_sha},
-                "baseline": {"fact_id": "baseline", "sha256": artifact.baseline_sha},
-                "subject_kind": artifact.subject_kind,
-                "original_available": baseline["typed"] is not None,
-                "representation": "normalized_source_record",
-                "record": deepcopy(obj),
-                "evidence_records": evidence,
-                "source_document": deepcopy(artifact.provenance["source_document"]),
-                "provenance_sha256": store.canonical(artifact.provenance)[0],
-            },
-        )
+        fact = _source_fact(db, artifact, target_id)
         return {"fact_id": fact.id, "sha256": fact.body_sha}
+
+
+def _source_fact(db, artifact, target_id):
+    target, original = _object_target(db, artifact.id, target_id)
+    if not all(store._has_baseline_subject(db, artifact.id, identity)
+               for identity in (target_id, target.id)):
+        raise store.HistoryConflict(
+            "Record has no baseline original; inspect its exact source contribution history"
+        )
+    operation_id = "review-record-source:" + artifact.baseline_sha + ":" + target.id
+    existing = db.scalar(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact.id,
+        ValidationFact.operation_id == operation_id,
+    ))
+    if existing is not None:
+        if existing.kind != "review_record_source" or existing.target_id != target.id:
+            raise store.HistoryConflict("Source record reference identity conflict")
+        return existing
+    baseline = db.get(ValidationBody, artifact.baseline_sha).content
+    normalized = baseline["normalized"]
+    matches = [item for item in normalized["extracted_objects"]
+               if (item.get("object_id") or item.get("pending_ref_id")) == original["object_ref"]]
+    if len(matches) != 1:
+        raise store.HistoryConflict("Original source record is missing or ambiguous")
+    obj = matches[0]
+    evidence_index = EvidenceSnapshot.from_payload(normalized, [obj])
+    evidence = []
+    for identity in dict.fromkeys(obj["evidence_record_ids"]):
+        record, error = evidence_index.resolve(identity)
+        if error is not None:
+            raise store.HistoryConflict("Original record evidence is " + error)
+        evidence.append(record)
+    return append_fact(
+        db, artifact.id,
+        operation_id=operation_id,
+        kind="review_record_source", target_id=target.id,
+        body={
+            "artifact_id": artifact.id,
+            "object_target": {"fact_id": target.id, "sha256": target.body_sha},
+            "baseline": {"fact_id": "baseline", "sha256": artifact.baseline_sha},
+            "subject_kind": artifact.subject_kind,
+            "original_available": baseline["typed"] is not None,
+            "representation": "normalized_source_record",
+            "record": deepcopy(obj),
+            "evidence_records": evidence,
+            "source_document": deepcopy(artifact.provenance["source_document"]),
+            "provenance_sha256": store.canonical(artifact.provenance)[0],
+        },
+    )
+
+
+# Bookkeeping that repeats on every record. The exact fact keeps all of it.
+_OMITTED_RECORD_FIELDS = frozenset({
+    "definition_notes", "definition_state", "metadata_refs", "model_ref", "schema_ref",
+})
+
+
+def _review_record(record):
+    """Scientific values stay untouched, including explicit nulls in the payload."""
+    return {key: value for key, value in record.items() if key not in _OMITTED_RECORD_FIELDS}
+
+
+def _review_evidence(record):
+    """Omit empty provenance fields and fragment text already in the verified quote."""
+    quote = record.get("verified_quote") or ""
+    compact = {key: value for key, value in record.items() if value is not None}
+    if isinstance(compact.get("source_fragments"), list):
+        compact["source_fragments"] = [
+            {key: value for key, value in fragment.items()
+             if value is not None and not (key == "text" and isinstance(value, str) and value in quote)}
+            for fragment in compact["source_fragments"]
+        ]
+    return compact
+
+
+def _wire_size(value):
+    return len(json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode())
+
+
+def group_snapshot(scope, episode_id, *, target_ids):
+    """Return related original records inline, with each shared evidence record once.
+
+    Every returned record names its exact immutable fact, the same one the
+    single-record tool returns. A response never exceeds the review packet size
+    and never truncates a record: the rest are returned for another call. This
+    grants no selection or revalidation rights.
+    """
+    from src.lib.openai_agents.config import get_validation_review_source_group_records
+    from .observations import record_read
+
+    limit = get_validation_review_source_group_records()
+    requested = list(dict.fromkeys(target_ids))
+    with store.SessionLocal.begin() as db:
+        episode, _ = lock_episode(db, scope, episode_id, require_open=False)
+        artifact = store._artifact(db, episode.artifact_id, scope)
+        packet_bytes = episode.policy["packet_bytes"]
+        page = {
+            "representation": "normalized_source_record",
+            "baseline": {"fact_id": "baseline", "sha256": artifact.baseline_sha},
+            "source_document": deepcopy(artifact.provenance["source_document"]),
+            "group_limit": limit,
+            "records": [], "evidence": {}, "too_large": [], "unavailable": [], "not_returned": [],
+        }
+        returned = {}
+        read_shas = []
+        for index, target_id in enumerate(requested):
+            if len(page["records"]) >= limit:
+                page["not_returned"] = requested[index:]
+                break
+            try:
+                fact = _source_fact(db, artifact, target_id)
+            except store.HistoryConflict as error:
+                page["unavailable"].append({"target_id": target_id, "reason": str(error)})
+                continue
+            reference = {"fact_id": fact.id, "sha256": fact.body_sha}
+            if fact.id in returned:
+                returned[fact.id].setdefault("also_requested_as", []).append(target_id)
+                continue
+            body = store._content(db, fact)
+            item = {"target_id": target_id, "ref": reference, "subject_kind": body["subject_kind"],
+                    "original_available": body["original_available"], "record": _review_record(body["record"])}
+            evidence = dict(page["evidence"])
+            for record in body["evidence_records"]:
+                identity, compact = record["evidence_record_id"], _review_evidence(record)
+                if evidence.setdefault(identity, compact) != compact:
+                    item.setdefault("own_evidence", {})[identity] = compact
+            remaining = requested[index + 1:]
+            if _wire_size({**page, "records": [*page["records"], item], "evidence": evidence,
+                           "not_returned": remaining}) > packet_bytes:
+                alone = {**page, "records": [item], "too_large": [], "unavailable": [], "not_returned": [],
+                         "evidence": {key: evidence[key] for key in evidence
+                                      if key in item["record"].get("evidence_record_ids", ())}}
+                if page["records"] and _wire_size(alone) <= packet_bytes:
+                    page["not_returned"] = requested[index:]
+                    break
+                page["too_large"].append({"target_id": target_id, "ref": reference})
+                continue
+            page["records"].append(item)
+            page["evidence"] = evidence
+            returned[fact.id] = item
+            read_shas.append(fact.body_sha)
+        if _wire_size(page) > packet_bytes:
+            raise ValueError("Configured packet size cannot carry this grouped source read; request fewer records")
+    for sha256 in read_shas:
+        record_read("review_record_source", {"content": sha256, "sha256": sha256, "offset": 0, "next_offset": None})
+    return page
+
+
+def evidence_groups(db, artifact):
+    """Short stable key per original record for the exact evidence it cites."""
+    normalized = db.get(ValidationBody, artifact.baseline_sha).content["normalized"]
+    return {
+        item.get("object_id") or item.get("pending_ref_id"):
+            store.canonical({"evidence": sorted(set(item.get("evidence_record_ids") or []))})[0][:12]
+        for item in normalized.get("extracted_objects", [])
+    }
