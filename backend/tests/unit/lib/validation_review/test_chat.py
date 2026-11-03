@@ -52,6 +52,7 @@ def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_t
         ),
     )
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "")
     apply_tool_surface(supervisor, runtime="chat_supervisor")
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.resolve_tools",
@@ -533,3 +534,24 @@ def test_review_model_defaults_to_sol(monkeypatch):
     monkeypatch.delenv("VALIDATION_REVIEW_REASONING", raising=False)
     assert get_validation_review_model() == "gpt-6.1-sol"
     assert get_validation_review_reasoning() == "medium"
+
+
+def test_startup_validation_rejects_a_bad_review_model_or_reasoning():
+    from src.lib.config.model_env_validation import model_env_errors
+
+    assert any("VALIDATION_REVIEW_MODEL" in error for error in model_env_errors({"VALIDATION_REVIEW_MODEL": "not-a-model"}))
+    assert any("VALIDATION_REVIEW_REASONING" in error for error in model_env_errors(
+        {"VALIDATION_REVIEW_MODEL": "gpt-6.1-sol", "VALIDATION_REVIEW_REASONING": "not-a-level"}))
+    assert not [error for error in model_env_errors(
+        {"VALIDATION_REVIEW_MODEL": "gpt-6.1-sol", "VALIDATION_REVIEW_REASONING": "medium"}) if "VALIDATION_REVIEW" in error]
+
+
+def test_compose_lets_an_empty_review_model_keep_the_supervisor_model():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[5]
+    composes = [path for path in (root / name for name in ("docker-compose.yml", "docker-compose.production.yml")) if path.is_file()]
+    if not composes:
+        pytest.skip("Compose files are not mounted in this test image")
+    for path in composes:
+        assert "${VALIDATION_REVIEW_MODEL-gpt-6.1-sol}" in path.read_text()
