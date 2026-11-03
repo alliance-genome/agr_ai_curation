@@ -3867,6 +3867,16 @@ def get_validation_review_source_group_records() -> int:
     return value
 
 
+def get_validation_review_model() -> str:
+    """Model for supervisor review; empty keeps the supervisor's own model."""
+    return _get_env("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol").strip()
+
+
+def get_validation_review_reasoning() -> str:
+    """Reasoning effort used with VALIDATION_REVIEW_MODEL."""
+    return _get_env("VALIDATION_REVIEW_REASONING", "medium").strip()
+
+
 def get_validation_review_initial_corrective_continuations() -> int:
     """Consecutive no-progress nudges per invocation; never a scientific retry cap."""
     name = "VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS"

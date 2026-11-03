@@ -181,6 +181,11 @@ A response stays within `VALIDATION_REVIEW_PACKET_BYTES` and returns at most
 call and nothing is truncated. Outstanding rows carry `evidence_group`, a key for the
 evidence a record cites, and are ordered by it.
 
+Supervisor review runs on `VALIDATION_REVIEW_MODEL` with
+`VALIDATION_REVIEW_REASONING`, separately from the supervisor that routes curator
+requests. An empty model keeps the supervisor's own model, and benchmark runs keep
+their pinned route.
+
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when
 needed. Per-record access does not remove old validation findings, summarize away

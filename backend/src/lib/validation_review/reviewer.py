@@ -54,10 +54,41 @@ def create_reviewer(
     return agent
 
 
+def _review_model_overrides(supervisor, instructions):
+    """Review runs on its configured model; pinned benchmark routes keep theirs."""
+    from src.lib.openai_agents.benchmark_routing import benchmark_route_plan_active
+    from src.lib.openai_agents.config import (
+        PromptCacheIdentity,
+        build_model_settings,
+        get_model_for_agent,
+        get_validation_review_model,
+        get_validation_review_reasoning,
+        resolve_model_provider,
+    )
+
+    model = get_validation_review_model()
+    if not model or benchmark_route_plan_active():
+        return {}
+    provider = resolve_model_provider(model)
+    parallel = getattr(supervisor.model_settings, "parallel_tool_calls", None)
+    return {
+        "model": get_model_for_agent(model, provider_override=provider),
+        "model_settings": build_model_settings(
+            model=model,
+            reasoning_effort=get_validation_review_reasoning(),
+            provider_override=provider,
+            parallel_tool_calls=bool(parallel),
+            prompt_cache=PromptCacheIdentity(
+                agent_key="supervisor.validation_review", static_prompt=instructions,
+            ),
+        ),
+    }
+
+
 def create_supervisor_phase(
     context, *, supervisor, checkpoint_provider, authenticated_groups, **callbacks
 ):
-    """Same resolved supervisor identity/model/policy; a strictly smaller capability set."""
+    """Same supervisor identity and policy on the review model; a strictly smaller capability set."""
     from src.lib.observability.cost_context import (
         get_agent_cost_identity,
         attach_agent_cost_identity,
@@ -95,14 +126,16 @@ def create_supervisor_phase(
         )
     )
     bundle = _bundle("supervisor", layers)
+    instructions = bundle.render()
     agent = supervisor.clone(
         name=supervisor.name + " Validation Review",
-        instructions=bundle.render(),
+        instructions=instructions,
         tools=create_tools(
             context, checkpoint_provider=checkpoint_provider, **callbacks
         ),
         handoffs=[],
         output_type=None,
+        **_review_model_overrides(supervisor, instructions),
     )
     identity = get_agent_cost_identity(supervisor)
     attach_agent_cost_identity(
