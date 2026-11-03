@@ -20,8 +20,10 @@ CORE_GENERATED_BUDGET = 2500
 # The reviewed unsupported-lookup guidance adds 171 characters (7700 total),
 # distinguishing accepted unresolved applicability from a confirmed identity.
 # Keep 100 characters of headroom; the protocol itself is never truncated.
+# Reviewed grouped-review guidance (read and save in groups, read validator answers,
+# judge scope, finish deferred records) adds 2197 characters, bringing it to 9897.
 # This is a source-growth regression ceiling, not a runtime truncation limit.
-AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 7800}
+AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 10000}
 
 
 def test_core_generated_within_budget_for_all_agents():
