@@ -119,6 +119,9 @@ def _review_evidence(record):
     return compact
 
 
+TOO_MANY_IDS = "Too many record IDs for one grouped source read; request fewer records"
+
+
 def _wire_size(value):
     return len(json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode())
 
@@ -163,6 +166,8 @@ def group_snapshot(scope, episode_id, *, target_ids):
             except store.HistoryConflict as error:
                 page["unavailable"].append({"target_id": target_id, "reason": str(error)})
                 if not fits():
+                    if index == 0:
+                        raise ValueError(TOO_MANY_IDS)
                     page["unavailable"].pop()
                     page["not_returned"] = requested[index:]
                     break
@@ -192,12 +197,14 @@ def group_snapshot(scope, episode_id, *, target_ids):
                          "evidence": {key: evidence[key] for key in evidence
                                       if key in item["record"].get("evidence_record_ids", ())}}
                 if _wire_size(alone) <= packet_bytes:
-                    if not page["records"]:
-                        raise ValueError("Too many record IDs for one grouped source read; request fewer records")
+                    if index == 0:
+                        raise ValueError(TOO_MANY_IDS)
                     page["not_returned"] = requested[index:]
                     break
                 page["too_large"].append({"target_id": target_id, "ref": reference})
                 if not fits():
+                    if index == 0:
+                        raise ValueError(TOO_MANY_IDS)
                     page["too_large"].pop()
                     page["not_returned"] = requested[index:]
                     break

@@ -263,6 +263,54 @@ def test_listed_problems_never_push_a_page_over_the_packet_limit(scope, monkeypa
     assert remaining == [] and sorted(seen) == sorted([target, *missing])
 
 
+def test_an_oversized_id_list_is_refused_rather_than_returned_unchanged(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_PACKET_BYTES", "2000")
+    envelope, _, episode, _, _ = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
+    target = _targets(envelope)[0]
+    with pytest.raises(ValueError, match="request fewer records"):
+        record_source.group_snapshot(scope, episode, target_ids=[target, *[f"missing-{n}" for n in range(200)]])
+    assert [item["target_id"] for item in record_source.group_snapshot(scope, episode, target_ids=[target])["records"]] == [target]
+
+
+def test_an_earlier_unreadable_id_does_not_discard_a_later_record_that_fits_alone(scope, monkeypatch):
+    envelope, _, episode, _, _ = _build(scope, [_object(0, ["e1"])], [_evidence("e1", "q" * 2000)])
+    target = _targets(envelope)[0]
+    alone = len(json.dumps(record_source.group_snapshot(scope, episode, target_ids=[target]),
+                           ensure_ascii=True, separators=(",", ":")).encode())
+    monkeypatch.setenv("VALIDATION_REVIEW_PACKET_BYTES", str(alone + 20))
+    envelope, _, episode, _, _ = _build(scope, [_object(0, ["e1"])], [_evidence("e1", "q" * 2000)])
+    target = _targets(envelope)[0]
+    first = record_source.group_snapshot(scope, episode, target_ids=["missing-record-identifier", target])
+    assert first["unavailable"][0]["target_id"] == "missing-record-identifier"
+    assert first["not_returned"] == [target]
+    assert [item["target_id"] for item in record_source.group_snapshot(scope, episode, target_ids=first["not_returned"])["records"]] == [target]
+
+
+def test_outstanding_page_reports_the_group_limit(scope, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", "7")
+    envelope, _, episode, _, _ = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
+    assert reads.outstanding(scope, episode)["group_limit"] == 7
+
+
+def test_authorization_failures_keep_their_type_and_are_not_rewritten(scope, monkeypatch):
+    from src.lib.validation_review import source_inputs
+
+    envelope, _, episode, baseline, checkpoint = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
+    target = _targets(envelope)[0]
+    denied = store.HistoryAccessError("Validation history artifact is not accessible")
+
+    def refuse(*args, **kwargs):
+        raise denied
+
+    monkeypatch.setattr(source_inputs, "require_applicability", refuse)
+    with pytest.raises(store.HistoryAccessError) as caught:
+        decisions.record_decisions(ReviewContext(scope, episode, "fixture-reviewer"), checkpoint_request=checkpoint(),
+            operation_id="denied", entries=[{"target_id": target, "decision_unit_id": target, "expected_version": 0,
+                "action": "accept", "reason": "Supported.", "absence_assessment": "unresolved",
+                "applicability_ref": {"fact_id": "fact", "sha256": "digest"}}])
+    assert caught.value is denied
+
+
 def test_decision_conflicts_name_the_record_at_fault(scope):
     objects = [_object(index, ["e1"]) for index in range(2)]
     envelope, artifact, episode, baseline, checkpoint = _build(scope, objects, [_evidence("e1")])

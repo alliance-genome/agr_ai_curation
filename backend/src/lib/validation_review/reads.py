@@ -191,6 +191,7 @@ def outstanding(scope, episode_id, *, cursor=None):
     from dataclasses import asdict
     from . import source_inputs
     from .record_scope import allowed_units, review_ready, review_blockers
+    from src.lib.openai_agents.config import get_validation_review_source_group_records
     from src.lib.validation_history.selections import effective_episode
 
     with store.SessionLocal.begin() as db:
@@ -274,6 +275,7 @@ def outstanding(scope, episode_id, *, cursor=None):
             "artifact_ready": manifest["ready"], "state": ep.state,
             "source_state_sha256": manifest["source_state_sha256"],
             "decision_entries": ep.policy["decision_entries"],
+            "group_limit": get_validation_review_source_group_records(),
             "outstanding_units": len({item["target_id"] for item in blockers if item["target_id"] is not None}),
             "outstanding_rows": len(rows), "remaining_rows": len(remaining),
             "global_blockers": dict(Counter(item["code"] for item in blockers if item["target_id"] is None)),

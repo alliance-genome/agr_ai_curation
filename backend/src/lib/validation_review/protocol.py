@@ -70,7 +70,9 @@ decision_unit_id; do not substitute the parent for a component. For extraction-o
 review use the authorized baseline reference and its manifest unit/target.
 Group related decision-unit fields atomically. One call holds at most the outstanding
 page's decision_entries and is atomic: if any entry conflicts, nothing in that call
-applies. The conflict names the record, so refresh it and resend the group.
+applies. A conflict about one entry names its record, so refresh it and resend the
+group. A conflict naming no record concerns the combined result: keep a composite
+record's decision units together, deciding them in the same way and the same call.
 Explain your decision. Caveats or completed unresolved answers need not trigger
 another validation. For extraction-only acceptance, put uncertain plain fields
 and explanations in unresolved_fields: export retains uncertainty without blocking

@@ -227,6 +227,8 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
         for entry in entries:
             try:
                 resolved.append(resolve_entry(entry))
+            except store.HistoryAccessError:
+                raise  # Authorization keeps its own type and never names a record.
             except store.HistoryConflict as error:
                 raise store.HistoryConflict(f"{entry['decision_unit_id']}: {error}") from error
             except ValueError as error:
