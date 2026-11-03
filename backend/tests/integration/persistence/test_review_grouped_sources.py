@@ -228,3 +228,52 @@ async def test_real_sdk_loop_reviews_a_group_in_one_read_and_one_save(scope, mon
                                 run_config=RunConfig(tracing_disabled=True))
     assert result["review"]["ready"], result
     assert len(model.calls) <= 3, "one read and one save cover the whole group"
+
+
+def test_inline_record_keeps_draft_definitions_and_non_evidence_references(scope):
+    objects = [_object(0, ["e1"]), _object(1, ["e1"])]
+    objects[0] = objects[0].model_copy(update={
+        "definition_state": "stable", "definition_notes": ["Repeated note."],
+        "metadata_refs": [{"metadata_path": "evidence_records[0]", "role": "verified_evidence"}]})
+    objects[1] = objects[1].model_copy(update={
+        "definition_state": "draft", "definition_notes": ["Definition still under review."],
+        "metadata_refs": [{"metadata_path": "evidence_records[0]", "role": "verified_evidence"},
+                          {"metadata_path": "raw_mentions[0]", "role": "source_mention", "description": "Ambiguous mention"}]})
+    envelope, _, episode, _, _ = _build(scope, objects, [_evidence("e1")])
+    stable, draft = record_source.group_snapshot(scope, episode, target_ids=_targets(envelope))["records"]
+    assert not {"definition_state", "definition_notes", "metadata_refs"} & set(stable["record"])
+    assert draft["record"]["definition_notes"] == ["Definition still under review."]
+    assert [ref["role"] for ref in draft["record"]["metadata_refs"]] == ["source_mention"]
+
+
+def test_listed_problems_never_push_a_page_over_the_packet_limit(scope, monkeypatch):
+    objects = [_object(0, ["e1"])]
+    monkeypatch.setenv("VALIDATION_REVIEW_PACKET_BYTES", "4096")
+    envelope, _, episode, _, _ = _build(scope, objects, [_evidence("e1")])
+    target = _targets(envelope)[0]
+    missing = [f"missing-target-{index}" for index in range(60)]
+    seen, remaining = [], [target, *missing]
+    for _ in range(40):
+        page = record_source.group_snapshot(scope, episode, target_ids=remaining)
+        assert len(json.dumps(page, ensure_ascii=True, separators=(",", ":")).encode()) <= 4096
+        seen += [item["target_id"] for item in page["records"]] + [item["target_id"] for item in page["unavailable"]]
+        remaining = page["not_returned"]
+        if not remaining:
+            break
+    assert remaining == [] and sorted(seen) == sorted([target, *missing])
+
+
+def test_decision_conflicts_name_the_record_at_fault(scope):
+    objects = [_object(index, ["e1"]) for index in range(2)]
+    envelope, artifact, episode, baseline, checkpoint = _build(scope, objects, [_evidence("e1")])
+    targets = _targets(envelope)
+    context = ReviewContext(scope, episode, "fixture-reviewer")
+    good = {"target_id": targets[0], "decision_unit_id": targets[0], "expected_version": 0, "action": "accept",
+            "reason": "Supported.", "extraction_ref": baseline}
+    wrong_baseline = {**good, "target_id": targets[1], "decision_unit_id": targets[1], "extraction_ref": "not-the-baseline"}
+    with pytest.raises(store.HistoryConflict, match=targets[1]):
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="bad-ref", entries=[good, wrong_baseline])
+    missing_reason = {**good, "reason": " "}
+    with pytest.raises(ValueError, match=targets[0]):
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="bad-reason", entries=[missing_reason])
+    assert {unit["version"] for unit in selections.read_manifest(scope, artifact, episode_id=episode)["units"]} == {0}

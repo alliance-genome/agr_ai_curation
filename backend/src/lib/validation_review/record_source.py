@@ -88,15 +88,22 @@ def _source_fact(db, artifact, target_id):
     )
 
 
-# Bookkeeping that repeats on every record. The exact fact keeps all of it.
-_OMITTED_RECORD_FIELDS = frozenset({
-    "definition_notes", "definition_state", "metadata_refs", "model_ref", "schema_ref",
-})
-
-
 def _review_record(record):
-    """Scientific values stay untouched, including explicit nulls in the payload."""
-    return {key: value for key, value in record.items() if key not in _OMITTED_RECORD_FIELDS}
+    """Omit repeated bookkeeping only; the exact fact keeps all of it.
+
+    Payloads stay untouched, including explicit nulls. A draft definition and any
+    reference to mentions, exclusions, ambiguities or notes stays visible.
+    """
+    omitted = {"model_ref", "schema_ref"}
+    if record.get("definition_state") == "stable":
+        omitted |= {"definition_notes", "definition_state"}
+    view = {key: value for key, value in record.items() if key not in omitted}
+    references = [ref for ref in record.get("metadata_refs") or [] if ref.get("role") != "verified_evidence"]
+    if references:
+        view["metadata_refs"] = references
+    else:
+        view.pop("metadata_refs", None)
+    return view
 
 
 def _review_evidence(record):
@@ -146,14 +153,30 @@ def group_snapshot(scope, episode_id, *, target_ids):
             if len(page["records"]) >= limit:
                 page["not_returned"] = requested[index:]
                 break
+            remaining = requested[index + 1:]
+
+            def fits():
+                return _wire_size({**page, "not_returned": remaining}) <= packet_bytes
+
             try:
                 fact = _source_fact(db, artifact, target_id)
             except store.HistoryConflict as error:
                 page["unavailable"].append({"target_id": target_id, "reason": str(error)})
+                if not fits():
+                    page["unavailable"].pop()
+                    page["not_returned"] = requested[index:]
+                    break
                 continue
             reference = {"fact_id": fact.id, "sha256": fact.body_sha}
             if fact.id in returned:
-                returned[fact.id].setdefault("also_requested_as", []).append(target_id)
+                aliases = returned[fact.id].setdefault("also_requested_as", [])
+                aliases.append(target_id)
+                if not fits():
+                    aliases.pop()
+                    if not aliases:
+                        del returned[fact.id]["also_requested_as"]
+                    page["not_returned"] = requested[index:]
+                    break
                 continue
             body = store._content(db, fact)
             item = {"target_id": target_id, "ref": reference, "subject_kind": body["subject_kind"],
@@ -163,16 +186,21 @@ def group_snapshot(scope, episode_id, *, target_ids):
                 identity, compact = record["evidence_record_id"], _review_evidence(record)
                 if evidence.setdefault(identity, compact) != compact:
                     item.setdefault("own_evidence", {})[identity] = compact
-            remaining = requested[index + 1:]
             if _wire_size({**page, "records": [*page["records"], item], "evidence": evidence,
                            "not_returned": remaining}) > packet_bytes:
                 alone = {**page, "records": [item], "too_large": [], "unavailable": [], "not_returned": [],
                          "evidence": {key: evidence[key] for key in evidence
                                       if key in item["record"].get("evidence_record_ids", ())}}
-                if page["records"] and _wire_size(alone) <= packet_bytes:
+                if _wire_size(alone) <= packet_bytes:
+                    if not page["records"]:
+                        raise ValueError("Too many record IDs for one grouped source read; request fewer records")
                     page["not_returned"] = requested[index:]
                     break
                 page["too_large"].append({"target_id": target_id, "ref": reference})
+                if not fits():
+                    page["too_large"].pop()
+                    page["not_returned"] = requested[index:]
+                    break
                 continue
             page["records"].append(item)
             page["evidence"] = evidence

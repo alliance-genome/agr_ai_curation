@@ -933,9 +933,9 @@ def apply_decisions_in_transaction(
         } or not isinstance(entry["reason"], str):
             raise ValueError("Explicit decision action and reason are required")
         if not state["active"] and action != "restore":
-            raise HistoryConflict("Retired target requires explicit restoration")
+            raise HistoryConflict(f"{target.id}: Retired target requires explicit restoration")
         if action == "restore" and state["active"]:
-            raise HistoryConflict("Only a retired target can be restored")
+            raise HistoryConflict(f"{target.id}: Only a retired target can be restored")
         selected = state["selected"]
         review = state["review"]
         active = state["active"]
@@ -954,14 +954,12 @@ def apply_decisions_in_transaction(
                 if target.id not in _content(db, named)["coverage"] or not db.scalar(select(ValidationFact.id).where(
                     ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "review_uncertainty",
                     ValidationFact.parent_id == named.id).limit(1)):
-                    raise HistoryConflict("Attempt has no recorded operational uncertainty for this target")
+                    raise HistoryConflict(f"{target.id}: Attempt has no recorded operational uncertainty for this target")
             elif subject == "baseline":
                 if artifact.subject_kind == "historical" or not _has_baseline_subject(
                     db, artifact_id, target.id
                 ):
-                    raise HistoryConflict(
-                        "This target has no attested extraction baseline subject"
-                    )
+                    raise HistoryConflict(f"{target.id}: This target has no attested extraction baseline subject")
             elif subject == "curator":
                 if (actor["type"] != "curator" or actor["id"] != scope.owner_id
                         or not _has_curator_subject(db, artifact_id, target.id)):
@@ -971,14 +969,14 @@ def apply_decisions_in_transaction(
                 applicability = source_inputs.require_applicability(db, artifact_id, target.id, subject, scope=scope)
                 if (action == "accept" and _content(db, applicability)["input"].get("unsupported_preflight")
                         and entry.get("absence_assessment") != "unresolved"):
-                    raise HistoryConflict("Unsupported preflight acceptance requires an unresolved assessment")
+                    raise HistoryConflict(f"{target.id}: Unsupported preflight acceptance requires an unresolved assessment")
                 if action == "acknowledge_failure":
-                    raise HistoryConflict("An applicability fact is not an execution failure")
+                    raise HistoryConflict(f"{target.id}: An applicability fact is not an execution failure")
                 if action == "accept" and entry.get("absence_assessment") is None:
-                    raise HistoryConflict("Applicability acceptance requires an explicit assessment")
+                    raise HistoryConflict(f"{target.id}: Applicability acceptance requires an explicit assessment")
             else:
                 if entry.get("absence_assessment") is not None:
-                    raise HistoryConflict("Applicability assessment requires an applicability source")
+                    raise HistoryConflict(f"{target.id}: Applicability assessment requires an applicability source")
                 completion = _fact(db, artifact_id, subject, kind="completion")
                 attempt = _fact(db, artifact_id, completion.parent_id, kind="attempt")
                 attempt_content = _content(db, attempt)
@@ -988,20 +986,16 @@ def apply_decisions_in_transaction(
                         db, scope, artifact_id, attempt_content, target.id
                     )
                 ):
-                    raise HistoryConflict(
-                        "Review subject is stale or belongs to another target"
-                    )
+                    raise HistoryConflict(f"{target.id}: Review subject is stale or belongs to another target")
                 if (
                     _content(db, completion)["state"] != "completed"
                     and action == "accept"
                 ):
-                    raise HistoryConflict(
-                        "Incomplete or failed execution cannot finalize a target"
-                    )
+                    raise HistoryConflict(f"{target.id}: Incomplete or failed execution cannot finalize a target")
             if action == "acknowledge_failure" and not uncertain_attempt and (
                 completion is None or _content(db, completion)["state"] == "completed"
             ):
-                raise HistoryConflict("Only an operationally incomplete attempt can be acknowledged")
+                raise HistoryConflict(f"{target.id}: Only an operationally incomplete attempt can be acknowledged")
             review = "pending" if action in {"defer", "acknowledge_failure"} else action
             if action == "accept":
                 selected = subject

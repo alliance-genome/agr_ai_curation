@@ -380,9 +380,13 @@ def test_protocol_and_tools_direct_grouped_review_with_record_specific_reasons()
     tools = {tool["name"]: tool for tool in runtime_tool_contract()}
     assert "get_validation_record_sources" in tools
     assert tools["get_validation_record_sources"]["parameters"]["required"] == ["target_ids"]
+    protocol = " ".join(REVIEW_PROTOCOL.split())
     for text in ("get_validation_record_sources", "evidence_group", "reason specific to each record",
-                 "because its neighbors were acceptable", "nothing in that call applies"):
-        assert text in REVIEW_PROTOCOL
+                 "because its neighbors were acceptable", "nothing in that call applies",
+                 "never validator answers", "Never accept an answer you have not read", "group_limit"):
+        assert text in protocol
+    assert "Validator answers are not included" in tools["get_validation_record_sources"]["description"]
+    assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
     assert "Assess the requested records incrementally" not in REVIEW_PROTOCOL
     assert "reason specific to each record" in tools["record_validation_review"]["description"]
 
@@ -397,3 +401,16 @@ def test_source_group_limit_is_configured_and_must_be_positive(monkeypatch):
     monkeypatch.setenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", "0")
     with pytest.raises(ValueError):
         get_validation_review_source_group_records()
+
+
+def test_source_group_limit_reaches_every_deployed_service_that_sets_review_limits():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[5]
+    composes = [path for path in (root / name for name in ("docker-compose.yml", "docker-compose.production.yml"))
+                if path.is_file()]
+    if not composes:
+        pytest.skip("Compose files are not mounted in this test image")
+    for path in composes:
+        text = path.read_text()
+        assert text.count("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS") == text.count("VALIDATION_REVIEW_DECISION_ENTRIES") > 0

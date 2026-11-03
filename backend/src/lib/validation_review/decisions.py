@@ -113,10 +113,12 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
             lock_episode(db, context.history_scope, context.episode_id)
         limits = ReviewLimits(**episode.policy)
         if not entries or len(entries) > limits.decision_entries:
-            raise ValueError("Review entries exceed configured bounds")
+            raise ValueError(
+                f"Review entries exceed configured bounds: send 1 to {limits.decision_entries} per call"
+            )
         bounded_text(operation_id, limits.instruction_chars, "Operation ID")
-        resolved = []
-        for entry in entries:
+
+        def resolve_entry(entry):
             action = entry["action"]
             if action not in {
                 "accept",
@@ -210,7 +212,7 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
                     raise ValueError("Unresolved fields require extraction-only acceptance")
                 for assessment in assessments:
                     bounded_text(assessment["explanation"], limits.instruction_chars, "Field explanation")
-            resolved.append(
+            return (
                 {
                     "target_id": unit.id,
                     "expected_version": entry["expected_version"],
@@ -221,6 +223,14 @@ def record_decisions(context, *, checkpoint_request, operation_id, entries):
                     **({"unresolved_fields": assessments} if assessments is not None else {}),
                 }
             )
+        resolved = []
+        for entry in entries:
+            try:
+                resolved.append(resolve_entry(entry))
+            except store.HistoryConflict as error:
+                raise store.HistoryConflict(f"{entry['decision_unit_id']}: {error}") from error
+            except ValueError as error:
+                raise ValueError(f"{entry['decision_unit_id']}: {error}") from error
         # The model never chooses the checkpoint/source linkage or the actor.
         if (
             checkpoint_request.envelope.metadata["validation_history"]["artifact_id"]

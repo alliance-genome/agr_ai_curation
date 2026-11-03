@@ -109,8 +109,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         do not shift later pages. Start a fresh scan after changing source/coverage
         and before finishing review. scan_complete only ends this scan; ready checks
         the entire requested scope. Rows are ordered so records citing the same
-        evidence share an evidence_group and sit together. Read the records with
-        get_validation_record_sources before deciding; listing is not assessment.
+        evidence share an evidence_group and sit together. Before deciding, read the
+        records with get_validation_record_sources and each attempt_ref/completion_ref
+        with read_validation_history; listing is not assessment.
         """
         return await asyncio.to_thread(reads.outstanding, context.history_scope,
                                       context.episode_id, cursor=cursor)
@@ -120,13 +121,16 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     async def get_validation_record_sources(target_ids: list[str]) -> dict:
         """Read related original records together, inline, with shared evidence once.
 
-        Supply record_target_id values from outstanding rows, preferably sharing an
-        evidence_group. Each record cites its evidence_record_ids in the evidence map;
+        Supply record_target_id values from outstanding rows, up to group_limit, keeping
+        rows that share an evidence_group together. Validator answers are not included;
+        read each completion_ref with read_validation_history.
+        Each record cites its evidence_record_ids in the evidence map;
         own_evidence holds a differing record with the same ID. Call again with
         not_returned for any remainder. too_large names records to read through
         read_validation_history using their ref; unavailable explains the rest.
-        Scientific values are complete. Bookkeeping fields, empty provenance fields
-        and fragment text repeating the verified quote are left out; each record's
+        Scientific values are complete. Stable-definition bookkeeping, plain evidence
+        pointers, empty provenance fields and fragment text repeating the verified
+        quote are left out; each record's
         ref holds the exact complete source. This is the saved normalized source, not
         current selected values or a new validation, and it does not read the paper.
         """
