@@ -7,14 +7,15 @@ begin_execution and complete_attempt, never inside a history transaction.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 import json
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 from src.models.sql.database import SessionLocal
 from src.models.sql.validation_history import (
@@ -96,6 +97,76 @@ def _authorize(db, scope: HistoryScope):
     return document
 
 
+@dataclass
+class _TransactionMemo:
+    """Rows already read in this transaction, so one save does not re-read history.
+
+    Bodies, facts and artifacts are protected by immutability triggers. Heads and
+    document liveness are mutable: anything read before an artifact lock is dropped
+    when that lock is gained (see note_artifact_lock), so version checks made under
+    the lock see committed state. apply_decisions_in_transaction is the only head
+    writer and updates this memo as it writes. Nothing here survives the transaction.
+    """
+
+    bodies: dict = field(default_factory=dict)
+    facts: dict = field(default_factory=dict)
+    artifacts: dict = field(default_factory=dict)
+    heads: dict = field(default_factory=dict)
+    live_artifacts: set = field(default_factory=set)
+    primed: set = field(default_factory=set)
+    lock_levels: dict = field(default_factory=dict)
+
+
+_MEMO_KEY = "validation_history_transaction_memo"
+
+
+def _memo(db) -> _TransactionMemo:
+    return db.info.setdefault(_MEMO_KEY, _TransactionMemo())
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _forget_transaction_memo(session, transaction):
+    if transaction.parent is None:
+        session.info.pop(_MEMO_KEY, None)
+
+
+def note_artifact_lock(db, artifact_id: str, *, write: bool) -> None:
+    """Call after taking an artifact row lock; earlier mutable reads may be stale."""
+    memo = _memo(db)
+    level = 2 if write else 1
+    if memo.lock_levels.get(artifact_id, 0) >= level:
+        return
+    memo.lock_levels[artifact_id] = level
+    memo.heads = {key: head for key, head in memo.heads.items() if key[0] != artifact_id}
+    memo.primed.discard(artifact_id)
+    memo.live_artifacts.discard(artifact_id)
+
+
+def prime_artifact(db, artifact_id: str) -> None:
+    """Load target facts, their bodies and current heads in bulk, once per transaction."""
+    memo = _memo(db)
+    if artifact_id in memo.primed:
+        return
+    memo.primed.add(artifact_id)
+    for fact, content in db.execute(
+        select(ValidationFact, ValidationBody.content)
+        .join(ValidationBody, ValidationBody.sha256 == ValidationFact.body_sha)
+        .where(ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target")
+    ):
+        memo.facts[(artifact_id, fact.id)] = fact
+        memo.bodies[fact.body_sha] = content
+    for target_id, version, fact, content in db.execute(
+        select(ValidationHead.target_id, ValidationHead.version, ValidationFact, ValidationBody.content)
+        .join(ValidationFact, (ValidationFact.artifact_id == ValidationHead.artifact_id)
+              & (ValidationFact.id == ValidationHead.fact_id))
+        .join(ValidationBody, ValidationBody.sha256 == ValidationFact.body_sha)
+        .where(ValidationHead.artifact_id == artifact_id)
+    ):
+        memo.heads[(artifact_id, target_id)] = (version, fact.id)
+        memo.facts[(artifact_id, fact.id)] = fact
+        memo.bodies[fact.body_sha] = content
+
+
 def _document_retirement(db, artifact_id):
     return db.scalar(
         select(ValidationFact).where(
@@ -106,13 +177,21 @@ def _document_retirement(db, artifact_id):
 
 
 def _require_live_artifact(db, artifact_id):
+    live = _memo(db).live_artifacts
+    if artifact_id in live:
+        return
     if _document_retirement(db, artifact_id) is not None:
         raise HistoryConflict(
             "Document history is retired; new validation or selection is not allowed"
         )
+    live.add(artifact_id)
 
 
 def _artifact(db, artifact_id: str, scope: HistoryScope) -> ValidationArtifact:
+    memo = _memo(db)
+    authorized = memo.artifacts.get((artifact_id, scope))
+    if authorized is not None:
+        return authorized
     row = db.get(ValidationArtifact, artifact_id)
     if row is None or (row.owner_id, row.document_id, row.session_id) != (
         scope.owner_id,
@@ -130,6 +209,7 @@ def _artifact(db, artifact_id: str, scope: HistoryScope) -> ValidationArtifact:
                 raise HistoryAccessError("Validation history source is not accessible")
         elif _document_retirement(db, artifact_id) is None:
             raise HistoryAccessError("Validation history source is not accessible")
+    memo.artifacts[(artifact_id, scope)] = row
     return row
 
 
@@ -203,18 +283,28 @@ def _body(db, value: dict[str, Any]) -> str:
 def _fact(
     db, artifact_id: str, fact_id: str, *, kind: str | None = None
 ) -> ValidationFact:
-    row = db.scalar(
-        select(ValidationFact).where(
-            ValidationFact.artifact_id == artifact_id, ValidationFact.id == fact_id
+    facts = _memo(db).facts
+    row = facts.get((artifact_id, fact_id))
+    if row is None:
+        row = db.scalar(
+            select(ValidationFact).where(
+                ValidationFact.artifact_id == artifact_id, ValidationFact.id == fact_id
+            )
         )
-    )
+        if row is not None:
+            facts[(artifact_id, fact_id)] = row
     if row is None or (kind is not None and row.kind != kind):
         raise HistoryConflict("History reference has incompatible scope or type")
     return row
 
 
 def _content(db, fact: ValidationFact) -> dict:
-    return deepcopy(db.get(ValidationBody, fact.body_sha).content)
+    bodies = _memo(db).bodies
+    content = bodies.get(fact.body_sha)
+    if content is None:
+        content = db.get(ValidationBody, fact.body_sha).content
+        bodies[fact.body_sha] = content
+    return deepcopy(content)
 
 
 def _append(
@@ -230,6 +320,8 @@ def _append(
 ) -> ValidationFact:
     if not operation_id.strip():
         raise ValueError("History operation identity is required")
+    if operation_id == "document-retired":
+        _memo(db).live_artifacts.discard(artifact_id)
     if target_id is not None:
         _fact(db, artifact_id, target_id, kind="target")
     if parent_id is not None:
@@ -364,6 +456,7 @@ def register_target(
             .where(ValidationArtifact.id == artifact_id)
             .with_for_update()
         )
+        note_artifact_lock(db, artifact_id, write=True)
         _require_live_artifact(db, artifact_id)
         return register_target_in_transaction(
             db,
@@ -474,6 +567,7 @@ def begin_execution_in_transaction(db, scope, artifact_id, *, operation_id, rece
         .where(ValidationArtifact.id == artifact_id)
         .with_for_update()
     )
+    note_artifact_lock(db, artifact_id, write=True)
     existing = db.scalar(
         select(ValidationFact).where(
             ValidationFact.artifact_id == artifact_id,
@@ -661,7 +755,20 @@ def record_scheduling(
 
 
 def _current(db, artifact_id: str, target_id: str) -> dict:
-    head = db.get(ValidationHead, (artifact_id, target_id))
+    memo = _memo(db)
+    key = (artifact_id, target_id)
+    if key in memo.heads:
+        head = memo.heads[key]
+    elif artifact_id in memo.primed:
+        head = None  # The bulk load saw every head, and only the writer below adds one.
+    else:
+        head = db.execute(
+            select(ValidationHead.version, ValidationHead.fact_id).where(
+                ValidationHead.artifact_id == artifact_id, ValidationHead.target_id == target_id,
+            )
+        ).first()
+        head = None if head is None else tuple(head)
+        memo.heads[key] = head
     if head is None:
         return {
             "version": 0,
@@ -671,9 +778,10 @@ def _current(db, artifact_id: str, target_id: str) -> dict:
             "selected": None,
             "review": "pending",
         }
+    version, fact_id = head
     return {
-        **_content(db, _fact(db, artifact_id, head.fact_id)),
-        "version": head.version,
+        **_content(db, _fact(db, artifact_id, fact_id)),
+        "version": version,
     }
 
 
@@ -771,6 +879,7 @@ def apply_decisions_in_transaction(
         .where(ValidationArtifact.id == artifact.id)
         .with_for_update()
     )
+    note_artifact_lock(db, artifact_id, write=True)
     _require_live_artifact(db, artifact_id)
     operation = db.scalar(
         select(ValidationFact).where(
@@ -961,6 +1070,7 @@ def apply_decisions_in_transaction(
                 set_={"version": value["version"], "fact_id": fact.id},
             )
         )
+        _memo(db).heads[(artifact_id, target.id)] = (value["version"], fact.id)
         versions.append(fact.id)
     return versions
 

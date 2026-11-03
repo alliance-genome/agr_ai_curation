@@ -1014,6 +1014,9 @@ class ValidatorAdapter:
         """Only configured dependent initial work may follow explicit selections."""
         from . import waves
 
+        # Nothing depends on another binding, so no selected inputs need preparing.
+        if not any(self.match(tid).binding.runs_after for tid in self.plan["matches"]):
+            return []
         await asyncio.to_thread(self.prepare_inputs, checkpoint_provider)
         outcomes = []
         for tid in self.plan["matches"]:

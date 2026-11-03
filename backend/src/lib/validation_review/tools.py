@@ -1,6 +1,7 @@
 """Bound tool adapters shared by direct/workspace and named supervisors."""
 
 import asyncio
+from time import perf_counter
 
 from agents import function_tool
 
@@ -175,7 +176,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """
+        started = perf_counter()
         request = await asyncio.to_thread(checkpoint_provider)
+        checkpointed = perf_counter()
         result = await asyncio.to_thread(
             decisions.record_decisions,
             context,
@@ -183,8 +186,20 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             operation_id=operation_id,
             entries=[entry.model_dump(mode="json") for entry in entries],
         )
+        recorded = perf_counter()
         if advance_work is not None:
             result = {**result, "dependent_work": await advance_work()}
+        from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
+
+        write_extraction_trace_event(
+            event_type="runtime.review_save_timing",
+            output_summary={
+                "entries": len(entries),
+                "checkpoint_ms": round((checkpointed - started) * 1000),
+                "record_decisions_ms": round((recorded - checkpointed) * 1000),
+                "advance_work_ms": round((perf_counter() - recorded) * 1000),
+            },
+        )
         return result
 
     @function_tool(failure_error_function=None)
