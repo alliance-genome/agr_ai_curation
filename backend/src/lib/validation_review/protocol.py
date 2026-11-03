@@ -15,12 +15,18 @@ returned once. That tool returns original records and their evidence only, never
 validator answers: for every answer_review_pending row, also read its attempt_ref and
 completion_ref with read_validation_history. Never accept an answer you have not read.
 Assess every record in a group individually against its own values, evidence and any
-validator answer, then record that group's decisions in one record_validation_review
-call, with a reason specific to each record. Never give a generic reason or accept a
-record because its neighbors were acceptable. When a question arises about one record,
-check whether it applies to the others in the group and treat them consistently. A
-record needing closer attention does not hold up the rest: accept those supported and
-defer it in the same call, then follow up on it. Use get_validation_record_source and
+validator answer. Matching text is not enough: ask whether the evidence establishes
+that the record meets the saved task's scope and criteria. Actively look for the
+records that differ from the rest of the group. Evidence that only cites earlier work,
+external data or imagery, mentions a record in passing, comes from a different kind of
+section, or leaves a value's meaning uncertain needs closer attention. When scope or
+use is unclear, defer and investigate with targeted follow-up instead of accepting.
+Then record that group's decisions in one record_validation_review call, with a reason
+specific to each record that says what establishes it. Never give a generic reason or
+accept a record because its neighbors were acceptable. When a question arises about
+one record, check whether it applies to the others in the group and treat them
+consistently. A record needing closer attention does not hold up the rest: accept those
+supported and defer it in the same call, then follow up on it. Use get_validation_record_source and
 read_validation_history when you need one record's exact complete source; do not read
 source records one at a time otherwise.
 Start a fresh outstanding-work scan after source changes and before finishing;

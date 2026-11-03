@@ -383,7 +383,9 @@ def test_protocol_and_tools_direct_grouped_review_with_record_specific_reasons()
     protocol = " ".join(REVIEW_PROTOCOL.split())
     for text in ("get_validation_record_sources", "evidence_group", "reason specific to each record",
                  "because its neighbors were acceptable", "nothing in that call applies",
-                 "never validator answers", "Never accept an answer you have not read", "group_limit"):
+                 "never validator answers", "Never accept an answer you have not read", "group_limit",
+                 "Matching text is not enough", "records that differ from the rest",
+                 "defer and investigate with targeted follow-up"):
         assert text in protocol
     assert "Validator answers are not included" in tools["get_validation_record_sources"]["description"]
     assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
@@ -395,7 +397,7 @@ def test_source_group_limit_is_configured_and_must_be_positive(monkeypatch):
     from src.lib.openai_agents.config import get_validation_review_source_group_records
 
     monkeypatch.delenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", raising=False)
-    assert get_validation_review_source_group_records() == 25
+    assert get_validation_review_source_group_records() == 12
     monkeypatch.setenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", "7")
     assert get_validation_review_source_group_records() == 7
     monkeypatch.setenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", "0")

@@ -3861,7 +3861,7 @@ def get_connections_health_snapshot_ttl_seconds() -> float:
 def get_validation_review_source_group_records() -> int:
     """Original records returned by one grouped source read; never a review coverage cap."""
     name = "VALIDATION_REVIEW_SOURCE_GROUP_RECORDS"
-    value = _get_env_int_with_fallback(name, 25)
+    value = _get_env_int_with_fallback(name, 12)
     if value <= 0:
         raise ValueError(f"{name} must be positive")
     return value
