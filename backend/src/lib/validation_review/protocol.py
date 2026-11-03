@@ -19,8 +19,11 @@ validator answer. Matching text is not enough: ask whether the evidence establis
 that the record meets the saved task's scope and criteria. Actively look for the
 records that differ from the rest of the group. Evidence that only cites earlier work,
 external data or imagery, mentions a record in passing, comes from a different kind of
-section, or leaves a value's meaning uncertain needs closer attention. When scope or
-use is unclear, defer and investigate with targeted follow-up instead of accepting.
+section, or leaves a value's meaning uncertain needs closer attention. These are cues,
+not exclusions; the saved task decides. When scope or use is unclear and follow-up is
+available, defer and investigate with targeted follow-up before accepting. Once
+follow-up finishes or cannot run, do not leave a record deferred over remaining
+uncertainty: accept with it recorded, or decide any retirement recommendation.
 Then record that group's decisions in one record_validation_review call, with a reason
 specific to each record that says what establishes it. Never give a generic reason or
 accept a record because its neighbors were acceptable. When a question arises about

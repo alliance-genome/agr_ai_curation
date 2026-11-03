@@ -385,7 +385,8 @@ def test_protocol_and_tools_direct_grouped_review_with_record_specific_reasons()
                  "because its neighbors were acceptable", "nothing in that call applies",
                  "never validator answers", "Never accept an answer you have not read", "group_limit",
                  "Matching text is not enough", "records that differ from the rest",
-                 "defer and investigate with targeted follow-up"):
+                 "defer and investigate with targeted follow-up", "These are cues, not exclusions",
+                 "do not leave a record deferred over remaining uncertainty"):
         assert text in protocol
     assert "Validator answers are not included" in tools["get_validation_record_sources"]["description"]
     assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
