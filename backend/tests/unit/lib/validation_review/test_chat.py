@@ -52,6 +52,7 @@ def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_t
         ),
     )
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "")
     apply_tool_surface(supervisor, runtime="chat_supervisor")
     monkeypatch.setattr(
         "src.lib.agent_studio.catalog_service.resolve_tools",
@@ -72,6 +73,7 @@ def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_t
         supervisor=supervisor,
         checkpoint_provider=lambda: None,
         authenticated_groups=[],
+        extractor_receipt={"agent_key": "saved", "contract": {"instructions": "Keep used reagents."}},
     )
     apply_tool_surface(phase, runtime="validation_reviewer")
     assert phase.model == supervisor.model
@@ -480,3 +482,77 @@ async def test_stop_inside_real_sdk_tool_survives_sdk_cancellation_handling(monk
     with pytest.raises(ReviewInterrupted):
         await asyncio.wait_for(collect(), timeout=5)
     assert called == [True] and context.interrupted
+
+
+def _phase_supervisor():
+    from agents import Agent, ModelSettings
+
+    return Agent(name="Flow Supervisor", instructions="Route.", model="gpt-6-astra",
+                 model_settings=ModelSettings(parallel_tool_calls=False))
+
+
+def test_review_uses_its_configured_model_and_keeps_tool_call_policy(monkeypatch):
+    from unittest.mock import Mock
+    from src.lib.openai_agents import config
+    from src.lib.validation_review.reviewer import _review_model_overrides
+
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol")
+    monkeypatch.setenv("VALIDATION_REVIEW_REASONING", "medium")
+    sentinel = Mock()
+    monkeypatch.setattr(config, "get_model_for_agent", lambda model, provider_override=None: (sentinel, model)[0])
+    settings = Mock()
+    build = Mock(return_value=settings)
+    monkeypatch.setattr(config, "build_model_settings", build)
+    overrides = _review_model_overrides(_phase_supervisor(), "Review instructions")
+    assert overrides == {"model": sentinel, "model_settings": settings}
+    arguments = build.call_args.kwargs
+    assert arguments["model"] == "gpt-6.1-sol" and arguments["reasoning_effort"] == "medium"
+    assert arguments["parallel_tool_calls"] is False
+    assert arguments["prompt_cache"].agent_key == "supervisor.validation_review"
+
+
+def test_empty_review_model_keeps_the_supervisor_model(monkeypatch):
+    from src.lib.validation_review.reviewer import _review_model_overrides
+
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "")
+    assert _review_model_overrides(_phase_supervisor(), "Review instructions") == {}
+
+
+def test_benchmark_routes_keep_their_pinned_review_model(monkeypatch):
+    from src.lib.openai_agents.benchmark_routing import benchmark_route_plan
+    from src.lib.validation_review.reviewer import _review_model_overrides
+
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "gpt-6.1-sol")
+    route = {"provider": "openai", "model": "gpt-6-astra", "reasoning_effort": "low"}
+    with benchmark_route_plan({"supervisor": route}):
+        assert _review_model_overrides(_phase_supervisor(), "Review instructions") == {}
+
+
+def test_review_model_defaults_to_sol(monkeypatch):
+    from src.lib.openai_agents.config import get_validation_review_model, get_validation_review_reasoning
+
+    monkeypatch.delenv("VALIDATION_REVIEW_MODEL", raising=False)
+    monkeypatch.delenv("VALIDATION_REVIEW_REASONING", raising=False)
+    assert get_validation_review_model() == "gpt-6.1-sol"
+    assert get_validation_review_reasoning() == "medium"
+
+
+def test_startup_validation_rejects_a_bad_review_model_or_reasoning():
+    from src.lib.config.model_env_validation import model_env_errors
+
+    assert any("VALIDATION_REVIEW_MODEL" in error for error in model_env_errors({"VALIDATION_REVIEW_MODEL": "not-a-model"}))
+    assert any("VALIDATION_REVIEW_REASONING" in error for error in model_env_errors(
+        {"VALIDATION_REVIEW_MODEL": "gpt-6.1-sol", "VALIDATION_REVIEW_REASONING": "not-a-level"}))
+    assert not [error for error in model_env_errors(
+        {"VALIDATION_REVIEW_MODEL": "gpt-6.1-sol", "VALIDATION_REVIEW_REASONING": "medium"}) if "VALIDATION_REVIEW" in error]
+
+
+def test_compose_lets_an_empty_review_model_keep_the_supervisor_model():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[5]
+    composes = [path for path in (root / name for name in ("docker-compose.yml", "docker-compose.production.yml")) if path.is_file()]
+    if not composes:
+        pytest.skip("Compose files are not mounted in this test image")
+    for path in composes:
+        assert "${VALIDATION_REVIEW_MODEL-gpt-6.1-sol}" in path.read_text()

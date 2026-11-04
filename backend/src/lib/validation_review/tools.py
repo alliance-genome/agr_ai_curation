@@ -1,6 +1,7 @@
 """Bound tool adapters shared by direct/workspace and named supervisors."""
 
 import asyncio
+from time import perf_counter
 
 from agents import function_tool
 
@@ -107,11 +108,37 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Pass next_cursor to continue the live keyset scan; completed earlier rows
         do not shift later pages. Start a fresh scan after changing source/coverage
         and before finishing review. scan_complete only ends this scan; ready checks
-        the entire requested scope. Read exact evidence with read_validation_history
-        or get_validation_record_source before deciding; listing is not assessment.
+        the entire requested scope. Rows are ordered so records citing the same
+        evidence share an evidence_group and sit together. Before deciding, read the
+        records with get_validation_record_sources and each attempt_ref/completion_ref
+        with read_validation_history; listing is not assessment.
         """
         return await asyncio.to_thread(reads.outstanding, context.history_scope,
                                       context.episode_id, cursor=cursor)
+
+    @function_tool(failure_error_function=None)
+    @_recoverable_tool
+    async def get_validation_record_sources(target_ids: list[str]) -> dict:
+        """Read related original records together, inline, with shared evidence once.
+
+        Supply record_target_id values from outstanding rows, up to group_limit, keeping
+        rows that share an evidence_group together. Validator answers are not included;
+        read each completion_ref with read_validation_history.
+        Each record cites its evidence_record_ids in the evidence map;
+        own_evidence holds a differing record with the same ID. Call again with
+        not_returned for any remainder. too_large names records to read through
+        read_validation_history using their ref; unavailable explains the rest.
+        Scientific values are complete. Stable-definition bookkeeping, plain evidence
+        pointers, empty provenance fields and fragment text repeating the verified
+        quote are left out; each record's
+        ref holds the exact complete source. This is the saved normalized source, not
+        current selected values or a new validation, and it does not read the paper.
+        """
+        from .record_source import group_snapshot
+
+        return await asyncio.to_thread(
+            group_snapshot, context.history_scope, context.episode_id, target_ids=target_ids
+        )
 
     @function_tool(failure_error_function=None)
     @_recoverable_tool
@@ -158,6 +185,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     ) -> dict:
         """Atomically record explicit decisions for exact target/answer components.
 
+        Send one call per reviewed group, with a reason specific to each record.
+        If any entry conflicts, nothing in the call applies: refresh and resend it.
         For answers, target_id is attempt input.target_id; decision_unit_id is a
         covered ID matching the manifest unit target_id. No component units means
         decision_unit_id equals target_id: null decision_unit / empty decision_units
@@ -175,7 +204,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """
+        started = perf_counter()
         request = await asyncio.to_thread(checkpoint_provider)
+        checkpointed = perf_counter()
         result = await asyncio.to_thread(
             decisions.record_decisions,
             context,
@@ -183,8 +214,20 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             operation_id=operation_id,
             entries=[entry.model_dump(mode="json") for entry in entries],
         )
+        recorded = perf_counter()
         if advance_work is not None:
             result = {**result, "dependent_work": await advance_work()}
+        from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
+
+        write_extraction_trace_event(
+            event_type="runtime.review_save_timing",
+            output_summary={
+                "entries": len(entries),
+                "checkpoint_ms": round((checkpointed - started) * 1000),
+                "record_decisions_ms": round((recorded - checkpointed) * 1000),
+                "advance_work_ms": round((perf_counter() - recorded) * 1000),
+            },
+        )
         return result
 
     @function_tool(failure_error_function=None)
@@ -261,8 +304,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         merge, split, reorder, addition or item retirement within a record is justified.
         field_paths select complete proposals including their explicit predecessor
         mappings; the runtime never guesses identity from matching text or indices.
-        Include the evidence required by selected fields. expected_source_sha is
-        the current packet manifest's source_state_sha256. Originals stay in history;
+        Include the evidence required by selected fields. expected_source_sha is the
+        current source_state_sha256 from get_outstanding_validation_reviews or the
+        latest retirement response; do not read the packet for it. Originals stay in history;
         only affected validator inputs become stale. This does not accept validation
         or establish submission readiness. Curators do not manage item IDs.
         """
@@ -280,7 +324,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Read its exact contribution, evidence and uncertainty first. Approval omits
         the record from current results without deleting original data or history;
         decline preserves current values and readiness. Curator authority is protected.
-        Use the current packet manifest's source_state_sha256. A field or nested-item
+        Use the current source_state_sha256 from get_outstanding_validation_reviews or
+        the latest retirement response; do not read the packet for it. A field or nested-item
         correction belongs to select_extraction_contribution instead.
         """
         assert select_source is not None
@@ -312,6 +357,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     result = [
         get_validation_review_packet,
         get_outstanding_validation_reviews,
+        get_validation_record_sources,
         get_validation_record_source,
         read_validation_history,
         record_validation_review,

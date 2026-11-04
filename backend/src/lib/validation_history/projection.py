@@ -17,6 +17,7 @@ from . import selections, store
 def source_envelope_in_transaction(db, scope, artifact_id, envelope):
     """Recover source/curator values by stable IDs, including reordered lists."""
     artifact = store._artifact(db, artifact_id, scope)
+    store.prime_artifact(db, artifact_id)
     ref = envelope.metadata.get("validation_history")
     if not isinstance(ref, dict) or ref.get("artifact_id") != artifact_id:
         raise store.HistoryConflict("Projection does not identify this artifact")

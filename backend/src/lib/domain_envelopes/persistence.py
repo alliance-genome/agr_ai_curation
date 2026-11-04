@@ -1092,5 +1092,7 @@ def lock_projection_artifact(db, artifact_id):
     found = db.scalar(select(ValidationArtifact.id).where(
         ValidationArtifact.id == artifact_id,
     ).with_for_update())
+    from src.lib.validation_history.store import note_artifact_lock
+    note_artifact_lock(db, artifact_id, write=True)
     if found is None:
         raise DomainEnvelopePersistenceError("Projection history artifact is missing")

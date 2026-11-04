@@ -357,10 +357,15 @@ async def test_manual_profile_worker_selects_saved_answer_and_refreshes_draft(ma
             operation_id="select-manual-answer", entries=entries)
         return {"output": "Accepted", "review": operations.admission.status(context.history_scope, context.episode_id)}
     monkeypatch.setattr(reviewer, "run", select_answer)
+    create_phase, receipts = reviewer.create_supervisor_phase, []
+    monkeypatch.setattr(reviewer, "create_supervisor_phase",
+                        lambda *a, **kw: receipts.append(kw["extractor_receipt"]) or create_phase(*a, **kw))
     await operations._execute(saved["operation_id"], "manual-worker", "manual-fixture-trace")
     db.expire_all()
     operation = db.get(WorkspaceReviewOperation, saved["operation_id"])
     assert operation.state == "complete", operation.outcome
+    # A curator-authored record reaches review with its saved receipt: no extractor rules.
+    assert len(receipts) == 1 and receipts[0]["contract"] is None
     assert len(requests) == 1
     assert requests[0].selected_inputs == {"mention": "A"}
     assert candidate.draft.fields[0]["value"] == {"paper_name": "A", "resolved_id": "EX:1"}

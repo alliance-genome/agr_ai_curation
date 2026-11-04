@@ -191,6 +191,7 @@ def outstanding(scope, episode_id, *, cursor=None):
     from dataclasses import asdict
     from . import source_inputs
     from .record_scope import allowed_units, review_ready, review_blockers
+    from src.lib.openai_agents.config import get_validation_review_source_group_records
     from src.lib.validation_history.selections import effective_episode
 
     with store.SessionLocal.begin() as db:
@@ -223,6 +224,9 @@ def outstanding(scope, episode_id, *, cursor=None):
             return base64.urlsafe_b64encode(json.dumps(
                 {"context": context_key, "after": key}, separators=(",", ":")).encode()).decode()
 
+        from .record_source import evidence_groups
+        groups = evidence_groups(db, artifact)
+
         def source_record(target_id):
             while target_id is not None:
                 fact = targets[target_id]
@@ -235,6 +239,7 @@ def outstanding(scope, episode_id, *, cursor=None):
         for blocker in blockers:
             unit_id = blocker["target_id"]
             row = dict(blocker)
+            group = ""
             if unit_id is not None:
                 unit = units[unit_id]
                 target = targets[unit_id]
@@ -246,13 +251,19 @@ def outstanding(scope, episode_id, *, cursor=None):
                     agent_may_decide=obligations[unit_id]["mode"] != "curator" and decidable,
                     record_target_id=source_record(unit_id),
                     unit_ref={"fact_id": target.id, "sha256": target.body_sha})
+                record_target = row["record_target_id"]
+                if record_target is not None:
+                    group = groups.get(store._content(db, targets[record_target])["object_ref"], "")
+                    if group:
+                        row["evidence_group"] = group
                 source = source_inputs.latest(db, ep.artifact_id, parent)
                 if source is not None and source_inputs.is_applicability(store._content(db, source)):
                     row["applicability_ref"] = source_inputs.reference(source)
                 if obligations[unit_id]["mode"] == "extraction_only" and decidable:
                     row["extraction_ref"] = artifact.baseline_sha
             # Each answer remains independently reachable, even for one unit.
-            key = json.dumps([unit_id or "", blocker["code"],
+            # Baseline evidence is immutable, so this keeps a stable keyset order.
+            key = json.dumps([group, unit_id or "", blocker["code"],
                 blocker.get("attempt_ref", {}).get("fact_id", ""),
                 blocker.get("completion_ref", {}).get("fact_id", ""),
                 blocker.get("binding_id", "")], separators=(",", ":"))
@@ -264,6 +275,7 @@ def outstanding(scope, episode_id, *, cursor=None):
             "artifact_ready": manifest["ready"], "state": ep.state,
             "source_state_sha256": manifest["source_state_sha256"],
             "decision_entries": ep.policy["decision_entries"],
+            "group_limit": get_validation_review_source_group_records(),
             "outstanding_units": len({item["target_id"] for item in blockers if item["target_id"] is not None}),
             "outstanding_rows": len(rows), "remaining_rows": len(remaining),
             "global_blockers": dict(Counter(item["code"] for item in blockers if item["target_id"] is None)),

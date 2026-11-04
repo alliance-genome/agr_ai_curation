@@ -291,3 +291,19 @@ async def test_stop_before_submission_does_not_invent_results_or_report_failure(
         else:
             await module.execute(_SCOPE, "work", call=unexpected)
     unexpected.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runs_after,prepared", [([], False), (["earlier"], True)])
+async def test_advance_prepares_selected_inputs_only_when_a_binding_depends_on_another(runs_after, prepared):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from src.lib.validation_review.validator_adapter import ValidatorAdapter
+
+    adapter = ValidatorAdapter.__new__(ValidatorAdapter)
+    adapter.plan = {"matches": {"target": {}}}
+    adapter.match = Mock(return_value=SimpleNamespace(binding=SimpleNamespace(runs_after=runs_after)))
+    adapter.attempted_targets = {"target"}
+    adapter.prepare_inputs = Mock()
+    assert await adapter.advance(Mock()) == []
+    assert adapter.prepare_inputs.called is prepared

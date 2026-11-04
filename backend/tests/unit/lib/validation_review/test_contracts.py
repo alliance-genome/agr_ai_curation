@@ -31,7 +31,7 @@ def test_tool_schema_cannot_choose_actor_episode_or_validator():
         "reviewer",
     )
     tools = create_tools(context, checkpoint_provider=Mock())
-    assert len(tools) == 7
+    assert len(tools) == 8
     for tool in tools:
         fields = tool.params_json_schema["properties"]
         assert not {
@@ -252,7 +252,7 @@ async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection
     extraction, selection, assessment = AsyncMock(), AsyncMock(), AsyncMock(return_value={"state": "completed"})
     tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
         request_extraction=extraction, select_source=selection, assess_source=assessment)}
-    assert len(tools) == 11
+    assert len(tools) == 12
     for tool in tools.values():
         assert not {"actor_id", "episode_id", "validator_agent", "receipt", "scope_id", "extractor_agent"}.intersection(
             tool.params_json_schema["properties"])
@@ -371,3 +371,49 @@ async def test_source_prerequisite_retry_is_recoverable_at_bound_tool_boundary()
     arguments.update(operation_id="independent", target_ids=["independent"])
     assert await invoke() == {"state": "completed"}
     assert assessment.await_count == 2
+
+
+def test_protocol_and_tools_direct_grouped_review_with_record_specific_reasons():
+    from src.lib.validation_review.protocol import REVIEW_PROTOCOL
+    from src.lib.validation_review.tools import runtime_tool_contract
+
+    tools = {tool["name"]: tool for tool in runtime_tool_contract()}
+    assert "get_validation_record_sources" in tools
+    assert tools["get_validation_record_sources"]["parameters"]["required"] == ["target_ids"]
+    protocol = " ".join(REVIEW_PROTOCOL.split())
+    for text in ("get_validation_record_sources", "evidence_group", "reason specific to each record",
+                 "because its neighbors were acceptable", "nothing in that call applies",
+                 "never validator answers", "Never accept an answer you have not read", "group_limit",
+                 "Matching text is not enough", "records that differ from the rest",
+                 "defer and investigate with targeted follow-up", "These are cues, not exclusions",
+                 "do not leave a record deferred over remaining uncertainty"):
+        assert text in protocol
+    assert "Validator answers are not included" in tools["get_validation_record_sources"]["description"]
+    assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
+    assert "Assess the requested records incrementally" not in REVIEW_PROTOCOL
+    assert "reason specific to each record" in tools["record_validation_review"]["description"]
+
+
+def test_source_group_limit_is_configured_and_must_be_positive(monkeypatch):
+    from src.lib.openai_agents.config import get_validation_review_source_group_records
+
+    monkeypatch.delenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", raising=False)
+    assert get_validation_review_source_group_records() == 12
+    monkeypatch.setenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", "7")
+    assert get_validation_review_source_group_records() == 7
+    monkeypatch.setenv("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS", "0")
+    with pytest.raises(ValueError):
+        get_validation_review_source_group_records()
+
+
+def test_source_group_limit_reaches_every_deployed_service_that_sets_review_limits():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[5]
+    composes = [path for path in (root / name for name in ("docker-compose.yml", "docker-compose.production.yml"))
+                if path.is_file()]
+    if not composes:
+        pytest.skip("Compose files are not mounted in this test image")
+    for path in composes:
+        text = path.read_text()
+        assert text.count("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS") == text.count("VALIDATION_REVIEW_DECISION_ENTRIES") > 0

@@ -24,6 +24,7 @@ def _lock_artifact(db, scope, artifact_id, *, write=False):
         .where(ValidationArtifact.id == artifact_id)
         .with_for_update(read=not write)
     )
+    store.note_artifact_lock(db, artifact_id, write=write)
     return artifact
 
 
@@ -283,6 +284,7 @@ def source_state_digest(db, artifact_id):
 def manifest_in_transaction(db, scope, artifact_id, *, episode_id):
     """Resolve a consistent snapshot; no inference from caveats or confidence."""
     artifact = _lock_artifact(db, scope, artifact_id)
+    store.prime_artifact(db, artifact_id)
     episode = store._fact(db, artifact_id, episode_id, kind="review_episode")
     episode_body = effective_episode(db, episode)
     obligations = episode_body["obligations"]

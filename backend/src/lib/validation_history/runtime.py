@@ -69,6 +69,7 @@ def _attach_object_targets(updated, scope, artifact_id, root_target, *, origin):
             .where(ValidationArtifact.id == artifact_id)
             .with_for_update()
         )
+        store.note_artifact_lock(db, artifact_id, write=True)
         store._require_live_artifact(db, artifact_id)
 
         return attach_object_targets_in_transaction(
@@ -724,6 +725,7 @@ def record_absent_source_input(binding, match, result, *, requires_prerequisites
         store._artifact(db, binding.artifact_id, binding.scope)
         db.scalar(select(ValidationArtifact.id).where(
             ValidationArtifact.id == binding.artifact_id).with_for_update())
+        store.note_artifact_lock(db, binding.artifact_id, write=True)
         target = binding_target(binding, match, db=db)
         frozen = source_inputs.absent_input(match, result, target, requires_prerequisites=requires_prerequisites)
         source_inputs.update(db, binding.artifact_id, operation_id="absence:" + str(uuid4()),
