@@ -87,24 +87,29 @@ def _review_model_overrides(supervisor, instructions):
 
 def _extractor_instructions(receipt):
     """The rules this extraction actually ran under, from its saved provenance."""
+    from src.lib.openai_agents.tool_surface import DEFERRED_TOOLS_HEADING
     from .protocol import NO_SAVED_EXTRACTOR_INSTRUCTIONS, SAVED_EXTRACTOR_INSTRUCTIONS
 
     contract = receipt["contract"]
     if not contract:
-        return NO_SAVED_EXTRACTOR_INSTRUCTIONS.format(agent_key=receipt["agent_key"])
+        return NO_SAVED_EXTRACTOR_INSTRUCTIONS
+    # A direct chat extractor's saved text ends with its own tool-loading note.
+    # Paper text is inside it too, so it must not be able to close this block.
+    rules = contract["instructions"].split("\n\n" + DEFERRED_TOOLS_HEADING, 1)[0]
     return SAVED_EXTRACTOR_INSTRUCTIONS.format(
-        agent_key=receipt["agent_key"], instructions=contract["instructions"]
+        agent_key=receipt["agent_key"],
+        instructions=rules.replace("</saved_extractor_instructions>", "[end of quoted tag]"),
     )
 
 
 def _extractor_rules_identity(receipt):
-    """Which rules a review ran under; an empty hash means it ran without any."""
+    """Which saved setup a review's rules came from; empty means it had none."""
     from src.lib.validation_history import store
 
     contract = receipt["contract"]
     return {
         "extractor_agent": receipt["agent_key"],
-        "extractor_rules_sha256": store.canonical(contract)[0] if contract else None,
+        "extractor_contract_sha256": store.canonical(contract)[0] if contract else None,
     }
 
 

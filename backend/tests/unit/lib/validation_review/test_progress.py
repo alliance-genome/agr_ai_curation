@@ -110,6 +110,7 @@ async def test_real_review_result_streams_before_reviewer_finishes(monkeypatch):
     from src.lib.openai_agents import extraction_trace_events
     review = ChatReview("owner", "document", "session", "turn", None, (), "request")
     record = SimpleNamespace(extraction_result_id="source")
+    saved_receipt = {"agent_key": "saved", "contract": {"instructions": "Rules."}}
     context = SimpleNamespace(episode_id="episode", history_scope=None, actor_id="supervisor")
     monkeypatch.setattr(review, "context", lambda _: context)
     monkeypatch.setattr(review, "saved_review_outcome", lambda _: None)
@@ -117,8 +118,10 @@ async def test_real_review_result_streams_before_reviewer_finishes(monkeypatch):
     adapter = SimpleNamespace(initial=AsyncMock(), advance=AsyncMock(), execute=None,
         prepare_inputs=None, refresh_inputs=None)
     monkeypatch.setattr(chat, "ValidatorAdapter", lambda *a, **kw: adapter)
-    monkeypatch.setattr(review, "extractor_adapter", lambda *a: SimpleNamespace(request=None, receipt={}))
-    monkeypatch.setattr(chat.reviewer, "create_supervisor_phase", lambda *a, **kw: SimpleNamespace(tools=[]))
+    monkeypatch.setattr(review, "extractor_adapter", lambda *a: SimpleNamespace(request=None, receipt=saved_receipt))
+    phases = []
+    monkeypatch.setattr(chat.reviewer, "create_supervisor_phase",
+                        lambda *a, **kw: phases.append(kw) or SimpleNamespace(tools=[]))
     monkeypatch.setattr(extraction_trace_events, "write_extraction_trace_event", lambda **kw: None)
     monkeypatch.setattr(streaming_tools, "write_stream_event", lambda *a, **kw: None)
     gate = asyncio.Event()
@@ -136,6 +139,7 @@ async def test_real_review_result_streams_before_reviewer_finishes(monkeypatch):
         gate.set()
         tail = [e async for e in stream]
         assert tail[-1]["details"]["message"] == "Supervisor review complete"
+        assert phases[0]["extractor_receipt"] is saved_receipt
     finally:
         await stream.aclose()
 

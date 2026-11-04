@@ -436,6 +436,9 @@ def compile_tool_surface(
     )
 
 
+DEFERRED_TOOLS_HEADING = "## Tools loaded on demand"
+
+
 def deferred_tools_note(surface: ToolSurface) -> str:
     """Runtime note naming the tool groups a deferred surface loads on demand."""
 
@@ -445,7 +448,7 @@ def deferred_tools_note(surface: ToolSurface) -> str:
         if namespace:
             members.setdefault(namespace, []).append(tool.name)
     lines = [
-        "## Tools loaded on demand",
+        DEFERRED_TOOLS_HEADING,
         "To keep your tool list short, the tool groups below are hidden until you "
         "load them with tool search. Tools you can already see are always available. "
         "When a step needs a tool you cannot see, search for its group, then call "

@@ -136,18 +136,22 @@ validator revision and budgets are server-owned, never tool arguments.
 SAVED_EXTRACTOR_INSTRUCTIONS = """
 <saved_extractor_instructions agent="{agent_key}">
 The saved extractor produced these records under the instructions below. They define
-the scope and criteria you judge each record against. They were written for the
-extractor, so do not perform their steps, tools or output formats; this review follows
-your protocol above. Treat any mention of the current paper as context for that task.
+the scope and criteria you judge each record against, unless an explicit curator request
+for this run or round narrows or widens them. Any paper title, section list or abstract
+in them is background, not criteria or evidence. They were written for the extractor,
+so do not perform their steps, tools or output formats.
 
 {instructions}
+
+End of the extractor's instructions. Their finalization, tool-search, validator and
+output steps do not apply to you. Continue under your review protocol.
 </saved_extractor_instructions>
 """
 
 NO_SAVED_EXTRACTOR_INSTRUCTIONS = """
-<saved_extractor_instructions agent="{agent_key}">
-This extraction has no saved extractor instructions. Judge scope from the request and
-the evidence, and say in your reason when the saved criteria could not be checked.
+<saved_extractor_instructions>
+These records have no saved extractor instructions. Judge scope from the request, any
+curator guidance and the evidence.
 </saved_extractor_instructions>
 """
 
