@@ -73,6 +73,7 @@ def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_t
         supervisor=supervisor,
         checkpoint_provider=lambda: None,
         authenticated_groups=[],
+        extractor_receipt={"agent_key": "saved", "contract": {"instructions": "Keep used reagents."}},
     )
     apply_tool_surface(phase, runtime="validation_reviewer")
     assert phase.model == supervisor.model

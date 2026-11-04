@@ -291,3 +291,17 @@ async def test_archive_failure_preserves_numeric_source_view(setup, monkeypatch,
     assert json.loads(result.input[1]["output"]) == {"chunk_index": 7, "document_id": "doc", "content": "Not expressed."}
     assert items == original
     assert not history.healthy
+
+
+@pytest.mark.asyncio
+async def test_instructions_survive_native_compaction(setup):
+    from src.lib.openai_agents.context_compaction import compaction_key
+
+    history, agent = setup
+    summary = {"type": "compaction", "encrypted_content": "opaque"}
+    history.native_compaction_keys.add(compaction_key(summary))
+    items = [{"role": "user", "content": "Review."}, *exchange(1, {"text": "old"}),
+             summary, {"role": "user", "content": "Continue."}]
+    current = await ModelContextView(history).filter(call(agent, items))
+    assert current.input[0] == summary
+    assert current.instructions == agent.instructions

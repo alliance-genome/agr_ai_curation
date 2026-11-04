@@ -117,7 +117,7 @@ async def test_real_review_result_streams_before_reviewer_finishes(monkeypatch):
     adapter = SimpleNamespace(initial=AsyncMock(), advance=AsyncMock(), execute=None,
         prepare_inputs=None, refresh_inputs=None)
     monkeypatch.setattr(chat, "ValidatorAdapter", lambda *a, **kw: adapter)
-    monkeypatch.setattr(review, "extractor_adapter", lambda *a: SimpleNamespace(request=None))
+    monkeypatch.setattr(review, "extractor_adapter", lambda *a: SimpleNamespace(request=None, receipt={}))
     monkeypatch.setattr(chat.reviewer, "create_supervisor_phase", lambda *a, **kw: SimpleNamespace(tools=[]))
     monkeypatch.setattr(extraction_trace_events, "write_extraction_trace_event", lambda **kw: None)
     monkeypatch.setattr(streaming_tools, "write_stream_event", lambda *a, **kw: None)

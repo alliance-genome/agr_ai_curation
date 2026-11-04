@@ -181,6 +181,13 @@ A response stays within `VALIDATION_REVIEW_PACKET_BYTES` and returns at most
 call and nothing is truncated. Outstanding rows carry `evidence_group`, a key for the
 evidence a record cites, and are ordered by it.
 
+Each review carries the instructions its own extractor ran under, taken from the
+extraction's saved provenance, so scope is judged against the actual criteria. They
+sit in the phase instructions, which every request resends and compaction leaves
+alone. One review covers one extraction, so it never holds another agent's rules.
+Follow-up results keep the extractor's name, receipt and `contract_sha256`, not a
+copy of its setup.
+
 Supervisor review runs on `VALIDATION_REVIEW_MODEL` with
 `VALIDATION_REVIEW_REASONING`, separately from the supervisor that routes curator
 requests. An empty model keeps the supervisor's own model, and benchmark runs keep

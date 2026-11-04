@@ -304,8 +304,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         merge, split, reorder, addition or item retirement within a record is justified.
         field_paths select complete proposals including their explicit predecessor
         mappings; the runtime never guesses identity from matching text or indices.
-        Include the evidence required by selected fields. expected_source_sha is
-        the current packet manifest's source_state_sha256. Originals stay in history;
+        Include the evidence required by selected fields. expected_source_sha is the
+        current source_state_sha256 from get_outstanding_validation_reviews or the
+        latest retirement response; do not read the packet for it. Originals stay in history;
         only affected validator inputs become stale. This does not accept validation
         or establish submission readiness. Curators do not manage item IDs.
         """
@@ -323,7 +324,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Read its exact contribution, evidence and uncertainty first. Approval omits
         the record from current results without deleting original data or history;
         decline preserves current values and readiness. Curator authority is protected.
-        Use the current packet manifest's source_state_sha256. A field or nested-item
+        Use the current source_state_sha256 from get_outstanding_validation_reviews or
+        the latest retirement response; do not read the packet for it. A field or nested-item
         correction belongs to select_extraction_contribution instead.
         """
         assert select_source is not None

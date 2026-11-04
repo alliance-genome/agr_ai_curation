@@ -85,10 +85,38 @@ def _review_model_overrides(supervisor, instructions):
     }
 
 
+def _extractor_instructions(receipt):
+    """The rules this extraction actually ran under, from its saved provenance."""
+    from .protocol import NO_SAVED_EXTRACTOR_INSTRUCTIONS, SAVED_EXTRACTOR_INSTRUCTIONS
+
+    contract = receipt["contract"]
+    if not contract:
+        return NO_SAVED_EXTRACTOR_INSTRUCTIONS.format(agent_key=receipt["agent_key"])
+    return SAVED_EXTRACTOR_INSTRUCTIONS.format(
+        agent_key=receipt["agent_key"], instructions=contract["instructions"]
+    )
+
+
+def _extractor_rules_identity(receipt):
+    """Which rules a review ran under; an empty hash means it ran without any."""
+    from src.lib.validation_history import store
+
+    contract = receipt["contract"]
+    return {
+        "extractor_agent": receipt["agent_key"],
+        "extractor_rules_sha256": store.canonical(contract)[0] if contract else None,
+    }
+
+
 def create_supervisor_phase(
-    context, *, supervisor, checkpoint_provider, authenticated_groups, **callbacks
+    context, *, supervisor, checkpoint_provider, authenticated_groups, extractor_receipt, **callbacks
 ):
-    """Same supervisor identity and policy on the review model; a strictly smaller capability set."""
+    """Same supervisor identity and policy on the review model; a strictly smaller capability set.
+
+    One review covers one extraction, so it carries only that extractor's rules.
+    They live in the instructions, which every request resends and compaction
+    leaves alone.
+    """
     from src.lib.observability.cost_context import (
         get_agent_cost_identity,
         attach_agent_cost_identity,
@@ -103,6 +131,7 @@ def create_supervisor_phase(
         prompt_templates_for_bundle,
     )
     from src.lib.prompts.context import set_pending_prompts, bind_prompt_run
+    from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
     from src.lib.openai_agents.langfuse_client import log_agent_config
 
     layers: list[PromptLayer] = list(
@@ -125,6 +154,20 @@ def create_supervisor_phase(
             source_ref="src.lib.validation_review.protocol:REVIEW_PROTOCOL",
         )
     )
+    # Rules vary by agent and paper, so they stay out of the shared cache identity.
+    shared_prompt = _bundle("supervisor", layers).render()
+    layers.append(
+        _make_layer(
+            layer_id="supervisor:saved_extractor_instructions",
+            kind="runtime_context",
+            title="Saved extractor instructions",
+            content=_extractor_instructions(extractor_receipt),
+            provenance="backend:validation_review",
+            editable=False,
+            locked=True,
+            source_ref="validation_artifacts.provenance:extractor_contract",
+        )
+    )
     bundle = _bundle("supervisor", layers)
     instructions = bundle.render()
     agent = supervisor.clone(
@@ -135,7 +178,7 @@ def create_supervisor_phase(
         ),
         handoffs=[],
         output_type=None,
-        **_review_model_overrides(supervisor, instructions),
+        **_review_model_overrides(supervisor, shared_prompt),
     )
     identity = get_agent_cost_identity(supervisor)
     attach_agent_cost_identity(
@@ -152,6 +195,11 @@ def create_supervisor_phase(
     bind_prompt_run(agent, prompt_id)
     _require_review_tools(agent)
     apply_tool_surface(agent, runtime="validation_reviewer")
+    rules_identity = _extractor_rules_identity(extractor_receipt)
+    write_extraction_trace_event(
+        event_type="runtime.review_extractor_rules",
+        output_summary={"review_episode_id": context.episode_id, **rules_identity},
+    )
     log_agent_config(
         agent_name=agent.name,
         instructions=agent.instructions,
@@ -165,6 +213,7 @@ def create_supervisor_phase(
             "actor_id": context.actor_id,
             "effective_prompt_hash": bundle.hash,
             "layer_manifest": bundle.to_manifest(),
+            **rules_identity,
         },
     )
     return agent

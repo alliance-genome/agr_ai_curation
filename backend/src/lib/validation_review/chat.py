@@ -443,6 +443,7 @@ class ChatReview:
                     supervisor=self.supervisor,
                     checkpoint_provider=checkpoint,
                     authenticated_groups=self.authenticated_groups,
+                    extractor_receipt=extractor.receipt,
                     execute_work=adapter.execute,
                     advance_work=lambda: adapter.advance(checkpoint),
                     prepare_inputs=lambda: adapter.prepare_inputs(checkpoint),

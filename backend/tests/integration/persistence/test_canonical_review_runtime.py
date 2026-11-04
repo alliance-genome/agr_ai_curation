@@ -82,6 +82,7 @@ async def test_canonical_grouped_review_and_reconsideration_use_real_sdk_tools(
         context = ReviewContext(item.scope, item.ep, "supervisor.validation_review")
         agent = reviewer.create_supervisor_phase(context, supervisor=supervisor,
             checkpoint_provider=checkpoint, authenticated_groups=[],
+            extractor_receipt={"agent_key": "fixture", "contract": None},
             execute_work=item.adapter.execute,
             advance_work=lambda: item.adapter.advance(checkpoint),
             prepare_inputs=lambda: item.adapter.prepare_inputs(checkpoint),
@@ -1085,7 +1086,8 @@ async def test_scoped_reviewer_records_each_answer_without_full_baseline(planned
     context = ReviewContext(item.scope, item.ep, 'supervisor.validation_review')
     supervisor = canonical_models.supervisor.clone(model=model)
     agent = reviewer.create_supervisor_phase(context, supervisor=supervisor,
-        checkpoint_provider=checkpoint, authenticated_groups=[], execute_work=item.adapter.execute,
+        checkpoint_provider=checkpoint, authenticated_groups=[],
+        extractor_receipt={"agent_key": "fixture", "contract": None}, execute_work=item.adapter.execute,
         advance_work=lambda: item.adapter.advance(checkpoint),
         prepare_inputs=lambda: item.adapter.prepare_inputs(checkpoint), refresh_inputs=item.adapter.refresh_inputs)
     before = store.read_baseline(item.scope, item.aid)

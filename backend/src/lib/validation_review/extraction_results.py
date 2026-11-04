@@ -12,6 +12,12 @@ from .specialist_context import reference
 from .item_relationships import validate as validate_item_relationships
 
 
+def _result_receipt(receipt):
+    """Name the extractor; its full setup stays in artifact provenance and the work."""
+    kept = {key: value for key, value in receipt.items() if key != "contract"}
+    return {**kept, "contract_sha256": store.canonical(receipt["contract"])[0]}
+
+
 def retain(scope, work_id, lease_token, result, *, evidence_records):
     """evidence_records is an authenticated extractor-tool snapshot, never a tool arg.
 
@@ -77,7 +83,7 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
                 operation_id="extraction-contribution:" + work_id + ":" + item.entry_id,
                 kind="extraction_contribution", parent_id=request.id, target_id=item.entry_id,
                 body={"work_id": work_id, "request_ref": request_ref,
-                      "extractor_receipt": row.payload["receipt"],
+                      "extractor_receipt": _result_receipt(row.payload["receipt"]),
                       "context_ref": row.payload["specialist_input"]["history"]["records"][0],
                       "proposal": item.model_dump(mode="json"), "evidence": evidence,
                       "item_relationships": relationships,

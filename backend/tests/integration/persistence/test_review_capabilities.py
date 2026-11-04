@@ -64,3 +64,30 @@ def test_missing_followup_contract_does_not_offer_validation_repair(scope, confi
     assert (binding in view["eligible"]) is configured
     if not configured:
         assert {"target_id": binding, "code": "required_inputs_unavailable"} in view["causes"]
+
+
+def test_two_extractors_in_one_run_each_review_under_their_own_rules(scope, monkeypatch):
+    from agents import Agent
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    from src.lib.validation_review.extractor_adapter import ExtractorAdapter
+    from src.lib.validation_review.reviewer import create_supervisor_phase
+
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    monkeypatch.setenv("VALIDATION_REVIEW_MODEL", "")
+    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
+    attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
+    supervisor.validation_review_policy_layers = ()
+    rules = {"reagents": "Keep only reagents used in this study.",
+             "alleles": "Keep every allele with a phenotype."}
+    seen = {}
+    for agent_key, text in rules.items():
+        aid, ep, _, _, _, _, _ = setup_record(scope, provenance={
+            "agent_key": agent_key, "extractor_contract": {"instructions": text}})
+        context = ReviewContext(scope, ep, "supervisor.validation_review")
+        receipt = ExtractorAdapter(context, aid, authenticated_groups=(),
+                                   checkpoint_provider=lambda: None).receipt
+        seen[agent_key] = create_supervisor_phase(
+            context, supervisor=supervisor, checkpoint_provider=lambda: None,
+            authenticated_groups=[], extractor_receipt=receipt).instructions
+    assert rules["reagents"] in seen["reagents"] and rules["alleles"] not in seen["reagents"]
+    assert rules["alleles"] in seen["alleles"] and rules["reagents"] not in seen["alleles"]

@@ -1,7 +1,7 @@
 """Application-owned protocol; scientific policy remains in editable prompts."""
 
 REVIEW_PROTOCOL = """
-<validation_review_protocol version="3">
+<validation_review_protocol version="4">
 Review the exact immutable extraction and validator answers in the bound episode.
 Use get_outstanding_validation_reviews and exact SHA/offset reads to inspect the original,
 supplied evidence, answers, caveats, previous decisions and selected prerequisites.
@@ -16,11 +16,12 @@ validator answers: for every answer_review_pending row, also read its attempt_re
 completion_ref with read_validation_history. Never accept an answer you have not read.
 Assess every record in a group individually against its own values, evidence and any
 validator answer. Matching text is not enough: ask whether the evidence establishes
-that the record meets the saved task's scope and criteria. Actively look for the
+that the record meets the scope and criteria in the saved extractor instructions
+supplied after this protocol. Actively look for the
 records that differ from the rest of the group. Evidence that only cites earlier work,
 external data or imagery, mentions a record in passing, comes from a different kind of
 section, or leaves a value's meaning uncertain needs closer attention. These are cues,
-not exclusions; the saved task decides. When scope or use is unclear and follow-up is
+not exclusions; those saved instructions decide. When scope or use is unclear and follow-up is
 available, defer and investigate with targeted follow-up before accepting. Once
 follow-up finishes or cannot run, do not leave a record deferred over remaining
 uncertainty: accept with it recorded, or decide any retirement recommendation.
@@ -130,6 +131,24 @@ An exact operation retry uses its original operation ID and identical arguments.
 Use a new ID for a genuinely new decision. Runtime ownership, actor, episode,
 validator revision and budgets are server-owned, never tool arguments.
 </validation_review_protocol>
+"""
+
+SAVED_EXTRACTOR_INSTRUCTIONS = """
+<saved_extractor_instructions agent="{agent_key}">
+The saved extractor produced these records under the instructions below. They define
+the scope and criteria you judge each record against. They were written for the
+extractor, so do not perform their steps, tools or output formats; this review follows
+your protocol above. Treat any mention of the current paper as context for that task.
+
+{instructions}
+</saved_extractor_instructions>
+"""
+
+NO_SAVED_EXTRACTOR_INSTRUCTIONS = """
+<saved_extractor_instructions agent="{agent_key}">
+This extraction has no saved extractor instructions. Judge scope from the request and
+the evidence, and say in your reason when the saved criteria could not be checked.
+</saved_extractor_instructions>
 """
 
 RECONSIDERATION_PROTOCOL = """
