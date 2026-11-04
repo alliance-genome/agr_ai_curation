@@ -48,6 +48,7 @@ def execution_settings() -> dict[str, Any]:
         "structured_finalization_retry_max_turns", "flow_supervisor_parallel_tool_calls_enabled",
         "flow_selected_fields_direct_export", "flow_step_output_preview_chars",
         "flow_step_evidence_preview_limit", "flow_memory_max_visible_output_chars",
+        "validation_review_source_group_records", "validation_review_model", "validation_review_reasoning",
     )
     return {**{name: getattr(config, "get_" + name)() for name in names},
             "validation_review_limits": config.get_validation_review_limits()}

@@ -81,6 +81,7 @@ def record_initial(binding, frozen, *, episode_id):
         store._artifact(db, binding.artifact_id, binding.scope)
         db.scalar(select(ValidationArtifact.id).where(
             ValidationArtifact.id == binding.artifact_id).with_for_update())
+        store.note_artifact_lock(db, binding.artifact_id, write=True)
         target = frozen["target_id"]
         episode = store._fact(db, binding.artifact_id, episode_id, kind="review_episode")
         previous = latest(db, binding.artifact_id, target)

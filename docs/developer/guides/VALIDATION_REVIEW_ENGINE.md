@@ -170,6 +170,29 @@ It is not a current selected value, validator answer or reconstructed typed sour
 Later contributions without a baseline original must be inspected through their
 exact contribution facts. Retired original records remain readable for audit.
 
+`get_validation_record_sources(target_ids)` returns related records inline and sends
+each shared evidence record once, so the supervisor can assess a group in one model
+turn and save its decisions in one `record_validation_review` call. Every record
+keeps its own explicit decision and reason. Each returned record names the same exact
+fact as the single-record tool. Scientific values are complete; repeated bookkeeping
+and fragment text already in the verified quote are left out of the inline view only.
+A response stays within `VALIDATION_REVIEW_PACKET_BYTES` and returns at most
+`VALIDATION_REVIEW_SOURCE_GROUP_RECORDS` records; the remainder are named for another
+call and nothing is truncated. Outstanding rows carry `evidence_group`, a key for the
+evidence a record cites, and are ordered by it.
+
+Each review carries the instructions its own extractor ran under, taken from the
+extraction's saved provenance, so scope is judged against the actual criteria. They
+sit in the phase instructions, which every request resends and compaction leaves
+alone. One review covers one extraction, so it never holds another agent's rules.
+Follow-up results keep the extractor's name, receipt and `contract_sha256`, not a
+copy of its setup.
+
+Supervisor review runs on `VALIDATION_REVIEW_MODEL` with
+`VALIDATION_REVIEW_REASONING`, separately from the supervisor that routes curator
+requests. An empty model keeps the supervisor's own model, and benchmark runs keep
+their pinned route.
+
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when
 needed. Per-record access does not remove old validation findings, summarize away

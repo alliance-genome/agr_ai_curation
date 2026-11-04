@@ -683,6 +683,7 @@ async def _execute(operation_id, lease_token, trace_id):
                 supervisor=supervisor,
                 checkpoint_provider=current_checkpoint,
                 authenticated_groups=groups,
+                extractor_receipt=extractor.receipt,
                 execute_work=adapter.execute,
                 advance_work=lambda: adapter.advance(current_checkpoint),
                 prepare_inputs=lambda: adapter.prepare_inputs(current_checkpoint),

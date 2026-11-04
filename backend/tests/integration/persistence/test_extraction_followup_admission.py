@@ -28,7 +28,8 @@ def request_args(item) -> dict[str, Any]:
         parent_id = parent.id
     return dict(operation_id=uuid4().hex, parent_decision_id=parent_id,
         entry_ids=[entry], instructions="Check Methods for the organism.",
-        receipt={"saved_extractor_contract": "test-contract"},
+        receipt={"agent_key": "saved", "execution_receipt": None,
+                 "contract": {"instructions": "Keep reagents used in this study."}},
         current_entries={entry: item.plan.envelope.extracted_objects[0].model_dump(mode="json")})
 
 
@@ -104,6 +105,10 @@ def test_late_proposal_retains_original_and_requires_actual_evidence(planned, mi
         contribution = store._fact(
             db, item.aid, outcome["contributions"][0]["fact_id"])
         body = store._content(db, contribution)
+        # The result names its extractor; the full setup is read from provenance.
+        assert body["extractor_receipt"] == {
+            "agent_key": "saved", "execution_receipt": None,
+            "contract_sha256": store.canonical(args["receipt"]["contract"])[0]}
         assert body["selectable"] is not missing_evidence
         if missing_evidence:
             assert body["structural_failure"] == "invalid_evidence_reference"
