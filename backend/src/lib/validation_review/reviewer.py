@@ -1,6 +1,7 @@
 """One configured reviewer for direct/workspace phases; no runtime activation here."""
 
 import asyncio
+import re
 
 from src.lib.openai_agents.model_settings_contract import model_settings_contract
 from src.lib.openai_agents.model_request_measurement import (
@@ -94,11 +95,20 @@ def _extractor_instructions(receipt):
     if not contract:
         return NO_SAVED_EXTRACTOR_INSTRUCTIONS
     # A direct chat extractor's saved text ends with its own tool-loading note.
-    # Paper text is inside it too, so it must not be able to close this block.
-    rules = contract["instructions"].split("\n\n" + DEFERRED_TOOLS_HEADING, 1)[0]
+    # Only that trailing note is removed; the same heading elsewhere is kept, so a
+    # later rule cannot be lost. If it ever fails to match, the closing line still
+    # tells the reviewer those steps do not apply.
+    tool_note = (
+        r"\n\n" + re.escape(DEFERRED_TOOLS_HEADING)
+        + r"\nTo keep your tool list short[^\n]*(?:\n- [^\n]*)*\Z"
+    )
+    rules = re.sub(tool_note, "", contract["instructions"])
+    # Paper text is inside the rules too, so it must not be able to close this block.
+    rules = re.sub(
+        r"</\s*saved_extractor_instructions\s*>", "[end of quoted tag]", rules, flags=re.IGNORECASE
+    )
     return SAVED_EXTRACTOR_INSTRUCTIONS.format(
-        agent_key=receipt["agent_key"],
-        instructions=rules.replace("</saved_extractor_instructions>", "[end of quoted tag]"),
+        agent_key=receipt["agent_key"], instructions=rules
     )
 
 
