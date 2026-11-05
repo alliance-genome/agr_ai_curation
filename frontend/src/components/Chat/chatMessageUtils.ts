@@ -498,7 +498,9 @@ export function withEvidenceRecords(
     const nextMessages = [...messages]
     nextMessages[index] = withEvidenceReviewAndCurateTarget({
       ...message,
-      content: stripDuplicateEvidenceSections(message.content),
+      content: evidenceRecords.length > 0
+        ? stripDuplicateEvidenceSections(message.content)
+        : message.content,
       evidenceRecords,
       evidenceCurationSupported: options?.evidenceCurationSupported ?? message.evidenceCurationSupported ?? null,
       evidenceCurationAdapterKey: options?.evidenceCurationAdapterKey ?? message.evidenceCurationAdapterKey ?? null,

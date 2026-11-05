@@ -2402,6 +2402,62 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    @pytest.mark.parametrize("pack_allows_no_evidence", [True, False])
+    def test_flow_step_gates_an_evidence_free_record_on_the_pack_rule(
+        self, mock_get_agent, mock_streaming, monkeypatch, pack_allows_no_evidence
+    ):
+        """The step itself must consult the pack rule before rejecting a record with no evidence."""
+        executor = _executor_module()
+        from src.lib.openai_agents.streaming_tools import (
+            add_specialist_event,
+            clear_collected_events,
+        )
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        payload = _structured_step_output("TP53", evidence_records=[])
+        monkeypatch.setattr(
+            executor,
+            "_flow_candidate_evidence_optional",
+            lambda _candidate: pack_allows_no_evidence,
+        )
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                add_specialist_event({
+                    "type": executor.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+                    "details": {
+                        "toolName": tool_name,
+                        "friendlyName": f"{specialist_name}: Internal Extraction Result",
+                        "success": True,
+                    },
+                    "internal": {
+                        "tool_output": json.dumps(payload),
+                        "output_length": len(json.dumps(payload)),
+                    },
+                })
+                return "Result with no evidence."
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([_agent_node("n1", "gene", output_key="gene_output")])
+        stub_completed_review(monkeypatch, payload)
+        clear_collected_events()
+        try:
+            tools, _, _, execution_state = get_stub_review_step_tools(flow, include_unavailable=True)
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+        finally:
+            clear_collected_events()
+
+        audit = execution_state["completed_steps"][0]["extraction_handoff_audit"]
+        assert audit["evidenceCount"] == 0
+        assert audit["evidenceOptional"] is pack_allows_no_evidence
+        assert (audit["candidateRejectReason"] is None) is pack_allows_no_evidence
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     def test_flow_step_uses_internal_extraction_payload_when_return_is_compact(
         self, mock_get_agent, mock_streaming, monkeypatch
     ):

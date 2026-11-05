@@ -105,7 +105,7 @@ object_definitions:
       - field_path: reference_curie
         field_type: string
         display_name: ABC reference
-        description: The paper's ABC reference ID, from the document record. A paper uploaded with no ABC reference shows this as blank and cannot be submitted to ABC.
+        description: The paper's ABC reference ID, from the document record. A paper uploaded with no ABC reference has none, and cannot be submitted to ABC.
         metadata:
           protected: true
           exported: false

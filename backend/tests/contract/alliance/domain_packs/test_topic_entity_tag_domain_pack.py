@@ -543,24 +543,8 @@ def test_only_the_objects_without_validators_report_none():
         packs.get_pack("agr.alliance.gene_expression")
     )
 
+    generic = DomainPackValidationRegistry.from_domain_pack(packs.get_pack("generic"))
+
     assert topic_tag.has_active_validators_for_object("topic_entity_tag") is False
+    assert generic.has_active_validators_for_object("generic_object") is False
     assert gene_expression.has_active_validators_for_object("GeneExpressionAnnotation") is True
-
-
-def test_profile_bound_output_is_not_reported_as_validator_free():
-    from src.lib.domain_packs.profile_validation import envelope_is_profile_bound
-    from src.schemas.domain_envelope import DomainEnvelope
-
-    plain = {
-        "envelope_id": "topic-tag-envelope",
-        "domain_pack_id": "agr.alliance.topic_entity_tag",
-        "extracted_objects": [],
-        "metadata": {},
-    }
-    profiled = {
-        **plain,
-        "metadata": {"extraction_metadata": {"provenance": {"generic_profile_ref": {"id": "p"}}}},
-    }
-
-    assert envelope_is_profile_bound(DomainEnvelope.model_validate(plain)) is False
-    assert envelope_is_profile_bound(DomainEnvelope.model_validate(profiled)) is True

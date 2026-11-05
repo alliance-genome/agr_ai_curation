@@ -94,8 +94,11 @@ def envelope_is_profile_bound(envelope: DomainEnvelope) -> bool:
 
     raw_receipt = envelope.metadata.get("execution_receipt")
     if raw_receipt is not None:
-        receipt = AgentExecutionReceipt.model_validate(raw_receipt)
-        if receipt.output_contract.output_mode == "profile_bound_generic":
+        # Read the stored value directly: this runs whenever a workspace loads,
+        # so a receipt that no longer validates must not fail the whole session.
+        output_contract = raw_receipt.get("output_contract") if isinstance(raw_receipt, Mapping) else None
+        output_mode = output_contract.get("output_mode") if isinstance(output_contract, Mapping) else None
+        if not isinstance(output_mode, str) or output_mode == "profile_bound_generic":
             return True
     return _envelope_profile_marked(envelope)
 

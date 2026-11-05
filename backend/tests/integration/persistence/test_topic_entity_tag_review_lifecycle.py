@@ -207,3 +207,4 @@ async def test_negated_proposal_opens_as_a_curation_session_and_can_be_signed_of
         db.rollback()
 
     assert decision.candidate.status.value == "accepted"
+    assert decision.candidate.has_active_validators is False
