@@ -6013,9 +6013,9 @@
           "type": "string"
         },
         {
-          "description": "The supporting passages the agent recorded. Required when the paper has data for the topic.",
+          "description": "The passages the agent's answer rests on. At least one is always required.",
           "name": "evidence_record_ids",
-          "required": false,
+          "required": true,
           "type": "array"
         }
       ],

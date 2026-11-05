@@ -42,6 +42,7 @@ from agr_ai_curation_alliance.domain_packs.topic_entity_tag import (
 )
 
 from .agr_curation import (
+    _BUILDER_LIST_DEFAULT_LIMIT,
     AgrQueryResult,
     _builder_candidate_list,
     _builder_finalization_summary,
@@ -61,7 +62,7 @@ class _StrictToolModel(BaseModel):
 class TopicEntityTagInput(_StrictToolModel):
     negated: StrictBool
     rationale: StrictStr
-    evidence_record_ids: List[StrictStr] = Field(default_factory=list, max_length=20)
+    evidence_record_ids: List[StrictStr] = Field(min_length=1)
 
     @field_validator("rationale")
     @classmethod
@@ -71,12 +72,12 @@ class TopicEntityTagInput(_StrictToolModel):
 
 class TopicEntityTagListInput(_StrictToolModel):
     include_discarded: bool = False
-    limit: int = Field(default=50, ge=0)
+    limit: int = Field(default=_BUILDER_LIST_DEFAULT_LIMIT, ge=0)
     offset: int = Field(default=0, ge=0)
 
 
 class TopicEntityTagFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(max_length=50)
+    candidate_ids: List[StrictStr]
 
 
 def _emit(
@@ -146,18 +147,9 @@ def _pydantic_issues(exc: ValidationError) -> list[dict[str, Any]]:
 
 def _validated_proposal(raw: Mapping[str, Any]) -> tuple[TopicEntityTagInput | None, list[dict[str, Any]]]:
     try:
-        proposal = TopicEntityTagInput(**raw)
+        return TopicEntityTagInput(**raw), []
     except ValidationError as exc:
         return None, _pydantic_issues(exc)
-    if not proposal.negated and not proposal.evidence_record_ids:
-        return None, [
-            {
-                "field_path": "evidence_record_ids",
-                "reason": "missing_evidence_record_ids",
-                "message": "A positive proposal must cite at least one verified evidence record.",
-            }
-        ]
-    return proposal, []
 
 
 def _staged_fields(proposal: TopicEntityTagInput) -> dict[str, Any]:
@@ -173,14 +165,14 @@ def _staged_fields(proposal: TopicEntityTagInput) -> dict[str, Any]:
 def _stage_topic_entity_tag_impl(
     negated: bool,
     rationale: str,
-    evidence_record_ids: Optional[List[str]] = None,
+    evidence_record_ids: List[str],
 ) -> AgrQueryResult:
     """Stage the single topic-tag proposal for this paper.
 
     Args:
         negated: False when the paper has data for this topic, true when it does not.
-        evidence_record_ids: Verified evidence records. Required when negated is false,
-            optional when it is true.
+        evidence_record_ids: At least one verified evidence record. When negated is true,
+            cite the passage showing what the paper studies instead.
     """
 
     attempted_query = _attempt_query(
@@ -193,7 +185,7 @@ def _stage_topic_entity_tag_impl(
         {
             "negated": negated,
             "rationale": rationale,
-            "evidence_record_ids": evidence_record_ids or [],
+            "evidence_record_ids": evidence_record_ids,
         }
     )
     if proposal is None:
@@ -280,6 +272,20 @@ def _patch_topic_entity_tag_impl(
             attempted_query=attempted_query,
         )
 
+    if candidate.status == _DISCARDED:
+        return _invalid(
+            "This proposal was discarded; stage a new one.",
+            [
+                {
+                    "field_path": "candidate_id",
+                    "reason": "discarded_candidate",
+                    "message": "A discarded proposal cannot be changed.",
+                }
+            ],
+            action="patch",
+            attempted_query=attempted_query,
+        )
+
     current = candidate.staged_fields
     proposal, issues = _validated_proposal(
         {
@@ -352,7 +358,7 @@ def _discard_topic_entity_tag_impl(
 
 def _list_staged_topic_entity_tags_impl(
     include_discarded: bool = False,
-    limit: int = 50,
+    limit: int = _BUILDER_LIST_DEFAULT_LIMIT,
     offset: int = 0,
     workspace_revision: Optional[int] = None,
 ) -> AgrQueryResult:
@@ -416,19 +422,40 @@ def _finalize_topic_entity_tag_extraction_impl(candidate_ids: List[str]) -> AgrQ
         )
 
     workspace = get_active_extraction_builder_workspace()
+    # Check before the shared finalize step: its failure path rewrites candidate status,
+    # which would bring a discarded proposal back.
+    discarded = [
+        candidate_id
+        for candidate_id in candidate_ids
+        if (candidate := workspace.candidates.get(candidate_id)) is not None
+        and candidate.status == _DISCARDED
+    ]
+    if discarded:
+        return _invalid(
+            "A discarded proposal cannot be finalized; stage a new one.",
+            [
+                {
+                    "field_path": "candidate_ids",
+                    "reason": "discarded_candidate",
+                    "message": "A discarded proposal cannot be finalized.",
+                    "candidate_ids": discarded,
+                }
+            ],
+            action="finalize",
+            attempted_query=attempted_query,
+        )
+
     try:
         evidence_records = get_active_evidence_records_snapshot()
     except RuntimeError:
         evidence_records = []
 
-    # The materializer applies the evidence rule: only a positive proposal requires it.
     outcome = finalize_builder_extraction(
         workspace=workspace,
         candidate_ids=candidate_ids,
         materialize=materialize_topic_entity_tag_builder_state,
         evidence_records=evidence_records,
         materialized_candidate_prefix="topic-entity-tag-envelope",
-        require_evidence_record_ids=False,
     )
     if not outcome.ok:
         return _invalid(

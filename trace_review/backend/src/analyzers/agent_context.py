@@ -161,6 +161,8 @@ class AgentContextAnalyzer:
             tool_names = [t.get("name", "") for t in tools]
             if "stage_go_recommendation" in tool_names:
                 return "rgd_go_paper_curator"
+            if "stage_topic_entity_tag" in tool_names:
+                return "gene_expression_topic_tag"
             if any("ask_" in name for name in tool_names):
                 return "supervisor"
             if any("search_document" in name or "read_section" in name for name in tool_names):
@@ -175,6 +177,8 @@ class AgentContextAnalyzer:
             or "stage_go_recommendation" in instructions_lower
         ):
             return "rgd_go_paper_curator"
+        if "stage_topic_entity_tag" in instructions_lower:
+            return "gene_expression_topic_tag"
         if "supervisor" in instructions_lower or "route" in instructions_lower:
             return "supervisor"
         if "pdf" in instructions_lower or "document" in instructions_lower:

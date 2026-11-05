@@ -91,6 +91,25 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
             "rgd_go_paper_curator",
         )
 
+    def test_topic_tag_agent_precedes_generic_gene_expression_classification(self):
+        instructions = (
+            "You decide whether the document has gene expression data. Call "
+            "stage_topic_entity_tag once."
+        )
+
+        self.assertEqual(
+            AgentContextAnalyzer._identify_agent_type(instructions, []),
+            "gene_expression_topic_tag",
+        )
+
+    def test_topic_tag_agent_is_identified_from_tools_without_instructions(self):
+        tools = [{"name": "search_document"}, {"name": "stage_topic_entity_tag"}]
+
+        self.assertEqual(
+            AgentContextAnalyzer._identify_agent_type("", tools),
+            "gene_expression_topic_tag",
+        )
+
     def _make_trace(self, output):
         return {
             "id": "trace-1234",

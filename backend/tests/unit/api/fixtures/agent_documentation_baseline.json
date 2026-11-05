@@ -1047,19 +1047,18 @@
       {
         "description": "Decides whether the paper reports its own results on gene expression in wild-type organisms. A paper without that data gets a negated proposal, so the answer is recorded either way.",
         "example_query": "Does this paper have gene expression data?",
-        "example_result": "Returns one proposed tag for the topic gene expression in wild type, marked as negated or not, with its reasoning and quotes from the paper when it has the data.",
+        "example_result": "Returns one proposed tag for the topic gene expression in wild type, marked as negated or not, with its reasoning and a supporting quote from the paper.",
         "name": "Paper-level topic decision"
       }
     ],
     "data_sources": [
       {
         "data_types": [
-          "PDF text chunks",
-          "Section content",
-          "Subsection content"
+          "Paper text",
+          "Sections"
         ],
-        "description": "Hybrid semantic and keyword search over the loaded paper.",
-        "name": "PDF Document Search (Weaviate)",
+        "description": "Searches and reads the text of the paper you have open.",
+        "name": "The loaded paper",
         "species_supported": null
       }
     ],

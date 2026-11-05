@@ -692,7 +692,8 @@
         "topic": "ATP:0000041",
         "mod_abbreviation": "WB",
         "negated": false,
-        "rationale": "Synthetic rationale."
+        "rationale": "Synthetic rationale.",
+        "topic_name": "gene expression in wild type"
       }
     }
   ],

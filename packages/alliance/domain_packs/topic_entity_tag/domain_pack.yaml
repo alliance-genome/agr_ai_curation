@@ -7,7 +7,7 @@ status: in_development
 enum_definitions:
   - enum_id: TopicEntityTagTopic
     display_name: Topic
-    description: ATP topic term the tag is about.
+    description: The subject this tag says the paper has data about.
     values:
       - value: ATP:0000041
         label: gene expression in wild type
@@ -26,7 +26,8 @@ model_definitions:
       - LinkML has no topic/entity-tag model yet, so the contract is ABC's API plus ATP terms.
     metadata:
       display:
-        label: topic
+        label: topic_name
+        id: topic
 object_definitions:
   - object_type: topic_entity_tag
     display_name: Topic tag
@@ -41,7 +42,7 @@ object_definitions:
         review_policy:
           mode: fields
           decision_fields: [negated, note]
-        primary_label_field: topic
+        primary_label_field: topic_name
         summary_fields:
           - negated
           - reference_curie
@@ -49,6 +50,7 @@ object_definitions:
           - id: tag
             label: Topic tag
             fields:
+              - topic_name
               - topic
               - negated
               - rationale
@@ -64,6 +66,16 @@ object_definitions:
         enum_ref: TopicEntityTagTopic
         metadata:
           protected: true
+          system_filled: true
+      - field_path: topic_name
+        field_type: string
+        display_name: Topic name
+        required: true
+        description: The readable name of the topic.
+        metadata:
+          protected: true
+          system_filled: true
+          exported: false
       - field_path: negated
         field_type: boolean
         display_name: Negated (no data for this topic)
@@ -79,18 +91,21 @@ object_definitions:
         metadata:
           protected: true
           curator_action_note: Written by the extraction agent; not editable.
+          free_text: true
       - field_path: note
         field_type: string
         display_name: Note
         description: An optional note from the curator to keep with the tag.
         metadata:
           editable: true
+          free_text: true
       - field_path: reference_curie
         field_type: string
         display_name: ABC reference
         description: The paper's ABC reference ID, from the document record. A paper uploaded with no ABC reference shows this as blank and cannot be submitted to ABC.
         metadata:
           protected: true
+          exported: false
       - field_path: mod_abbreviation
         field_type: enum
         display_name: Data provider
@@ -99,11 +114,12 @@ object_definitions:
         enum_ref: TopicEntityTagMod
         metadata:
           protected: true
+          system_filled: true
 fixture_packs:
   - fixture_pack_id: wb_gene_expression
     display_name: WB gene-expression topic-tag proposals
     path: fixtures/wb_gene_expression.yaml
-    description: One positive and one negated WB ATP:0000041 proposal.
+    description: One positive and one negated WB gene-expression proposal.
     object_types:
       - topic_entity_tag
 metadata:
@@ -132,6 +148,16 @@ metadata:
       note: Optional curator entry.
     ai_curation_only:
       - rationale
+    display_only:
+      - topic_name
+    post_request_mapping:
+      reference_curie: From the document record.
+      topic: From this pack's configuration.
+      negated: From the curator's decision.
+      note: From the curator's entry; left out when blank.
+      tag_source_id: Decided at submission for the curator's data provider.
+      data_novelty: Decided at submission.
+      data_context: Decided at submission.
     decided_at_submission:
       - tag_source_id
       - data_novelty

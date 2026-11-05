@@ -191,6 +191,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/test_rgd_go_paper_curator_prompt_policy.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_topic_entity_tag_domain_pack.py"),
     Path("backend/tests/integration/persistence/test_topic_entity_tag_persistence.py"),
+    Path("backend/tests/integration/persistence/test_topic_entity_tag_review_lifecycle.py"),
     Path("backend/tests/unit/test_allele_extractor_mgi_prompt_policy.py"),
     Path("backend/tests/unit/lib/config/test_agent_access.py"),
     Path("backend/tests/unit/lib/config/test_bundled_alliance_package_aware_loaders.py"),

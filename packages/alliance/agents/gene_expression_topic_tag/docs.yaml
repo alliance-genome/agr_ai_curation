@@ -4,12 +4,12 @@ capabilities:
   - name: "Paper-level topic decision"
     description: "Decides whether the paper reports its own results on gene expression in wild-type organisms. A paper without that data gets a negated proposal, so the answer is recorded either way."
     example_query: "Does this paper have gene expression data?"
-    example_result: "Returns one proposed tag for the topic gene expression in wild type, marked as negated or not, with its reasoning and quotes from the paper when it has the data."
+    example_result: "Returns one proposed tag for the topic gene expression in wild type, marked as negated or not, with its reasoning and a supporting quote from the paper."
 data_sources:
-  - name: "PDF Document Search (Weaviate)"
-    description: "Hybrid semantic and keyword search over the loaded paper."
+  - name: "The loaded paper"
+    description: "Searches and reads the text of the paper you have open."
     species_supported: null
-    data_types: ["PDF text chunks", "Section content", "Subsection content"]
+    data_types: ["Paper text", "Sections"]
 use_when:
   - "When you want a proposed gene-expression topic tag for a paper, to review and sign off."
 avoid_when:

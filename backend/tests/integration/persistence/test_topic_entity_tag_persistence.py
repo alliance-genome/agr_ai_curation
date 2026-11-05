@@ -121,8 +121,13 @@ def _fields(row):
     return {field["field_path"]: field["value"] for field in row.metadata["workspace_fields"]}
 
 
-def test_negated_proposal_without_evidence_persists_to_one_review_row(db_session, monkeypatch):
-    payload = _proposal_payload(monkeypatch, negated=True, rationale="No expression data.")
+def test_negated_proposal_persists_to_one_review_row(db_session, monkeypatch):
+    payload = _proposal_payload(
+        monkeypatch,
+        negated=True,
+        rationale="No expression data.",
+        evidence_record_ids=["evidence-1"],
+    )
 
     rows = _persisted_rows(db_session, monkeypatch, payload, reference_curie=DOCUMENT_CURIE)
 
@@ -131,6 +136,7 @@ def test_negated_proposal_without_evidence_persists_to_one_review_row(db_session
     assert fields["negated"] is True
     assert fields["topic"] == "ATP:0000041"
     assert fields["reference_curie"] == DOCUMENT_CURIE
+    assert rows[0].metadata["evidence_record_ids"] == ["evidence-1"]
 
 
 def test_positive_proposal_for_an_upload_persists_with_evidence_and_blank_reference(
@@ -150,3 +156,91 @@ def test_positive_proposal_for_an_upload_persists_with_evidence_and_blank_refere
     assert fields["negated"] is False
     assert fields["reference_curie"] in (None, "")
     assert rows[0].metadata["evidence_record_ids"] == ["evidence-1"]
+
+
+@pytest.mark.parametrize("negated", [True, False])
+def test_flow_gates_accept_a_finalized_proposal(monkeypatch, negated):
+    from src.lib.curation_workspace.extraction_results import (
+        build_extraction_envelope_candidate_with_evidence,
+    )
+    from src.lib.flows import executor
+
+    payload = _proposal_payload(
+        monkeypatch, negated=negated, rationale="Reason.", evidence_record_ids=["evidence-1"]
+    )
+
+    candidate, evidence = build_extraction_envelope_candidate_with_evidence(
+        payload, agent_key="gene_expression_topic_tag", adapter_key="topic_entity_tag"
+    )
+
+    assert candidate is not None
+    assert evidence["evidence_count"] == 1
+    assert (
+        executor._flow_candidate_reject_reason(
+            candidate=candidate,
+            candidate_expected=True,
+            used_internal_extraction_payload=True,
+            adapter_key_resolved=True,
+            evidence_count=evidence["evidence_count"],
+        )
+        is None
+    )
+    audit = {
+        "candidateExpected": True,
+        "candidateBuilt": True,
+        "adapterKeyResolved": True,
+        "evidenceCount": evidence["evidence_count"],
+    }
+    assert executor._flow_expected_extraction_handoff_failures(
+        [{"extraction_handoff_audit": audit}]
+    ) == []
+
+
+def test_curator_edits_to_decision_fields_persist_and_protected_fields_are_refused(
+    db_session, monkeypatch
+):
+    from src.lib.domain_envelopes.patches import (
+        EnvelopeFieldPatch,
+        EnvelopeFieldPatchOperation,
+        EnvelopeFieldPatchStatus,
+        apply_curator_field_patch,
+    )
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    payload = _proposal_payload(
+        monkeypatch, negated=True, rationale="Reason.", evidence_record_ids=["evidence-1"]
+    )
+    rows = _persisted_rows(db_session, monkeypatch, payload, reference_curie=DOCUMENT_CURIE)
+    envelope_row = db_session.get(DomainEnvelopeModel, rows[0].envelope_id)
+    envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+
+    def patch(field_path, before, value):
+        return apply_curator_field_patch(
+            envelope,
+            pack,
+            EnvelopeFieldPatch(
+                envelope_id=envelope.envelope_id,
+                expected_revision=envelope_row.revision,
+                object_id=rows[0].object_id,
+                field_path=field_path,
+                before=before,
+                value=value,
+                operation=EnvelopeFieldPatchOperation.REPLACE,
+                reason="Curator decision",
+            ),
+            current_revision=envelope_row.revision,
+            actor_id="curator",
+            actor_display_name="Curator",
+        )
+
+    flipped = patch("negated", True, False)
+    noted = patch("note", None, "Checked by the curator.")
+
+    assert flipped.status == EnvelopeFieldPatchStatus.ACCEPTED
+    assert flipped.envelope.extracted_objects[0].payload["negated"] is False
+    assert noted.status == EnvelopeFieldPatchStatus.ACCEPTED
+    assert noted.envelope.extracted_objects[0].payload["note"] == "Checked by the curator."
+    assert patch("rationale", "Reason.", "Changed.").status == EnvelopeFieldPatchStatus.REJECTED
+    assert patch("topic", "ATP:0000041", "ATP:0000010").status == EnvelopeFieldPatchStatus.REJECTED

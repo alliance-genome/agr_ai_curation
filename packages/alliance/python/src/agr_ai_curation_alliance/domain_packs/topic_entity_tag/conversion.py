@@ -30,7 +30,10 @@ from .constants import (
     TOPIC_ENTITY_TAG_SCHEMA_PROVIDER,
     TOPIC_ENTITY_TAG_SCHEMA_URI,
     TOPIC_ENTITY_TAG_TOPIC,
+    TOPIC_ENTITY_TAG_TOPIC_NAME,
 )
+
+_DISCARDED = "discarded"
 
 
 def _schema_ref() -> SchemaRef:
@@ -141,6 +144,19 @@ def materialize_topic_entity_tag_builder_state(
             message="One paper gets one topic-tag proposal; finalize a single candidate.",
         )
 
+    if not ids and any(
+        candidate.status != _DISCARDED for candidate in getattr(workspace, "candidates", {}).values()
+    ):
+        return _failure(
+            ids,
+            field_path="candidate_ids",
+            reason="staged_topic_entity_tag_not_finalized",
+            message=(
+                "An empty finalize means the paper could not be assessed; "
+                "finalize or discard the staged proposal first."
+            ),
+        )
+
     normalized_records = normalize_workspace_records(evidence_records or [])
     curatable_objects: list[dict[str, Any]] = []
     retained_evidence_ids: tuple[str, ...] = ()
@@ -183,16 +199,17 @@ def materialize_topic_entity_tag_builder_state(
                 message="evidence_record_ids must reference records verified in this run.",
                 evidence_record_ids=unknown,
             )
-        if not negated and not evidence_ids:
+        if not evidence_ids:
             return _failure(
                 ids,
                 field_path="evidence_record_ids",
                 reason="missing_evidence_record_ids",
-                message="A positive proposal must cite at least one verified evidence record.",
+                message="A proposal must cite at least one verified evidence record.",
             )
 
         payload: dict[str, Any] = {
             "topic": TOPIC_ENTITY_TAG_TOPIC,
+            "topic_name": TOPIC_ENTITY_TAG_TOPIC_NAME,
             "mod_abbreviation": TOPIC_ENTITY_TAG_MOD_ABBREVIATION,
             "negated": negated,
             "rationale": rationale.strip(),

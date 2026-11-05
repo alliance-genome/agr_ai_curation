@@ -433,6 +433,7 @@ FREE_TEXT_RATIONALE_PACKS = {
     "agr.alliance.gene_expression",
     "agr.alliance.go",
     "agr.alliance.phenotype",
+    "agr.alliance.topic_entity_tag",
 }
 
 
