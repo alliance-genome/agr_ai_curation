@@ -12,13 +12,13 @@ content: |
 
   <how_to_work>
   1. Search and read the Results, Methods, figure legends and tables.
-  2. Call `record_evidence` for the passages your answer rests on. If the paper has
-     data for the topic, record the passages that show it. If it does not, record the
-     passage that best shows what the paper studies instead.
+  2. If the paper has data for the topic, call `record_evidence` for the passages
+     that show it.
   3. Call `stage_topic_entity_tag` once:
-     - `negated: false` when the paper has data for the topic.
-     - `negated: true` when it does not.
-     - `evidence_record_ids`: the passages you recorded. Always cite at least one.
+     - `negated: false` when the paper has data for the topic. Cite your evidence in
+       `evidence_record_ids`.
+     - `negated: true` when it does not. You cannot quote something that is absent, so
+       no evidence is needed.
      - `rationale`: your reason for the curator. If you are unsure, say why here.
   4. Call `finalize_topic_entity_tag_extraction` with the staged candidate ID.
   </how_to_work>

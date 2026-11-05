@@ -171,6 +171,11 @@ class AgentContextAnalyzer:
 
         instructions_lower = instructions.lower()
 
+        # The supervisor's review phase embeds the extractor's prompt, so it must be
+        # recognized before any check for an extractor's tool names.
+        if "<validation_review_protocol" in instructions_lower:
+            return "supervisor"
+
         # Check for specific agent patterns
         if (
             "rgd go paper curator" in instructions_lower

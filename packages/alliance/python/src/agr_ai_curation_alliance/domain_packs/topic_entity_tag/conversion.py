@@ -199,12 +199,12 @@ def materialize_topic_entity_tag_builder_state(
                 message="evidence_record_ids must reference records verified in this run.",
                 evidence_record_ids=unknown,
             )
-        if not evidence_ids:
+        if not negated and not evidence_ids:
             return _failure(
                 ids,
                 field_path="evidence_record_ids",
                 reason="missing_evidence_record_ids",
-                message="A proposal must cite at least one verified evidence record.",
+                message="A positive proposal must cite at least one verified evidence record.",
             )
 
         payload: dict[str, Any] = {

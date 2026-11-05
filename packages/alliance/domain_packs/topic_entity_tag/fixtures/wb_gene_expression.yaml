@@ -39,7 +39,7 @@ fixtures:
               section: Results
               chunk_id: chunk-1
   - name: wb_gene_expression_negated
-    description: The paper has no gene-expression data, so the proposal cites what it studies instead.
+    description: The paper has no gene-expression data, so the proposal cites no evidence.
     envelope:
       envelope_id: topic-entity-tag-wb-negated
       domain_pack_id: agr.alliance.topic_entity_tag
@@ -58,17 +58,6 @@ fixtures:
             mod_abbreviation: WB
             negated: true
             rationale: The Results and figures report no gene-expression experiments.
-          evidence_record_ids:
-            - evidence-2
-          metadata_refs:
-            - metadata_path: evidence_records[0]
-              role: verified_evidence
       metadata:
         extraction_metadata:
-          evidence_records:
-            - evidence_record_id: evidence-2
-              entity: study focus
-              verified_quote: We measured brood size and lifespan after dietary restriction.
-              page: 2
-              section: Results
-              chunk_id: chunk-2
+          evidence_records: []

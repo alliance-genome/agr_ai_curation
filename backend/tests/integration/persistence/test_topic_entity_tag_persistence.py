@@ -57,12 +57,12 @@ def db_session():
         db.rollback()
 
 
-def _proposal_payload(monkeypatch, **stage_args):
+def _proposal_payload(monkeypatch, *, run_evidence=EVIDENCE, **stage_args):
     workspace = ExtractionBuilderWorkspace(
         run_id=f"topic-tag-{uuid4()}", agent_id="gene_expression_topic_tag"
     )
     monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
-    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: EVIDENCE)
+    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: run_evidence)
     monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_event: None)
     staged = tools._stage_topic_entity_tag_impl(**stage_args)
     assert staged.status == "ok", staged.message
@@ -121,13 +121,8 @@ def _fields(row):
     return {field["field_path"]: field["value"] for field in row.metadata["workspace_fields"]}
 
 
-def test_negated_proposal_persists_to_one_review_row(db_session, monkeypatch):
-    payload = _proposal_payload(
-        monkeypatch,
-        negated=True,
-        rationale="No expression data.",
-        evidence_record_ids=["evidence-1"],
-    )
+def test_negated_proposal_without_evidence_persists_to_one_review_row(db_session, monkeypatch):
+    payload = _proposal_payload(monkeypatch, negated=True, rationale="No expression data.")
 
     rows = _persisted_rows(db_session, monkeypatch, payload, reference_curie=DOCUMENT_CURIE)
 
@@ -136,7 +131,7 @@ def test_negated_proposal_persists_to_one_review_row(db_session, monkeypatch):
     assert fields["negated"] is True
     assert fields["topic"] == "ATP:0000041"
     assert fields["reference_curie"] == DOCUMENT_CURIE
-    assert rows[0].metadata["evidence_record_ids"] == ["evidence-1"]
+    assert rows[0].metadata["evidence_record_ids"] == []
 
 
 def test_positive_proposal_for_an_upload_persists_with_evidence_and_blank_reference(
@@ -158,42 +153,53 @@ def test_positive_proposal_for_an_upload_persists_with_evidence_and_blank_refere
     assert rows[0].metadata["evidence_record_ids"] == ["evidence-1"]
 
 
-@pytest.mark.parametrize("negated", [True, False])
-def test_flow_gates_accept_a_finalized_proposal(monkeypatch, negated):
+def test_flow_gates_accept_a_negated_proposal_without_evidence(monkeypatch):
     from src.lib.curation_workspace.extraction_results import (
         build_extraction_envelope_candidate_with_evidence,
     )
     from src.lib.flows import executor
 
     payload = _proposal_payload(
-        monkeypatch, negated=negated, rationale="Reason.", evidence_record_ids=["evidence-1"]
+        monkeypatch, run_evidence=[], negated=True, rationale="No expression data."
     )
-
     candidate, evidence = build_extraction_envelope_candidate_with_evidence(
         payload, agent_key="gene_expression_topic_tag", adapter_key="topic_entity_tag"
     )
 
     assert candidate is not None
-    assert evidence["evidence_count"] == 1
+    assert evidence["evidence_count"] == 0
+    assert executor._flow_candidate_evidence_optional(candidate) is True
     assert (
         executor._flow_candidate_reject_reason(
             candidate=candidate,
             candidate_expected=True,
             used_internal_extraction_payload=True,
             adapter_key_resolved=True,
-            evidence_count=evidence["evidence_count"],
+            evidence_count=0,
+            evidence_optional=True,
         )
         is None
     )
-    audit = {
-        "candidateExpected": True,
-        "candidateBuilt": True,
-        "adapterKeyResolved": True,
-        "evidenceCount": evidence["evidence_count"],
-    }
-    assert executor._flow_expected_extraction_handoff_failures(
-        [{"extraction_handoff_audit": audit}]
-    ) == []
+
+
+def test_flow_gates_do_not_excuse_other_adapters_or_positive_proposals(monkeypatch):
+    from src.lib.curation_workspace.extraction_results import (
+        build_extraction_envelope_candidate_with_evidence,
+    )
+    from src.lib.flows import executor
+
+    payload = _proposal_payload(
+        monkeypatch, negated=False, rationale="Reports.", evidence_record_ids=["evidence-1"]
+    )
+    positive, _ = build_extraction_envelope_candidate_with_evidence(
+        payload, agent_key="gene_expression_topic_tag", adapter_key="topic_entity_tag"
+    )
+    other_adapter, _ = build_extraction_envelope_candidate_with_evidence(
+        payload, agent_key="gene_extractor", adapter_key="gene"
+    )
+
+    assert executor._flow_candidate_evidence_optional(positive) is False
+    assert executor._flow_candidate_evidence_optional(other_adapter) is False
 
 
 def test_curator_edits_to_decision_fields_persist_and_protected_fields_are_refused(
@@ -208,9 +214,7 @@ def test_curator_edits_to_decision_fields_persist_and_protected_fields_are_refus
     from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
     from src.schemas.domain_envelope import DomainEnvelope
 
-    payload = _proposal_payload(
-        monkeypatch, negated=True, rationale="Reason.", evidence_record_ids=["evidence-1"]
-    )
+    payload = _proposal_payload(monkeypatch, negated=True, rationale="Reason.")
     rows = _persisted_rows(db_session, monkeypatch, payload, reference_curie=DOCUMENT_CURIE)
     envelope_row = db_session.get(DomainEnvelopeModel, rows[0].envelope_id)
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)

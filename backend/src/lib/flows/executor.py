@@ -101,6 +101,7 @@ from src.lib.flows.unavailable_steps import (
     flow_step_unavailable_reason_code,
 )
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
+from src.lib.domain_packs.evidence_policy import records_may_omit_evidence
 from src.lib.domain_packs.flow_validator_selection import (
     effective_flow_validation_groups,
     set_flow_validator_selections,
@@ -1462,6 +1463,20 @@ def _is_finalized_empty_extraction(payload: Any, finalization: Any) -> bool:
     return not envelope.extracted_objects
 
 
+def _flow_candidate_evidence_optional(candidate: ExtractionEnvelopeCandidate) -> bool:
+    """Return whether this candidate's pack declares that its records need no evidence."""
+
+    adapter_key = _resolve_flow_candidate_adapter_key(candidate)
+    if adapter_key is None or not isinstance(candidate.payload_json, Mapping):
+        return False
+    from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
+
+    domain_pack = load_curation_adapter_registry().get_domain_pack(adapter_key)
+    if domain_pack is None:
+        return False
+    return records_may_omit_evidence(candidate.payload_json, domain_pack.metadata)
+
+
 def _flow_candidate_reject_reason(
     *,
     candidate: ExtractionEnvelopeCandidate | None,
@@ -1470,13 +1485,19 @@ def _flow_candidate_reject_reason(
     adapter_key_resolved: bool,
     evidence_count: int,
     finalized_empty_extraction: bool = False,
+    evidence_optional: bool = False,
 ) -> str | None:
     """Explain the coarse handoff outcome without inspecting full payload values."""
 
     if candidate is not None:
         if candidate_expected and not adapter_key_resolved:
             return "missing_adapter_key"
-        if candidate_expected and evidence_count <= 0 and not finalized_empty_extraction:
+        if (
+            candidate_expected
+            and evidence_count <= 0
+            and not finalized_empty_extraction
+            and not evidence_optional
+        ):
             return "evidence_records_empty"
         return None
     if not candidate_expected:
@@ -1557,7 +1578,11 @@ def _flow_expected_extraction_handoff_failures(
             reason = str(audit.get("candidateRejectReason") or "no_extraction_candidate")
         elif audit.get("adapterKeyResolved") is not True:
             reason = "missing_adapter_key"
-        elif evidence_count <= 0 and audit.get("finalizedEmptyExtraction") is not True:
+        elif (
+            evidence_count <= 0
+            and audit.get("finalizedEmptyExtraction") is not True
+            and audit.get("evidenceOptional") is not True
+        ):
             reason = "evidence_records_empty"
 
         if reason is None:
@@ -2433,6 +2458,11 @@ def get_all_agent_tools(
                 if candidate is not None
                 else bool(curation_adapter_key)
             )
+            evidence_optional = (
+                candidate is not None
+                and evidence_count <= 0
+                and _flow_candidate_evidence_optional(candidate)
+            )
             candidate_reject_reason = _flow_candidate_reject_reason(
                 candidate=candidate,
                 candidate_expected=candidate_expected,
@@ -2442,6 +2472,7 @@ def get_all_agent_tools(
                 finalized_empty_extraction=(
                     internal_lookup_audit.get("finalizedEmptyExtraction") is True
                 ),
+                evidence_optional=evidence_optional,
             )
             if (
                 candidate is not None
@@ -2463,6 +2494,7 @@ def get_all_agent_tools(
                     "candidateRejectReason": candidate_reject_reason,
                     "adapterKeyResolved": adapter_key_resolved,
                     "evidenceCount": evidence_count,
+                    "evidenceOptional": evidence_optional,
                     "persistenceAttempted": False,
                     "persistedResultCount": None,
                 }

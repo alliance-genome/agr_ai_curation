@@ -1081,8 +1081,8 @@ tools:
             description: The agent's reason for the curator, including any doubt.
           - name: evidence_record_ids
             type: array
-            required: true
-            description: The passages the agent's answer rests on. At least one is always required.
+            required: false
+            description: The passages showing the paper has data for the topic. Not needed when it has none.
   - tool_id: patch_topic_entity_tag
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.topic_entity_tag_builder_tools:patch_topic_entity_tag

@@ -38,6 +38,9 @@ object_definitions:
       - Review-only proposal for a curator to sign off. Nothing here writes to ABC.
     metadata:
       object_role: curatable_unit
+      # The absence of data for a topic cannot be quoted from a paper.
+      evidence_optional_when:
+        negated: true
       workspace_display:
         review_policy:
           mode: fields

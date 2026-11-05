@@ -794,6 +794,29 @@ def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
     }
 
 
+def test_evidence_gates_honor_a_declared_exception_and_nothing_else():
+    from src.lib.flows import executor
+
+    audit = {"candidateExpected": True, "candidateBuilt": True, "adapterKeyResolved": True,
+             "evidenceCount": 0}
+
+    assert executor._flow_candidate_reject_reason(
+        candidate=object(), candidate_expected=True, used_internal_extraction_payload=True,
+        adapter_key_resolved=True, evidence_count=0, evidence_optional=True,
+    ) is None
+    assert executor._flow_candidate_reject_reason(
+        candidate=object(), candidate_expected=True, used_internal_extraction_payload=True,
+        adapter_key_resolved=True, evidence_count=0,
+    ) == "evidence_records_empty"
+    assert executor._flow_expected_extraction_handoff_failures(
+        [{"extraction_handoff_audit": {**audit, "evidenceOptional": True}}]
+    ) == []
+    failures = executor._flow_expected_extraction_handoff_failures(
+        [{"extraction_handoff_audit": audit}]
+    )
+    assert [failure["reason"] for failure in failures] == ["evidence_records_empty"]
+
+
 def _finalized_empty_step(monkeypatch=None):
     from src.lib.openai_agents.extraction_builder_workspace import (
         ExtractionBuilderWorkspace, build_internal_extraction_result_event,

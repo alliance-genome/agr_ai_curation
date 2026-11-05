@@ -39,17 +39,6 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
 
 from agr_ai_curation_alliance.tools import topic_entity_tag_builder_tools as tools  # noqa: E402
 
-EVIDENCE = [
-    {
-        "evidence_record_id": "evidence-1",
-        "entity": "study focus",
-        "verified_quote": "We measured lifespan after dietary restriction.",
-        "page": 2,
-        "section": "Results",
-        "chunk_id": "chunk-1",
-    }
-]
-
 
 @pytest.mark.asyncio
 async def test_review_of_a_proposal_without_validators_reaches_a_ready_state(
@@ -60,11 +49,9 @@ async def test_review_of_a_proposal_without_validators_reaches_a_ready_state(
         run_id=f"topic-tag-{uuid4()}", agent_id="gene_expression_topic_tag"
     )
     monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
-    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: EVIDENCE)
+    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
     monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_event: None)
-    staged = tools._stage_topic_entity_tag_impl(
-        negated=True, rationale="No expression data.", evidence_record_ids=["evidence-1"]
-    )
+    staged = tools._stage_topic_entity_tag_impl(negated=True, rationale="No expression data.")
     assert tools._finalize_topic_entity_tag_extraction_impl([staged.data["candidate_id"]]).status == "ok"
     record = CurationExtractionResultRecord.model_validate(
         {

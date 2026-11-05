@@ -62,7 +62,7 @@ class _StrictToolModel(BaseModel):
 class TopicEntityTagInput(_StrictToolModel):
     negated: StrictBool
     rationale: StrictStr
-    evidence_record_ids: List[StrictStr] = Field(min_length=1)
+    evidence_record_ids: List[StrictStr] = Field(default_factory=list)
 
     @field_validator("rationale")
     @classmethod
@@ -147,9 +147,18 @@ def _pydantic_issues(exc: ValidationError) -> list[dict[str, Any]]:
 
 def _validated_proposal(raw: Mapping[str, Any]) -> tuple[TopicEntityTagInput | None, list[dict[str, Any]]]:
     try:
-        return TopicEntityTagInput(**raw), []
+        proposal = TopicEntityTagInput(**raw)
     except ValidationError as exc:
         return None, _pydantic_issues(exc)
+    if not proposal.negated and not proposal.evidence_record_ids:
+        return None, [
+            {
+                "field_path": "evidence_record_ids",
+                "reason": "missing_evidence_record_ids",
+                "message": "A positive proposal must cite at least one verified evidence record.",
+            }
+        ]
+    return proposal, []
 
 
 def _staged_fields(proposal: TopicEntityTagInput) -> dict[str, Any]:
@@ -165,14 +174,14 @@ def _staged_fields(proposal: TopicEntityTagInput) -> dict[str, Any]:
 def _stage_topic_entity_tag_impl(
     negated: bool,
     rationale: str,
-    evidence_record_ids: List[str],
+    evidence_record_ids: Optional[List[str]] = None,
 ) -> AgrQueryResult:
     """Stage the single topic-tag proposal for this paper.
 
     Args:
         negated: False when the paper has data for this topic, true when it does not.
-        evidence_record_ids: At least one verified evidence record. When negated is true,
-            cite the passage showing what the paper studies instead.
+        evidence_record_ids: Verified evidence records. Required when negated is false.
+            When negated is true, the absence of data cannot be quoted, so this is optional.
     """
 
     attempted_query = _attempt_query(
@@ -185,7 +194,7 @@ def _stage_topic_entity_tag_impl(
         {
             "negated": negated,
             "rationale": rationale,
-            "evidence_record_ids": evidence_record_ids,
+            "evidence_record_ids": evidence_record_ids or [],
         }
     )
     if proposal is None:
@@ -427,7 +436,7 @@ def _finalize_topic_entity_tag_extraction_impl(candidate_ids: List[str]) -> AgrQ
     discarded = [
         candidate_id
         for candidate_id in candidate_ids
-        if (candidate := workspace.candidates.get(candidate_id)) is not None
+        if (candidate := workspace.candidates.get(candidate_id.strip())) is not None
         and candidate.status == _DISCARDED
     ]
     if discarded:
@@ -456,6 +465,8 @@ def _finalize_topic_entity_tag_extraction_impl(candidate_ids: List[str]) -> AgrQ
         materialize=materialize_topic_entity_tag_builder_state,
         evidence_records=evidence_records,
         materialized_candidate_prefix="topic-entity-tag-envelope",
+        # The materializer applies the rule: only a positive proposal requires evidence.
+        require_evidence_record_ids=False,
     )
     if not outcome.ok:
         return _invalid(

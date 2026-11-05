@@ -145,21 +145,29 @@ def _field_value(row, field_path: str) -> Any:
     raise AssertionError(f"{field_path} is not on the review row")
 
 
-def test_negated_proposal_keeps_its_evidence_on_one_review_row(bound_tools):
+def test_negated_proposal_without_evidence_reaches_one_review_row(bound_tools):
     curatable_object = _finalized_object(
-        bound_tools,
-        negated=True,
-        rationale="No expression data in this paper.",
-        evidence_record_ids=["evidence-1"],
+        bound_tools, negated=True, rationale="No expression data in this paper."
     )
 
     rows = _review_rows(curatable_object, DOCUMENT_CURIE)
 
-    assert curatable_object["evidence_record_ids"] == ["evidence-1"]
+    assert curatable_object["evidence_record_ids"] == []
     assert len(rows) == 1
     assert _field_value(rows[0], "negated") is True
     assert _field_value(rows[0], "rationale") == "No expression data in this paper."
     assert rows[0].display_label == "gene expression in wild type"
+
+
+def test_negated_proposal_may_still_cite_evidence(bound_tools):
+    curatable_object = _finalized_object(
+        bound_tools,
+        negated=True,
+        rationale="The authors state they did not examine expression.",
+        evidence_record_ids=["evidence-1"],
+    )
+
+    assert curatable_object["evidence_record_ids"] == ["evidence-1"]
 
 
 def test_positive_proposal_keeps_evidence_and_abc_values(bound_tools):
@@ -217,15 +225,30 @@ def test_upload_without_a_reference_still_gets_a_review_row_with_a_blank_referen
     assert _field_value(rows[0], "reference_curie") in (None, "")
 
 
-@pytest.mark.parametrize("negated", [True, False])
-def test_stage_rejects_a_proposal_without_evidence(bound_tools, negated):
-    result = tools._stage_topic_entity_tag_impl(
-        negated=negated, rationale="Reason.", evidence_record_ids=[]
-    )
+def test_stage_rejects_positive_proposal_without_evidence(bound_tools):
+    result = tools._stage_topic_entity_tag_impl(negated=False, rationale="Reports expression.")
 
     assert result.status == "error"
     assert result.data["validation_issues"][0]["field_path"] == "evidence_record_ids"
     assert bound_tools.candidates == {}
+
+
+def test_materializer_rejects_positive_proposal_without_evidence():
+    workspace = _workspace("topic-tag-no-evidence")
+    workspace.upsert_candidate(
+        candidate_id="candidate-1",
+        staged_fields={"negated": False, "rationale": "Reports expression."},
+        pending_ref_ids=["ref-1"],
+        evidence_record_ids=[],
+        status="valid",
+    )
+
+    result = materialize_topic_entity_tag_builder_state(
+        workspace=workspace, candidate_ids=["candidate-1"], evidence_records=[]
+    )
+
+    assert not result.ok
+    assert [issue["reason"] for issue in result.issues] == ["missing_evidence_record_ids"]
 
 
 @pytest.mark.parametrize(
@@ -302,15 +325,13 @@ def test_materializer_rejects_unknown_evidence_record():
     assert [issue["reason"] for issue in result.issues] == ["unknown_evidence_record_id"]
 
 
-def test_finalize_negated_proposal_with_evidence_succeeds(bound_tools):
-    staged = tools._stage_topic_entity_tag_impl(
-        negated=True, rationale="None.", evidence_record_ids=["evidence-1"]
-    )
+def test_finalize_negated_proposal_without_evidence_succeeds(bound_tools):
+    staged = tools._stage_topic_entity_tag_impl(negated=True, rationale="None.")
 
     result = tools._finalize_topic_entity_tag_extraction_impl([staged.data["candidate_id"]])
 
     assert result.status == "ok", result.message
-    assert bound_tools.finalization.evidence_record_ids == ("evidence-1",)
+    assert bound_tools.finalization.evidence_record_ids == ()
 
 
 def test_empty_finalize_succeeds_with_no_record(bound_tools):
@@ -349,14 +370,29 @@ def test_discarded_proposal_cannot_be_finalized_or_patched_back(bound_tools):
     assert bound_tools.finalization is None
 
 
+def test_padded_id_cannot_finalize_a_discarded_proposal(bound_tools):
+    staged = tools._stage_topic_entity_tag_impl(negated=True, rationale="None.")
+    candidate_id = staged.data["candidate_id"]
+    tools._discard_topic_entity_tag_impl(candidate_id=candidate_id)
+
+    result = tools._finalize_topic_entity_tag_extraction_impl([f"{candidate_id} "])
+
+    assert result.status == "error"
+    assert result.data["validation_issues"][0]["reason"] == "discarded_candidate"
+    assert bound_tools.finalization is None
+
+
 def test_patch_can_flip_negated_and_keeps_the_evidence_rule(bound_tools):
     staged = tools._stage_topic_entity_tag_impl(
         negated=True, rationale="None.", evidence_record_ids=["evidence-1"]
     )
     candidate_id = staged.data["candidate_id"]
 
-    rejected = tools._patch_topic_entity_tag_impl(candidate_id=candidate_id, evidence_record_ids=[])
-    accepted = tools._patch_topic_entity_tag_impl(candidate_id=candidate_id, negated=False)
+    tools._patch_topic_entity_tag_impl(candidate_id=candidate_id, evidence_record_ids=[])
+    rejected = tools._patch_topic_entity_tag_impl(candidate_id=candidate_id, negated=False)
+    accepted = tools._patch_topic_entity_tag_impl(
+        candidate_id=candidate_id, negated=False, evidence_record_ids=["evidence-1"]
+    )
 
     assert rejected.status == "error"
     assert accepted.status == "ok"
@@ -389,9 +425,14 @@ def test_pack_loads_with_valid_fixture_and_no_validators():
     assert {obj.payload["negated"] for obj in objects} == {True, False}
     for obj in objects:
         assert set(obj.payload) - AI_CURATION_ONLY_FIELDS <= ABC_VALIDATE_FIELDS
-        assert obj.evidence_record_ids
         assert "reference_curie" not in obj.payload
     assert pack.metadata.metadata["validators"]["active"] == []
+    definition = next(
+        item
+        for item in pack.metadata.object_definitions
+        if item.object_type == TOPIC_ENTITY_TAG_OBJECT_TYPE
+    )
+    assert definition.metadata["evidence_optional_when"] == {"negated": True}
 
 
 def test_pack_pins_the_abc_and_atp_contract():

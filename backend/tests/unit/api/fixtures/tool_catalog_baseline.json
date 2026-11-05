@@ -6013,9 +6013,9 @@
           "type": "string"
         },
         {
-          "description": "The passages the agent's answer rests on. At least one is always required.",
+          "description": "The passages showing the paper has data for the topic. Not needed when it has none.",
           "name": "evidence_record_ids",
-          "required": true,
+          "required": false,
           "type": "array"
         }
       ],
