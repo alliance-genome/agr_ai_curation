@@ -123,3 +123,82 @@ async def test_review_of_a_proposal_without_validators_reaches_a_ready_state(
     assert response["ready"] is True
     assert admission.status(scope, episode_id)["ready"] is True
     assert latest_publication_reference(scope, artifact_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_negated_proposal_opens_as_a_curation_session_and_can_be_signed_off(
+    scope, migrated, monkeypatch
+):
+    from sqlalchemy import select
+
+    from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
+    from src.lib.curation_workspace.extraction_results import persist_extraction_result
+    from src.lib.curation_workspace.models import CurationCandidate
+    from src.lib.curation_workspace.session_mutation_service import decide_candidate
+    from src.models.sql.database import SessionLocal
+    from src.schemas.curation_workspace import (
+        CurationCandidateAction,
+        CurationCandidateDecisionRequest,
+        CurationExtractionPersistenceRequest,
+        CurationExtractionSourceKind,
+    )
+
+    workspace = ExtractionBuilderWorkspace(
+        run_id=f"topic-tag-{uuid4()}", agent_id="gene_expression_topic_tag"
+    )
+    monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", lambda: [])
+    monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_event: None)
+    staged = tools._stage_topic_entity_tag_impl(negated=True, rationale="No expression data.")
+    assert tools._finalize_topic_entity_tag_extraction_impl([staged.data["candidate_id"]]).status == "ok"
+
+    flow_run_id = str(uuid4())
+    origin_session_id = str(uuid4())
+    with SessionLocal() as db:
+        record = persist_extraction_result(
+            CurationExtractionPersistenceRequest(
+                document_id=scope.document_id,
+                agent_key="gene_expression_topic_tag",
+                adapter_key="topic_entity_tag",
+                source_kind=CurationExtractionSourceKind.FLOW,
+                flow_run_id=flow_run_id,
+                origin_session_id=origin_session_id,
+                user_id=scope.owner_id,
+                candidate_count=1,
+                payload_json=workspace.finalization.payload,
+            ),
+            db=db,
+        ).extraction_result
+        db.commit()
+
+        result = await run_flow_curation_handoff(
+            extraction_results=[record],
+            document_id=scope.document_id,
+            runner_user_id=scope.owner_id,
+            active_groups=("WB",),
+            flow_run_id=flow_run_id,
+            origin_session_id=origin_session_id,
+            conversation_summary="One negated proposal",
+            db=db,
+        )
+
+        assert len(result.review_session_ids) == 1
+        session_id = result.review_session_ids[0]
+        candidates = list(
+            db.scalars(select(CurationCandidate).where(CurationCandidate.session_id == session_id))
+        )
+        assert len(candidates) == 1
+
+        decision = decide_candidate(
+            db,
+            candidates[0].id,
+            CurationCandidateDecisionRequest(
+                session_id=str(session_id),
+                candidate_id=str(candidates[0].id),
+                action=CurationCandidateAction.ACCEPT,
+            ),
+            {"sub": scope.owner_id},
+        )
+        db.rollback()
+
+    assert decision.candidate.status.value == "accepted"

@@ -522,7 +522,6 @@ export function withMissingEvidenceReviewAndCurateTargets(
   const nextMessages = messages.map((message) => {
     if (
       message.role !== 'assistant'
-      || (message.evidenceRecords?.length ?? 0) === 0
       || message.reviewAndCurateTarget
       || message.evidenceCurationSupported !== true
       || !message.evidenceCurationAdapterKey

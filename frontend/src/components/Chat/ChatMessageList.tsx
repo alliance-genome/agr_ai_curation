@@ -2,6 +2,7 @@ import type { RefObject } from 'react'
 
 import { useTheme } from '@mui/material/styles'
 
+import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 
 import EvidenceCard from './EvidenceCard'
@@ -168,6 +169,23 @@ function ChatMessageList({
                     evidenceRecords={message.evidenceRecords ?? []}
                     reviewAndCurateTarget={message.reviewAndCurateTarget}
                     onReviewAndCurateClick={handleEvidenceReviewAndCurateClick}
+                  />
+                ) : message.reviewAndCurateTarget && message.evidenceCurationSupported === true ? (
+                  <ReviewAndCurateButton
+                    sessionId={message.reviewAndCurateTarget.sessionId}
+                    documentId={message.reviewAndCurateTarget.documentId}
+                    flowRunId={message.reviewAndCurateTarget.flowRunId}
+                    originSessionId={message.reviewAndCurateTarget.originSessionId}
+                    adapterKeys={message.reviewAndCurateTarget.adapterKeys}
+                    size="small"
+                    variant="outlined"
+                    label="Review & Curate"
+                    sx={{ alignSelf: 'flex-start', mt: 1 }}
+                    onOpened={(curationSessionId) => {
+                      if (message.id) {
+                        onReviewAndCurateOpened(message.id, curationSessionId)
+                      }
+                    }}
                   />
                 ) : null}
               </div>

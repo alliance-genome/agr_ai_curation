@@ -20,6 +20,28 @@ const evidenceRecord: EvidenceRecord = {
 }
 
 describe('chatMessageUtils', () => {
+  it('builds a review target for a supported message with no evidence', () => {
+    const nextMessages = withMissingEvidenceReviewAndCurateTargets(
+      [
+        {
+          role: 'assistant',
+          content: 'No data for the topic.',
+          timestamp: new Date(),
+          evidenceCurationSupported: true,
+          evidenceCurationAdapterKey: 'topic_entity_tag',
+        } as Message,
+      ],
+      'document-1',
+      'session-1',
+    )
+
+    expect(nextMessages[0].reviewAndCurateTarget).toEqual({
+      documentId: 'document-1',
+      originSessionId: 'session-1',
+      adapterKeys: ['topic_entity_tag'],
+    })
+  })
+
   beforeEach(() => {
     localStorage.clear()
     vi.restoreAllMocks()
