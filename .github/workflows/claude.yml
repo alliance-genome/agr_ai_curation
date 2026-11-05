@@ -180,10 +180,11 @@ jobs:
             ## Code for Mechanics, LLM for Meaning
             Check every changed step against section 8 of `AGENTS.md` in both directions. A model turn
             spent on mechanical work that code could do is a finding, and so is code that makes a semantic
-            call. Regular expressions, keyword or word lists, or similarity matching run over biological
-            text, and hardcoded name lists used to recognize meaning in free text, are blocking. A change
-            that settles a gray zone without a recorded maintainer decision is also blocking: name the gray
-            zone and the options in the finding.
+            call. Regular expressions, keyword or word lists, or similarity matching used to recognize or
+            judge meaning in biological text, and hardcoded name lists used the same way, are blocking.
+            Locating or verifying copied text, such as source-copy checks, is mechanics. A change
+            that settles a gray zone without a maintainer decision recorded in the PR description is also
+            blocking: name the gray zone and the options in the finding.
 
             ## Output Format
 

@@ -234,16 +234,20 @@ Some steps sit on the line. Validator lookups are the standing example: a unique
 exact match on an identifier is mechanical, while choosing among near matches
 or applying curator rules is semantic. When you find a gray zone, do not settle
 it silently in either direction. Name it in the ticket, workpad, or PR, set out
-the options, and get a maintainer's decision before building it.
+the options, and get a maintainer's decision before building it. Record the
+decision in the PR description so reviewers can verify it. Gray zones in code
+the change does not touch are noted, not blocking.
 
 Never handle meaning with text tricks. Regular expressions, keyword or word
-lists, and substring or similarity matching run over biological sentences are
-prohibited, and so are hardcoded lists of every possible validator, agent, gene,
-or term name used to recognize them in free text. They look deterministic, but
-they are guesses about meaning that break on the next paper. Use structural
-signals instead (identifiers, schema fields, explicit metadata, database
-records), or give the case to the LLM. If neither fits, it is a gray zone:
-raise it.
+lists, and substring or similarity matching run over biological sentences to
+recognize or judge meaning are prohibited, and so are hardcoded lists of every
+possible validator, agent, gene, or term name used to recognize them in free
+text. They look deterministic, but they are guesses about meaning that break on
+the next paper. Use structural signals instead (identifiers, schema fields,
+explicit metadata, database records), or give the case to the LLM. If neither
+fits, it is a gray zone: raise it. Locating or verifying copied text, such as
+exact source-copy checks and quote localization for highlighting, is mechanics
+and stays allowed.
 
 ## 9) Shared Implementation and Review Policies
 
