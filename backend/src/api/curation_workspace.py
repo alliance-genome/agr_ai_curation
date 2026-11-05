@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 import logging
 from typing import Annotated, Any, Callable, NoReturn, TypeVar
@@ -646,9 +647,11 @@ async def get_review_session(
     db: Session = Depends(get_db),
 ) -> CurationReviewSession | CurationWorkspaceResponse:
     await provision_user_async(principal_from_claims(user))
+    # Building the workspace reads and serializes megabytes; keep it off the
+    # single worker's event loop so other users' requests are not stalled.
     if include_workspace:
-        return get_session_workspace(db, session_id)
-    return get_session_detail(db, session_id)
+        return await asyncio.to_thread(get_session_workspace, db, session_id)
+    return await asyncio.to_thread(get_session_detail, db, session_id)
 
 
 @router.get(

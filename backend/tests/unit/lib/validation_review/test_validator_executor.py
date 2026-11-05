@@ -302,7 +302,9 @@ async def test_advance_prepares_selected_inputs_only_when_a_binding_depends_on_a
 
     adapter = ValidatorAdapter.__new__(ValidatorAdapter)
     adapter.plan = {"matches": {"target": {}}}
-    adapter.match = Mock(return_value=SimpleNamespace(binding=SimpleNamespace(runs_after=runs_after)))
+    adapter.current_matches = Mock(
+        return_value={"target": SimpleNamespace(binding=SimpleNamespace(runs_after=runs_after))}
+    )
     adapter.attempted_targets = {"target"}
     adapter.prepare_inputs = Mock()
     assert await adapter.advance(Mock()) == []

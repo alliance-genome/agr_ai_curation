@@ -63,6 +63,32 @@ class _TransactionSpy:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include_workspace", [True, False])
+async def test_get_review_session_builds_response_off_the_event_loop(monkeypatch, include_workspace):
+    import threading
+
+    loop_thread = threading.get_ident()
+    calls = []
+
+    def build(db, session_id):
+        calls.append(threading.get_ident())
+        return {"session_id": str(session_id)}
+
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
+    monkeypatch.setattr(module, "get_session_workspace", build)
+    monkeypatch.setattr(module, "get_session_detail", build)
+    session_id = uuid4()
+
+    result = await module.get_review_session(
+        session_id=session_id, include_workspace=include_workspace, user={"sub": "curator-1"}, db=object()
+    )
+
+    assert result == {"session_id": str(session_id)}
+    assert len(calls) == 1
+    assert calls[0] != loop_thread
+
+
+@pytest.mark.asyncio
 async def test_get_benchmark_destinations_returns_only_display_safe_configuration(monkeypatch):
     expected = CurationBenchmarkDestinationListResponse(
         destinations=[
