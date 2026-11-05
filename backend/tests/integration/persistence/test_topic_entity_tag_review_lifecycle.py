@@ -1,6 +1,7 @@
-"""A topic-tag proposal has no validators, and its review can still finish (ALL-1461).
+"""Records with no validators can still be reviewed and signed off (ALL-1461).
 
-The review waits for one explicit acceptance of the extraction itself.
+A topic-tag review waits for one explicit acceptance of the extraction itself.
+PDF extractor records take the same Accept path, and export still needs a published review.
 """
 
 from datetime import datetime, timezone
@@ -208,3 +209,133 @@ async def test_negated_proposal_opens_as_a_curation_session_and_can_be_signed_of
 
     assert decision.candidate.status.value == "accepted"
     assert decision.candidate.has_active_validators is False
+
+
+@pytest.mark.asyncio
+async def test_accepting_a_record_with_no_validators_does_not_skip_the_review_export_needs(
+    scope, migrated, monkeypatch
+):
+    from sqlalchemy import select
+
+    from agr_ai_curation_alliance.tools import generic_builder_tools as generic_tools
+    from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
+    from src.lib.curation_workspace.export_adapters.json_bundle import (
+        DEFAULT_JSON_BUNDLE_TARGET_KEY,
+    )
+    from src.lib.curation_workspace.extraction_results import persist_extraction_result
+    from src.lib.curation_workspace.models import CurationCandidate
+    from src.lib.curation_workspace.session_mutation_service import decide_candidate
+    from src.lib.curation_workspace.session_queries import get_session_workspace
+    from src.lib.curation_workspace.session_submission_service import submission_preview
+    from src.models.sql.database import SessionLocal
+    from src.schemas.curation_workspace import (
+        CurationCandidateAction,
+        CurationCandidateDecisionRequest,
+        CurationExtractionPersistenceRequest,
+        CurationExtractionSourceKind,
+        CurationSubmissionPreviewRequest,
+        SubmissionMode,
+    )
+
+    workspace = ExtractionBuilderWorkspace(
+        run_id=f"generic-{uuid4()}", domain_pack_id="generic", agent_id="pdf_extraction"
+    )
+    evidence_id = str(uuid4())
+    evidence = [
+        {
+            "evidence_record_id": evidence_id,
+            "entity": "finding",
+            "verified_quote": "LAG-2 protein declined within one hour.",
+            "page": 1,
+            "section": "Results",
+            "chunk_id": str(uuid4()),
+        }
+    ]
+    monkeypatch.setattr(generic_tools, "get_active_extraction_builder_workspace", lambda: workspace)
+    monkeypatch.setattr(generic_tools, "get_active_evidence_records_snapshot", lambda: evidence)
+    monkeypatch.setattr(generic_tools, "write_extraction_trace_event", lambda **_event: None)
+    staged = [
+        generic_tools._stage_generic_object_impl(
+            class_key="generic:generic_claim",
+            label=label,
+            evidence_record_ids=[evidence_id],
+            classification_notes=["A paper-level finding."],
+            rationale="The paper states this in its Results.",
+            payload={"claim_text": f"{label} was reported."},
+        )
+        for label in ("first finding", "second finding")
+    ]
+    assert all(result.status == "ok" for result in staged), staged
+    finalized = generic_tools._finalize_generic_extraction_impl(
+        [result.data["candidate_id"] for result in staged]
+    )
+    assert finalized.status == "ok", finalized
+
+    flow_run_id = str(uuid4())
+    origin_session_id = str(uuid4())
+    with SessionLocal() as db:
+        record = persist_extraction_result(
+            CurationExtractionPersistenceRequest(
+                document_id=scope.document_id,
+                agent_key="pdf_extraction",
+                adapter_key="generic",
+                source_kind=CurationExtractionSourceKind.FLOW,
+                flow_run_id=flow_run_id,
+                origin_session_id=origin_session_id,
+                user_id=scope.owner_id,
+                candidate_count=len(staged),
+                payload_json=workspace.finalization.payload,
+            ),
+            db=db,
+        ).extraction_result
+        db.commit()
+        result = await run_flow_curation_handoff(
+            extraction_results=[record],
+            document_id=scope.document_id,
+            runner_user_id=scope.owner_id,
+            active_groups=("WB",),
+            flow_run_id=flow_run_id,
+            origin_session_id=origin_session_id,
+            conversation_summary="Two findings",
+            db=db,
+        )
+        session_id = result.review_session_ids[0]
+        candidates = list(
+            db.scalars(select(CurationCandidate).where(CurationCandidate.session_id == session_id))
+        )
+        assert len(candidates) == 2
+        accepted, pending = candidates
+        accepted_id, pending_id = str(accepted.id), str(pending.id)
+
+        payload = get_session_workspace(db, session_id)
+        assert {item.has_active_validators for item in payload.workspace.candidates} == {False}
+
+        decide_candidate(
+            db,
+            accepted.id,
+            CurationCandidateDecisionRequest(
+                session_id=str(session_id),
+                candidate_id=accepted_id,
+                action=CurationCandidateAction.ACCEPT,
+            ),
+            {"sub": scope.owner_id},
+        )
+        response = submission_preview(
+            db,
+            session_id,
+            CurationSubmissionPreviewRequest(
+                session_id=str(session_id),
+                mode=SubmissionMode.EXPORT,
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+                include_payload=True,
+            ),
+            actor_claims={"sub": scope.owner_id},
+        )
+        db.rollback()
+
+    # This fixture never runs the validation review, so nothing was published.
+    publication = "Explicit review and selected-value publication are required."
+    reasons = {item.candidate_id: item.blocking_reasons for item in response.submission.readiness}
+    assert reasons[accepted_id] == [publication]
+    assert reasons[pending_id] == ["Candidate is still pending curator review.", publication]
+    assert not any(item.ready for item in response.submission.readiness)
