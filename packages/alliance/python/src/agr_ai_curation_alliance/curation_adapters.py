@@ -43,7 +43,6 @@ from agr_ai_curation_alliance.domain_packs.phenotype import (
 from agr_ai_curation_alliance.domain_packs.topic_entity_tag import (
     TOPIC_ENTITY_TAG_ADAPTER_KEY,
     TOPIC_ENTITY_TAG_DOMAIN_PACK_ID,
-    TopicEntityTagReviewRowMaterializer,
 )
 from src.lib.curation_adapters.reference import (
     REFERENCE_ADAPTER_KEY,
@@ -98,7 +97,6 @@ _REVIEW_ROW_MATERIALIZERS = {
     "disease": DiseaseReviewRowMaterializer,
     "gene_expression": GeneExpressionReviewRowMaterializer,
     "go": GOReviewRowMaterializer,
-    TOPIC_ENTITY_TAG_ADAPTER_KEY: TopicEntityTagReviewRowMaterializer,
 }
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
     "phenotype": normalize_phenotype_extraction_payload,

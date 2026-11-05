@@ -6,6 +6,7 @@ import type {
   CurationBenchmarkSnapshotCreateResponse,
   CurationCandidateDecisionRequest,
   CurationCandidateDecisionResponse,
+  CurationDocumentReferenceResult,
   CurationManualCandidateCreateRequest,
   CurationManualCandidateCreateResponse,
   CurationCandidateDraftUpdateRequest,
@@ -257,6 +258,39 @@ export async function submitCurationCandidateDecision(
       body: JSON.stringify(request),
       keepalive: options.keepalive,
     },
+  )
+}
+
+function documentReferencePath(sessionId: string): string {
+  return `/api/curation-workspace/sessions/${encodeURIComponent(sessionId)}/document-reference`
+}
+
+export async function findDocumentReference(
+  sessionId: string,
+  identifier: string,
+): Promise<CurationDocumentReferenceResult> {
+  return fetchCurationWorkspaceJson<CurationDocumentReferenceResult>(
+    `${documentReferencePath(sessionId)}/find`,
+    { method: 'POST', body: JSON.stringify({ identifier }) },
+  )
+}
+
+export async function linkDocumentReference(
+  sessionId: string,
+  identifier: string,
+): Promise<CurationDocumentReferenceResult> {
+  return fetchCurationWorkspaceJson<CurationDocumentReferenceResult>(
+    documentReferencePath(sessionId),
+    { method: 'PUT', body: JSON.stringify({ identifier }) },
+  )
+}
+
+export async function unlinkDocumentReference(
+  sessionId: string,
+): Promise<CurationDocumentReferenceResult> {
+  return fetchCurationWorkspaceJson<CurationDocumentReferenceResult>(
+    documentReferencePath(sessionId),
+    { method: 'DELETE' },
   )
 }
 

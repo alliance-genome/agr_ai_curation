@@ -208,6 +208,9 @@ def test_document_ref_uses_protected_document_id_url():
         title=None,
         filename="paper.pdf",
         page_count=5,
+        source_provider_reference_id=None,
+        source_provider_reference_curie=None,
+        linked_reference_curie=None,
         viewer_mode="local_pdf",
     )
 
@@ -224,6 +227,9 @@ def test_document_ref_omits_pdf_url_for_text_only_document():
         title="Imported article",
         filename="article.md",
         page_count=1,
+        source_provider_reference_id=None,
+        source_provider_reference_curie=None,
+        linked_reference_curie=None,
         viewer_mode="text_only",
     )
 

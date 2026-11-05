@@ -361,6 +361,8 @@ class CurationActionType(str, Enum):
     SUBMISSION_PREVIEWED = "submission_previewed"
     SUBMISSION_EXECUTED = "submission_executed"
     SUBMISSION_RETRIED = "submission_retried"
+    DOCUMENT_REFERENCE_LINKED = "document_reference_linked"
+    DOCUMENT_REFERENCE_UNLINKED = "document_reference_unlinked"
 
 
 class CurationActorType(str, Enum):
@@ -478,11 +480,48 @@ class CurationAdapterRef(CurationWorkspaceBaseModel):
     )
 
 
+class CurationDocumentReferenceSource(str, Enum):
+    """Where a document's reference in its literature source came from."""
+
+    IMPORTED = "imported"
+    CURATOR_LINK = "curator_link"
+
+
+class CurationDocumentReferenceStatus(str, Enum):
+    """Outcome of finding, linking or unlinking a document's reference."""
+
+    FOUND = "found"
+    LINKED = "linked"
+    UNLINKED = "unlinked"
+    INVALID_IDENTIFIER = "invalid_identifier"
+    NOT_FOUND = "not_found"
+    ACCESS_DENIED = "access_denied"
+    TOKEN_UNAVAILABLE = "token_unavailable"
+    SOURCE_UNAVAILABLE = "source_unavailable"
+
+
+class CurationDocumentReferenceRequest(CurationWorkspaceBaseModel):
+    """One curator-entered identifier. The server resolves it; nothing else is accepted."""
+
+    identifier: str = Field(min_length=1, max_length=256, description="Identifier to look up")
+
+
+class CurationDocumentReferenceResult(CurationWorkspaceBaseModel):
+    """Result of a reference lookup or change, written for the curator to read."""
+
+    status: CurationDocumentReferenceStatus = Field(description="What happened")
+    message: str = Field(description="Curator-readable explanation")
+    reference_curie: Optional[str] = Field(default=None, description="Reference found or linked")
+    reference_title: Optional[str] = Field(default=None, description="Title of that paper")
+    provider: Optional[str] = Field(default=None, description="Source provider identifier")
+
+
 class CurationDocumentRef(CurationWorkspaceBaseModel):
     """Canonical document metadata needed by inventory and workspace clients."""
 
     document_id: str = Field(description="Workspace document identifier")
     title: str = Field(description="Primary document title")
+    filename: Optional[str] = Field(default=None, description="Name of the stored file")
     pmid: Optional[str] = Field(default=None, description="PMID when available")
     doi: Optional[str] = Field(default=None, description="DOI when available")
     citation_label: Optional[str] = Field(
@@ -504,6 +543,14 @@ class CurationDocumentRef(CurationWorkspaceBaseModel):
     publication_year: Optional[int] = Field(
         default=None,
         description="Publication year when available",
+    )
+    reference_curie: Optional[str] = Field(
+        default=None,
+        description="The paper's reference in the document's literature source, when known",
+    )
+    reference_source: Optional[CurationDocumentReferenceSource] = Field(
+        default=None,
+        description="Whether that reference came from an import or a curator link",
     )
 
 

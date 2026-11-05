@@ -39,10 +39,10 @@ from agr_ai_curation_alliance.domain_packs.topic_entity_tag import (  # noqa: E4
     TOPIC_ENTITY_TAG_MOD_ABBREVIATION,
     TOPIC_ENTITY_TAG_OBJECT_TYPE,
     TOPIC_ENTITY_TAG_TOPIC,
-    TopicEntityTagReviewRowMaterializer,
     materialize_topic_entity_tag_builder_state,
 )
 from agr_ai_curation_alliance.tools import topic_entity_tag_builder_tools as tools  # noqa: E402
+from src.lib.domain_packs import DomainPackMetadataReviewRowMaterializer  # noqa: E402
 
 PACK_DIR = REPO_ROOT / "packages" / "alliance" / "domain_packs" / "topic_entity_tag"
 AGENT_PATH = (
@@ -64,7 +64,6 @@ ABC_VALIDATE_FIELDS = {
 }
 # The platform's protected rationale, and ABC's read-only display name for the topic.
 AI_CURATION_ONLY_FIELDS = {"rationale", "topic_name"}
-DOCUMENT_CURIE = "AGRKB:101000000000001"
 
 
 def _evidence_records() -> list[dict[str, Any]]:
@@ -97,7 +96,7 @@ def bound_tools(monkeypatch):
     return workspace
 
 
-def _context(reference_curie: str | None) -> ExtractionExecutionContext:
+def _context() -> ExtractionExecutionContext:
     return ExtractionExecutionContext(
         captured_at=datetime.now(timezone.utc),
         source_kind="flow",
@@ -107,8 +106,8 @@ def _context(reference_curie: str | None) -> ExtractionExecutionContext:
         executed_query="Assess this paper.",
         document=SourceDocumentProvenance(
             document_id=uuid4(),
-            provider="abc_literature" if reference_curie else None,
-            reference_curie=reference_curie,
+            provider="abc_literature",
+            reference_curie="AGRKB:101000000000001",
         ),
     )
 
@@ -125,15 +124,15 @@ def _finalized_object(bound_workspace, **stage_args) -> dict[str, Any]:
     return result.payload["curatable_objects"][0]
 
 
-def _review_rows(curatable_object: dict[str, Any], reference_curie: str | None):
+def _review_rows(curatable_object: dict[str, Any]):
     pack = load_alliance_domain_pack_registry().get_pack(TOPIC_ENTITY_TAG_DOMAIN_PACK_ID)
     envelope = DomainEnvelope(
         envelope_id="topic-tag-envelope",
         domain_pack_id=TOPIC_ENTITY_TAG_DOMAIN_PACK_ID,
         extracted_objects=[CuratableObjectEnvelope.model_validate(curatable_object)],
-        execution_context=_context(reference_curie),
+        execution_context=_context(),
     )
-    return TopicEntityTagReviewRowMaterializer(metadata=pack.metadata).materialize(
+    return DomainPackMetadataReviewRowMaterializer(metadata=pack.metadata).materialize(
         envelope, envelope_revision=1
     )
 
@@ -150,7 +149,7 @@ def test_negated_proposal_without_evidence_reaches_one_review_row(bound_tools):
         bound_tools, negated=True, rationale="No expression data in this paper."
     )
 
-    rows = _review_rows(curatable_object, DOCUMENT_CURIE)
+    rows = _review_rows(curatable_object)
 
     assert curatable_object["evidence_record_ids"] == []
     assert len(rows) == 1
@@ -203,26 +202,18 @@ def test_record_holds_only_real_abc_fields_plus_the_platform_rationale(bound_too
         assert decided_elsewhere not in curatable_object["payload"]
 
 
-def test_document_reference_is_the_server_value_on_the_review_row(bound_tools):
+def test_the_reference_stays_on_the_document_and_off_the_record(bound_tools):
     curatable_object = _finalized_object(
         bound_tools, negated=True, rationale="None.", evidence_record_ids=["evidence-1"]
     )
 
-    rows = _review_rows(curatable_object, DOCUMENT_CURIE)
-
-    assert _field_value(rows[0], "reference_curie") == DOCUMENT_CURIE
-    assert "reference_curie" not in curatable_object["payload"]
-
-
-def test_upload_without_a_reference_still_gets_a_review_row_with_a_blank_reference(bound_tools):
-    curatable_object = _finalized_object(
-        bound_tools, negated=True, rationale="None.", evidence_record_ids=["evidence-1"]
-    )
-
-    rows = _review_rows(curatable_object, None)
+    rows = _review_rows(curatable_object)
 
     assert len(rows) == 1
-    assert _field_value(rows[0], "reference_curie") in (None, "")
+    assert "reference_curie" not in curatable_object["payload"]
+    assert "reference_curie" not in {
+        field["field_path"] for field in rows[0].metadata["workspace_fields"]
+    }
 
 
 def test_stage_rejects_positive_proposal_without_evidence(bound_tools):
@@ -510,7 +501,6 @@ def test_curators_can_edit_their_decision_but_not_the_configured_or_agent_fields
         "negated": True,
         "rationale": False,
         "note": True,
-        "reference_curie": False,
         "mod_abbreviation": False,
     }
 

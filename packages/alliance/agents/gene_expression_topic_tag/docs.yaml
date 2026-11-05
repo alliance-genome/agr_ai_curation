@@ -19,5 +19,5 @@ avoid_when:
 limitations:
   - "Covers one topic, gene expression in wild type, for WormBase."
   - "Proposes one tag per paper."
-  - "A paper uploaded directly, rather than imported from ABC, shows no ABC reference and cannot be submitted to ABC."
+  - "A paper uploaded directly, rather than imported from ABC, may have no ABC reference. A curator can link it on the review screen, and it cannot be submitted to ABC until then."
   - "Nothing is written to ABC by this agent."

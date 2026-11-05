@@ -52,6 +52,15 @@ class PDFDocument(Base):
     # Stores: sections, top_level_sections, created_at, model_used, llm_raw_response
     hierarchy_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # A curator's statement of which source paper an uploaded file is. Kept apart
+    # from the provenance below, which says where the file itself came from.
+    linked_reference_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    linked_reference_curie: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    linked_reference_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
     # Optional upstream provenance for provider-backed document imports.
     source_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_provider_reference_id: Mapped[str | None] = mapped_column(

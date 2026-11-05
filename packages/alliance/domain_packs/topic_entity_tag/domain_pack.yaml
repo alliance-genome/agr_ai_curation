@@ -48,7 +48,6 @@ object_definitions:
         primary_label_field: topic_name
         summary_fields:
           - negated
-          - reference_curie
         groups:
           - id: tag
             label: Topic tag
@@ -58,7 +57,6 @@ object_definitions:
               - negated
               - rationale
               - note
-              - reference_curie
               - mod_abbreviation
     fields:
       - field_path: topic
@@ -102,13 +100,6 @@ object_definitions:
         metadata:
           editable: true
           free_text: true
-      - field_path: reference_curie
-        field_type: string
-        display_name: ABC reference
-        description: The paper's ABC reference ID, from the document record. A paper uploaded with no ABC reference has none, and cannot be submitted to ABC.
-        metadata:
-          protected: true
-          exported: false
       - field_path: mod_abbreviation
         field_type: enum
         display_name: Data provider

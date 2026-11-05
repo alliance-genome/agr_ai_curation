@@ -124,12 +124,18 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
         if str(document.viewer_mode or "").strip().lower() == "text_only"
         else protected_pdf_url(document.id)
     )
+    from src.lib.curation_workspace.document_reference import effective_document_reference
+
+    reference = effective_document_reference(document)
     return CurationDocumentRef(
         document_id=str(document.id),
         title=document.title or document.filename,
+        filename=document.filename,
         pdf_url=viewer_url,
         viewer_url=viewer_url,
         page_count=document.page_count,
+        reference_curie=reference.curie if reference is not None else None,
+        reference_source=reference.source if reference is not None else None,
     )
 
 
