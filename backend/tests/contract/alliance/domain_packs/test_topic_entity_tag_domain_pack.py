@@ -528,3 +528,39 @@ def test_agent_can_read_its_own_contract(monkeypatch):
     assert envelope["success"] is True, envelope
     assert field["success"] is True, field
     assert field["items"][0]["field"]["field_type"] == "boolean"
+
+
+def test_only_the_objects_without_validators_report_none():
+    from src.lib.domain_packs.registry import load_domain_pack_registry
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+
+    packs = load_domain_pack_registry(PACK_DIR.parent)
+
+    topic_tag = DomainPackValidationRegistry.from_domain_pack(
+        packs.get_pack("agr.alliance.topic_entity_tag")
+    )
+    gene_expression = DomainPackValidationRegistry.from_domain_pack(
+        packs.get_pack("agr.alliance.gene_expression")
+    )
+
+    assert topic_tag.has_active_validators_for_object("topic_entity_tag") is False
+    assert gene_expression.has_active_validators_for_object("GeneExpressionAnnotation") is True
+
+
+def test_profile_bound_output_is_not_reported_as_validator_free():
+    from src.lib.domain_packs.profile_validation import envelope_is_profile_bound
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    plain = {
+        "envelope_id": "topic-tag-envelope",
+        "domain_pack_id": "agr.alliance.topic_entity_tag",
+        "extracted_objects": [],
+        "metadata": {},
+    }
+    profiled = {
+        **plain,
+        "metadata": {"extraction_metadata": {"provenance": {"generic_profile_ref": {"id": "p"}}}},
+    }
+
+    assert envelope_is_profile_bound(DomainEnvelope.model_validate(plain)) is False
+    assert envelope_is_profile_bound(DomainEnvelope.model_validate(profiled)) is True

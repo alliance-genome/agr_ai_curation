@@ -1277,6 +1277,13 @@ class CurationCandidate(CurationWorkspaceBaseModel):
         default=None,
         description="Current validation summary for the candidate",
     )
+    has_active_validators: bool = Field(
+        default=True,
+        description=(
+            "False when the record's domain pack has no active validator for this "
+            "object, so the curator's decision is not waiting on a validation result"
+        ),
+    )
     validation_summary_projections: list[DomainEnvelopeValidationSummaryProjection] = Field(
         default_factory=list,
         description="Object- and field-scoped validation summaries projected from envelope findings",

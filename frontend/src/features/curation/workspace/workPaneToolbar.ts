@@ -60,6 +60,18 @@ export function isValidatedPendingCandidate(candidate: CurationCandidate): boole
     hasResolvedEnvelopeSummaries(candidate.validation_summary_projections)
 }
 
+export function canAcceptPendingCandidate(candidate: CurationCandidate): boolean {
+  if (candidate.status !== 'pending') {
+    return false
+  }
+
+  if (hasBlockingEnvelopeSummary(candidate.validation_summary_projections)) {
+    return false
+  }
+
+  return candidate.has_active_validators === false || isValidatedPendingCandidate(candidate)
+}
+
 export function countValidatedPending(candidates: CurationCandidate[]): number {
   return candidates.filter(isValidatedPendingCandidate).length
 }

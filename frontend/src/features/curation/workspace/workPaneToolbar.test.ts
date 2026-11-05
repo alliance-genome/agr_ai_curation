@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { CurationCandidate } from '@/features/curation/types'
-import { countValidatedPending } from './workPaneToolbar'
+import { canAcceptPendingCandidate, countValidatedPending } from './workPaneToolbar'
 
 function candidate(overrides: Partial<CurationCandidate> = {}): CurationCandidate {
   return {
@@ -108,5 +108,55 @@ describe('countValidatedPending', () => {
         ],
       }),
     ])).toBe(1)
+  })
+})
+
+describe('canAcceptPendingCandidate', () => {
+  const skippedOnly: CurationCandidate['validation'] = {
+    state: 'completed',
+    counts: {
+      validated: 0,
+      ambiguous: 0,
+      not_found: 0,
+      invalid_format: 0,
+      conflict: 0,
+      unresolved: 0,
+      skipped: 7,
+      overridden: 0,
+    },
+    stale_field_keys: [],
+    warnings: ['No envelope validation findings targeted this field.'],
+  }
+
+  it('lets a curator accept a pending record that has no validators to wait for', () => {
+    const record = candidate({ has_active_validators: false, validation: skippedOnly })
+
+    expect(canAcceptPendingCandidate(record)).toBe(true)
+    expect(countValidatedPending([record])).toBe(0)
+  })
+
+  it('still requires a completed validation result when validators exist', () => {
+    expect(canAcceptPendingCandidate(candidate({
+      has_active_validators: true,
+      validation: skippedOnly,
+    }))).toBe(false)
+    expect(canAcceptPendingCandidate(validatedCandidate('validated'))).toBe(true)
+  })
+
+  it('never offers Accept on an already decided record', () => {
+    expect(canAcceptPendingCandidate(candidate({
+      has_active_validators: false,
+      status: 'accepted',
+    }))).toBe(false)
+  })
+
+  it('keeps a blocking finding authoritative when no validators are configured', () => {
+    expect(canAcceptPendingCandidate(candidate({
+      has_active_validators: false,
+      validation_summary_projections: [{
+        status: 'blocked',
+        open_finding_count: 1,
+      } as NonNullable<CurationCandidate['validation_summary_projections']>[number]],
+    }))).toBe(false)
   })
 })

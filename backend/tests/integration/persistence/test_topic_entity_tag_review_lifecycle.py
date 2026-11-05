@@ -189,6 +189,11 @@ async def test_negated_proposal_opens_as_a_curation_session_and_can_be_signed_of
         )
         assert len(candidates) == 1
 
+        from src.lib.curation_workspace.session_queries import get_session_workspace
+
+        workspace_payload = get_session_workspace(db, session_id)
+        assert workspace_payload.workspace.candidates[0].has_active_validators is False
+
         decision = decide_candidate(
             db,
             candidates[0].id,

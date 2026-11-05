@@ -849,6 +849,15 @@ class DomainPackValidationRegistry:
 
         return tuple(_routed_match(match) for match in matches)
 
+    def has_active_validators_for_object(self, object_type: str) -> bool:
+        """Report whether any active validator applies to this object type."""
+
+        return any(
+            option.state is ValidationBindingState.ACTIVE
+            and (option.scope == "pack" or option.object_type == object_type)
+            for option in self.validation_attachment_options()
+        )
+
     def validation_attachment_options(self) -> tuple[ValidationAttachmentOption, ...]:
         """Return deterministic flow-builder validation attachment options."""
 

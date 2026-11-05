@@ -422,6 +422,7 @@ export interface CurationCandidate {
   evidence_anchors: CurationEvidenceRecord[]
   evidence_anchor_projections?: DomainEnvelopeEvidenceAnchorProjection[]
   validation?: CurationValidationSummary | null
+  has_active_validators?: boolean
   validation_summary_projections?: DomainEnvelopeValidationSummaryProjection[]
   evidence_summary?: CurationEvidenceSummary | null
   created_at: string
