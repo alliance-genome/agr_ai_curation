@@ -54,7 +54,9 @@ import {
   useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
+import DocumentReferenceControl from '@/features/curation/workspace/DocumentReferenceControl'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
+import { fetchDocumentSourceProviderConfiguration } from '@/services/weaviate'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 import {
@@ -401,6 +403,12 @@ function CurationWorkspacePageContent({
     if (!await autosave.flush()) throw new Error('Save your current edits before refreshing the completed validation.')
     await refreshWorkspace(activeCandidateId)
   }, [autosave, activeCandidateId, refreshWorkspace])
+  const documentSourceQuery = useQuery({
+    queryKey: ['document-source-provider'],
+    queryFn: fetchDocumentSourceProviderConfiguration,
+    retry: false,
+    staleTime: Infinity,
+  })
   const backgroundReviewError = useWorkspaceReviewCompletion(workspace.session.session_id, refreshAfterReview)
 
   const setCandidateBusy = useCallback((
@@ -613,6 +621,17 @@ function CurationWorkspacePageContent({
       <WorkspaceShell
         headerSlot={(
           <WorkspaceHeader
+            referenceSlot={(
+              <DocumentReferenceControl
+                document={workspaceDocument}
+                importEnabled={documentSourceQuery.data?.importEnabled === true}
+                onChanged={refreshAfterReview}
+                onRetrySource={() => void documentSourceQuery.refetch()}
+                presentation={documentSourceQuery.data?.presentation ?? null}
+                sessionId={workspace.session.session_id}
+                sourceCheckFailed={documentSourceQuery.isError}
+              />
+            )}
             navigationSlot={(
               <Stack spacing={1} sx={{
                 width: "100%"

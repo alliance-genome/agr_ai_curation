@@ -2131,16 +2131,21 @@ def _submission_intent_fingerprint(
     return canonical_extraction_payload_hash(
         {
             "session_id": str(session_row.id),
-            "document": (
-                _document_ref(document).model_dump(mode="json")
-                if document is not None
-                else None
-            ),
+            "document": _document_intent_payload(document) if document is not None else None,
             "adapter_key": adapter_key,
             "mode": mode.value,
             "target_key": target_key,
             "candidates": candidates,
         }
+    )
+
+
+def _document_intent_payload(document: PDFDocument) -> dict[str, Any]:
+    """Describe the document for a retry fingerprint, without fields that may change later."""
+
+    return _document_ref(document).model_dump(
+        mode="json",
+        exclude={"filename", "reference_curie", "reference_source"},
     )
 
 

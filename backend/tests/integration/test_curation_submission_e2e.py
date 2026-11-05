@@ -639,7 +639,7 @@ def submission_e2e_context(client: TestClient, test_db):
         DomainValidationFinding,
     )
     from src.models.sql.database import Base
-    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
     from src.models.sql.user import User
 
     Base.metadata.create_all(
@@ -647,6 +647,7 @@ def submission_e2e_context(client: TestClient, test_db):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            DocumentReferenceLink.__table__,
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
             DomainEnvelopeModel.__table__,

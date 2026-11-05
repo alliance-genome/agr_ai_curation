@@ -13,7 +13,6 @@ from .conversion import (
     TopicEntityTagMaterializationResult,
     materialize_topic_entity_tag_builder_state,
 )
-from .review_rows import TopicEntityTagReviewRowMaterializer
 
 __all__ = [
     "TOPIC_ENTITY_TAG_ADAPTER_KEY",
@@ -24,6 +23,5 @@ __all__ = [
     "TOPIC_ENTITY_TAG_PENDING_REF_ID",
     "TOPIC_ENTITY_TAG_TOPIC",
     "TopicEntityTagMaterializationResult",
-    "TopicEntityTagReviewRowMaterializer",
     "materialize_topic_entity_tag_builder_state",
 ]

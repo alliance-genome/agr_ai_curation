@@ -7,7 +7,7 @@ import logging
 from typing import Annotated, Any, Callable, NoReturn, TypeVar
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
@@ -27,6 +27,12 @@ from src.lib.curation_workspace.benchmark_snapshots import (
 from src.lib.curation_workspace.curation_prep_invocation import (
     build_chat_curation_prep_preview,
 )
+from src.lib.curation_workspace.document_reference import (
+    find_document_reference,
+    link_document_reference,
+    require_document_can_be_linked,
+    unlink_document_reference,
+)
 from src.lib.curation_workspace.evidence_service import (
     create_manual_evidence,
     recompute_evidence,
@@ -38,6 +44,7 @@ from src.lib.curation_workspace.saved_view_service import (
     list_saved_views as list_saved_view_records,
 )
 from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.pdf_jobs.upload_intake_service import external_document_source_import_enabled
 from src.lib.group_rules import get_groups_from_provider_groups
 from src.lib.domain_packs.materialization import (
     DomainEnvelopeMaterializationError,
@@ -76,6 +83,9 @@ from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
     CurationCandidateDeleteResponse,
+    CurationDocumentReferenceRequest,
+    CurationDocumentReferenceResult,
+    CurationDocumentReferenceStatus,
     CurationCandidateDraftUpdateRequest,
     CurationCandidateDraftUpdateResponse,
     CurationBenchmarkErrorResponse,
@@ -649,6 +659,84 @@ async def get_review_session(
     if include_workspace:
         return get_session_workspace(db, session_id)
     return get_session_detail(db, session_id)
+
+
+def _require_document_source_import() -> None:
+    if not external_document_source_import_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document-source import is disabled",
+        )
+
+
+@router.post(
+    "/sessions/{session_id}/document-reference/find",
+    response_model=CurationDocumentReferenceResult,
+)
+async def find_session_document_reference(
+    session_id: UUID,
+    payload: CurationDocumentReferenceRequest,
+    request: Request,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationDocumentReferenceResult:
+    """Look up the paper an identifier names, without saving anything."""
+    _require_document_source_import()
+    await provision_user_async(principal_from_claims(user))
+    require_document_can_be_linked(db, session_id)
+    db.rollback()
+    return await find_document_reference(
+        payload.identifier,
+        request=request,
+        user_claims=user,
+    )
+
+
+@router.put(
+    "/sessions/{session_id}/document-reference",
+    response_model=CurationDocumentReferenceResult,
+)
+async def link_session_document_reference(
+    session_id: UUID,
+    payload: CurationDocumentReferenceRequest,
+    request: Request,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationDocumentReferenceResult:
+    """Resolve the identifier again on the server and save what it names."""
+    _require_document_source_import()
+    await provision_user_async(principal_from_claims(user))
+    require_document_can_be_linked(db, session_id)
+    db.rollback()
+    found = await find_document_reference(
+        payload.identifier,
+        request=request,
+        user_claims=user,
+    )
+    if found.status is not CurationDocumentReferenceStatus.FOUND:
+        return found
+    return _run_curation_mutation(
+        db,
+        lambda: link_document_reference(db, session_id, found, actor_claims=user),
+    )
+
+
+@router.delete(
+    "/sessions/{session_id}/document-reference",
+    response_model=CurationDocumentReferenceResult,
+)
+async def unlink_session_document_reference(
+    session_id: UUID,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationDocumentReferenceResult:
+    """Remove a curator link from the session's document."""
+    _require_document_source_import()
+    await provision_user_async(principal_from_claims(user))
+    return _run_curation_mutation(
+        db,
+        lambda: unlink_document_reference(db, session_id, actor_claims=user),
+    )
 
 
 @router.get(

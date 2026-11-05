@@ -24,6 +24,7 @@ export interface WorkspaceHeaderProps {
   session: CurationReviewSession
   backHref?: string
   navigationSlot?: ReactNode
+  referenceSlot?: ReactNode
 }
 
 function getDocumentMetaLabel(session: CurationReviewSession): string {
@@ -55,6 +56,7 @@ export default function WorkspaceHeader({
   session,
   backHref = '/curation',
   navigationSlot,
+  referenceSlot,
 }: WorkspaceHeaderProps) {
   const adapterChipColor = getAdapterChipColor(session.adapter)
   const statusChipColor = getStatusChipColor(session.status)
@@ -155,6 +157,7 @@ export default function WorkspaceHeader({
           }}>
             {session.document.title} · {getDocumentMetaLabel(session)}
           </Typography>
+          {referenceSlot}
         </Stack>
 
         <Box sx={{ flexGrow: 1 }} />

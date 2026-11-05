@@ -130,11 +130,11 @@ def test_negated_proposal_without_evidence_persists_to_one_review_row(db_session
     fields = _fields(rows[0])
     assert fields["negated"] is True
     assert fields["topic"] == "ATP:0000041"
-    assert fields["reference_curie"] == DOCUMENT_CURIE
+    assert "reference_curie" not in fields
     assert rows[0].metadata["evidence_record_ids"] == []
 
 
-def test_positive_proposal_for_an_upload_persists_with_evidence_and_blank_reference(
+def test_positive_proposal_for_an_upload_persists_with_evidence(
     db_session, monkeypatch
 ):
     payload = _proposal_payload(
@@ -149,7 +149,6 @@ def test_positive_proposal_for_an_upload_persists_with_evidence_and_blank_refere
     assert len(rows) == 1
     fields = _fields(rows[0])
     assert fields["negated"] is False
-    assert fields["reference_curie"] in (None, "")
     assert rows[0].metadata["evidence_record_ids"] == ["evidence-1"]
 
 

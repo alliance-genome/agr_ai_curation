@@ -293,7 +293,7 @@ def client(test_db, get_auth_mock, monkeypatch):
     from src.models.sql.chat_session import ChatSession
     from src.models.sql.curation_flow import CurationFlow
     from src.models.sql.database import get_db
-    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
     from src.models.sql.prompts import PromptExecutionLog, PromptTemplate
     from src.models.sql.user import User
 
@@ -304,6 +304,7 @@ def client(test_db, get_auth_mock, monkeypatch):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            DocumentReferenceLink.__table__,
             Project.__table__,
             ProjectMember.__table__,
             UnifiedAgent.__table__,
@@ -852,7 +853,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     from src.lib.openai_agents.tools.file_output_tools import save_projected_file_output
     from src.models.sql.database import Base
     from src.models.sql.file_output import FileOutput
-    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
     from src.models.sql.user import User
 
     sample_pdf_path = (
@@ -866,6 +867,7 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
         bind=test_db.get_bind(),
         tables=[
             PDFDocument.__table__,
+            DocumentReferenceLink.__table__,
             FileOutput.__table__,
         ],
     )

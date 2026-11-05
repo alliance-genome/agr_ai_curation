@@ -52,7 +52,7 @@ from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
     CurationActionType,
@@ -123,6 +123,7 @@ TEST_TABLES = [
     ValidationCheckpoint.__table__,
     User.__table__,
     PDFDocument.__table__,
+    DocumentReferenceLink.__table__,
     ReviewSessionModel.__table__,
     CurationSessionAgentRevision.__table__,
     ExtractionResultModel.__table__,
@@ -208,6 +209,9 @@ def test_document_ref_uses_protected_document_id_url():
         title=None,
         filename="paper.pdf",
         page_count=5,
+        source_provider_reference_id=None,
+        source_provider_reference_curie=None,
+        reference_link=None,
         viewer_mode="local_pdf",
     )
 
@@ -224,6 +228,9 @@ def test_document_ref_omits_pdf_url_for_text_only_document():
         title="Imported article",
         filename="article.md",
         page_count=1,
+        source_provider_reference_id=None,
+        source_provider_reference_curie=None,
+        reference_link=None,
         viewer_mode="text_only",
     )
 

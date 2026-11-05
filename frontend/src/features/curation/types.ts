@@ -130,6 +130,8 @@ export const CURATION_ACTION_TYPES = [
   'submission_previewed',
   'submission_executed',
   'submission_retried',
+  'document_reference_linked',
+  'document_reference_unlinked',
 ] as const
 
 export type CurationActionType = (typeof CURATION_ACTION_TYPES)[number]
@@ -220,6 +222,7 @@ export interface CurationAdapterRef {
 export interface CurationDocumentRef {
   document_id: string
   title: string
+  filename?: string | null
   pmid?: string | null
   doi?: string | null
   citation_label?: string | null
@@ -227,6 +230,28 @@ export interface CurationDocumentRef {
   viewer_url?: string | null
   page_count?: number | null
   publication_year?: number | null
+  reference_curie?: string | null
+  reference_source?: CurationDocumentReferenceSource | null
+}
+
+export type CurationDocumentReferenceSource = 'imported' | 'curator_link'
+
+export type CurationDocumentReferenceStatus =
+  | 'found'
+  | 'linked'
+  | 'unlinked'
+  | 'invalid_identifier'
+  | 'not_found'
+  | 'access_denied'
+  | 'token_unavailable'
+  | 'source_unavailable'
+
+export interface CurationDocumentReferenceResult {
+  status: CurationDocumentReferenceStatus
+  message: string
+  reference_curie?: string | null
+  reference_title?: string | null
+  provider?: string | null
 }
 
 export interface CurationDateRange {

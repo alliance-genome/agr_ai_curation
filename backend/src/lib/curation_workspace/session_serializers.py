@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from src.lib.curation_adapters.entity_tag_bridge import (
     ENTITY_FIELD_KEYS,
@@ -74,7 +74,11 @@ def _load_documents(db: Session, document_ids: Iterable[UUID]) -> dict[UUID, PDF
     ids = list({document_id for document_id in document_ids})
     if not ids:
         return {}
-    documents = db.scalars(select(PDFDocument).where(PDFDocument.id.in_(ids))).all()
+    documents = db.scalars(
+        select(PDFDocument)
+        .where(PDFDocument.id.in_(ids))
+        .options(selectinload(PDFDocument.reference_link))
+    ).all()
     return {document.id: document for document in documents}
 
 
@@ -124,12 +128,18 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
         if str(document.viewer_mode or "").strip().lower() == "text_only"
         else protected_pdf_url(document.id)
     )
+    from src.lib.curation_workspace.document_reference import effective_document_reference
+
+    reference = effective_document_reference(document)
     return CurationDocumentRef(
         document_id=str(document.id),
         title=document.title or document.filename,
+        filename=document.filename,
         pdf_url=viewer_url,
         viewer_url=viewer_url,
         page_count=document.page_count,
+        reference_curie=reference.curie if reference is not None else None,
+        reference_source=reference.source if reference is not None else None,
     )
 
 

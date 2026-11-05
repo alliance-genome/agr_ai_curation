@@ -69,6 +69,15 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   waiveCurationValidationFinding: serviceMocks.waiveCurationValidationFinding,
 }))
 
+const documentSourceMock = vi.hoisted(() => ({
+  fetchDocumentSourceProviderConfiguration: vi.fn(),
+}))
+
+vi.mock('@/services/weaviate', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/services/weaviate')>(),
+  fetchDocumentSourceProviderConfiguration: documentSourceMock.fetchDocumentSourceProviderConfiguration,
+}))
+
 vi.mock('@/components/pdfViewer/PersistentPdfWorkspaceLayout', () => ({
   usePersistentPdfWorkspaceLayout: () => ({
     focusGrid: serviceMocks.focusGrid,
@@ -562,6 +571,12 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.createCurationBenchmarkSnapshot.mockReset()
     serviceMocks.executeCurationSubmission.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
+    documentSourceMock.fetchDocumentSourceProviderConfiguration.mockReset()
+    documentSourceMock.fetchDocumentSourceProviderConfiguration.mockResolvedValue({
+      provider: null,
+      importEnabled: false,
+      presentation: null,
+    })
     serviceMocks.fetchBenchmarkDestinations.mockReset()
     serviceMocks.fetchBenchmarkDestinations.mockResolvedValue({
       destinations: [{ destination_id: 'portal', label: 'Alliance Benchmark' }],
@@ -1354,6 +1369,27 @@ describe('CurationWorkspacePage', () => {
       })
     })
     expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
+  })
+
+  it('offers a link for a paper with no reference and leaves Accept unaffected', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates[1] = { ...workspace.candidates[1], has_active_validators: false }
+    documentSourceMock.fetchDocumentSourceProviderConfiguration.mockResolvedValue({
+      provider: 'fixture_source',
+      importEnabled: true,
+      presentation: { displayLabel: 'Fixture Source', referenceLabelPriority: null },
+    })
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: workspace.session,
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+
+    expect(await screen.findByText('Not linked to Fixture Source')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Link to Fixture Source' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Accept Pending candidate' })).toBeEnabled()
   })
 
   it('enables Accept for a pending record that has no validators to wait for', async () => {

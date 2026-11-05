@@ -46,7 +46,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
     CurationCandidateDraftUpdateRequest,
@@ -82,6 +82,7 @@ TEST_TABLES = [
     ValidationCheckpoint.__table__,
     User.__table__,
     PDFDocument.__table__,
+    DocumentReferenceLink.__table__,
     CurationReviewSession.__table__,
     CurationSessionAgentRevision.__table__,
     CurationExtractionResultRecord.__table__,

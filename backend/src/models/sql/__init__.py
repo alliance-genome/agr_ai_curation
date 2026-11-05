@@ -37,7 +37,7 @@ from .database import Base, SessionLocal, engine, get_db
 from .file_output import FileOutput, FileType
 from .ontology import Ontology
 from .ontology_term import OntologyTerm
-from .pdf_document import PDFDocument
+from .pdf_document import DocumentReferenceLink, PDFDocument
 from .pdf_processing_job import PdfProcessingJob, PdfJobStatus
 from .prompts import PromptTemplate, PromptExecutionLog
 from .tool_policy import ToolPolicy
@@ -100,6 +100,7 @@ __all__ = [
     "get_db",
     "Ontology",
     "OntologyTerm",
+    "DocumentReferenceLink",
     "PDFDocument",
     "PdfProcessingJob",
     "PdfJobStatus",
