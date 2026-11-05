@@ -1052,6 +1052,145 @@ tools:
             required: true
             description: The list of draft entries the agent wants to hand off for confirmation.
   # ---------------------------------------------------------------------------------------
+  # Gene-expression topic-tag builder tools. One paper gets one proposal, which uses ABC's own
+  # topic-entity-tag fields. Nothing here writes to ABC.
+  # ---------------------------------------------------------------------------------------
+  - tool_id: stage_topic_entity_tag
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.topic_entity_tag_builder_tools:stage_topic_entity_tag
+    required_context: []
+    description: Add the proposed topic tag for this paper to the run's working list.
+    source_file: python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py
+    metadata:
+      name: Stage Topic Entity Tag
+      category: Database
+      builder_output_mode: domain
+      builder_run_state: true
+      audit:
+        display_name: Stage Topic Entity Tag
+      documentation:
+        summary: Records the agent's proposal for this paper, a first-pass draft for a curator to review. One paper gets one proposal.
+        parameters:
+          - name: negated
+            type: boolean
+            required: true
+            description: False when the paper has data for the topic, true when it does not.
+          - name: rationale
+            type: string
+            required: true
+            description: The agent's reason for the curator, including any doubt.
+          - name: evidence_record_ids
+            type: array
+            required: false
+            description: The supporting passages the agent recorded. Required when the paper has data for the topic.
+  - tool_id: patch_topic_entity_tag
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.topic_entity_tag_builder_tools:patch_topic_entity_tag
+    required_context: []
+    description: Change the proposed topic tag on the run's working list.
+    source_file: python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py
+    metadata:
+      namespace: staged_object_corrections
+      name: Patch Topic Entity Tag
+      category: Database
+      builder_output_mode: domain
+      builder_run_state: true
+      audit:
+        display_name: Patch Topic Entity Tag
+      documentation:
+        summary: Updates the draft proposal when the agent changes its mind. Only the fields it passes are changed.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: The draft proposal to change.
+          - name: negated
+            type: boolean
+            required: false
+            description: The new answer, if it changes.
+          - name: rationale
+            type: string
+            required: false
+            description: The new reason, if it changes.
+          - name: evidence_record_ids
+            type: array
+            required: false
+            description: A replacement list of supporting passages.
+  - tool_id: discard_topic_entity_tag
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.topic_entity_tag_builder_tools:discard_topic_entity_tag
+    required_context: []
+    description: Remove the proposed topic tag from the run's working list.
+    source_file: python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py
+    metadata:
+      namespace: staged_object_corrections
+      name: Discard Topic Entity Tag
+      category: Database
+      builder_output_mode: domain
+      builder_run_state: true
+      audit:
+        display_name: Discard Topic Entity Tag
+      documentation:
+        summary: Removes the draft proposal so the agent can write a new one.
+        parameters:
+          - name: candidate_id
+            type: string
+            required: true
+            description: The draft proposal to remove.
+          - name: reason
+            type: string
+            required: false
+            description: A short note on why it was removed.
+  - tool_id: list_staged_topic_entity_tags
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.topic_entity_tag_builder_tools:list_staged_topic_entity_tags
+    required_context: []
+    description: Show the proposed topic tag on the run's working list.
+    source_file: python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py
+    metadata:
+      name: List Staged Topic Entity Tags
+      category: Database
+      builder_output_mode: domain
+      builder_run_state: true
+      audit:
+        display_name: List Staged Topic Entity Tags
+      documentation:
+        summary: Lets the agent check its draft proposal before finishing.
+        parameters:
+          - name: include_discarded
+            type: boolean
+            required: false
+            description: Whether to include drafts the agent removed.
+          - name: limit
+            type: integer
+            required: false
+            description: How many entries to return at once.
+          - name: offset
+            type: integer
+            required: false
+            description: How many entries to skip.
+  - tool_id: finalize_topic_entity_tag_extraction
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.topic_entity_tag_builder_tools:finalize_topic_entity_tag_extraction
+    required_context: []
+    description: Submit the proposed topic tag so a curator can review it.
+    source_file: python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py
+    metadata:
+      name: Finalize Topic Entity Tag Extraction
+      category: Database
+      builder_output_mode: domain
+      builder_finalization: true
+      builder_run_state: true
+      audit:
+        display_name: Finalize Topic Entity Tag Extraction
+      documentation:
+        summary: Hands the agent's proposal to curator review. Nothing is written to ABC.
+        parameters:
+          - name: candidate_ids
+            type: array
+            required: true
+            description: The draft proposal to hand off. Empty only when the paper could not be assessed at all.
+  # ---------------------------------------------------------------------------------------
   # Generic PDF extraction builder tools. These stage explicit class-keyed objects from the
   # generated generic domain-pack catalog and finalize through the shared builder contract.
   # ---------------------------------------------------------------------------------------

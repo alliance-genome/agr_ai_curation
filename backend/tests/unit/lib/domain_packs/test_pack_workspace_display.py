@@ -31,6 +31,7 @@ PACK_PATHS = {
     "agr.alliance.gene_expression": PACK_ROOT / "gene_expression" / "domain_pack.yaml",
     "agr.alliance.go": PACK_ROOT / "go" / "domain_pack.yaml",
     "agr.alliance.phenotype": PACK_ROOT / "phenotype" / "domain_pack.yaml",
+    "agr.alliance.topic_entity_tag": PACK_ROOT / "topic_entity_tag" / "domain_pack.yaml",
     "gene": PACK_ROOT / "gene" / "domain_pack.yaml",
 }
 

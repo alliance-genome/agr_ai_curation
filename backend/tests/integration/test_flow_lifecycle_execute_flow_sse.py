@@ -499,6 +499,7 @@ def test_execute_flow_persists_durable_history_and_replays_completed_turn(client
         ("gene", "gene_builder_tools", "gene_extractor"),
         ("phenotype", "phenotype_builder_tools", "phenotype_extractor"),
         ("go", "go_builder_tools", "rgd_go_paper_curator"),
+        ("topic_entity_tag", "topic_entity_tag_builder_tools", "gene_expression_topic_tag"),
     ],
 )
 def test_execute_flow_saves_and_replays_finalized_empty_extraction(

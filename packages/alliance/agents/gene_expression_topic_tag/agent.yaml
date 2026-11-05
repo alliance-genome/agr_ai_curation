@@ -1,0 +1,70 @@
+# =============================================================================
+# AGENT DEFINITION: gene_expression_topic_tag
+# =============================================================================
+# Proposes one paper-level gene-expression topic tag for a curator to sign off.
+# Tool name generated at runtime: ask_gene_expression_topic_tag_specialist
+# =============================================================================
+
+agent_id: gene_expression_topic_tag
+
+name: "Gene Expression Topic Tag Agent"
+
+description: >
+  Reads one paper and proposes whether it has data for the gene-expression topic,
+  using ABC's own topic-entity-tag fields. A curator signs off every proposal;
+  nothing is written to ABC here.
+
+category: "Extraction"
+subcategory: "PDF Extraction"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use to propose the paper-level gene-expression topic tag for the loaded paper.
+    Not for extracting detailed expression annotations; use the gene expression
+    extractor for those.
+  batchable: false  # Document-based agent, processes one document at a time
+
+tools:
+  - search_document
+  - read_chunk
+  - read_section
+  - read_subsection
+  - record_evidence
+  - list_recorded_evidence
+  - get_recorded_evidence
+  - discard_recorded_evidence
+  - get_agent_contract
+  - stage_topic_entity_tag
+  - patch_topic_entity_tag
+  - discard_topic_entity_tag
+  - list_staged_topic_entity_tags
+  - finalize_topic_entity_tag_extraction
+
+# Builder-pattern agents are forbidden an output schema; the backend materializes the
+# envelope from staged builder state.
+output_schema: null
+
+model_config:
+  model: "${AGENT_GENE_EXPRESSION_TOPIC_TAG_MODEL:-gpt-6.1-sol}"
+  temperature: 0.1
+  reasoning: "${AGENT_GENE_EXPRESSION_TOPIC_TAG_REASONING:-medium}"
+
+requires_document: true
+required_params:
+  - document_id
+  - user_id
+
+batch_capabilities:
+  - pdf_extraction
+
+frontend:
+  icon: "🏷️"
+  show_in_palette: true
+
+curation:
+  adapter_key: "topic_entity_tag"
+  domain_pack_id: "agr.alliance.topic_entity_tag"
+  launchable: true
+
+group_rules_enabled: false

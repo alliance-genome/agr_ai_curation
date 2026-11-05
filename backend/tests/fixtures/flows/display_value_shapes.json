@@ -683,6 +683,17 @@
           "identity unresolved"
         ]
       }
+    },
+    {
+      "shape_id": "topic_entity_tag_positive",
+      "pack_id": "agr.alliance.topic_entity_tag",
+      "object_type": "topic_entity_tag",
+      "payload": {
+        "topic": "ATP:0000041",
+        "mod_abbreviation": "WB",
+        "negated": false,
+        "rationale": "Synthetic rationale."
+      }
     }
   ],
   "custom_profiles": [

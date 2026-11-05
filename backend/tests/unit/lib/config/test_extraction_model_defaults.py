@@ -19,6 +19,7 @@ EXTRACTORS = {
     'phenotype_extractor': 'phenotype_extractor',
     'pdf': 'pdf_extraction',
     'rgd_go_paper_curator': 'rgd_go_paper_curator',
+    'gene_expression_topic_tag': 'gene_expression_topic_tag',
 }
 FORMATTERS = {'csv_formatter', 'tsv_formatter', 'json_formatter', 'chat_output'}
 # Validators that read AGENT_GO_ANNOTATIONS_MODEL, overridden in the fixture below.

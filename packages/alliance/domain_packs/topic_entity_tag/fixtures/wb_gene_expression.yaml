@@ -1,0 +1,63 @@
+fixture_pack_id: wb_gene_expression
+domain_pack_id: agr.alliance.topic_entity_tag
+fixtures_api_version: 1.0.0
+display_name: WB gene-expression topic-tag proposals
+description: One positive and one negated WB ATP:0000041 proposal.
+fixtures:
+  - name: wb_gene_expression_positive
+    description: The paper reports gene expression in wild-type animals.
+    envelope:
+      envelope_id: topic-entity-tag-wb-positive
+      domain_pack_id: agr.alliance.topic_entity_tag
+      domain_pack_version: 0.1.0
+      status: extracted
+      extracted_objects:
+        - object_type: topic_entity_tag
+          object_role: curatable_unit
+          pending_ref_id: topic-entity-tag-1
+          model_ref: TopicEntityTagPayload
+          status: pending
+          definition_state: in_development
+          payload:
+            reference_curie: AGRKB:101000000000001
+            topic: ATP:0000041
+            mod_abbreviation: WB
+            negated: false
+            rationale: Figure 2 shows reporter expression in wild-type body wall muscle.
+          evidence_record_ids:
+            - evidence-1
+          metadata_refs:
+            - metadata_path: evidence_records[0]
+              role: verified_evidence
+      metadata:
+        extraction_metadata:
+          evidence_records:
+            - evidence_record_id: evidence-1
+              entity: gene expression
+              verified_quote: unc-54 reporter expression was observed in wild-type body wall muscle.
+              page: 4
+              section: Results
+              chunk_id: chunk-1
+  - name: wb_gene_expression_negated
+    description: The paper has no gene-expression data, so the proposal cites no evidence.
+    envelope:
+      envelope_id: topic-entity-tag-wb-negated
+      domain_pack_id: agr.alliance.topic_entity_tag
+      domain_pack_version: 0.1.0
+      status: extracted
+      extracted_objects:
+        - object_type: topic_entity_tag
+          object_role: curatable_unit
+          pending_ref_id: topic-entity-tag-1
+          model_ref: TopicEntityTagPayload
+          status: pending
+          definition_state: in_development
+          payload:
+            reference_curie: AGRKB:101000000000002
+            topic: ATP:0000041
+            mod_abbreviation: WB
+            negated: true
+            rationale: The Results and figures report no gene-expression experiments.
+      metadata:
+        extraction_metadata:
+          evidence_records: []

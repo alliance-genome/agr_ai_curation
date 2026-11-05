@@ -1607,6 +1607,43 @@
     ],
     "source_file": "python/src/agr_ai_curation_alliance/tools/documents.py"
   },
+  "discard_topic_entity_tag": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Discard Topic Entity Tag"
+    },
+    "binding_kind": "static",
+    "builder_output_mode": "domain",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Remove the proposed topic tag from the run's working list.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "The draft proposal to remove.",
+          "name": "candidate_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "A short note on why it was removed.",
+          "name": "reason",
+          "required": false,
+          "type": "string"
+        }
+      ],
+      "summary": "Removes the draft proposal so the agent can write a new one."
+    },
+    "methods": null,
+    "name": "Discard Topic Entity Tag",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py"
+  },
   "explain_formatter_capabilities": {
     "agent_methods": null,
     "binding_kind": "runtime_context_factory",
@@ -1921,6 +1958,38 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py"
+  },
+  "finalize_topic_entity_tag_extraction": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Finalize Topic Entity Tag Extraction"
+    },
+    "binding_kind": "static",
+    "builder_finalization": true,
+    "builder_output_mode": "domain",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Submit the proposed topic tag so a curator can review it.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "The draft proposal to hand off. Empty only when the paper could not be assessed at all.",
+          "name": "candidate_ids",
+          "required": true,
+          "type": "array"
+        }
+      ],
+      "summary": "Hands the agent's proposal to curator review. Nothing is written to ABC."
+    },
+    "methods": null,
+    "name": "Finalize Topic Entity Tag Extraction",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py"
   },
   "find_staged_allele_observations": {
     "agent_methods": null,
@@ -3610,6 +3679,49 @@
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py"
   },
+  "list_staged_topic_entity_tags": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "List Staged Topic Entity Tags"
+    },
+    "binding_kind": "static",
+    "builder_output_mode": "domain",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Show the proposed topic tag on the run's working list.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "Whether to include drafts the agent removed.",
+          "name": "include_discarded",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "description": "How many entries to return at once.",
+          "name": "limit",
+          "required": false,
+          "type": "integer"
+        },
+        {
+          "description": "How many entries to skip.",
+          "name": "offset",
+          "required": false,
+          "type": "integer"
+        }
+      ],
+      "summary": "Lets the agent check its draft proposal before finishing."
+    },
+    "methods": null,
+    "name": "List Staged Topic Entity Tags",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py"
+  },
   "map_curies_to_names": {
     "agent_methods": null,
     "category": "Database",
@@ -4010,6 +4122,55 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py"
+  },
+  "patch_topic_entity_tag": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Patch Topic Entity Tag"
+    },
+    "binding_kind": "static",
+    "builder_output_mode": "domain",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Change the proposed topic tag on the run's working list.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "The draft proposal to change.",
+          "name": "candidate_id",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The new answer, if it changes.",
+          "name": "negated",
+          "required": false,
+          "type": "boolean"
+        },
+        {
+          "description": "The new reason, if it changes.",
+          "name": "rationale",
+          "required": false,
+          "type": "string"
+        },
+        {
+          "description": "A replacement list of supporting passages.",
+          "name": "evidence_record_ids",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "summary": "Updates the draft proposal when the agent changes its mind. Only the fields it passes are changed."
+    },
+    "methods": null,
+    "name": "Patch Topic Entity Tag",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py"
   },
   "preview_output_projection": {
     "agent_methods": null,
@@ -5826,6 +5987,49 @@
     "package_version": "1.0.0",
     "required_context": [],
     "source_file": "python/src/agr_ai_curation_alliance/tools/phenotype_builder_tools.py"
+  },
+  "stage_topic_entity_tag": {
+    "agent_methods": null,
+    "audit": {
+      "display_name": "Stage Topic Entity Tag"
+    },
+    "binding_kind": "static",
+    "builder_output_mode": "domain",
+    "builder_run_state": true,
+    "category": "Database",
+    "description": "Add the proposed topic tag for this paper to the run's working list.",
+    "documentation": {
+      "parameters": [
+        {
+          "description": "False when the paper has data for the topic, true when it does not.",
+          "name": "negated",
+          "required": true,
+          "type": "boolean"
+        },
+        {
+          "description": "The agent's reason for the curator, including any doubt.",
+          "name": "rationale",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "description": "The supporting passages the agent recorded. Required when the paper has data for the topic.",
+          "name": "evidence_record_ids",
+          "required": false,
+          "type": "array"
+        }
+      ],
+      "summary": "Records the agent's proposal for this paper, a first-pass draft for a curator to review. One paper gets one proposal."
+    },
+    "methods": null,
+    "name": "Stage Topic Entity Tag",
+    "package_backed": true,
+    "package_display_name": "Alliance Defaults",
+    "package_export_name": "default",
+    "package_id": "agr.alliance",
+    "package_version": "1.0.0",
+    "required_context": [],
+    "source_file": "python/src/agr_ai_curation_alliance/tools/topic_entity_tag_builder_tools.py"
   },
   "update_recorded_evidence_metadata": {
     "agent_methods": null,

@@ -24,6 +24,12 @@ BUILDER_FINALIZERS = [
     ("phenotype_builder_tools", "finalize_phenotype_extraction", "PhenotypeFinalizeInput", "phenotype_extractor"),
     ("go_builder_tools", "finalize_go_extraction", "GOFinalizeInput", "rgd_go_paper_curator"),
     ("generic_builder_tools", "finalize_generic_extraction", "GenericFinalizeInput", "pdf"),
+    (
+        "topic_entity_tag_builder_tools",
+        "finalize_topic_entity_tag_extraction",
+        "TopicEntityTagFinalizeInput",
+        "gene_expression_topic_tag",
+    ),
 ]
 
 

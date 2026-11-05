@@ -1037,6 +1037,44 @@
       "When a paper uses reporters, in situ hybridization, or antibody staining to show baseline expression."
     ]
   },
+  "gene_expression_topic_tag": {
+    "avoid_when": [
+      "To extract detailed expression patterns; use the Gene Expression Extractor.",
+      "To add a tag to ABC directly; this agent only proposes one for review.",
+      "When there is no loaded paper, since it cannot work from chat text alone."
+    ],
+    "capabilities": [
+      {
+        "description": "Decides whether the paper reports its own results on gene expression in wild-type organisms. A paper without that data gets a negated proposal, so the answer is recorded either way.",
+        "example_query": "Does this paper have gene expression data?",
+        "example_result": "Returns one proposed tag for the topic gene expression in wild type, marked as negated or not, with its reasoning and quotes from the paper when it has the data.",
+        "name": "Paper-level topic decision"
+      }
+    ],
+    "data_sources": [
+      {
+        "data_types": [
+          "PDF text chunks",
+          "Section content",
+          "Subsection content"
+        ],
+        "description": "Hybrid semantic and keyword search over the loaded paper.",
+        "name": "PDF Document Search (Weaviate)",
+        "species_supported": null
+      }
+    ],
+    "limitations": [
+      "Covers one topic, gene expression in wild type, for WormBase.",
+      "Proposes one tag per paper.",
+      "A paper uploaded directly, rather than imported from ABC, shows no ABC reference and cannot be submitted to ABC.",
+      "Nothing is written to ABC by this agent."
+    ],
+    "note": "",
+    "summary": "Reads a paper and proposes whether it has data for the topic \"gene expression in wild type\", with its reasoning and the supporting passages, for a curator to sign off.",
+    "use_when": [
+      "When you want a proposed gene-expression topic tag for a paper, to review and sign off."
+    ]
+  },
   "gene_extractor": {
     "avoid_when": [
       "To confirm a gene against the Alliance database; the domain pack's validators do that automatically on everything this agent extracts.",

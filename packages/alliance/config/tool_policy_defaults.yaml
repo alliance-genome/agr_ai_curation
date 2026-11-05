@@ -140,6 +140,56 @@ tool_policies:
     config:
       system_managed_inheritance: true
 
+  stage_topic_entity_tag:
+    display_name: Stage Topic Entity Tag
+    description: Inherited stage topic entity tag helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  patch_topic_entity_tag:
+    display_name: Patch Topic Entity Tag
+    description: Inherited patch topic entity tag helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  discard_topic_entity_tag:
+    display_name: Discard Topic Entity Tag
+    description: Inherited discard topic entity tag helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  list_staged_topic_entity_tags:
+    display_name: List Staged Topic Entity Tags
+    description: Inherited list staged topic entity tags helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
+  finalize_topic_entity_tag_extraction:
+    display_name: Finalize Topic Entity Tag Extraction
+    description: Inherited finalize topic entity tag extraction helper for the selected package agent.
+    category: Runtime Helpers
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      system_managed_inheritance: true
+
   finalize_gene_extraction:
     display_name: Finalize Gene Extraction
     description: Inherited finalize gene extraction helper for the selected package agent.

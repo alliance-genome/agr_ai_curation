@@ -1,0 +1,23 @@
+# Curator-facing documentation for the Gene Expression Topic Tag Agent.
+summary: "Reads a paper and proposes whether it has data for the topic \"gene expression in wild type\", with its reasoning and the supporting passages, for a curator to sign off."
+capabilities:
+  - name: "Paper-level topic decision"
+    description: "Decides whether the paper reports its own results on gene expression in wild-type organisms. A paper without that data gets a negated proposal, so the answer is recorded either way."
+    example_query: "Does this paper have gene expression data?"
+    example_result: "Returns one proposed tag for the topic gene expression in wild type, marked as negated or not, with its reasoning and quotes from the paper when it has the data."
+data_sources:
+  - name: "PDF Document Search (Weaviate)"
+    description: "Hybrid semantic and keyword search over the loaded paper."
+    species_supported: null
+    data_types: ["PDF text chunks", "Section content", "Subsection content"]
+use_when:
+  - "When you want a proposed gene-expression topic tag for a paper, to review and sign off."
+avoid_when:
+  - "To extract detailed expression patterns; use the Gene Expression Extractor."
+  - "To add a tag to ABC directly; this agent only proposes one for review."
+  - "When there is no loaded paper, since it cannot work from chat text alone."
+limitations:
+  - "Covers one topic, gene expression in wild type, for WormBase."
+  - "Proposes one tag per paper."
+  - "A paper uploaded directly, rather than imported from ABC, shows no ABC reference and cannot be submitted to ABC."
+  - "Nothing is written to ABC by this agent."

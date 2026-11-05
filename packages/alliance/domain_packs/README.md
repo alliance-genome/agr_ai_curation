@@ -20,6 +20,10 @@ LinkML schema references. Concrete packs such as `gene_expression`, `gene`,
 curation DB grounding in package metadata, fixtures, and Alliance package Python
 adapters instead of adding those fields to core schemas.
 
+`topic_entity_tag` differs: LinkML has no topic-tag model yet, so it pins ABC's
+topic-entity-tag API and ATP terms in its `abc_contract` metadata and keeps ABC's own
+field names. It is review-only and registers no export or submission path.
+
 For new domain-pack runs, the persisted domain envelope is the semantic source
 of truth. Workspace review rows, candidate rows, export bundles, and submission
 payloads are projections over envelope objects at a known revision.
