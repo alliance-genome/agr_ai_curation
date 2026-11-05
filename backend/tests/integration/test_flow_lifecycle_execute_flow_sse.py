@@ -516,7 +516,7 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(
     from src.lib.openai_agents.extraction_builder_workspace import (
         ExtractionBuilderWorkspace, build_internal_extraction_result_event,
     )
-    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+    from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.user import User
 
     tables = {
@@ -648,7 +648,7 @@ def test_execute_flow_persists_and_replays_terminal_specialist_text_with_file(
     test_db,
     monkeypatch,
 ):
-    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+    from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.user import User
 
     sample_pdf_path = (
