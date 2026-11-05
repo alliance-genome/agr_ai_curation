@@ -236,7 +236,8 @@ or applying curator rules is semantic. When you find a gray zone, do not settle
 it silently in either direction. Name it in the ticket, workpad, or PR, set out
 the options, and get a maintainer's decision before building it. Record the
 decision in the PR description so reviewers can verify it. Gray zones in code
-the change does not touch are noted, not blocking.
+the change does not touch are not blocking and are not reported in review;
+raise them in a ticket.
 
 Never handle meaning with text tricks. Regular expressions, keyword or word
 lists, and substring or similarity matching run over biological sentences to
