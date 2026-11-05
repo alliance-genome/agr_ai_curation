@@ -1490,6 +1490,13 @@ def _stream_events(monkeypatch, runner_events, *, launchable=True):
         "get_agent_curation_metadata",
         lambda agent_key: {"adapter_key": "fixture_adapter", "launchable": launchable},
     )
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
 
     async def _register_active_stream(
         session_id: str,
