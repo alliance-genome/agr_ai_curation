@@ -160,7 +160,30 @@ Document each setting under the `# Operational limits` section of
 its default. Adding a numeric or boolean operational limit without both the
 environment getter and documentation is a review-blocking defect.
 
-## 8) LLM Judgment and Structural Enforcement
+## 8) Code for Mechanics, LLM for Meaning
+
+This is the program's central design rule. Code and LLMs sit side by side here
+and meet at almost every step, so draw the line deliberately each time. The test
+is whether the step needs to understand meaning. If it does, the LLM does it. If
+code already has the answer, or can compute it the same way every time, code
+does it. Both directions below are review-blocking, and the gray-zone rule at
+the end applies to every change.
+
+### Mechanics belong in code
+
+Do not spend a model turn on work code can do: fetching or copying values the
+runtime already holds, collecting IDs, counting, paging through lists,
+restating tool output, replaying a fixed plan, formatting output from a known
+plan, finalizing a staged batch that passes validation, retry bookkeeping, or
+progress reporting. Every model turn costs curators seconds and the project
+money. A step belongs in code when the model calls a tool only to get state for
+the next tool, when the result is fully determined by its inputs, when the
+model produces the same plan byte for byte across runs, or when nobody reads
+the model's output. When a tool's advertised contract and its validation
+disagree, fix the contract instead of letting the model retry. Moving mechanics
+into code never moves a semantic decision with it.
+
+### Semantic judgment belongs to the LLM
 
 When a task delegates checking, validation, interpretation, or review to an LLM,
 the LLM owns the semantic judgment. Do not add a second programmatic judge that
@@ -197,13 +220,35 @@ conflicting semantic gates and remove them within the authorized scope; do not
 preserve or introduce them merely as "defense in depth". Tests should verify
 structural enforcement and faithful handling of LLM judgments, not establish
 an additional deterministic oracle for scientific meaning. Any exception must
-come from Chris's explicit instruction for that specific semantic rule.
+come from a maintainer's explicit instruction for that specific semantic rule.
 
 A minimum character count used to reject an LLM-selected abstract is a semantic
 quality veto, not a structural check. Making such a veto environment-configurable
 does not make it permissible. Exact source-copy, span offset/hash verification,
 and document/tenant ownership checks protect provenance and remain mandatory;
 they do not assess whether the selected evidence scientifically supports a claim.
+
+### Gray zones: raise them, never guess
+
+Some steps sit on the line. Validator lookups are the standing example: a unique
+exact match on an identifier is mechanical, while choosing among near matches
+or applying curator rules is semantic. When you find a gray zone, do not settle
+it silently in either direction. Name it in the ticket, workpad, or PR, set out
+the options, and get a maintainer's decision before building it. Record the
+decision in the PR description so reviewers can verify it. Gray zones in code
+the change does not touch are not blocking and are not reported in review;
+raise them in a ticket.
+
+Never handle meaning with text tricks. Regular expressions, keyword or word
+lists, and substring or similarity matching run over biological sentences to
+recognize or judge meaning are prohibited, and so are hardcoded lists of every
+possible validator, agent, gene, or term name used to recognize them in free
+text. They look deterministic, but they are guesses about meaning that break on
+the next paper. Use structural signals instead (identifiers, schema fields,
+explicit metadata, database records), or give the case to the LLM. If neither
+fits, it is a gray zone: raise it. Locating or verifying copied text, such as
+exact source-copy checks and quote localization for highlighting, is mechanics
+and stays allowed.
 
 ## 9) Shared Implementation and Review Policies
 
