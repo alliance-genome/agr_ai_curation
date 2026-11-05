@@ -25,6 +25,8 @@ DOMAINS = [
      "phenotype_extractor", "no retained phenotype annotations"),
     ("go", "go_builder_tools", "GOFinalizeInput",
      "rgd_go_paper_curator", "no retained recommendations"),
+    ("topic_entity_tag", "topic_entity_tag_builder_tools", "TopicEntityTagFinalizeInput",
+     "gene_expression_topic_tag", "no topic-tag proposal"),
 ]
 
 

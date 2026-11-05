@@ -80,6 +80,29 @@ def resolve_profile_validation(
     return compile_profile_validation(receipt, profile, generic_pack, active_group_ids=active_group_ids, user_id=user_id)
 
 
+def _envelope_profile_marked(envelope: DomainEnvelope) -> bool:
+    extraction_metadata = envelope.metadata.get("extraction_metadata")
+    provenance = (extraction_metadata.get("provenance")
+                  if isinstance(extraction_metadata, Mapping) else None)
+    return (
+        isinstance(provenance, Mapping) and provenance.get("generic_profile_ref") is not None
+    ) or any(obj.metadata.get("generic_profile_ref") is not None for obj in envelope.extracted_objects)
+
+
+def envelope_is_profile_bound(envelope: DomainEnvelope) -> bool:
+    """Report whether this envelope's validators come from a generic profile."""
+
+    raw_receipt = envelope.metadata.get("execution_receipt")
+    if raw_receipt is not None:
+        # Read the stored value directly: this runs whenever a workspace loads,
+        # so a receipt that no longer validates must not fail the whole session.
+        output_contract = raw_receipt.get("output_contract") if isinstance(raw_receipt, Mapping) else None
+        output_mode = output_contract.get("output_mode") if isinstance(output_contract, Mapping) else None
+        if not isinstance(output_mode, str) or output_mode == "profile_bound_generic":
+            return True
+    return _envelope_profile_marked(envelope)
+
+
 def resolve_envelope_profile_validation(
     envelope: DomainEnvelope,
     generic_pack: LoadedDomainPack,
@@ -94,12 +117,7 @@ def resolve_envelope_profile_validation(
     an invitation to dispatch the open generic registry's validators.
     """
     raw_receipt = envelope.metadata.get("execution_receipt")
-    extraction_metadata = envelope.metadata.get("extraction_metadata")
-    provenance = (extraction_metadata.get("provenance")
-                  if isinstance(extraction_metadata, Mapping) else None)
-    profile_marked = (
-        isinstance(provenance, Mapping) and provenance.get("generic_profile_ref") is not None
-    ) or any(obj.metadata.get("generic_profile_ref") is not None for obj in envelope.extracted_objects)
+    profile_marked = _envelope_profile_marked(envelope)
     if raw_receipt is None:
         if profile_marked:
             raise ProfileIdentityError("Profile validation requires the authoritative execution receipt")

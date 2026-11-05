@@ -849,6 +849,7 @@ async def chat_stream_endpoint(
         flow_terminal_events: List[Dict[str, Any]] = []
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
+        reviewable_extractions: List[Dict[str, Any]] = []
         sentry_error_event_count = 0
         sentry_terminal_status = "incomplete"
         sentry_transaction_context_manager = gen_ai_workflow_transaction(
@@ -998,6 +999,10 @@ async def chat_stream_endpoint(
                     yield _stream_event_sse(flat_event)
                     continue
 
+                reviewable_extraction = _reviewable_extraction_curation_metadata(event)
+                if reviewable_extraction is not None:
+                    reviewable_extractions.append(reviewable_extraction)
+
                 candidate = _build_extraction_candidate_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,
@@ -1136,6 +1141,23 @@ async def chat_stream_endpoint(
                             **evidence_curation_metadata,
                         )
                     )
+                elif not evidence_records and not evidence_summary_event_received:
+                    # A record may need no evidence, and a curator must still reach it.
+                    reviewable_adapter_keys = {
+                        item["curation_adapter_key"] for item in reviewable_extractions
+                    }
+                    if len(reviewable_adapter_keys) == 1:
+                        yield _stream_event_sse(
+                            _stream_event_payload(
+                                "evidence_summary",
+                                session_id=current_session_id,
+                                turn_id=current_turn_id,
+                                trace_id=trace_id,
+                                timestamp=datetime.now(timezone.utc).isoformat(),
+                                evidence_records=[],
+                                **reviewable_extractions[0],
+                            )
+                        )
 
                 try:
                     assistant_turn = _persist_completed_chat_stream_turn(

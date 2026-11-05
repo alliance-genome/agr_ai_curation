@@ -1463,6 +1463,108 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
     assert events[2]["evidence_records"] == [expected_record]
 
 
+def _reviewable_result_events(extracted_objects):
+    payload = {
+        "domain_pack_id": "fixture.pack",
+        "extracted_objects": extracted_objects,
+    }
+    return [
+        {"type": "RUN_STARTED", "data": {"trace_id": "trace-reviewable"}},
+        {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_fixture_specialist", "agent_key": "fixture_agent"},
+            "internal": {
+                "canonical_payload": payload,
+                "tool_output": json.dumps(payload),
+                "agent_key": "fixture_agent",
+                "extraction_result_id": "11111111-1111-1111-1111-111111111111",
+            },
+        },
+        {"type": "RUN_FINISHED", "data": {"response": "done"}},
+    ]
+
+
+def _stream_events(monkeypatch, runner_events, *, launchable=True):
+    monkeypatch.setattr(
+        chat_common,
+        "get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "fixture_adapter", "launchable": launchable},
+    )
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda _active_groups=None: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        for event in runner_events:
+            yield event
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="Assess this paper", session_id="session-review"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    return asyncio.run(_consume_stream(response))
+
+
+def test_reviewable_result_without_evidence_still_offers_review_and_curate(monkeypatch):
+    events = _stream_events(
+        monkeypatch,
+        _reviewable_result_events([{"object_type": "tag", "payload": {"absent": True}}]),
+    )
+
+    summaries = [event for event in events if event["type"] == "evidence_summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["evidence_records"] == []
+    assert summaries[0]["curation_supported"] is True
+    assert summaries[0]["curation_adapter_key"] == "fixture_adapter"
+
+
+def test_empty_extraction_does_not_offer_review_and_curate(monkeypatch):
+    events = _stream_events(monkeypatch, _reviewable_result_events([]))
+
+    assert not [event for event in events if event["type"] == "evidence_summary"]
+
+
+def test_result_from_a_non_launchable_agent_does_not_offer_review_and_curate(monkeypatch):
+    events = _stream_events(
+        monkeypatch,
+        _reviewable_result_events([{"object_type": "tag", "payload": {"absent": True}}]),
+        launchable=False,
+    )
+
+    assert not [event for event in events if event["type"] == "evidence_summary"]
+
+
 def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     expected_record = _expected_evidence_record()
     chat._LOCAL_CANCEL_EVENTS.clear()

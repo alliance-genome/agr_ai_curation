@@ -72,6 +72,7 @@ import {
 import WorkPaneToolbar from '@/features/curation/workspace/WorkPaneToolbar'
 import {
   countValidatedPending,
+  canAcceptPendingCandidate,
   isValidatedPendingCandidate,
 } from '@/features/curation/workspace/workPaneToolbar'
 import {
@@ -621,7 +622,7 @@ function CurationWorkspacePageContent({
                   selectedDecision={selectedCandidate ? {
                     label: selectedCandidate.display_label ?? selectedCandidate.candidate_id,
                     status: selectedCandidate.status,
-                    canAccept: isValidatedPendingCandidate(selectedCandidate),
+                    canAccept: canAcceptPendingCandidate(selectedCandidate),
                     isBusy: decidingCandidateIds.has(selectedCandidate.candidate_id),
                     onAccept: () => void handleAcceptTag(selectedCandidate.candidate_id),
                     onReject: () => void handleRejectTag(selectedCandidate.candidate_id),

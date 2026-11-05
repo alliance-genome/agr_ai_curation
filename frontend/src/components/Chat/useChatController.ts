@@ -973,11 +973,12 @@ export function useChatController({
 
       if (parsed.type === 'evidence_summary') {
         const evidenceRecords = extractEvidenceRecords(parsed.evidence_records)
-        if (evidenceRecords.length === 0) {
+        const curationSupport = extractEvidenceCurationSupport(parsed)
+        // A result may have records to review without any evidence to show.
+        if (evidenceRecords.length === 0 && !curationSupport?.supported) {
           return
         }
 
-        const curationSupport = extractEvidenceCurationSupport(parsed)
         const reviewAndCurateTarget = curationSupport?.supported
           ? buildEvidenceReviewAndCurateTarget(
               activeDocument?.id,

@@ -849,6 +849,24 @@ class DomainPackValidationRegistry:
 
         return tuple(_routed_match(match) for match in matches)
 
+    def has_active_validators_for_object(self, object_type: str) -> bool:
+        """Report whether any active validator applies to this object type."""
+
+        if any(
+            option.state is ValidationBindingState.ACTIVE
+            and (option.scope == "pack" or option.object_type == object_type)
+            for option in self.validation_attachment_options()
+        ):
+            return True
+        # Dispatch can prefer the role on the extracted object over the one its
+        # definition declares, so a role-only binding may apply to any object.
+        return any(
+            binding.state is ValidationBindingState.ACTIVE
+            and binding.object_roles
+            and not binding.object_types
+            for binding in self.bindings
+        )
+
     def validation_attachment_options(self) -> tuple[ValidationAttachmentOption, ...]:
         """Return deterministic flow-builder validation attachment options."""
 

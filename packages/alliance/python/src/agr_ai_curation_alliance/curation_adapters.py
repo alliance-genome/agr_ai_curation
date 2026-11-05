@@ -40,6 +40,11 @@ from agr_ai_curation_alliance.domain_packs.phenotype import (
     PhenotypeAnnotationSubmissionBlockerAdapter,
     normalize_phenotype_extraction_payload,
 )
+from agr_ai_curation_alliance.domain_packs.topic_entity_tag import (
+    TOPIC_ENTITY_TAG_ADAPTER_KEY,
+    TOPIC_ENTITY_TAG_DOMAIN_PACK_ID,
+    TopicEntityTagReviewRowMaterializer,
+)
 from src.lib.curation_adapters.reference import (
     REFERENCE_ADAPTER_KEY,
     ReferenceCandidateNormalizer,
@@ -61,7 +66,10 @@ _STRUCTURED_ADAPTER_DOMAIN_PACKS = {
     "gene_expression": "agr.alliance.gene_expression",
     "go": "agr.alliance.go",
     "phenotype": "agr.alliance.phenotype",
+    TOPIC_ENTITY_TAG_ADAPTER_KEY: TOPIC_ENTITY_TAG_DOMAIN_PACK_ID,
 }
+# Review-only adapters: they register no export adapter and no submission transport.
+_REVIEW_ONLY_ADAPTERS = {"go", TOPIC_ENTITY_TAG_ADAPTER_KEY}
 _DOMAIN_EXPORT_ADAPTERS = {
     "allele": AllelePaperEvidenceExportAdapter,
     "disease": DiseaseAnnotationExportAdapter,
@@ -90,6 +98,7 @@ _REVIEW_ROW_MATERIALIZERS = {
     "disease": DiseaseReviewRowMaterializer,
     "gene_expression": GeneExpressionReviewRowMaterializer,
     "go": GOReviewRowMaterializer,
+    TOPIC_ENTITY_TAG_ADAPTER_KEY: TopicEntityTagReviewRowMaterializer,
 }
 _EXTRACTION_PAYLOAD_NORMALIZERS = {
     "phenotype": normalize_phenotype_extraction_payload,
@@ -132,7 +141,7 @@ def _domain_pack_for(adapter_key: str, domain_pack_id: str):
 
 
 def _export_adapter_for(adapter_key: str):
-    if adapter_key == "go":
+    if adapter_key in _REVIEW_ONLY_ADAPTERS:
         return None
     export_adapter_factory = _DOMAIN_EXPORT_ADAPTERS[adapter_key]
     if adapter_key == "gene_expression":

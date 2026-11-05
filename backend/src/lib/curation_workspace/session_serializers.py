@@ -19,6 +19,7 @@ from src.lib.curation_workspace.evidence_quality import summarize_evidence_recor
 from src.lib.domain_packs.materialization import (
     project_evidence_anchor_projections,
     project_validation_summary_projections,
+    stable_object_id,
 )
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
@@ -336,6 +337,36 @@ def _domain_evidence_anchor_projections(
     )
 
 
+def _candidate_has_active_validators(candidate: CurationCandidate) -> bool:
+    """Tell the workspace when a record has no validator result to wait for.
+
+    Profile-bound output takes its validators from the profile rather than the
+    pack, so only an ordinary pack-backed object can report that it has none.
+    """
+
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.profile_validation import envelope_is_profile_bound
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+
+    envelope = _candidate_domain_envelope(candidate)
+    if envelope is None or envelope_is_profile_bound(envelope):
+        return True
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    domain_object = next(
+        (
+            item
+            for item in envelope.extracted_objects
+            if stable_object_id(item) == candidate.object_id
+        ),
+        None,
+    )
+    if domain_pack is None or domain_object is None:
+        return True
+    return DomainPackValidationRegistry.from_domain_pack(
+        domain_pack
+    ).has_active_validators_for_object(domain_object.object_type)
+
+
 def _domain_validation_summary_projections(
     candidate: CurationCandidate,
     *,
@@ -388,6 +419,7 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
         evidence_anchors=[_evidence_record(record) for record in ordered_evidence],
         evidence_anchor_projections=_domain_evidence_anchor_projections(candidate),
         validation=_validation_summary(candidate.validation_snapshots),
+        has_active_validators=_candidate_has_active_validators(candidate),
         validation_summary_projections=_domain_validation_summary_projections(
             candidate,
             object_id=candidate.object_id,
@@ -990,6 +1022,7 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
         evidence_anchors=evidence_records,
         evidence_anchor_projections=_domain_evidence_anchor_projections(candidate),
         validation=_candidate_validation_summary(candidate),
+        has_active_validators=_candidate_has_active_validators(candidate),
         validation_summary_projections=_domain_validation_summary_projections(
             candidate,
             object_id=candidate.object_id,

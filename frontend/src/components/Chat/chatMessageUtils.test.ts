@@ -7,6 +7,7 @@ import {
   loadMessagesFromStorage,
   mergeFlowChatOutputs,
   sanitizeStoredMessage,
+  withEvidenceRecords,
   withMissingEvidenceReviewAndCurateTargets,
 } from './chatMessageUtils'
 import type { Message, SerializedMessage, StoredChatData } from './types'
@@ -20,6 +21,28 @@ const evidenceRecord: EvidenceRecord = {
 }
 
 describe('chatMessageUtils', () => {
+  it('builds a review target for a supported message with no evidence', () => {
+    const nextMessages = withMissingEvidenceReviewAndCurateTargets(
+      [
+        {
+          role: 'assistant',
+          content: 'No data for the topic.',
+          timestamp: new Date(),
+          evidenceCurationSupported: true,
+          evidenceCurationAdapterKey: 'topic_entity_tag',
+        } as Message,
+      ],
+      'document-1',
+      'session-1',
+    )
+
+    expect(nextMessages[0].reviewAndCurateTarget).toEqual({
+      documentId: 'document-1',
+      originSessionId: 'session-1',
+      adapterKeys: ['topic_entity_tag'],
+    })
+  })
+
   beforeEach(() => {
     localStorage.clear()
     vi.restoreAllMocks()
@@ -180,5 +203,28 @@ describe('chatMessageUtils', () => {
 
     expect(nextMessages).toBe(messages)
     expect(nextMessages[0].reviewAndCurateTarget).toBeUndefined()
+  })
+})
+
+describe('withEvidenceRecords', () => {
+  const reply: Message = {
+    role: 'assistant',
+    content: 'Proposed tag: negated.\n\nEvidence: no expression data was reported.',
+    timestamp: new Date('2026-11-05T12:00:00Z'),
+    turnId: 'turn-1',
+  }
+
+  it('keeps the evidence text when no evidence card replaces it', () => {
+    const [message] = withEvidenceRecords([reply], [], { turnId: 'turn-1' })
+
+    expect(message.content).toContain('Evidence: no expression data was reported.')
+    expect(message.evidenceRecords).toEqual([])
+  })
+
+  it('removes the duplicate evidence text when an evidence card replaces it', () => {
+    const [message] = withEvidenceRecords([reply], [evidenceRecord], { turnId: 'turn-1' })
+
+    expect(message.content).not.toContain('Evidence: no expression data was reported.')
+    expect(message.evidenceRecords).toEqual([evidenceRecord])
   })
 })

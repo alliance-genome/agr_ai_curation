@@ -1641,6 +1641,7 @@ def _spy_inline_persistence(monkeypatch):
         ("gene", "gene_builder_tools", "gene_extractor"),
         ("phenotype", "phenotype_builder_tools", "phenotype_extractor"),
         ("go", "go_builder_tools", "rgd_go_paper_curator"),
+        ("topic_entity_tag", "topic_entity_tag_builder_tools", "gene_expression_topic_tag"),
     ],
 )
 @pytest.mark.parametrize("text_source", ["final_output", "new_items", "stream"])

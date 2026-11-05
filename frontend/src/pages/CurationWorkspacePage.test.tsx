@@ -1356,6 +1356,40 @@ describe('CurationWorkspacePage', () => {
     expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
   })
 
+  it('enables Accept for a pending record that has no validators to wait for', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates[1] = {
+      ...workspace.candidates[1],
+      has_active_validators: false,
+      validation: {
+        state: 'completed',
+        counts: {
+          validated: 0,
+          ambiguous: 0,
+          not_found: 0,
+          invalid_format: 0,
+          conflict: 0, unresolved: 0,
+          skipped: 2,
+          overridden: 0,
+        },
+        stale_field_keys: [],
+        warnings: ['No envelope validation findings targeted this field.'],
+      },
+    }
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: workspace.session,
+      action_log_entry: null,
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Accept Pending candidate' })).toBeEnabled()
+    })
+    expect(screen.getByRole('button', { name: /Accept all validated/ })).toBeDisabled()
+  })
+
   it('submits the selected-candidate toolbar Accept action through the workspace decision service', async () => {
     const workspace = buildWorkspace()
     workspace.candidates[1] = {

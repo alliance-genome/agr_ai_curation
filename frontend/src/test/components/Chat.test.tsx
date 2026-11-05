@@ -1172,6 +1172,73 @@ describe('Chat persistence', () => {
     })
   })
 
+  it('offers Review & Curate for a reviewable result that has no evidence', async () => {
+    openCurationWorkspaceMock.mockResolvedValueOnce('curation-session-negated')
+    mockChatFetch({
+      activeDocument: {
+        id: 'doc-7',
+        filename: 'doc-7.pdf',
+      },
+    })
+
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'This paper has no data for the topic.',
+        },
+        {
+          type: 'evidence_summary',
+          curation_supported: true,
+          curation_adapter_key: 'topic_entity_tag',
+          evidence_records: [],
+        },
+      ],
+    })
+
+    expect(await screen.findByText('This paper has no data for the topic.')).toBeInTheDocument()
+    expect(screen.queryByText('0 evidence quotes')).not.toBeInTheDocument()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review & Curate' }))
+
+    await waitFor(() => {
+      expect(openCurationWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: 'doc-7',
+          originSessionId: 'session-1',
+          adapterKeys: ['topic_entity_tag'],
+          navigate: mockNavigate,
+        })
+      )
+    })
+  })
+
+  it('offers nothing when a result has no evidence and is not reviewable', async () => {
+    mockChatFetch({
+      activeDocument: {
+        id: 'doc-7',
+        filename: 'doc-7.pdf',
+      },
+    })
+
+    renderChat({
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          content: 'Nothing to review here.',
+        },
+        {
+          type: 'evidence_summary',
+          curation_supported: false,
+          evidence_records: [],
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Nothing to review here.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Review & Curate' })).not.toBeInTheDocument()
+  })
+
   it('shows the unsupported curation message for evidence-only generic extraction results', async () => {
     renderChat({
       events: [

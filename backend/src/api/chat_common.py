@@ -386,6 +386,31 @@ def _build_candidate_evidence_curation_metadata(
     }
 
 
+def _reviewable_extraction_curation_metadata(event: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Describe a finalized result that has records for a curator to review."""
+
+    if event.get("type") != INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+        return None
+    internal = event.get("internal")
+    if not isinstance(internal, dict):
+        return None
+    payload = internal.get("canonical_payload")
+    if not isinstance(payload, dict) or not (
+        payload.get("extracted_objects") or payload.get("curatable_objects")
+    ):
+        return None
+    agent_key = str(internal.get("agent_key") or "").strip()
+    curation = (get_agent_curation_metadata(agent_key) or {}) if agent_key else {}
+    adapter_key = str(curation.get("adapter_key") or "").strip()
+    if not adapter_key or not curation.get("launchable"):
+        return None
+    return {
+        "curation_supported": True,
+        "curation_agent_key": agent_key,
+        "curation_adapter_key": adapter_key,
+    }
+
+
 def _persist_extraction_candidates(
     *,
     candidates: List[ExtractionEnvelopeCandidate],

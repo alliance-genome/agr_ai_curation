@@ -794,6 +794,29 @@ def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
     }
 
 
+def test_evidence_gates_honor_a_declared_exception_and_nothing_else():
+    from src.lib.flows import executor
+
+    audit = {"candidateExpected": True, "candidateBuilt": True, "adapterKeyResolved": True,
+             "evidenceCount": 0}
+
+    assert executor._flow_candidate_reject_reason(
+        candidate=object(), candidate_expected=True, used_internal_extraction_payload=True,
+        adapter_key_resolved=True, evidence_count=0, evidence_optional=True,
+    ) is None
+    assert executor._flow_candidate_reject_reason(
+        candidate=object(), candidate_expected=True, used_internal_extraction_payload=True,
+        adapter_key_resolved=True, evidence_count=0,
+    ) == "evidence_records_empty"
+    assert executor._flow_expected_extraction_handoff_failures(
+        [{"extraction_handoff_audit": {**audit, "evidenceOptional": True}}]
+    ) == []
+    failures = executor._flow_expected_extraction_handoff_failures(
+        [{"extraction_handoff_audit": audit}]
+    )
+    assert [failure["reason"] for failure in failures] == ["evidence_records_empty"]
+
+
 def _finalized_empty_step(monkeypatch=None):
     from src.lib.openai_agents.extraction_builder_workspace import (
         ExtractionBuilderWorkspace, build_internal_extraction_result_event,
@@ -2376,6 +2399,62 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert "Focus on the validated findings." in invocations[1][1]
         assert "Smith et al. (2024).pdf" in invocations[1][1]
         assert "Validate disease assertions" in invocations[1][1]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    @pytest.mark.parametrize("pack_allows_no_evidence", [True, False])
+    def test_flow_step_gates_an_evidence_free_record_on_the_pack_rule(
+        self, mock_get_agent, mock_streaming, monkeypatch, pack_allows_no_evidence
+    ):
+        """The step itself must consult the pack rule before rejecting a record with no evidence."""
+        executor = _executor_module()
+        from src.lib.openai_agents.streaming_tools import (
+            add_specialist_event,
+            clear_collected_events,
+        )
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        payload = _structured_step_output("TP53", evidence_records=[])
+        monkeypatch.setattr(
+            executor,
+            "_flow_candidate_evidence_optional",
+            lambda _candidate: pack_allows_no_evidence,
+        )
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name, **_kwargs):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                add_specialist_event({
+                    "type": executor.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+                    "details": {
+                        "toolName": tool_name,
+                        "friendlyName": f"{specialist_name}: Internal Extraction Result",
+                        "success": True,
+                    },
+                    "internal": {
+                        "tool_output": json.dumps(payload),
+                        "output_length": len(json.dumps(payload)),
+                    },
+                })
+                return "Result with no evidence."
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([_agent_node("n1", "gene", output_key="gene_output")])
+        stub_completed_review(monkeypatch, payload)
+        clear_collected_events()
+        try:
+            tools, _, _, execution_state = get_stub_review_step_tools(flow, include_unavailable=True)
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+        finally:
+            clear_collected_events()
+
+        audit = execution_state["completed_steps"][0]["extraction_handoff_audit"]
+        assert audit["evidenceCount"] == 0
+        assert audit["evidenceOptional"] is pack_allows_no_evidence
+        assert (audit["candidateRejectReason"] is None) is pack_allows_no_evidence
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
