@@ -3,9 +3,9 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.sql.database import Base
 
@@ -52,13 +52,13 @@ class PDFDocument(Base):
     # Stores: sections, top_level_sections, created_at, model_used, llm_raw_response
     hierarchy_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    # A curator's statement of which source paper an uploaded file is. Kept apart
-    # from the provenance below, which says where the file itself came from.
-    linked_reference_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    linked_reference_curie: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    linked_reference_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
+    # A curator's statement of which source paper this file is. Loaded only when
+    # read, and kept in its own table, apart from where the file itself came from.
+    reference_link: Mapped["DocumentReferenceLink | None"] = relationship(
+        back_populates="document",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     # Optional upstream provenance for provider-backed document imports.
@@ -131,3 +131,21 @@ class PDFDocument(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<PDFDocument(id={self.id}, filename='{self.filename}')>"
+
+
+class DocumentReferenceLink(Base):
+    """A curator's link from an uploaded document to its paper in the literature source."""
+
+    __tablename__ = "pdf_document_reference_links"
+
+    document_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("pdf_documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    reference_curie: Mapped[str] = mapped_column(String(128), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    document: Mapped[PDFDocument] = relationship(back_populates="reference_link")
+

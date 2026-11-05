@@ -48,7 +48,7 @@ def client(test_db, get_auth_mock, monkeypatch):
     from src.models.sql.chat_session import ChatSession
     from src.models.sql.database import Base
     from src.models.sql.database import get_db
-    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
     from src.models.sql.user import User
 
     app = create_app()
@@ -61,6 +61,7 @@ def client(test_db, get_auth_mock, monkeypatch):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            DocumentReferenceLink.__table__,
             ChatSession.__table__,
             ChatMessage.__table__,
         ],
@@ -101,7 +102,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
         DomainValidationFinding,
     )
     from src.models.sql.database import Base
-    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
     from src.models.sql.user import User
 
     Base.metadata.create_all(
@@ -109,6 +110,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            DocumentReferenceLink.__table__,
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
             DomainEnvelopeModel.__table__,

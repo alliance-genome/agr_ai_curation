@@ -33,7 +33,7 @@ from src.lib.curation_workspace.models import (
     DomainValidationFinding,
 )
 from src.models.sql.database import Base
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
@@ -65,6 +65,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 TEST_TABLES = [
     PDFDocument.__table__,
+    DocumentReferenceLink.__table__,
     CurationReviewSession.__table__,
     CurationSessionAgentRevision.__table__,
     CurationExtractionResultRecord.__table__,

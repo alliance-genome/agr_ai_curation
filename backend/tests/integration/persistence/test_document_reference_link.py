@@ -21,7 +21,7 @@ from src.lib.document_sources.models import (
     SourceReference,
 )
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationDocumentReferenceRequest,
@@ -112,8 +112,14 @@ def _session(document_id) -> str:
 def _document(scope):
     with SessionLocal() as db:
         document = db.get(PDFDocument, scope.document_id)
-        db.expunge(document)
-        return document
+        link = document.reference_link
+        return SimpleNamespace(
+            source_provider=document.source_provider,
+            source_provider_reference_curie=document.source_provider_reference_curie,
+            linked_reference_curie=link.reference_curie if link else None,
+            linked_reference_provider=link.provider if link else None,
+            linked_reference_at=link.linked_at if link else None,
+        )
 
 
 def _set_imported(scope):
@@ -261,7 +267,14 @@ async def test_a_link_saved_during_the_lookup_wins_and_the_second_is_refused(
 
     async def resolve_after_another_curator_links(identifier, *, request_bearer_token=None):
         with SessionLocal.begin() as other:
-            other.get(PDFDocument, scope.document_id).linked_reference_curie = "SOURCE:OTHER"
+            other.add(
+                DocumentReferenceLink(
+                    document_id=scope.document_id,
+                    provider="fixture_source",
+                    reference_curie="SOURCE:OTHER",
+                    linked_at=datetime.now(timezone.utc),
+                )
+            )
         return await original_resolve(identifier, request_bearer_token=request_bearer_token)
 
     monkeypatch.setattr(wired.provider, "resolve_reference", resolve_after_another_curator_links)
@@ -388,9 +401,33 @@ def test_linking_does_not_change_a_submission_retry_fingerprint(scope, migrated,
     with SessionLocal() as db:
         document = db.get(PDFDocument, scope.document_id)
         before = _document_intent_payload(document)
-        document.linked_reference_curie = CURIE
+        document.reference_link = DocumentReferenceLink(
+            provider="fixture_source", reference_curie=CURIE, linked_at=datetime.now(timezone.utc)
+        )
         after = _document_intent_payload(document)
         db.rollback()
 
     assert before == after
     assert not {"filename", "reference_curie", "reference_source"} & set(before)
+
+
+def test_deleting_a_document_removes_its_link(scope, migrated):
+    from sqlalchemy import text
+
+    with SessionLocal.begin() as db:
+        db.add(
+            DocumentReferenceLink(
+                document_id=scope.document_id,
+                provider="fixture_source",
+                reference_curie=CURIE,
+                linked_at=datetime.now(timezone.utc),
+            )
+        )
+    with SessionLocal.begin() as db:
+        db.delete(db.get(PDFDocument, scope.document_id))
+    with SessionLocal() as db:
+        remaining = db.execute(
+            text("SELECT count(*) FROM pdf_document_reference_links WHERE document_id = :id"),
+            {"id": scope.document_id},
+        ).scalar_one()
+    assert remaining == 0

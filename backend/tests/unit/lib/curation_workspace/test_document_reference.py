@@ -12,7 +12,9 @@ def _document(*, imported_id=None, imported_curie=None, linked_curie=None):
     return SimpleNamespace(
         source_provider_reference_id=imported_id,
         source_provider_reference_curie=imported_curie,
-        linked_reference_curie=linked_curie,
+        reference_link=(
+            SimpleNamespace(reference_curie=linked_curie) if linked_curie is not None else None
+        ),
     )
 
 

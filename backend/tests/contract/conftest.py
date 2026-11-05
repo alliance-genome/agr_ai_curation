@@ -84,7 +84,7 @@ def chat_contract_db():
     from src.models.sql.chat_message import ChatMessage
     from src.models.sql.chat_session import ChatSession
     from src.models.sql.database import Base, SessionLocal
-    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
     from src.models.sql.user import User
 
     def _cleanup(db):
@@ -109,6 +109,7 @@ def chat_contract_db():
             tables=[
                 User.__table__,
                 PDFDocument.__table__,
+                DocumentReferenceLink.__table__,
                 ChatSession.__table__,
                 ChatMessage.__table__,
             ],

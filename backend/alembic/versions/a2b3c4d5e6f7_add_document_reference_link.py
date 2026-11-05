@@ -1,4 +1,4 @@
-"""Add a curator reference link to documents, and its action-log events.
+"""Add a table for curator reference links on documents, and its action-log events.
 
 Revision ID: a2b3c4d5e6f7
 Revises: f4a8b0c2d3e5
@@ -10,6 +10,7 @@ from typing import Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "a2b3c4d5e6f7"
@@ -64,17 +65,17 @@ def _replace_action_type_check(values: Sequence[str]) -> None:
 
 
 def upgrade() -> None:
-    op.add_column(
-        "pdf_documents",
-        sa.Column("linked_reference_provider", sa.String(length=64), nullable=True),
-    )
-    op.add_column(
-        "pdf_documents",
-        sa.Column("linked_reference_curie", sa.String(length=128), nullable=True),
-    )
-    op.add_column(
-        "pdf_documents",
-        sa.Column("linked_reference_at", sa.DateTime(timezone=True), nullable=True),
+    op.create_table(
+        "pdf_document_reference_links",
+        sa.Column(
+            "document_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("pdf_documents.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column("provider", sa.String(length=64), nullable=False),
+        sa.Column("reference_curie", sa.String(length=128), nullable=False),
+        sa.Column("linked_at", sa.DateTime(timezone=True), nullable=False),
     )
     _replace_action_type_check(CURRENT_ACTION_TYPES)
 
@@ -85,6 +86,4 @@ def downgrade() -> None:
         "('document_reference_linked', 'document_reference_unlinked')"
     )
     _replace_action_type_check(PREVIOUS_ACTION_TYPES)
-    op.drop_column("pdf_documents", "linked_reference_at")
-    op.drop_column("pdf_documents", "linked_reference_curie")
-    op.drop_column("pdf_documents", "linked_reference_provider")
+    op.drop_table("pdf_document_reference_links")

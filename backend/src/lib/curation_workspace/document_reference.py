@@ -32,7 +32,7 @@ from src.lib.document_sources.models import (
 from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.observability.runtime import report_runtime_exception
 from src.lib.packages.document_source_provider_models import DevelopmentReaderUnavailable
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
@@ -72,9 +72,10 @@ def effective_document_reference(document: Any) -> EffectiveDocumentReference | 
             curie=document.source_provider_reference_curie,
             source=CurationDocumentReferenceSource.IMPORTED,
         )
-    if document.linked_reference_curie:
+    link = document.reference_link
+    if link is not None:
         return EffectiveDocumentReference(
-            curie=document.linked_reference_curie,
+            curie=link.reference_curie,
             source=CurationDocumentReferenceSource.CURATOR_LINK,
         )
     return None
@@ -115,7 +116,7 @@ def _document_or_404(
 def _refuse_link(document: PDFDocument) -> None:
     if _has_imported_reference(document):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_IMPORTED_DETAIL)
-    if document.linked_reference_curie:
+    if document.reference_link is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_ALREADY_LINKED_DETAIL)
 
 
@@ -254,9 +255,11 @@ def link_document_reference(
     document = _document_or_404(db, session.document_id, for_update=True)
     _refuse_link(document)
     now = datetime.now(timezone.utc)
-    document.linked_reference_provider = found.provider
-    document.linked_reference_curie = found.reference_curie
-    document.linked_reference_at = now
+    document.reference_link = DocumentReferenceLink(
+        provider=found.provider,
+        reference_curie=found.reference_curie,
+        linked_at=now,
+    )
     db.add(document)
     _log_change(
         db,
@@ -291,14 +294,13 @@ def unlink_document_reference(
     document = _document_or_404(db, session.document_id, for_update=True)
     if _has_imported_reference(document):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_IMPORTED_DETAIL)
-    if not document.linked_reference_curie:
+    link = document.reference_link
+    if link is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_NOT_LINKED_DETAIL)
-    removed_curie = document.linked_reference_curie
-    removed_provider = document.linked_reference_provider
+    removed_curie = link.reference_curie
+    removed_provider = link.provider
     now = datetime.now(timezone.utc)
-    document.linked_reference_provider = None
-    document.linked_reference_curie = None
-    document.linked_reference_at = None
+    document.reference_link = None
     db.add(document)
     _log_change(
         db,

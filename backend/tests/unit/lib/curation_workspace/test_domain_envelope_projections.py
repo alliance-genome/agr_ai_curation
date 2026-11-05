@@ -37,7 +37,7 @@ from src.lib.domain_packs.materialization import (
     project_validation_summary_projections,
 )
 from src.models.sql.database import Base
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
@@ -69,6 +69,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 TEST_TABLES = [
     PDFDocument.__table__,
+    DocumentReferenceLink.__table__,
     ReviewSessionModel.__table__,
     CurationSessionAgentRevision.__table__,
     ExtractionResultModel.__table__,

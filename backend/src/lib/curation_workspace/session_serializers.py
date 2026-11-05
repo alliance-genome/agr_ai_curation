@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from src.lib.curation_adapters.entity_tag_bridge import (
     ENTITY_FIELD_KEYS,
@@ -74,7 +74,11 @@ def _load_documents(db: Session, document_ids: Iterable[UUID]) -> dict[UUID, PDF
     ids = list({document_id for document_id in document_ids})
     if not ids:
         return {}
-    documents = db.scalars(select(PDFDocument).where(PDFDocument.id.in_(ids))).all()
+    documents = db.scalars(
+        select(PDFDocument)
+        .where(PDFDocument.id.in_(ids))
+        .options(selectinload(PDFDocument.reference_link))
+    ).all()
     return {document.id: document for document in documents}
 
 
