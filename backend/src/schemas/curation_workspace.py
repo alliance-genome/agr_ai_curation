@@ -503,7 +503,7 @@ class CurationDocumentReferenceStatus(str, Enum):
 class CurationDocumentReferenceRequest(CurationWorkspaceBaseModel):
     """One curator-entered identifier. The server resolves it; nothing else is accepted."""
 
-    identifier: str = Field(min_length=1, max_length=256, description="Identifier to look up")
+    identifier: str = Field(min_length=1, description="Identifier to look up")
 
 
 class CurationDocumentReferenceResult(CurationWorkspaceBaseModel):

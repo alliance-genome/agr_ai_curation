@@ -185,7 +185,13 @@ async def find_document_reference(
         )
     finally:
         if provider is not None:
-            await provider.aclose()
+            try:
+                await provider.aclose()
+            except Exception as cleanup_err:
+                logger.warning(
+                    "Best-effort document-source provider cleanup failed: %s",
+                    type(cleanup_err).__name__,
+                )
 
     # A provider can know an identifier from elsewhere (such as PubMed) without
     # holding the paper. Only a reference id means the source has it.

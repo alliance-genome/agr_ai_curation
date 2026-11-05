@@ -12,6 +12,7 @@ from src.api import curation_workspace as api
 from src.lib.curation_workspace import document_reference as service
 from src.lib.curation_workspace.models import CurationActionLogEntry, CurationReviewSession
 from src.lib.curation_workspace.session_queries import get_session_detail
+from src.lib.packages.document_source_provider_models import DevelopmentReaderUnavailable
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
     DocumentSourceError,
@@ -251,6 +252,56 @@ async def test_link_saves_the_servers_answer_and_every_session_sees_it(scope, mi
     }
 
 
+@pytest.mark.asyncio
+async def test_a_link_saved_during_the_lookup_wins_and_the_second_is_refused(
+    scope, migrated, wired, monkeypatch
+):
+    session_id = _session(scope.document_id)
+    original_resolve = wired.provider.resolve_reference
+
+    async def resolve_after_another_curator_links(identifier, *, request_bearer_token=None):
+        with SessionLocal.begin() as other:
+            other.get(PDFDocument, scope.document_id).linked_reference_curie = "SOURCE:OTHER"
+        return await original_resolve(identifier, request_bearer_token=request_bearer_token)
+
+    monkeypatch.setattr(wired.provider, "resolve_reference", resolve_after_another_curator_links)
+
+    with pytest.raises(HTTPException) as refused:
+        await _link(session_id)
+
+    assert refused.value.status_code == 409
+    assert _document(scope).linked_reference_curie == "SOURCE:OTHER"
+    assert _log_entries(session_id) == []
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_development_reader_is_reported_as_no_token(
+    scope, migrated, wired, monkeypatch
+):
+    async def context(*, request, user_claims):
+        raise DevelopmentReaderUnavailable("no reader")
+
+    monkeypatch.setattr(service, "build_document_source_request_context", context)
+
+    result = await _find(_session(scope.document_id))
+
+    assert result.status is CurationDocumentReferenceStatus.TOKEN_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_fails_to_close_does_not_lose_the_answer(
+    scope, migrated, wired, monkeypatch
+):
+    async def failing_close():
+        raise DocumentSourceError("close failed")
+
+    monkeypatch.setattr(wired.provider, "aclose", failing_close)
+
+    result = await _find(_session(scope.document_id))
+
+    assert result.status is CurationDocumentReferenceStatus.FOUND
+
+
 def test_the_request_cannot_carry_a_reference():
     with pytest.raises(ValueError):
         CurationDocumentReferenceRequest(identifier="PMID:1", reference_curie="SOURCE:EVIL")
@@ -327,3 +378,19 @@ async def test_endpoints_refuse_when_document_source_import_is_off(
             await action(session_id)
         assert refused.value.status_code == 503
     assert wired.provider.tokens == []
+
+
+def test_linking_does_not_change_a_submission_retry_fingerprint(scope, migrated, wired):
+    from src.lib.curation_workspace.session_submission_service import (
+        _document_intent_payload,
+    )
+
+    with SessionLocal() as db:
+        document = db.get(PDFDocument, scope.document_id)
+        before = _document_intent_payload(document)
+        document.linked_reference_curie = CURIE
+        after = _document_intent_payload(document)
+        db.rollback()
+
+    assert before == after
+    assert not {"filename", "reference_curie", "reference_source"} & set(before)

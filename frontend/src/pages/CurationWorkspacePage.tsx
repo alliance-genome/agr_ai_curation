@@ -626,8 +626,10 @@ function CurationWorkspacePageContent({
                 document={workspaceDocument}
                 importEnabled={documentSourceQuery.data?.importEnabled === true}
                 onChanged={refreshAfterReview}
+                onRetrySource={() => void documentSourceQuery.refetch()}
                 presentation={documentSourceQuery.data?.presentation ?? null}
                 sessionId={workspace.session.session_id}
+                sourceCheckFailed={documentSourceQuery.isError}
               />
             )}
             navigationSlot={(

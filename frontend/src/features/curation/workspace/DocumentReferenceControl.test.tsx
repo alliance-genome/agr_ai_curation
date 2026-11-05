@@ -4,11 +4,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CurationDocumentRef } from '@/features/curation/types'
 import DocumentReferenceControl from './DocumentReferenceControl'
 
-const mocks = vi.hoisted(() => ({
-  findDocumentReference: vi.fn(),
-  linkDocumentReference: vi.fn(),
-  unlinkDocumentReference: vi.fn(),
-}))
+const mocks = vi.hoisted(() => {
+  class CurationWorkspaceRequestError extends Error {
+    constructor(public status: number, message: string) {
+      super(message)
+    }
+  }
+  return {
+    CurationWorkspaceRequestError,
+    findDocumentReference: vi.fn(),
+    linkDocumentReference: vi.fn(),
+    unlinkDocumentReference: vi.fn(),
+  }
+})
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => mocks)
 
@@ -25,6 +33,7 @@ function document(overrides: Partial<CurationDocumentRef> = {}): CurationDocumen
 function renderControl(
   overrides: Partial<CurationDocumentRef> = {},
   importEnabled = true,
+  extraProps: { onRetrySource?: () => void; sourceCheckFailed?: boolean } = {},
 ) {
   const onChanged = vi.fn().mockResolvedValue(undefined)
   render(
@@ -34,6 +43,7 @@ function renderControl(
       onChanged={onChanged}
       presentation={importEnabled ? presentation : null}
       sessionId="session-1"
+      {...extraProps}
     />,
   )
   return { onChanged }
@@ -189,5 +199,115 @@ describe('DocumentReferenceControl', () => {
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
     expect(mocks.unlinkDocumentReference).toHaveBeenCalledWith('session-1')
+  })
+
+  it('locks the identifier during Find and links the identifier that was found', async () => {
+    let finishFind: (value: unknown) => void = () => {}
+    mocks.findDocumentReference.mockReturnValue(new Promise((resolve) => { finishFind = resolve }))
+    mocks.linkDocumentReference.mockResolvedValue({
+      status: 'linked',
+      message: 'Linked.',
+      reference_curie: 'SOURCE:1',
+    })
+    renderControl()
+
+    await findPaper('PMID:1')
+    expect(screen.getByLabelText('Identifier')).toBeDisabled()
+    finishFind({
+      status: 'found',
+      message: 'Found.',
+      reference_curie: 'SOURCE:1',
+      reference_title: 'Paper one',
+    })
+    await screen.findByText('Paper one')
+    fireEvent.click(screen.getByRole('button', { name: 'Link this paper' }))
+
+    await waitFor(() => expect(mocks.linkDocumentReference).toHaveBeenCalledWith('session-1', 'PMID:1'))
+  })
+
+  it('reports a saved link when only the screen refresh fails', async () => {
+    mocks.findDocumentReference.mockResolvedValue({
+      status: 'found',
+      message: 'Found.',
+      reference_curie: 'SOURCE:9',
+      reference_title: 'The found paper',
+    })
+    mocks.linkDocumentReference.mockResolvedValue({
+      status: 'linked',
+      message: 'Linked.',
+      reference_curie: 'SOURCE:9',
+    })
+    const { onChanged } = renderControl()
+    onChanged.mockRejectedValue(new Error('Save your current edits first.'))
+
+    await findPaper()
+    await screen.findByText('The found paper')
+    fireEvent.click(screen.getByRole('button', { name: 'Link this paper' }))
+
+    expect(await screen.findByText('Saved, but the screen did not refresh. Reload this page.'))
+      .toBeInTheDocument()
+    expect(screen.queryByText('Save your current edits first.')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('reports a saved unlink when only the screen refresh fails', async () => {
+    mocks.unlinkDocumentReference.mockResolvedValue({ status: 'unlinked', message: 'Unlinked.' })
+    const { onChanged } = renderControl({
+      reference_curie: 'SOURCE:2',
+      reference_source: 'curator_link',
+    })
+    onChanged.mockRejectedValue(new Error('Refresh failed.'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Unlink this paper' }))
+
+    expect(await screen.findByText('Saved, but the screen did not refresh. Reload this page.'))
+      .toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('refreshes the header when the server says the screen is out of date', async () => {
+    mocks.findDocumentReference.mockRejectedValue(
+      new mocks.CurationWorkspaceRequestError(409, 'This paper is already linked.'),
+    )
+    const { onChanged } = renderControl()
+
+    await findPaper()
+
+    expect(await screen.findByText('This paper is already linked.')).toBeInTheDocument()
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not refresh the header on other request failures', async () => {
+    mocks.findDocumentReference.mockRejectedValue(
+      new mocks.CurationWorkspaceRequestError(500, 'Server error.'),
+    )
+    const { onChanged } = renderControl()
+
+    await findPaper()
+
+    expect(await screen.findByText('Server error.')).toBeInTheDocument()
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it('says so and offers a retry when the source settings could not be read', () => {
+    const onRetrySource = vi.fn()
+    renderControl({}, false, { onRetrySource, sourceCheckFailed: true })
+
+    expect(screen.getByText('Could not check the literature source.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(onRetrySource).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps showing a reference when the source settings could not be read', () => {
+    renderControl(
+      { reference_curie: 'SOURCE:2', reference_source: 'curator_link' },
+      false,
+      { onRetrySource: vi.fn(), sourceCheckFailed: true },
+    )
+
+    expect(screen.getByText('Reference: SOURCE:2')).toBeInTheDocument()
+    expect(screen.getByText('Could not check the literature source.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Unlink' })).not.toBeInTheDocument()
   })
 })

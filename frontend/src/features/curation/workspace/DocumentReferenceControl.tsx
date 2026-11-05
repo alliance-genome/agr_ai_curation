@@ -14,6 +14,7 @@ import {
 } from '@mui/material'
 
 import {
+  CurationWorkspaceRequestError,
   findDocumentReference,
   linkDocumentReference,
   unlinkDocumentReference,
@@ -28,8 +29,16 @@ export interface DocumentReferenceControlProps {
   document: CurationDocumentRef
   importEnabled: boolean
   onChanged: () => Promise<void> | void
+  onRetrySource?: () => void
   presentation: DocumentSourceProviderMetadata | null
   sessionId: string
+  sourceCheckFailed?: boolean
+}
+
+const REFRESH_FAILED_MESSAGE = 'Saved, but the screen did not refresh. Reload this page.'
+
+function isOutOfDate(error: unknown): boolean {
+  return error instanceof CurationWorkspaceRequestError && error.status === 409
 }
 
 function errorMessage(error: unknown): string {
@@ -55,7 +64,8 @@ interface LinkDialogProps {
   document: CurationDocumentRef
   label: string
   onCancel: () => void
-  onLinked: () => Promise<void> | void
+  onLinked: () => void
+  onOutOfDate: () => void
   open: boolean
   presentation: DocumentSourceProviderMetadata | null
   sessionId: string
@@ -66,15 +76,17 @@ function LinkDialog({
   label,
   onCancel,
   onLinked,
+  onOutOfDate,
   open,
   presentation,
   sessionId,
 }: LinkDialogProps) {
   const [identifier, setIdentifier] = useState('')
   const [found, setFound] = useState<CurationDocumentReferenceResult | null>(null)
+  const [foundIdentifier, setFoundIdentifier] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isBusy, setIsBusy] = useState(false)
-  const examples = presentation?.identifierExamples?.slice(0, 2).join(', ')
+  const examples = presentation?.identifierExamples?.join(', ')
 
   const handleFind = useCallback(async (event: FormEvent) => {
     event.preventDefault()
@@ -89,34 +101,42 @@ function LinkDialog({
       const result = await findDocumentReference(sessionId, trimmed)
       if (result.status === 'found') {
         setFound(result)
+        setFoundIdentifier(trimmed)
       } else {
         setError(result.message)
       }
     } catch (findError) {
       setError(errorMessage(findError))
+      if (isOutOfDate(findError)) {
+        onOutOfDate()
+      }
     } finally {
       setIsBusy(false)
     }
-  }, [identifier, isBusy, sessionId])
+  }, [identifier, isBusy, onOutOfDate, sessionId])
 
   const handleConfirm = useCallback(async () => {
     setIsBusy(true)
     setError(null)
     try {
-      const result = await linkDocumentReference(sessionId, identifier.trim())
-      if (result.status !== 'linked') {
-        setFound(null)
-        setError(result.message)
+      // Save exactly the identifier whose paper the curator is looking at.
+      const result = await linkDocumentReference(sessionId, foundIdentifier)
+      if (result.status === 'linked') {
+        onLinked()
         return
       }
-      await onLinked()
+      setFound(null)
+      setError(result.message)
     } catch (linkError) {
       setFound(null)
       setError(errorMessage(linkError))
+      if (isOutOfDate(linkError)) {
+        onOutOfDate()
+      }
     } finally {
       setIsBusy(false)
     }
-  }, [identifier, onLinked, sessionId])
+  }, [foundIdentifier, onLinked, onOutOfDate, sessionId])
 
   return (
     <Dialog fullWidth maxWidth="sm" onClose={isBusy ? undefined : onCancel} open={open}>
@@ -130,6 +150,7 @@ function LinkDialog({
           <Stack component="form" direction="row" onSubmit={handleFind} spacing={1}>
             <TextField
               autoFocus
+              disabled={isBusy}
               fullWidth
               helperText={examples ? `For example: ${examples}` : undefined}
               label="Identifier"
@@ -186,36 +207,56 @@ export default function DocumentReferenceControl({
   document,
   importEnabled,
   onChanged,
+  onRetrySource,
   presentation,
   sessionId,
+  sourceCheckFailed = false,
 }: DocumentReferenceControlProps) {
   const [dialog, setDialog] = useState<'link' | 'unlink' | null>(null)
   const [unlinkError, setUnlinkError] = useState<string | null>(null)
   const [isUnlinking, setIsUnlinking] = useState(false)
+  const [refreshFailed, setRefreshFailed] = useState(false)
   const label = presentation?.displayLabel ?? 'the literature source'
   const reference = document.reference_curie
   const canChange = importEnabled
 
-  const handleLinked = useCallback(async () => {
-    await onChanged()
-    setDialog(null)
+  // The change is already committed here, so a failed refresh must not read as a failed change.
+  const refreshHeader = useCallback(async () => {
+    setRefreshFailed(false)
+    try {
+      await onChanged()
+    } catch {
+      setRefreshFailed(true)
+    }
   }, [onChanged])
+
+  const handleLinked = useCallback(() => {
+    setDialog(null)
+    void refreshHeader()
+  }, [refreshHeader])
+
+  const handleOutOfDate = useCallback(() => {
+    void refreshHeader()
+  }, [refreshHeader])
 
   const handleUnlink = useCallback(async () => {
     setIsUnlinking(true)
     setUnlinkError(null)
     try {
       await unlinkDocumentReference(sessionId)
-      await onChanged()
       setDialog(null)
+      void refreshHeader()
     } catch (error) {
       setUnlinkError(errorMessage(error))
+      if (isOutOfDate(error)) {
+        void refreshHeader()
+      }
     } finally {
       setIsUnlinking(false)
     }
-  }, [onChanged, sessionId])
+  }, [refreshHeader, sessionId])
 
-  if (!reference && !canChange) {
+  if (!reference && !canChange && !sourceCheckFailed) {
     return null
   }
 
@@ -226,12 +267,33 @@ export default function DocumentReferenceControl({
       spacing={1}
       sx={{ alignItems: 'center', minHeight: 24 }}
     >
-      <Typography variant="caption" sx={{ color: reference ? 'text.secondary' : 'warning.main' }}>
-        {reference
-          ? `${presentation?.displayLabel ?? 'Reference'}: ${reference}`
-          : `Not linked to ${label}`}
-      </Typography>
-      {!reference ? (
+      {reference || canChange ? (
+        <Typography variant="caption" sx={{ color: reference ? 'text.secondary' : 'warning.main' }}>
+          {reference
+            ? `${presentation?.displayLabel ?? 'Reference'}: ${reference}`
+            : `Not linked to ${label}`}
+        </Typography>
+      ) : null}
+      {sourceCheckFailed ? (
+        <>
+          <Typography variant="caption" sx={{ color: 'warning.main' }}>
+            Could not check the literature source.
+          </Typography>
+          <Button
+            onClick={onRetrySource}
+            size="small"
+            sx={{ minWidth: 0, py: 0, fontSize: '0.72rem' }}
+          >
+            Retry
+          </Button>
+        </>
+      ) : null}
+      {refreshFailed ? (
+        <Typography variant="caption" sx={{ color: 'warning.main' }}>
+          {REFRESH_FAILED_MESSAGE}
+        </Typography>
+      ) : null}
+      {!reference && canChange ? (
         <Button
           aria-label={`Link to ${label}`}
           onClick={() => setDialog('link')}
@@ -253,12 +315,13 @@ export default function DocumentReferenceControl({
           Unlink
         </Button>
       ) : null}
-      {dialog === 'link' ? (
+      {dialog === 'link' && !reference ? (
         <LinkDialog
           document={document}
           label={label}
           onCancel={() => setDialog(null)}
           onLinked={handleLinked}
+          onOutOfDate={handleOutOfDate}
           open
           presentation={presentation}
           sessionId={sessionId}
@@ -268,7 +331,7 @@ export default function DocumentReferenceControl({
         fullWidth
         maxWidth="xs"
         onClose={isUnlinking ? undefined : () => setDialog(null)}
-        open={dialog === 'unlink'}
+        open={dialog === 'unlink' && Boolean(reference)}
       >
         <DialogTitle>Unlink this paper?</DialogTitle>
         <DialogContent>

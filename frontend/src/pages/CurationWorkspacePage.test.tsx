@@ -1373,6 +1373,7 @@ describe('CurationWorkspacePage', () => {
 
   it('offers a link for a paper with no reference and leaves Accept unaffected', async () => {
     const workspace = buildWorkspace()
+    workspace.candidates[1] = { ...workspace.candidates[1], has_active_validators: false }
     documentSourceMock.fetchDocumentSourceProviderConfiguration.mockResolvedValue({
       provider: 'fixture_source',
       importEnabled: true,
@@ -1388,7 +1389,7 @@ describe('CurationWorkspacePage', () => {
 
     expect(await screen.findByText('Not linked to Fixture Source')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Link to Fixture Source' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Accept Pending candidate' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Accept Pending candidate' })).toBeEnabled()
   })
 
   it('enables Accept for a pending record that has no validators to wait for', async () => {
