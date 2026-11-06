@@ -374,25 +374,36 @@ async def test_source_prerequisite_retry_is_recoverable_at_bound_tool_boundary()
     assert assessment.await_count == 2
 
 
-def test_protocol_and_tools_direct_grouped_review_with_record_specific_reasons():
+def test_protocol_v5_reads_the_packet_once_and_keeps_record_specific_reasons():
     from src.lib.validation_review.protocol import REVIEW_PROTOCOL
     from src.lib.validation_review.tools import runtime_tool_contract
 
     tools = {tool["name"]: tool for tool in runtime_tool_contract()}
-    assert "get_validation_record_sources" in tools
-    assert tools["get_validation_record_sources"]["parameters"]["required"] == ["target_ids"]
+    assert 'version="5"' in REVIEW_PROTOCOL
+    assert tools["read_review_packet"]["parameters"]["required"] == ["packet_id", "page"]
     protocol = " ".join(REVIEW_PROTOCOL.split())
-    for text in ("get_validation_record_sources", "evidence_group", "reason specific to each record",
-                 "because its neighbors were acceptable", "nothing in that call applies",
-                 "never validator answers", "Never accept an answer you have not read", "group_limit",
+    for text in ("Call read_review_packet with no packet_id", "read every page of that packet before deciding",
+                 "do not read those records or answers again", "Decide every D handle",
+                 "in one record_validation_review call with the packet_id and packet_decisions",
+                 "split only when they exceed decision_entries", "reason specific to each record",
+                 "never a generic reason", "because its neighbors were acceptable",
+                 "nothing in that call applies", "Never accept an answer you have not read",
                  "Matching text is not enough", "records that differ from the rest",
                  "defer and investigate with targeted follow-up", "These are cues, not exclusions",
-                 "do not leave a record deferred over remaining uncertainty"):
-        assert text in protocol
-    assert "Validator answers are not included" in tools["get_validation_record_sources"]["description"]
+                 "one request_targeted_extraction covering all of them",
+                 "do not leave a record deferred over remaining uncertainty",
+                 "a correct identity does not make a record that is out of scope acceptable",
+                 "using the exact-history tools and explicit entries"):
+        assert text in protocol, text
+    assert "group_limit" not in protocol and "evidence_group" not in protocol
+    save = tools["record_validation_review"]
+    assert "reason specific to each record" in save["description"]
+    assert "packet_id" in save["description"] and "packet_decisions" in save["description"]
+    assert set(save["parameters"]["required"]) == {"operation_id", "packet_id", "packet_decisions", "entries"}
+    decision = save["parameters"]["$defs"]["PacketDecision"]
+    assert set(decision["properties"]) == {"handle", "action", "reason", "absence_assessment", "unresolved_fields"}
+    assert decision["additionalProperties"] is False
     assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
-    assert "Assess the requested records incrementally" not in REVIEW_PROTOCOL
-    assert "reason specific to each record" in tools["record_validation_review"]["description"]
 
 
 @pytest.mark.asyncio

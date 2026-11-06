@@ -218,6 +218,12 @@ lists each applied handle with its `decision_unit_id` and binding `target_id`. A
 record too large for one page is listed under `too_large` with its target and handles
 for the exact-history tools. The explicit `entries` form is unchanged.
 
+Protocol v5 asks the supervisor to read the packet once, decide every handle with a
+reason specific to each record, save in one call (more only when the decisions exceed
+`VALIDATION_REVIEW_DECISION_ENTRIES`), and send one targeted follow-up covering all
+deferred records. Curator-requested rounds, follow-up contribution selection and
+retirement keep the exact-history tools.
+
 ### Review progress lines
 
 While review runs, each review tool adds one plain-language progress line to a live

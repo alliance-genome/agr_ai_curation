@@ -11,11 +11,12 @@ from .record_scope import allowed_units, review_blockers
 
 
 REMINDER = (
-    "The recorded review is not complete. Start a fresh scan with "
-    "get_outstanding_validation_reviews, follow its pages, and read the exact "
-    "source/answer references needed for your assessment. Continue authorized "
-    "work and record your decisions. Do not infer readiness from prose or an "
-    "empty page, invent a scientific disposition, or reset any allowance."
+    "The recorded review is not complete. Read a fresh packet with "
+    "read_review_packet, including every page, and decide what remains; in a "
+    "curator-requested round, scan with get_outstanding_validation_reviews and "
+    "read the exact references you need. Continue authorized work and record "
+    "your decisions. Do not infer readiness from prose or an empty page, invent "
+    "a scientific disposition, or reset any allowance."
 )
 KNOWN_BLOCKERS = frozenset({
     "unreviewed", "episode_review_pending", "answer_review_pending", "execution_pending",
