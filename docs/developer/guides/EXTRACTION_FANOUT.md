@@ -75,9 +75,12 @@ finalizes. Its last reply is the specialist explanation saved with the result.
   attributed to it, and a writer cannot overwrite another writer's draft through a reused
   `pending_ref_id` (`ExtractionBuilderOwnershipError`). The planner's thread keeps the
   single-writer semantics.
-- Writers share the run's workspace (lock-protected) and evidence list. Their tool calls
-  are replayed through the specialist stream loop after they finish, so the audit, the
-  evidence summary and the tool-call record match a single-writer run.
+- Writers share the run's workspace (lock-protected). A writer's verified
+  `record_evidence` result joins the run's live evidence list as soon as the call returns,
+  so the writer can update its own new record by ID. Writers' tool calls are replayed
+  through the specialist stream loop after they finish, which merges the same evidence
+  records by ID, so the audit, the evidence summary and the tool-call record match a
+  single-writer run.
 - Extraction trace event sequence numbers are allocated under a lock.
 
 ## Failures

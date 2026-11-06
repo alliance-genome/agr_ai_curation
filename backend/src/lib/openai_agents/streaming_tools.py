@@ -4947,6 +4947,9 @@ async def run_specialist_with_events(
                 specialist_name=specialist_name,
                 input_text=input_text,
                 emit_event=add_specialist_event,
+                record_live_evidence=lambda record: _append_live_evidence_record(
+                    live_evidence_records, record
+                ),
             )
             if builder_materializer_agent
             else None
