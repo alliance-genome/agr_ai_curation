@@ -114,6 +114,11 @@ _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS = frozenset(
 _VALIDATOR_EXECUTION_FAILURE_EXPLANATION = (
     "Validator execution could not be completed. Curator review is required."
 )
+# Fields of a supplied evidence record the validator model sees. Span, chunk and
+# envelope provenance stays on the persisted request and in _check_evidence.
+_MODEL_EVIDENCE_RECORD_FIELDS = (
+    "evidence_record_id", "section", "subsection", "page", "verified_quote",
+)
 
 
 class _ValidatorDispatchRuntimeError(RuntimeError):
@@ -1937,31 +1942,9 @@ def run_package_scoped_validator_agent_batch(
         ),
     )
 
-    provider_payload = {
-        "mode": "domain_validator_batch",
-        "instructions": (
-            "Validate every DomainValidationRequest in requests. Return a "
-            "JSON object with a results array containing exactly one "
-            "DomainValidatorResultBase-compatible result per request_id. "
-            "Copy dispatcher-owned identity fields from each request. Use "
-            "one bulk lookup tool call per compatible shared lookup group "
-            "when a bulk method exists, using list inputs such as "
-            "gene_symbols or allele_symbols. Map the returned items back to "
-            "their request_ids, and do not loop one lookup call per request "
-            "when one shared bulk call can answer the group."
-        ),
-        "requests": [
-            validator_request_payload_for_agent(job.request)
-            for job in jobs
-        ],
-    }
-    if compact_runtime is not None:
-        provider_payload["instructions"] = (
-            "Assess every request scientifically and finalize exactly one compact decision per request_id. "
-            "Use one bulk lookup tool call per compatible shared lookup group when a bulk method exists, "
-            "using the tool's declared bulk/list input. Do not loop one lookup per request "
-            "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
-        )
+    provider_payload = validator_batch_payload_for_agent(
+        [job.request for job in jobs], compact_runtime=compact_runtime is not None,
+    )
     from src.lib.validation_review.validator_adapter import attach_reconsideration_context
     provider_payload = attach_reconsideration_context(agent, provider_payload)
     validator_model = str(getattr(agent, "model", "") or "")
@@ -2190,34 +2173,128 @@ def _validator_evidence_context_identity(
     }
 
 
+def _model_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a supplied evidence record a validator reads: ID, location, quote."""
+    return {
+        key: record[key]
+        for key in _MODEL_EVIDENCE_RECORD_FIELDS
+        if record.get(key) is not None
+    }
+
+
+def _model_evidence_records(request: DomainValidationRequest) -> list[dict[str, Any]]:
+    """Request evidence for the model, minus records already in ``evidence_quotes``.
+
+    ``selected_inputs.evidence_quotes`` keeps its name and shape: custom
+    validators read it. A record is left out only when that input carries the
+    same ID with the same quote.
+    """
+    quoted = {
+        (bundle.get("evidence_record_id"), bundle.get("verified_quote"))
+        for bundle in request.selected_inputs.get("evidence_quotes", [])
+        if isinstance(bundle, Mapping)
+    }
+    return [
+        model_record
+        for model_record in map(_model_evidence_record, request.evidence)
+        if (model_record.get("evidence_record_id"), model_record.get("verified_quote")) not in quoted
+    ]
+
+
 def validator_request_payload_for_agent(
     request: DomainValidationRequest,
 ) -> dict[str, Any]:
     """Return the compact request shape sent to validator agents.
 
     The canonical ``DomainValidationRequest`` intentionally keeps dispatcher
-    metadata for persistence and materialization. The runtime model input should
-    avoid repeating that same data, especially ``target.input_values`` which is
-    a copy of ``selected_inputs`` for most bindings.
+    metadata and full evidence provenance for persistence and materialization.
+    The runtime model input should avoid repeating that same data, especially
+    ``target.input_values`` which is a copy of ``selected_inputs`` for most
+    bindings, and evidence provenance the validator does not read.
     """
 
     payload = request.model_dump(
         mode="json",
         exclude_none=True,
-        exclude={"input_selectors"},
+        exclude={"input_selectors", "evidence"},
     )
     target = payload.get("target")
     if isinstance(target, dict):
         target.pop("input_values", None)
+    payload["evidence"] = _model_evidence_records(request)
     payload["runtime_compaction"] = {
         "omitted_fields": [
             "input_selectors",
             "target.input_values",
         ],
         "input_values_source": "selected_inputs",
+        "evidence_view": (
+            "Evidence records show their ID, location and verified quote. A record "
+            "already in selected_inputs.evidence_quotes appears only there."
+        ),
         "canonical_identity_restored_by": "finalize_validator_result",
     }
     return payload
+
+
+def validator_batch_payload_for_agent(
+    requests: list[DomainValidationRequest],
+    *,
+    compact_runtime: bool,
+) -> dict[str, Any]:
+    """Return the batch model input, listing each distinct evidence record once.
+
+    Each request names its records in ``evidence_record_ids``. A record without
+    an ID, or whose ID an earlier request supplied with different content, stays
+    in that request's own ``evidence`` list, so only identical records are shared.
+    """
+
+    if compact_runtime:
+        instructions = (
+            "Assess every request scientifically and finalize exactly one compact decision per request_id. "
+            "Use one bulk lookup tool call per compatible shared lookup group when a bulk method exists, "
+            "using the tool's declared bulk/list input. Do not loop one lookup per request "
+            "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
+        )
+    else:
+        instructions = (
+            "Validate every DomainValidationRequest in requests. Return a "
+            "JSON object with a results array containing exactly one "
+            "DomainValidatorResultBase-compatible result per request_id. "
+            "Copy dispatcher-owned identity fields from each request. Use "
+            "one bulk lookup tool call per compatible shared lookup group "
+            "when a bulk method exists, using list inputs such as "
+            "gene_symbols or allele_symbols. Map the returned items back to "
+            "their request_ids, and do not loop one lookup call per request "
+            "when one shared bulk call can answer the group."
+        )
+    instructions += (
+        " evidence_records lists each supplied evidence record once; a request's "
+        "evidence_record_ids name the records supplied for that request. Judge each "
+        "request only with its own evidence."
+    )
+    evidence_records: dict[str, dict[str, Any]] = {}
+    request_payloads = []
+    for request in requests:
+        payload = validator_request_payload_for_agent(request)
+        record_ids: list[str] = []
+        own_records: list[dict[str, Any]] = []
+        for record in payload.pop("evidence"):
+            record_id = record.get("evidence_record_id")
+            if record_id is not None and evidence_records.setdefault(record_id, record) == record:
+                record_ids.append(record_id)
+            else:
+                own_records.append(record)
+        payload["evidence_record_ids"] = record_ids
+        if own_records:
+            payload["evidence"] = own_records
+        request_payloads.append(payload)
+    return {
+        "mode": "domain_validator_batch",
+        "instructions": instructions,
+        "evidence_records": list(evidence_records.values()),
+        "requests": request_payloads,
+    }
 
 
 def _append_validator_finalization_instructions(
@@ -3469,5 +3546,6 @@ __all__ = [
     "run_package_scoped_validator_agent_batch_in_worker_thread",
     "run_package_scoped_validator_agent_in_worker_thread",
     "run_package_scoped_validator_agent",
+    "validator_batch_payload_for_agent",
     "validator_request_payload_for_agent",
 ]

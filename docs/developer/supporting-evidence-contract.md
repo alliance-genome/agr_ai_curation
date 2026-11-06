@@ -43,6 +43,19 @@ the paper or manage source evidence, and return resolutions/questions separately
 Database/ontology lookup tools remain available. Missing context is reported to
 the supervisor without an automatic extraction retry.
 
+### What the validator model sees
+
+The persisted request keeps every evidence record whole. The model input
+(`validator_request_payload_for_agent`) shows each request-level `evidence`
+record as `evidence_record_id`, `section`, `subsection`, `page` and
+`verified_quote` only, and leaves out a record whose ID and quote already appear
+in `selected_inputs.evidence_quotes`. That input keeps its name and shape, because
+custom validators read it. A batch input lists each distinct record once in
+`evidence_records`; each request names its own in `evidence_record_ids`. A record
+without an ID, or one whose ID another request supplies with different content,
+stays in that request's own `evidence` list. Evidence references in decisions are
+still checked against the persisted request.
+
 ## Rollout
 
 Deploy package YAML and validator prompts together. Allele's reusable
