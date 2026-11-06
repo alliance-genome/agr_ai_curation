@@ -68,6 +68,9 @@ from src.lib.observability import tool_results, runtime
         ({"status": "needs_source_read"}, False, True, None),
         ({"status": "invalid_arguments", "error_code": "invalid_tool_arguments", "saved": False}, False, False, None),
         ({"status": "invalid_arguments"}, False, True, None),
+        # Unhashable values are compared, never hashed.
+        ({"status": {"nested": "needs_source_read"}, "error_code": ["invalid_tool_arguments"], "saved": False},
+         False, True, None),
         ({"status": "error", "data": {"success": False}}, False, True, None),
         ("ERROR timeout secret arbitrary text", False, True, None),
     ],
