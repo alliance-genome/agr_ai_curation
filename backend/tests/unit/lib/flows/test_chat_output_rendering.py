@@ -33,6 +33,9 @@ from openai.types.responses import (
 from src.lib.agent_studio.catalog_service import ToolExecutionContext, resolve_tools
 from src.lib.config.agent_loader import get_agent_definition
 from src.lib.flows.chat_output_delivery import chat_output_delivery_scope
+from src.lib.openai_agents.tools.output_formatter_tools import (
+    formatter_completion_tool_use_behavior,
+)
 from tests.fixtures.flows.semantic_chat_output import (
     CURATOR_REQUEST,
     EM_DASH,
@@ -123,8 +126,14 @@ def _tool_outputs(model_input: Any) -> dict[str, str]:
     }
 
 
-def _install_scripted_formatter(monkeypatch, executor, model: _ScriptedFormatterModel) -> dict[str, Any]:
-    """Build the chat agent from its packaged tool list with the scripted model."""
+def _install_scripted_formatter(
+    monkeypatch,
+    executor,
+    model: _ScriptedFormatterModel,
+    *,
+    fail_after_run: Exception | None = None,
+) -> dict[str, Any]:
+    """Build the chat agent from its packaged tools, stop rule and the scripted model."""
 
     captured: dict[str, Any] = {}
 
@@ -147,6 +156,7 @@ def _install_scripted_formatter(monkeypatch, executor, model: _ScriptedFormatter
             instructions="\n\n".join(kwargs.get("additional_runtime_context") or []),
             model=model,
             tools=tools,
+            tool_use_behavior=formatter_completion_tool_use_behavior,
         )
 
     def fake_streaming_tool(*, agent, **kwargs):
@@ -159,6 +169,9 @@ def _install_scripted_formatter(monkeypatch, executor, model: _ScriptedFormatter
                 run_config=RunConfig(tracing_disabled=True),
             )
             captured["specialist_final_output"] = result.final_output
+            if fail_after_run is not None:
+                # The specialist wrapper fails after the agent run delivered.
+                raise fail_after_run
             return result.final_output
 
         return SimpleNamespace(on_invoke_tool=on_invoke_tool)
@@ -239,8 +252,9 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     with chat_output_delivery_scope() as delivery:
         receipt_text = await _invoke(tool, "Render the requested expression table.")
 
-    # Actual provider instructions stay compact and carry no diagnostics.
-    assert len(model.requests) == 7
+    # Actual provider instructions stay compact and carry no diagnostics. The run
+    # ends at the delivered output: no model call after finalize_chat_output.
+    assert len(model.requests) == 6
     instructions = model.requests[0]["instructions"]
     assert len(instructions) < _MAX_FORMATTER_INSTRUCTION_CHARS
     assert len(instructions) < PROVIDER_INSTRUCTIONS_LIMIT
@@ -256,7 +270,7 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     # Selected tool results retain complete data; the common boundary owns capacity.
     final_input = model.requests[-1]["input"]
     outputs = _tool_outputs(final_input)
-    assert len(outputs) == 6
+    assert len(outputs) == 5
     catalog_page = json.loads(outputs["call-0"])["inventory"]["field_catalog"]
     # One resolvable-term field (ALL-1283) instead of parallel label/id/status lists.
     assert catalog_page["matching_fields"] >= 1
@@ -274,10 +288,11 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     assert value_slice["total_chars"] == len(value_slice["value_slice"])
     preview = json.loads(outputs["call-4"])["preview"]
     assert preview["total_count"] == 7
-    finalize_receipt = json.loads(outputs["call-5"])
+    # The finalize receipt is the specialist's final output, not closing text.
+    finalize_receipt = json.loads(captured["specialist_final_output"])
     assert finalize_receipt.get("delivered") is True, finalize_receipt
     assert finalize_receipt["projection_summary"]["row_count"] == 7
-    assert "body wall musculature" not in outputs["call-5"]
+    assert "body wall musculature" not in captured["specialist_final_output"]
 
     # The caller receives a compact receipt; the application holds the table.
     assert len(receipt_text) < _MAX_RECEIPT_CHARS
@@ -285,7 +300,9 @@ async def test_chat_output_uses_tools_over_bundle_not_instruction_payload(monkey
     assert receipt["delivered"] is True
     assert receipt["projection_summary"]["columns"] == EXPECTED_HEADERS
     assert "body wall musculature" not in receipt_text
-    assert captured["specialist_final_output"] == "Chat output delivered."
+    assert {
+        key: value for key, value in receipt.items() if key != "message"
+    } == finalize_receipt
 
     assert delivery.delivered
     content = delivery.output or ""
@@ -345,6 +362,8 @@ async def test_chat_output_cannot_complete_is_returned_without_delivery(monkeypa
     with chat_output_delivery_scope() as delivery:
         result = json.loads(await _invoke(tool, "Render the table."))
 
+    # formatter_cannot_complete does not end the run; the closing turn still runs.
+    assert len(model.requests) == 2
     assert delivery.output is None
     assert result["status"] == "cannot_complete"
     assert result["reason"] == "No PMID field was saved."
@@ -388,6 +407,8 @@ async def test_operational_ceiling_in_flow_chat_step_fails_once_with_saved_data_
     with chat_output_delivery_scope() as delivery:
         result = json.loads(await _invoke(tool, "Render the table."))
 
+    # A failed finalize does not end the run; the model is asked again.
+    assert len(model.requests) == 2
     assert delivery.output is None
     assert result["status"] == "cannot_complete"
     assert result["code"] == "operational_ceiling_exceeded"
@@ -430,6 +451,8 @@ async def test_cannot_complete_after_reported_ceiling_keeps_one_capture(monkeypa
         raw = await _invoke(tool, "Render the table.")
     result = json.loads(raw)
 
+    # The model explains after the failed finalize, then writes its closing text.
+    assert len(model.requests) == 3
     assert delivery.output is None
     assert result["status"] == "cannot_complete"
     assert result["failure_reported"] is True
@@ -467,15 +490,21 @@ async def test_specialist_error_after_delivery_still_delivers_table_once(monkeyp
         "report_runtime_exception",
         lambda exc, **kwargs: runtime_reports.append((exc, kwargs)),
     )
-    model = _FailAfterFinalizeModel(
+    model = _ScriptedFormatterModel(
         [("finalize_chat_output", {"plan_json": json.dumps(SEMANTIC_CHAT_PLAN)})]
     )
-    _install_scripted_formatter(monkeypatch, executor, model)
+    _install_scripted_formatter(
+        monkeypatch,
+        executor,
+        model,
+        fail_after_run=RuntimeError("provider stream dropped after finalization"),
+    )
     tool = _chat_tool(executor, completed_steps=[build_semantic_output_step(min_diagnostic_chars=10_000)])
 
     with chat_output_delivery_scope() as delivery:
         receipt = json.loads(await _invoke(tool, "Render the table."))
 
+    assert len(model.requests) == 1
     assert delivery.delivered
     assert (delivery.output or "").split("\n")[: len(EXPECTED_ROWS) + 2] == _expected_table_lines()
     assert receipt["delivered"] is True
@@ -510,7 +539,7 @@ async def test_multi_table_report_uses_program_rendering_and_compact_model_recei
         ("validate_output_projection", {"report_json": json.dumps(report)}),
         ("finalize_chat_output", {"report_json": json.dumps(report)}),
     ])
-    _install_scripted_formatter(monkeypatch, executor, model)
+    captured = _install_scripted_formatter(monkeypatch, executor, model)
     tool = _chat_tool(executor, completed_steps=[build_semantic_output_step()])
     with chat_output_delivery_scope() as delivery:
         receipt = json.loads(await _invoke(tool, "Render two independently configured tables."))
@@ -526,5 +555,7 @@ async def test_multi_table_report_uses_program_rendering_and_compact_model_recei
         for summary in summaries:
             assert len(json.dumps(summary)) < _MAX_RECEIPT_CHARS
             assert summary["export_accounting"]["counts"]["exported_row_count"] == 7
+    assert len(model.requests) == 2
     final_results = _tool_outputs(model.requests[-1]["input"])
     assert all("body wall musculature" not in value for value in final_results.values())
+    assert "body wall musculature" not in captured["specialist_final_output"]
