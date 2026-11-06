@@ -333,6 +333,30 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         )
         self.assertEqual(result["parse_status"], "full")
 
+    def test_compact_json_lookup_result_keeps_count_and_warnings_visible(self):
+        # AgrQueryResult model text: compact JSON with unset fields left out.
+        fields = {"status": "ok", "data": {"items": [{"symbol": "wg"}]}, "count": 1,
+                  "warnings": ["anatomy_lookup:no match for [x]", "bulk_symbol_cap_applied:2:3"],
+                  "lookup_status": "success"}
+        result = ToolResultParser.parse(json.dumps(fields, separators=(",", ":")))
+
+        self.assertEqual(result["parse_status"], "full")
+        self.assertEqual(result["parsed"]["json_data"], fields)
+        self.assertEqual(result["parsed"]["warnings"], fields["warnings"])
+        self.assertEqual(
+            result["summary"],
+            "Status: ok | Count: 1 | Warning: anatomy_lookup:no match for [x] | "
+            "Bulk symbols truncated: processed first 2 of 3",
+        )
+
+    def test_structured_warnings_stay_in_json_data_only(self):
+        fields = {"status": "ok", "warnings": [{"code": "partial"}]}
+        result = ToolResultParser.parse(json.dumps(fields))
+
+        self.assertEqual(result["parse_status"], "full")
+        self.assertEqual(result["parsed"], {"json_data": fields})
+        self.assertEqual(result["summary"], "Status: ok")
+
     def test_document_local_references_remain_exact_in_tool_diagnostics(self):
         selections = [{"chunk_index": 42, "span_index": 3}]
         payload = {"status": "verified", "selections": selections,

@@ -66,6 +66,11 @@ from src.lib.observability import tool_results, runtime
         ),
         ({"status": "needs_source_read", "error_code": "unissued_document_selection", "saved": False}, False, False, None),
         ({"status": "needs_source_read"}, False, True, None),
+        ({"status": "invalid_arguments", "error_code": "invalid_tool_arguments", "saved": False}, False, False, None),
+        ({"status": "invalid_arguments"}, False, True, None),
+        # Unhashable values are compared, never hashed.
+        ({"status": {"nested": "needs_source_read"}, "error_code": ["invalid_tool_arguments"], "saved": False},
+         False, True, None),
         ({"status": "error", "data": {"success": False}}, False, True, None),
         ("ERROR timeout secret arbitrary text", False, True, None),
     ],
@@ -78,6 +83,30 @@ def test_contract_matrix(payload, studio, success, code):
             tool_results.classify_tool_result(json.dumps(payload), studio=studio)
             == result
         )
+
+
+@pytest.mark.parametrize(
+    "fields,success,code",
+    [
+        ({"status": "ok", "data": {"candidate_id": "c1"}, "count": 1, "lookup_status": "success"}, True, None),
+        ({"status": "error", "data": {"validation_issues": [{"reason": "invalid"}]}, "count": 1,
+          "message": "rejected", "lookup_status": "blocked", "failure_classification": "validation_failed"},
+         False, None),
+        ({"status": "error", "message": "provider down", "lookup_status": "transient",
+          "failure_classification": "transient"}, False, "lookup_dependency_failure"),
+    ],
+)
+def test_agr_results_classify_from_the_object_and_model_text_drops_unset_fields(monkeypatch, fields, success, code):
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5] / "packages/alliance/python/src"))
+    from agr_ai_curation_alliance.tools.agr_curation import AgrQueryResult
+
+    result = AgrQueryResult(**fields)
+    outcome = tool_results.classify_tool_result(result)
+    assert (outcome.success, outcome.operational_code) == (success, code)
+    # The SDK sends str(result) to the model; classification never reads it.
+    assert json.loads(str(result)) == fields
+    assert "None" not in str(result) and "null" not in str(result)
 
 
 @pytest.mark.asyncio

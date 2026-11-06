@@ -99,6 +99,7 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
 def test_record_evidence_description_exposes_span_ids_not_quote_text(monkeypatch):
     monkeypatch.setattr(record_evidence, "function_tool", _identity_tool)
     monkeypatch.setattr(record_evidence, "scoped_document_tool", lambda tool, **kwargs: tool)
+    monkeypatch.setattr(record_evidence, "_reject_unknown_arguments", lambda tool: tool)
 
     tool = record_evidence.create_record_evidence_tool("doc-1", "user-1")
     doc = _tool_doc(tool)

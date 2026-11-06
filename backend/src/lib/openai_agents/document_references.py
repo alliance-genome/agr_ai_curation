@@ -421,6 +421,31 @@ async def project_history_source_result(result: dict, *, user_id: str) -> dict:
     return {**result, "payload": payload}
 
 
+# A verified record_evidence result as the model sees it: the new record's
+# identity and location plus the exact quote once. The model already holds
+# what it sent (entity, selections, targets); per-fragment copies of the quote
+# and repeated document identity stay in the stored result.
+_RECORD_EVIDENCE_MODEL_FIELDS = (
+    "status", "evidence_record_id", "chunk_index", "page", "section", "subsection",
+    "figure_reference", "verified_quote", "source_reference_status",
+)
+
+
+def _compact_reference_view(tool: str, payload: dict) -> dict:
+    """Model-only shape for evidence results; stored results are unchanged."""
+    if tool == "record_evidence" and payload.get("status") == "verified":
+        return {key: payload[key] for key in _RECORD_EVIDENCE_MODEL_FIELDS if key in payload}
+    if tool == "list_recorded_evidence" and isinstance(payload.get("evidence_records"), list):
+        document_id = payload.get("document_id")
+        return {**payload, "evidence_records": [
+            {key: value for key, value in record.items()
+             if not (key == "document_id" and value == document_id)
+             and not (key == "envelope_targets" and value == [])}
+            if isinstance(record, dict) else record
+            for record in payload["evidence_records"]]}
+    return payload
+
+
 async def project_model_source_items(items: list, *, user_id: str | None, cache: dict) -> list:
     """Model-only view. SDK run items and evidence/UI consumers keep originals."""
     from copy import deepcopy
@@ -451,7 +476,7 @@ async def project_model_source_items(items: list, *, user_id: str | None, cache:
         # describe historical reads; current writes always reverify the binding.
         key = (name, hashlib.sha256(exact_json(payload).encode("utf-8")).hexdigest())
         if key not in cache:
-            cache[key] = exact_json(_refresh_document_guidance(
-                await project_source_references(payload, user_id=user_id), name))
+            cache[key] = exact_json(_compact_reference_view(name, _refresh_document_guidance(
+                await project_source_references(payload, user_id=user_id), name)))
         item["output"] = cache[key]
     return result
