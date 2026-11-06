@@ -58,6 +58,7 @@ A capability needs a provider-visible tool, working dispatch, current authentica
 | “I canceled—did anything save?” | Report actual Apply/Save state; never infer persistence from successful proposal generation |
 | “How does the program decide this?” | Inspect deployed source when needed; describe behavior plainly and identify inference or unavailable evidence |
 | “What does ‘Writing 38 records in 8 parallel batches’ mean, and why does my flow differ from my Studio test?” | Read guide topic `extraction_fanout` and the run's `extraction_fanout` timeline section; explain the plan, writers, check and save from observed counts; Studio tests run as one writer |
+| “Why does this answer say ‘Checked once with 3 other records’? Did the validator check my record?” | Read guide topic `validator_inputs`; confirm the shared run from the trace or saved results; each record has its own copy of one exact-match answer, which is not a skipped check; offer Revalidate record when the curator wants a separate assessment |
 
 ## Current verification
 

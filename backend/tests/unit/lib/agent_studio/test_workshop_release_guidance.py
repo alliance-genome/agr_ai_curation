@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[5]
     ("perturbation", "domain_workflows", ["measured changes after perturbation", "Rescue-only", "reagent, specimen and allele validation remain under development"]),
     ("parallel batches", "extraction_fanout", ["Never assume it is on", "submit_extraction_plan (shown as Plan Records)", "Agent Studio test runs", "run as one writer", "writers get only read_chunk, search_document, record_evidence and the stage tool", "extraction_plan_missing", "writer_completed", "not judgments about the records", "several model-call inputs"]),
     ("Plan Records", "extraction_fanout", ["code never matches labels or merges records", "a planning miss, a writing miss and a check miss"]),
+    ("Checked once", "validator_inputs", ['"Checked once with N other records that had the same value and evidence."', "where N counts the other records", "the same evidence records with the same IDs, quotes and locations", "(a different entity label or different spans) has different IDs and runs separately", "Nothing is matched by similarity", "without any check being skipped", "Revalidate record"]),
+    ("custom validator prompt", "validator_inputs", ["The saved validation request keeps every evidence record whole", "receives selected_inputs exactly as saved", "keeps its evidence_record_id, verified_quote and field_path", "In that evidence list, chunk and span locators", "get_trace_payload", "never to span IDs, source fragments or revision bookkeeping", "evidence_record_ids"]),
 ])
 def test_curator_question_finds_complete_relevant_guidance(monkeypatch, query, topic, requirements):
     template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
