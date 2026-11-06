@@ -60,7 +60,7 @@ DEFAULT_FLOW_QUERY = (
     "Include the organism and one verified evidence record for that gene."
 )
 DEFAULT_FLOW_MODEL = "gpt-6.1-sol"
-DEFAULT_CHAT_MODEL = "gpt-6-astra"
+DEFAULT_CHAT_MODEL = "gpt-6.1-sol"
 DEFAULT_SPECIALIST_MODEL = "gpt-6.1-sol"
 OPENAI_AGENTS_DISTRIBUTION = "openai-agents"
 OPENAI_AGENTS_LOCKFILE_RELATIVE_PATH = Path("backend/requirements.lock.txt")

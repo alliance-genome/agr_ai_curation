@@ -1157,7 +1157,7 @@ LLM_PROVIDER_STRICT_MODE=true      # Fail startup if required keys missing (defa
 
 # Per-agent model overrides (in agent.yaml via ${VAR:-default})
 AGENT_GENE_MODEL=gpt-6.1-sol
-AGENT_SUPERVISOR_MODEL=gpt-6-astra
+AGENT_SUPERVISOR_MODEL=gpt-6.1-sol
 
 # Runtime paths (optional; these are the container defaults)
 AGR_RUNTIME_CONFIG_DIR=/runtime/config

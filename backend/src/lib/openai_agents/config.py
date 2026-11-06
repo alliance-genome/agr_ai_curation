@@ -8,7 +8,7 @@ Environment variable naming convention:
   AGENT_{AGENT_NAME}_{SETTING}
 
 Example:
-  AGENT_SUPERVISOR_MODEL=gpt-6-astra
+  AGENT_SUPERVISOR_MODEL=gpt-6.1-sol
   AGENT_PDF_MODEL=gpt-6.1-sol
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
