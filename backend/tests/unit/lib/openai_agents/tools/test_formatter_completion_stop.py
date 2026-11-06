@@ -4,7 +4,7 @@ The callers of a formatter run read the runtime's file handoff or chat
 delivery, never the model's closing text, so the run must not spend another
 model turn after a successful finalize. A failed finalize keeps the run going
 so the model can repair, retry or explain why it cannot complete, and
-formatter_cannot_complete still leads to the closing text the supervisor reads.
+formatter_cannot_complete still leads to the closing turn.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def test_successful_finalize_ends_the_run_with_its_receipt(tool_name, output):
         ("finalize_chat_output", json.dumps({"status": "invalid", "errors": ["notes too long"]})),
         # The SDK's text for a finalize call that raised is not a receipt.
         ("finalize_and_save", "An error occurred while running the tool."),
-        # The supervisor still reads the closing text after cannot-complete.
+        # formatter_cannot_complete still leads to the closing turn.
         ("formatter_cannot_complete", _CANNOT_COMPLETE),
         # Other formatter tools also report status ok; they never complete the run.
         ("validate_output_projection", json.dumps({"status": "ok", "errors": []})),

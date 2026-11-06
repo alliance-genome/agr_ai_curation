@@ -2466,8 +2466,10 @@ def formatter_completion_tool_use_behavior(
       cannot-complete reason with the chat finalize failure and in place of a
       file finalize failure, so stopping on a failure would change the message
       curators see.
-    - ``formatter_cannot_complete``. The supervisor still receives the model's
-      closing text after it, as before.
+    - ``formatter_cannot_complete``. The model still writes its closing text,
+      and each caller returns what it returned before: a flow file output step
+      and an ad hoc chat export return that closing text to the supervisor, and
+      a flow chat output step returns the recorded cannot-complete payload.
     """
 
     for result in tool_results:
