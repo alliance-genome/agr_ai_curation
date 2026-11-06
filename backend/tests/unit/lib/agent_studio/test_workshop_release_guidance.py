@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[5]
     ("reasoning", "tool_discovery_and_limits", ["reasoning_options/defaults", "pinned revision", "INCOMPLETE", "never PASS"]),
     ("phenotype_terms", "domain_workflows", ["complete declared phenotype_terms", "not the primary display label", "under development", "not a phenotype extraction or an automatic"]),
     ("perturbation", "domain_workflows", ["measured changes after perturbation", "Rescue-only", "reagent, specimen and allele validation remain under development"]),
+    ("parallel batches", "extraction_fanout", ["Never assume it is on", "submit_extraction_plan (shown as Plan Records)", "Agent Studio test runs", "run as one writer", "writers get only read_chunk, search_document, record_evidence and the stage tool", "extraction_plan_missing", "writer_completed", "not judgments about the records", "several model-call inputs"]),
+    ("Plan Records", "extraction_fanout", ["code never matches labels or merges records", "a planning miss, a writing miss and a check miss"]),
 ])
 def test_curator_question_finds_complete_relevant_guidance(monkeypatch, query, topic, requirements):
     template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
@@ -68,6 +70,39 @@ def test_curator_domain_docs_match_shipped_scope():
     assert "complete term list" in phenotype
     assert "contributes_to" not in disease
     assert "subject validation routes separately" in disease
+
+
+@pytest.mark.parametrize("package", ["core", "alliance"])
+def test_extraction_fanout_guide_is_available_on_demand_for_each_package(package):
+    template = (ROOT / f"packages/{package}/config/agent_studio_system_prompt.md").read_text()
+    always_sent, topics = prepare_studio_prompt_template(template)
+    assert "extraction_fanout" in {topic.topic_id for topic in topics}
+    result = read_studio_guide(template=template, render_diagnostic_tools=str, topic="extraction_fanout")
+    assert result["success"] and result["complete"]
+    assert result["content"] not in always_sent
+    assert "extraction_fanout" in {
+        item["topic"] for item in read_studio_guide(
+            template=template, render_diagnostic_tools=str, query="extraction_plan_missing",
+        )["topics"]
+    }
+
+
+def test_trace_workflow_points_fanout_runs_to_the_fanout_guide():
+    template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
+    workflow = read_studio_guide(template=template, render_diagnostic_tools=str, topic="trace_investigation")
+    assert "read studio guide topic `extraction_fanout`" in workflow["content"]
+
+
+def test_fanout_guide_says_evidence_review_and_completion_are_skipped_by_instruction():
+    template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
+    guide = read_studio_guide(template=template, render_diagnostic_tools=str, topic="extraction_fanout")["content"]
+    assert "recording evidence from the chunks it already read" in guide
+    assert "extraction-completion steps are skipped by instruction, not blocked" in guide
+    assert "The planner and the check pass still have those tools; writers do not." in guide
+    assert "is not told to skip those steps" in guide
+    assert "steps are replaced" not in guide
+    assert "the planner's staging turn, the writers and the check pass" in guide
+    assert "reach the planner and the check pass, not the writers" not in guide
 
 
 @pytest.mark.parametrize("package", ["core", "alliance"])

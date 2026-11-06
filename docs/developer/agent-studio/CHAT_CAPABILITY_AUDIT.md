@@ -57,6 +57,7 @@ A capability needs a provider-visible tool, working dispatch, current authentica
 | “Update this agent but leave the other flow alone.” | Save a new immutable revision and propose retargeting only the originating node; other pins stay intact |
 | “I canceled—did anything save?” | Report actual Apply/Save state; never infer persistence from successful proposal generation |
 | “How does the program decide this?” | Inspect deployed source when needed; describe behavior plainly and identify inference or unavailable evidence |
+| “What does ‘Writing 38 records in 8 parallel batches’ mean, and why does my flow differ from my Studio test?” | Read guide topic `extraction_fanout` and the run's `extraction_fanout` timeline section; explain the plan, writers, check and save from observed counts; Studio tests run as one writer |
 
 ## Current verification
 

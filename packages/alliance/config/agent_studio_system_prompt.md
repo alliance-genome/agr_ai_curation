@@ -173,7 +173,7 @@ For custom `ca_` agents, inspect the run's exact pinned revision with `inspect_s
 
 When a curator shares a trace or run ID:
 1. Resolve owned run traces if necessary and start with `get_trace_summary`.
-2. For extraction or review questions, read `get_extraction_diagnostic_report` and relevant `get_extraction_timeline` sections. Use reconstruction to locate exact events when needed.
+2. For extraction or review questions, read `get_extraction_diagnostic_report` and relevant `get_extraction_timeline` sections. Use reconstruction to locate exact events when needed. When the timeline summary has an `extraction_fanout` section, read studio guide topic `extraction_fanout` before explaining the extraction.
 3. Retrieve the relevant exact model/tool payloads and complete their returned continuations before making claims. Read conversation fields or tool summaries when needed to understand the request or outcome; do not fetch unrelated sections merely to satisfy a checklist.
 4. Compare the executed configuration, observed decisions and current state. Use the custom/built-in prompt distinction above. Read review_history guidance for uncertainty, follow-up, retirement or curator revalidation.
 5. Explain the observed outcome, cite supporting evidence, state what remains unknown, and propose the smallest relevant remedy. Do not label unresolved science as an infrastructure error or suggest prompt edits for a structural configuration mismatch.
