@@ -261,11 +261,18 @@ receive model-authored row arrays or file bytes.
 
 On successful `finalize_and_save`, specialist streaming returns a deterministic
 `{status: "ok", saved_file: true, file: {...}}` handoff to the supervisor using
-the same safe FileInfo fields as `FILE_READY`. The formatter's final prose is
-not responsible for conveying the URL; even missing final prose does not cause
-another model call after a save. Metadata is invocation-local. Duplicate saves
-retain the original file and do not emit another download card. Failed saves or
-`formatter_cannot_complete` do not establish this success contract. A save that
+the same safe FileInfo fields as `FILE_READY`. A successful save writes no
+closing prose: agents with the formatter tools (packaged CSV, TSV, JSON and
+chat output formatters, and custom agents built from them) end the run as soon
+as `finalize_and_save` or `finalize_chat_output` returns `status: ok`, and that
+receipt becomes the run's output. An invalid or failed finalize goes back to
+the model, which can repair the plan, retry, or call
+`formatter_cannot_complete`. After `formatter_cannot_complete` the model still
+writes its closing text, which the supervisor receives. Metadata is
+invocation-local.
+Duplicate saves retain the original file and do not emit another download
+card. Failed saves or `formatter_cannot_complete` do not establish this success
+contract. A save that
 reports success but omits required file metadata returns `handoff_error` with
 `saved_file: true` and missing field names, without inventing a link or claiming
 the save failed. Existing file authorization and storage contracts are unchanged.

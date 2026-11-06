@@ -2342,6 +2342,15 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         output_type=output_schema,
         output_guardrails=output_guardrails,
     )
+    if uses_runtime_formatter_tools:
+        # Packaged formatters and custom agents built from them end the run once
+        # the file is saved or chat output delivered; callers read the runtime
+        # receipt, not a closing message (ALL-1496).
+        from src.lib.openai_agents.tools.output_formatter_tools import (
+            formatter_completion_tool_use_behavior,
+        )
+
+        runtime_agent.tool_use_behavior = formatter_completion_tool_use_behavior
     benchmark_route_slot = str(kwargs.get("benchmark_route_slot") or "").strip()
     if benchmark_route_slot:
         from src.lib.openai_agents.benchmark_routing import attach_benchmark_route
