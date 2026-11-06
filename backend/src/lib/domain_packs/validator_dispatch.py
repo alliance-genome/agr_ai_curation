@@ -1336,13 +1336,19 @@ def _shared_group_results(
     jobs: list[ValidatorDispatchJob],
     representative_result: DomainValidatorResultBase,
 ) -> list[DomainValidatorResultBase]:
-    """Give every request of one dedupe group the representative's answer."""
+    """Give every request of one dedupe group the representative's answer.
+
+    One binding can match two fields of one record with identical inputs, so a
+    group's size is not its record count. Each copy counts the other records.
+    """
     representative = jobs[0]
+    record_ids = {job.request.target.object_id for job in jobs}
     return [
         representative_result
         if job is representative
         else _remap_validator_result_for_request(
-            representative_result, job.request, other_record_count=len(jobs) - 1,
+            representative_result, job.request,
+            other_record_count=len(record_ids - {job.request.target.object_id}),
         )
         for job in jobs
     ]
@@ -1607,7 +1613,8 @@ def _remap_validator_result_for_request(
     }
     # Only requests with quote evidence are grouped on exactly equal inputs and
     # evidence; other groups ignore context quotes, so they make no such claim.
-    if _validator_evidence_context_identity(request) is not None:
+    # A copy for another field of the same record keeps the answer unchanged.
+    if other_record_count and _validator_evidence_context_identity(request) is not None:
         update["explanation"] = (
             f"{validator_result.explanation}\n{_shared_check_note(other_record_count)}"
         )

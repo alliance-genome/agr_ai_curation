@@ -1461,11 +1461,11 @@ def test_dispatch_batches_after_dedupe_and_remaps_to_original_requests(
     assert {item.explanation for item in result.validator_results} == {"Fixture validator result."}
 
 
-def _quote_bundle_pack(tmp_path: Path) -> LoadedDomainPack:
+def _quote_bundle_pack(tmp_path: Path, *, both_gene_fields: bool = False) -> LoadedDomainPack:
     pack_path = tmp_path / "fixture.quote-bundle-dispatch"
     pack_path.mkdir()
     metadata_path = pack_path / "domain_pack.yaml"
-    metadata_path.write_text(_pack_text().replace(
+    text = _pack_text().replace(
         "          evidence_quote:\n"
         "            source: evidence_record\n"
         "            path: quote\n"
@@ -1477,7 +1477,16 @@ def _quote_bundle_pack(tmp_path: Path) -> LoadedDomainPack:
         "            required: false\n"
         "            context_only: true\n",
         1,
-    ), encoding="utf-8")
+    )
+    if both_gene_fields:
+        # Like disease_ontology_term_lookup (curie and name) or go_term_validation
+        # (curie and label): one binding matches two field paths of one object.
+        text = text.replace(
+            "          field_paths:\n            - gene.identifier\n",
+            "          field_paths:\n            - gene.identifier\n            - gene.symbol\n",
+            1,
+        )
+    metadata_path.write_text(text, encoding="utf-8")
     metadata = load_domain_pack_metadata(metadata_path)
     return LoadedDomainPack(
         pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
@@ -1535,6 +1544,44 @@ def test_dispatch_checks_records_with_the_same_value_and_evidence_once(tmp_path:
             "Fixture validator result.\n"
             "Checked once with 2 other records that had the same value and evidence."
         )
+
+
+def _dispatch_both_gene_fields(tmp_path: Path, object_count: int):
+    pack = _quote_bundle_pack(tmp_path, both_gene_fields=True)
+    runs: list[tuple[str, str]] = []
+
+    def _runner(request, *, binding):
+        runs.append((request.target.object_id, request.target.field_path))
+        return _result_payload(request)
+
+    shared = "BAD:0001 knockdown shortened the axis."
+    result = dispatch_active_validator_bindings(
+        _shared_quote_envelope([shared] * object_count), pack, runner=_runner, max_parallel_validators=1,
+    )
+    return runs, result
+
+
+def test_one_record_checked_for_two_fields_does_not_claim_another_record(tmp_path: Path):
+    runs, result = _dispatch_both_gene_fields(tmp_path, object_count=1)
+
+    assert len(runs) == 1
+    assert sorted(item.target.field_path for item in result.validator_results) == ["gene.identifier", "gene.symbol"]
+    # The copy for the second field keeps exactly the first field's explanation.
+    assert {item.explanation for item in result.validator_results} == {"Fixture validator result."}
+
+
+def test_shared_check_counts_other_records_not_other_fields(tmp_path: Path):
+    runs, result = _dispatch_both_gene_fields(tmp_path, object_count=2)
+
+    assert len(runs) == 1
+    note = "Fixture validator result.\nChecked once with 1 other record that had the same value and evidence."
+    explanations = {
+        (item.target.object_id, item.target.field_path): item.explanation for item in result.validator_results
+    }
+    representative = (runs[0][0], runs[0][1])
+    assert explanations.pop(representative) == "Fixture validator result."
+    assert set(explanations.values()) == {note}
+    assert len(explanations) == 3
 
 
 def test_shared_check_note_counts_one_other_record():
