@@ -651,13 +651,16 @@ class FanoutExtraction:
 
     def _stage_message(self, count: int) -> str:
         return (
-            f"[Writing phase] Your plan has {_records(count)}. Staging is now enabled. "
-            "Stage exactly the records in your plan, following all of your instructions "
-            "for field values, sources and evidence: record the evidence for all of them "
-            "in one turn, then stage all of them in the next turn. Do not finalize; the "
-            "system finalizes after you reply. When every planned record is staged, reply "
-            "with your final explanation (what was extracted, exclusions and uncertainty), "
-            "as your instructions describe."
+            f"[Writing phase] Your plan has {_records(count)}. Staging is now enabled. For "
+            "this step these rules override the evidence-review and extraction-completion "
+            "steps in your instructions. Stage exactly the records in your plan, following "
+            "all of your instructions for field values, sources and evidence: record the "
+            "evidence for all of them in one turn, from the chunks you already read in this "
+            "conversation (read again only a passage you have not read), then stage all of "
+            "them in the next turn. Do not review evidence records, do not list or find "
+            "staged records, and do not finalize; the system finalizes after you reply. When "
+            "every planned record is staged, reply with your final explanation (what was "
+            "extracted, exclusions and uncertainty), as your instructions describe."
         )
 
     def _check_message(self, outcomes: Sequence[WriterOutcome]) -> str:

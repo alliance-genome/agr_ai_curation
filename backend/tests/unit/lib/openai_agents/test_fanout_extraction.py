@@ -650,6 +650,10 @@ async def test_small_plan_is_staged_by_the_planner_thread(harness):
         if isinstance(item, dict) and _text(item).startswith("[Writing phase]")
     )
     assert "Your plan has 2 records. Staging is now enabled." in stage_prompt
+    # Same overrides as the check pass: no evidence review, no listing, no finalize.
+    assert "override the evidence-review and extraction-completion steps" in stage_prompt
+    assert "Do not review evidence records, do not list or find staged records, and do not finalize" in stage_prompt
+    assert "from the chunks you already read in this conversation" in stage_prompt
     # Same thread: the resumed request still carries the plan submission.
     resumed = next(request["input"] for request in model.requests
                    if any(_text(item).startswith("[Writing phase]") for item in request["input"] if isinstance(item, dict)))
