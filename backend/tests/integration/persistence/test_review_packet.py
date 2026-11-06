@@ -392,6 +392,82 @@ def test_every_unknown_uncertain_field_is_named_with_its_handle_and_the_valid_fi
         assert {store._current(db, artifact, target)["version"] for target in targets} == {0}
 
 
+def _list_row(index, *, source=True):
+    attributes = {"reagent_names": f"UAS-gene{index}-RNAi", "detail_reagent_type": "Transgene or insertion",
+                  "detail_associated_gene": f"gene{index}"}
+    if source:
+        attributes["source"] = f"BDSC:{index}"
+    obj = _object(index, ["e1"])
+    return obj.model_copy(update={"payload": {**obj.payload, "attributes": attributes}})
+
+
+def test_r44_shape_valid_paths_bind_after_a_selected_followup_and_only_a_missing_field_is_named(scope):
+    """r44: valid uncertain fields on every record, plus one record genuinely lacking source."""
+    from src.lib.validation_history.projection import read_published_projection
+    from src.lib.validation_review import extraction_results, extraction_scheduling, source_selection, work
+
+    objects = [_list_row(0), _list_row(1, source=False)]
+    envelope, artifact, episode, _, checkpoint = _build(scope, objects, [_evidence("e1")])
+    with_source, without_source = _targets(envelope)
+    context = ReviewContext(scope, episode, "fixture-reviewer")
+    first = reads.review_packet(scope, episode)
+    deferred = decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="defer",
+        packet_id=first["packet_id"], packet_decisions=_decide(
+            [handle for record in first["records"] for handle in _handles(record)], "defer"))
+    wid = extraction_scheduling.request(context, operation_id="followup", parent_decision_id=deferred["decision_id"],
+        entry_ids=[with_source, without_source], instructions="Check the reagent table.",
+        receipt={"agent_key": "saved", "execution_receipt": None,
+                 "contract": {"instructions": "Keep reagents used in this study."}},
+        current_entries={obj.metadata["validation_history"]["target_id"]: obj.model_dump(mode="json")
+                         for obj in envelope.extracted_objects})
+    claim = work.claim(scope, wid)
+    work.mark_submitted(scope, wid, claim["lease_token"])
+    retained = extraction_results.retain(scope, wid, claim["lease_token"], {"entries": [
+        {"entry_id": with_source, "outcome": "proposed_correction", "assessment": "Table names an RNAi line.",
+         "remaining_uncertainty": "", "evidence_record_ids": [],
+         "proposed_values": [{"field_path": "attributes.detail_reagent_type", "value": "RNAi line",
+                              "evidence_record_ids": []}]},
+        {"entry_id": without_source, "outcome": "no_new_information", "assessment": "No supplier is given.",
+         "remaining_uncertainty": "Supplier unknown.", "proposed_values": [], "evidence_record_ids": []}]},
+        evidence_records=[])
+    work.finish(scope, wid, claim["lease_token"], outcome=retained)
+    correction = next(ref for ref in retained["contributions"]
+                      if store.read_fact(scope, artifact, ref["fact_id"])["content"]["proposal"]["entry_id"] == with_source)
+    with store.SessionLocal.begin() as db:
+        source_selection.select_in_transaction(db, context, operation_id="select", contribution_ref=correction,
+            field_paths=["attributes.detail_reagent_type"], evidence_ids=[],
+            expected_source_sha=selections.source_state_digest(db, artifact), reason="Table supports it.",
+            source_envelope=envelope, rebuild_inputs=lambda db, env: {},
+            publish=lambda db, env, requests, changed, selection_id: {})
+    second = reads.review_packet(scope, episode)
+    handles = {record["target_id"]: _handles(record)[0] for record in second["records"]}
+    assert set(handles) == {with_source, without_source}
+
+    def save(operation_id, fields_without_source):
+        return decisions.record_packet_decisions(context, checkpoint_request=checkpoint(),
+            operation_id=operation_id, packet_id=second["packet_id"], packet_decisions=[
+                {"handle": handles[with_source], "action": "accept", "reason": "Pathway tool use is defensible.",
+                 "unresolved_fields": [
+                     {"field_path": "attributes.detail_associated_gene", "explanation": "Tool or gene biology."},
+                     {"field_path": "attributes.reagent_names", "explanation": "Two lines share a name."}]},
+                {"handle": handles[without_source], "action": "accept", "reason": "Measurement tool.",
+                 "unresolved_fields": [{"field_path": path, "explanation": "Not established."}
+                                       for path in fields_without_source]}])
+
+    with pytest.raises(store.HistoryConflict) as refused:
+        save("first-try", ["attributes.reagent_names", "attributes.source"])
+    message = str(refused.value)
+    assert f'{handles[without_source]}: unresolved field "attributes.source" does not exist' in message
+    assert handles[with_source] + ":" not in message, "valid paths on the corrected record are not refused"
+    assert "attributes.detail_reagent_type" in message and with_source not in message
+    result = save("second-try", ["attributes.reagent_names"])
+    assert result["ready"]
+    projected, _ = read_published_projection(scope, result["publication"], finalized=True)
+    assert sorted(finding.field_ref.field_path for finding in projected.validation_findings
+                  if finding.code == "validation_review.assessment_unresolved") == [
+        "attributes.detail_associated_gene", "attributes.reagent_names", "attributes.reagent_names"]
+
+
 def test_a_malformed_path_is_named_and_the_other_entries_are_still_checked(scope):
     odd = _object(0, ["e1"])
     odd = odd.model_copy(update={"payload": {**odd.payload, "attributes": {**odd.payload["attributes"],
