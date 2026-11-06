@@ -691,3 +691,12 @@ def test_fanout_plan_writers_and_finalize_are_visible(tmp_path, monkeypatch):
     assert [item['event_type'] for item in events] == ['extraction_fanout.' + kind for kind, _ in kinds]
     assert events[1]['output'] == {'writer': 2, 'assigned_count': 2, 'staged_count': 1}
 
+
+def test_fanout_section_is_absent_when_fanout_did_not_run(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    _write_event(tmp_path, 'single', _event('single', 1, 'extraction_builder.candidate_mutation'))
+
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='single', raw_trace={}, observations=[], include_raw_outputs=True)
+
+    assert 'extraction_fanout' not in result
+

@@ -65,6 +65,9 @@ logger = logging.getLogger(__name__)
 install_model_request_measurement()
 
 SUBMIT_PLAN_TOOL_NAME = "submit_extraction_plan"
+# Recorded tool times on replayed writer items; the specialist stream loop reads them.
+REPLAYED_TOOL_STARTED_AT = "fanout_tool_started_at"
+REPLAYED_TOOL_COMPLETED_AT = "fanout_tool_completed_at"
 PREFETCH_TOOL_NAME = "read_chunk"
 # Source tools a writer keeps besides the agent's stage tools.
 WRITER_SOURCE_TOOL_NAMES = frozenset({"read_chunk", "search_document", "record_evidence"})
@@ -284,9 +287,18 @@ _REPLAY_EVENT_NAMES = {
 }
 
 
-def _replay_event(item: Any) -> RunItemStreamEvent | None:
-    name = _REPLAY_EVENT_NAMES.get(getattr(item, "type", None))
-    return RunItemStreamEvent(name=name, item=item) if name else None
+def _replay_event(item: Any, timings: dict[str, tuple[datetime, datetime]]) -> RunItemStreamEvent | None:
+    item_type = getattr(item, "type", None)
+    name = _REPLAY_EVENT_NAMES.get(item_type)
+    if name is None:
+        return None
+    timing = timings.get(getattr(item, "call_id", None) or "")
+    if timing is not None:
+        if item_type == "tool_call_item":
+            setattr(item, REPLAYED_TOOL_STARTED_AT, timing[0])
+        elif item_type == "tool_call_output_item":
+            setattr(item, REPLAYED_TOOL_COMPLETED_AT, timing[1])
+    return RunItemStreamEvent(name=name, item=item)
 
 
 def prepare_fanout_extraction(
@@ -417,6 +429,8 @@ class FanoutExtraction:
         self.writer_outcomes: list[WriterOutcome] = []
         self._planner_result: Any = None
         self._chunk_views: dict[int, asyncio.Future] = {}
+        # Writers' tool start and end times by call ID, for the replayed audit.
+        self._tool_timings: dict[str, tuple[datetime, datetime]] = {}
         self._finalize_created: set[str] = set()
         self.submit_tool = FunctionTool(
             name=SUBMIT_PLAN_TOOL_NAME,
@@ -588,11 +602,17 @@ class FanoutExtraction:
             for outcome in self.writer_outcomes:
                 self.new_items.extend(outcome.new_items)
                 for item in outcome.new_items:
-                    event = _replay_event(item)
+                    event = _replay_event(item, self._tool_timings)
                     if event is not None:
                         yield event
             self.phase = "checking"
-            self._progress(f"Checking the {count} written records")
+            staged = sum(
+                1 for candidate in self.workspace.candidates.values()
+                if candidate.status != CANDIDATE_STATUS_DISCARDED
+            )
+            self._progress(
+                "Checking the written record" if staged == 1 else f"Checking the {staged} written records"
+            )
             async for event in self._run_planner_thread(self._check_message(self.writer_outcomes)):
                 yield event
 
@@ -758,7 +778,7 @@ class FanoutExtraction:
         ]
         writer = self.planner_agent.clone(
             instructions=self.base_instructions,
-            tools=tools,
+            tools=[self._timed(tool) for tool in tools],
             tool_use_behavior="run_llm_again",
         )
         agent_key = getattr(self.planner_agent, "agent_key", None)
@@ -766,6 +786,22 @@ class FanoutExtraction:
             writer.agent_key = agent_key
         apply_tool_surface(writer, runtime=self.surface.runtime)
         return writer
+
+    def _timed(self, tool: Any) -> Any:
+        """Record a writer tool's real start and end, so its replayed audit keeps them."""
+
+        timed = copy(tool)
+        invoke = tool.on_invoke_tool
+
+        async def on_invoke(ctx: Any, arguments: str) -> Any:
+            started = datetime.now(timezone.utc)
+            try:
+                return await invoke(ctx, arguments)
+            finally:
+                self._tool_timings[ctx.tool_call_id] = (started, datetime.now(timezone.utc))
+
+        timed.on_invoke_tool = on_invoke
+        return timed
 
     def _writer_assignment(
         self,
@@ -902,6 +938,7 @@ class FanoutExtraction:
         if self.workspace.finalization is not None:
             return
         self.phase = "correcting"
+        self._progress("Fixing the problems validation found before saving")
         async for event in self._run_planner_thread(
             "[Finalize check] The system tried to finalize the staged records, and validation "
             "reported the problems below. Fix them with your correction tools: patch a record, "

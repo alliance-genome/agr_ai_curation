@@ -93,15 +93,17 @@ finalizes. Its last reply is the specialist explanation saved with the result.
 
 Chat shows plain-language phase lines (`AGENT_GENERATING` events with
 `details.extractionPhase`), for example "Reading the paper and planning the records",
-"Writing 38 records in 8 parallel batches" and "Checking the 38 written records". The
-planner's reading streams live as today. Writers' tool calls reach the audit when the
-writers finish.
+"Writing 38 records in 8 parallel batches", "Checking the 37 written records" (the staged
+count) and, when validation sends problems back, "Fixing the problems validation found
+before saving". The planner's reading streams live as today. Writers' tool calls reach the
+audit when the writers finish, with their recorded start and end times.
 
 ## Observability
 
 - Extraction trace events: `extraction_fanout.plan_submitted` (path, counts, the plan),
   `extraction_fanout.writer_completed` (assigned and staged counts per writer) and
-  `extraction_fanout.finalize_attempt`. TraceReview groups them under `extraction_fanout`.
+  `extraction_fanout.finalize_attempt`. TraceReview groups them under `extraction_fanout`,
+  which is absent when fan-out did not run.
 - Langfuse shows the planner, check pass and each writer as separate agent runs in one
   trace.
 

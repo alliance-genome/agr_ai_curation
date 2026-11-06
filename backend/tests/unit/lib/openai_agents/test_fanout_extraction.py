@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 
 import pytest
 from agents import Agent, FunctionTool, ModelSettings, RunConfig, function_tool
@@ -142,6 +143,7 @@ def test_stage_role_comes_from_package_binding_metadata():
 @function_tool(name_override=STAGE)
 def _stage_test_object(label: str, evidence_record_ids: list[str], pending_ref_id: str | None = None) -> str:
     """Stage one record."""
+    time.sleep(0.02)  # a measurable tool duration for the replayed audit
     workspace = builder.get_active_extraction_builder_workspace()
     candidate = workspace.stage_candidate(
         id_prefix="obj",
@@ -580,8 +582,17 @@ async def test_planner_three_writers_tidy_and_code_finalize(harness):
     assert harness.progress() == [
         "Reading the paper and planning the records",
         "Writing 7 records in 3 parallel batches",
-        "Checking the 7 written records",
+        # The staged count, not the planned count: writer 2 staged one record short.
+        "Checking the 6 written records",
     ]
+    # Replayed writer calls keep their recorded durations instead of about 0 ms.
+    writer_stage_ids = {f"w{w}-st-{n}" for w in (1, 2, 3) for n in range(3)}
+    writer_stage_durations = [
+        event["details"]["durationMs"] for event in harness.events
+        if event.get("type") == "TOOL_COMPLETE" and event["details"].get("toolCallId") in writer_stage_ids
+    ]
+    assert len(writer_stage_durations) == 6
+    assert min(writer_stage_durations) >= 15
     payload = _internal_result(harness.events)["internal"]["canonical_payload"]
     assert payload["specialist_explanation"] == "Checked the records; one missing record was restored."
 
@@ -667,6 +678,7 @@ async def test_validation_problems_go_back_to_the_planner_thread_once(harness):
         if isinstance(item, dict) and _text(item).startswith("[Finalize check]")
     )
     assert "bad is not a record" in fix_prompt
+    assert harness.progress()[-1] == "Fixing the problems validation found before saving"
     assert _finalized_labels(harness) == ["reagent 1"]
     attempts = [event["output_summary"]["finalized"] for event in harness.trace
                 if event["event_type"] == "extraction_fanout.finalize_attempt"]
