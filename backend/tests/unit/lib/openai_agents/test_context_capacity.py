@@ -305,6 +305,50 @@ async def test_request_that_provably_fits_skips_the_token_count_call(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_skip_path_serializes_the_real_tool_surface(monkeypatch):
+    import httpx
+    from openai import AsyncOpenAI
+    from openai.types.shared import Reasoning
+    from pydantic import BaseModel
+    from agents import AgentOutputSchema, ToolSearchTool, function_tool, tool_namespace
+    from agents.models.openai_responses import OpenAIResponsesModel
+
+    @function_tool
+    def lookup_gene(symbol: str, taxon: str | None = None) -> str:
+        """Look up a gene symbol."""
+        return symbol
+
+    @function_tool
+    def read_chunk(chunk_id: str) -> str:
+        """Read a chunk."""
+        return chunk_id
+
+    class Out(BaseModel):
+        genes: list[str]
+        notes: str | None = None
+
+    sent = []
+    def reply(request):
+        sent.append(request.url.path)
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply)))
+    model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
+    settings = ModelSettings(max_tokens=1000, reasoning=Reasoning(effort="medium", summary="auto"),
+        tool_choice="read_chunk", parallel_tool_calls=True, verbosity="low", store=False,
+        extra_args={"service_tier": "priority"})
+    tools = [ToolSearchTool(execution="server"), read_chunk,
+             *tool_namespace(name="genes", description="Gene lookups", tools=[lookup_gene])]
+    request = NativeCapacityRequest(model, settings, instructions="Extract records.", tools=tools,
+        output_schema=AgentOutputSchema(Out), handoffs=[])
+    policy = ContextCapacityPolicy(MemoryHistory())
+    await policy.prepare(request, deepcopy(_TEXT_TURN), settings)
+    assert sent == []
+    assert policy.metrics["count_skipped"] is True
+    assert 0 < policy.metrics["request_bytes"] <= request.capacity
+    await client.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("item", [
     {"role": "user", "content": [{"type": "input_image", "image_url": "https://example.org/figure.png"}]},
     {"role": "user", "content": [{"type": "input_file", "file_id": "file-1"}]},

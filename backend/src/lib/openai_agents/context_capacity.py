@@ -1,8 +1,9 @@
 """Capacity recovery for native Responses requests; no per-tool context quota.
 
-The token-counting endpoint measures the SDK's actual wire input. Native
-compaction handles the ordinary threshold. This module acts only when a request
-would exceed the configured model's verified input/context capability.
+A request whose byte-bounded wire body fits the token capacity needs no count.
+Otherwise the token-counting endpoint measures the SDK's actual wire input.
+Native compaction handles the ordinary threshold. This module acts only when a
+request would exceed the configured model's verified input/context capability.
 """
 from __future__ import annotations
 
@@ -18,11 +19,14 @@ from .run_history import exact_json
 CONTEXT_READ_TOOL = "read_pending_context"
 _COUNT_FIELDS = frozenset({"model", "input", "instructions", "tools", "tool_choice",
     "parallel_tool_calls", "reasoning", "text", "previous_response_id", "conversation", "truncation"})
-# Input shapes whose token cost never exceeds their UTF-8 byte length. Text is
+# Input shapes whose token cost stays below their UTF-8 byte length. Text is
 # tokenized by byte-level BPE, so every token spans at least one byte. Encrypted
 # reasoning and compaction items carried inline measured 0.03-0.07 tokens per
-# byte on gpt-6.1-sol (2026-11-05). Anything else, such as images, files or
-# items sent by reference, is counted by the provider.
+# byte, and whole real extractor requests 0.19-0.22, on gpt-6.1-sol and
+# gpt-6-astra (2026-11-05). The provider's few fixed tokens with no bytes in the
+# body (system header, hosted tool_search text) are covered many times over by
+# JSON keys, ids and schema fields that it does not render as tokens. Anything
+# else, such as images, files or items sent by reference, is counted.
 _TEXT_ITEM_TYPES = frozenset({"message", "function_call", "function_call_output",
     "tool_search_call", "tool_search_output"})
 _INLINE_OPAQUE_ITEM_TYPES = frozenset({"reasoning", "compaction"})
