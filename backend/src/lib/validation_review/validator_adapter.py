@@ -475,14 +475,19 @@ class ValidatorAdapter:
     def current_matches(self):
         """Every configured match from one refresh of the source plan."""
         self.refresh_source_plan()
-        return {target_id: self._current_match(target_id) for target_id in self.plan["matches"]}
+        # One plan for every match, even if a concurrent selection swaps it.
+        plan = self.plan
+        return {target_id: self._plan_match(plan, target_id) for target_id in plan["matches"]}
 
     def _current_match(self, target_id):
-        if target_id not in self.plan["matches"]:
+        return self._plan_match(self.plan, target_id)
+
+    def _plan_match(self, plan, target_id):
+        if target_id not in plan["matches"]:
             raise store.HistoryAccessError(
                 "Target is outside configured review bindings"
             )
-        match = MATCH.validate_python(self.plan["matches"][target_id])
+        match = MATCH.validate_python(plan["matches"][target_id])
         required = match.binding.required_any_active_group
         if required and not set(required).intersection(
             self.context.authenticated_groups or ()

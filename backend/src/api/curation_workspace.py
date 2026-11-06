@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 import logging
 from typing import Annotated, Any, Callable, NoReturn, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
@@ -647,11 +647,12 @@ async def get_review_session(
     db: Session = Depends(get_db),
 ) -> CurationReviewSession | CurationWorkspaceResponse:
     await provision_user_async(principal_from_claims(user))
-    # Building the workspace reads and serializes megabytes; keep it off the
-    # single worker's event loop so other users' requests are not stalled.
+    # The database reads and model building run in the thread pool so the
+    # single worker's event loop keeps serving other users. Response encoding
+    # still happens on the loop after this returns.
     if include_workspace:
-        return await asyncio.to_thread(get_session_workspace, db, session_id)
-    return await asyncio.to_thread(get_session_detail, db, session_id)
+        return await run_in_threadpool(get_session_workspace, db, session_id)
+    return await run_in_threadpool(get_session_detail, db, session_id)
 
 
 @router.get(
