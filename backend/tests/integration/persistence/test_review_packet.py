@@ -266,8 +266,8 @@ def test_a_crashed_validation_is_acknowledged_by_its_handle_and_nothing_else(pla
 
     item = planned
     frozen = runtime.frozen_job_requests(item.plan.history_binding, item.plan.initial_jobs)
-    wid = scheduling.initial(item.scope, item.ep, operation_id="crashed", requests=frozen,
-                             receipt={"revision": "fixture"})
+    [wid] = scheduling.initial(item.scope, item.ep, [{"operation_id": "crashed", "requests": frozen,
+                                                      "receipt": {"revision": "fixture"}}])
     claim = work.claim(item.scope, wid)
     work.mark_submitted(item.scope, wid, claim["lease_token"])
     work.mark_uncertain(item.scope, wid, claim["lease_token"], reason="worker_disconnected")

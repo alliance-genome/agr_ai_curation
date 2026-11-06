@@ -62,6 +62,9 @@ def _enqueue(
             from .record_scope import allowed_units
             if item["target_id"] in allowed_units(episode_body):
                 obligations[root] = item["binding_id"]
+    from .attempt_lineage import Lineage
+    # Nothing in this loop writes, so one lineage read counts every request.
+    lineage = None
     for request in requests:
         tid = request["target_id"]
         if (
@@ -69,8 +72,9 @@ def _enqueue(
             or request["review_episode_id"] != ep.id
         ):
             raise store.HistoryConflict("Request is outside admitted binding coverage")
-        from .attempt_lineage import counts
-        count = counts(db, ep, [tid])[tid]
+        if lineage is None:
+            lineage = Lineage(db, ep)
+        count = lineage.count(tid)
         if not reconsideration and count:
             raise store.HistoryConflict("Target already has its initial attempt")
         if reconsideration and not count and not first_from_source:
@@ -103,26 +107,35 @@ def _enqueue(
     )
 
 
-def initial(scope, episode_id, *, operation_id, requests, receipt):
-    """Called only by the runtime after constructing authoritative binding requests."""
+def initial(scope, episode_id, items):
+    """Called only by the runtime after constructing authoritative binding requests.
+
+    Each item is one work operation (operation_id, requests, receipt). All are
+    admitted in one transaction, in order: every item is queued, or none is.
+    Returns the work IDs in item order.
+    """
     with store.SessionLocal.begin() as db:
-        ep, _ = lock_episode(db, scope, episode_id, require_open=False)
-        prior = _existing(
-            db, ep, operation_id, {"requests": requests, "receipt": receipt}
-        )
-        if prior is not None:
-            return prior.id
-        lock_episode(db, scope, episode_id)
-        return _enqueue(
-            db,
-            scope,
-            ep,
-            operation_id=operation_id,
-            requests=requests,
-            receipt=receipt,
-            identity={"requests": requests, "receipt": receipt},
-            reconsideration=False,
-        )
+        return [_initial_in_transaction(db, scope, episode_id, **item) for item in items]
+
+
+def _initial_in_transaction(db, scope, episode_id, *, operation_id, requests, receipt):
+    ep, _ = lock_episode(db, scope, episode_id, require_open=False)
+    prior = _existing(
+        db, ep, operation_id, {"requests": requests, "receipt": receipt}
+    )
+    if prior is not None:
+        return prior.id
+    lock_episode(db, scope, episode_id)
+    return _enqueue(
+        db,
+        scope,
+        ep,
+        operation_id=operation_id,
+        requests=requests,
+        receipt=receipt,
+        identity={"requests": requests, "receipt": receipt},
+        reconsideration=False,
+    )
 
 
 def reconsider(

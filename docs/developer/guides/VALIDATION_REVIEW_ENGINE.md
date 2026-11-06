@@ -16,7 +16,8 @@ activation requires representative calibration and cost-policy approval in ALL-1
    renewal names its predecessor, authenticated owner and reason; it retains the
    parent allowances. It does not refill them.
 3. Freeze requests and exact saved validator receipts through `scheduling.initial`.
-   Attempt creation, admission reservation and work scheduling commit together.
+   Attempt creation, admission reservation and work scheduling commit together:
+   every initial work item of an episode is queued in one transaction, or none is.
    Do not substitute package defaults for saved custom validator revisions.
 4. Run `execution.execute` with a trusted validator adapter. The adapter must
    reauthorize the receipt, retain supplied-context-only validator tools, use the

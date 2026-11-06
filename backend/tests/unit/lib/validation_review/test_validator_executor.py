@@ -23,7 +23,7 @@ def _adapter(monkeypatch, run):
     adapter.plan_ref = "fixture-plan"
     job = SimpleNamespace(match=SimpleNamespace(binding=SimpleNamespace(binding_id="fixture")))
     adapter.require_current_invocation = lambda payload: None
-    adapter.job = lambda request: job
+    adapter.jobs = lambda requests: [job for _ in requests]
     adapter.receipt = lambda jobs, **kwargs: {"contracts": {"fixture": "frozen"}}
     adapter._call = run
     monkeypatch.setattr(validator_adapter, "binding_contract", lambda match: "frozen")
