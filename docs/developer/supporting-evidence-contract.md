@@ -38,7 +38,12 @@ the correct biological decision.
 Gene extraction still emits one object per candidate/evidence pairing; this
 change does not merge those objects. Validator dispatch retains its existing
 batching policy: requests carrying quote bundles retain isolated runs where
-configured. Validators receive supplied evidence directly, cannot search/read
+configured. Requests with quote bundles for different records share one run only
+when every input is exactly equal: the selected inputs (including every quote
+bundle), the request evidence (ID, location and quote), the guidance and the
+binding. No similarity matching is used. Each record keeps its own answer, and
+a copied answer's explanation ends with "Checked once with N other records that
+had the same value and evidence." Validators receive supplied evidence directly, cannot search/read
 the paper or manage source evidence, and return resolutions/questions separately.
 Database/ontology lookup tools remain available. Missing context is reported to
 the supervisor without an automatic extraction retry.

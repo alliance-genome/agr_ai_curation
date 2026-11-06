@@ -671,7 +671,8 @@ def test_stored_condition_finalization_preserves_component_completeness(schemas,
     result = _finalize_validator_result(_validated_result_from_agent_output(
         _ValidatorAgentRunOutput(None, result), request=contract.request), request=contract.request)
     result = _remap_validator_result_for_request(
-        result, contract.request.model_copy(update={"request_id": "remapped-condition"}))
+        result, contract.request.model_copy(update={"request_id": "remapped-condition"}),
+        other_record_count=1)
     assert result.status == "resolved"
     assert result.request_id == "remapped-condition"
     assert result.missing_expected_fields == []

@@ -1252,14 +1252,9 @@ def _execute_validator_run_group_uncaptured(
         batch_results,
         strict=True,
     ):
-        group = grouped_jobs[group_index]
-        representative = group[0]
-        dedupe_group_results[group_index] = [
-            representative_result
-            if job is representative
-            else _remap_validator_result_for_request(representative_result, job.request)
-            for job in group
-        ]
+        dedupe_group_results[group_index] = _shared_group_results(
+            grouped_jobs[group_index], representative_result,
+        )
 
     return _ValidatorRunGroupResult(
         dedupe_group_results=dedupe_group_results,
@@ -1284,12 +1279,18 @@ def _dedupe_validator_jobs(jobs: list[ValidatorDispatchJob]) -> list[list[Valida
 
 
 def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
-    selected_identity_inputs = {
-        key: value
-        for key, value in request.selected_inputs.items()
-        if key not in _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS
-    }
-    if not selected_identity_inputs:
+    evidence_context = _validator_evidence_context_identity(request)
+    if evidence_context is None:
+        selected_identity_inputs = {
+            key: value
+            for key, value in request.selected_inputs.items()
+            if key not in _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS
+        }
+        if not selected_identity_inputs:
+            selected_identity_inputs = dict(request.selected_inputs)
+    else:
+        # Requests with quote evidence share one run across records only when
+        # every input is exactly equal; only the record they belong to differs.
         selected_identity_inputs = dict(request.selected_inputs)
 
     target_identity: dict[str, Any] = {
@@ -1298,10 +1299,6 @@ def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
         "object_role": request.target.object_role,
         "expected_fields": list(request.target.expected_fields),
     }
-    evidence_context = _validator_evidence_context_identity(request)
-    if evidence_context is not None:
-        target_identity["object_id"] = request.target.object_id
-        target_identity["field_path"] = request.target.field_path
 
     return json.dumps(
         {
@@ -1328,15 +1325,25 @@ def _run_validator_job_group(
     *,
     agent_runner: DomainValidatorAgentRunner,
 ) -> list[DomainValidatorResultBase]:
-    representative = jobs[0]
     validator_result = _run_single_validator_job(
-        representative,
+        jobs[0],
         agent_runner=agent_runner,
     )
+    return _shared_group_results(jobs, validator_result)
+
+
+def _shared_group_results(
+    jobs: list[ValidatorDispatchJob],
+    representative_result: DomainValidatorResultBase,
+) -> list[DomainValidatorResultBase]:
+    """Give every request of one dedupe group the representative's answer."""
+    representative = jobs[0]
     return [
-        validator_result
+        representative_result
         if job is representative
-        else _remap_validator_result_for_request(validator_result, job.request)
+        else _remap_validator_result_for_request(
+            representative_result, job.request, other_record_count=len(jobs) - 1,
+        )
         for job in jobs
     ]
 
@@ -1578,18 +1585,33 @@ def _finalize_validator_result(
     )
 
 
+def _shared_check_note(other_record_count: int) -> str:
+    records = "record" if other_record_count == 1 else "records"
+    return (
+        f"Checked once with {other_record_count} other {records} "
+        "that had the same value and evidence."
+    )
+
+
 def _remap_validator_result_for_request(
     validator_result: DomainValidatorResultBase,
     request: DomainValidationRequest,
+    *,
+    other_record_count: int,
 ) -> DomainValidatorResultBase:
-    remapped = validator_result.model_copy(
-        update={
-            "request_id": request.request_id,
-            "validator_binding_id": request.validator_binding_id,
-            "validator_agent": request.validator_agent,
-            "target": request.target,
-        }
-    )
+    update: dict[str, Any] = {
+        "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent,
+        "target": request.target,
+    }
+    # Only requests with quote evidence are grouped on exactly equal inputs and
+    # evidence; other groups ignore context quotes, so they make no such claim.
+    if _validator_evidence_context_identity(request) is not None:
+        update["explanation"] = (
+            f"{validator_result.explanation}\n{_shared_check_note(other_record_count)}"
+        )
+    remapped = validator_result.model_copy(update=update)
     return _finalize_validator_result(remapped, request=request)
 
 
@@ -2160,8 +2182,6 @@ def _validator_evidence_context_identity(
     if not bundles:
         return None
     return {
-        "target_object_id": request.target.object_id,
-        "target_field_path": request.target.field_path,
         "evidence_quote_bundles": [
             {
                 "evidence_record_id": _optional_string(bundle.get("evidence_record_id")),
@@ -2170,6 +2190,7 @@ def _validator_evidence_context_identity(
             }
             for bundle in bundles
         ],
+        "evidence": [_model_evidence_record(record) for record in request.evidence],
     }
 
 
