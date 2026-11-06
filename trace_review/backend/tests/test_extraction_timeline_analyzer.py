@@ -671,3 +671,32 @@ def test_optional_absence_source_and_assessment_retain_exact_history(tmp_path, m
     for event, (kind, content) in zip(result["validation_review"]["events"], bodies.items(), strict=True):
         assert event["output"]["preview"]["content"] == content
         assert event["output"]["preview"]["sha256"] == "exact-" + kind
+
+
+def test_fanout_plan_writers_and_finalize_are_visible(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    kinds = [
+        ('plan_submitted', {'path': 'writers', 'planned_records': 7, 'writer_count': 3}),
+        ('writer_completed', {'writer': 2, 'assigned_count': 2, 'staged_count': 1}),
+        ('finalize_attempt', {'attempt': 1, 'finalized': True}),
+    ]
+    for sequence, (kind, summary) in enumerate(kinds, 1):
+        _write_event(tmp_path, 'fanout', _event('fanout', sequence, 'extraction_fanout.' + kind,
+                                                output_summary=summary))
+    _write_event(tmp_path, 'fanout', _event('fanout', 4, 'extraction_builder.candidate_mutation'))
+
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='fanout', raw_trace={}, observations=[], include_raw_outputs=True)
+
+    events = result['extraction_fanout']['events']
+    assert [item['event_type'] for item in events] == ['extraction_fanout.' + kind for kind, _ in kinds]
+    assert events[1]['output'] == {'writer': 2, 'assigned_count': 2, 'staged_count': 1}
+
+
+def test_fanout_section_is_absent_when_fanout_did_not_run(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    _write_event(tmp_path, 'single', _event('single', 1, 'extraction_builder.candidate_mutation'))
+
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='single', raw_trace={}, observations=[], include_raw_outputs=True)
+
+    assert 'extraction_fanout' not in result
+

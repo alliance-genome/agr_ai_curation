@@ -1015,6 +1015,7 @@ class ExtractionTimelineAnalyzer:
             key = str(event.get("event_type") or "unknown")
             counts[key] = counts.get(key, 0) + 1
 
+        fanout_events = [item for item in timeline if str(item.get("event_type", "")).startswith("extraction_fanout.")]
         return {
             "schema_version": ANALYZER_SCHEMA_VERSION,
             "trace_id": trace_id,
@@ -1036,6 +1037,12 @@ class ExtractionTimelineAnalyzer:
                            {"validation_review." + kind for kind in FOLLOWUP_FACTS}],
                 "note": "Extractor proposals and supervisor/curator dispositions are separate immutable facts; proposals do not change current results.",
             },
+            **({"extraction_fanout": {
+                "events": fanout_events,
+                "note": "Fan-out extraction: the submitted plan, each parallel writer's assigned and staged counts, "
+                        "and code finalize attempts. Writers run as separate agent runs in this trace; counts are "
+                        "what code observed, not judgments about the records.",
+            }} if fanout_events else {}),
             "workspace_validation_review": {
                 "events": [item for item in timeline if str(item.get("event_type", "")) in {
                     "validation_review.workspace_operation", "validation_review.workspace_revalidation_request",

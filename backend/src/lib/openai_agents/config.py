@@ -948,6 +948,20 @@ def build_model_settings(
     )
 
 
+def provider_allows_parallel_tool_calls(model: str, provider_override: Optional[str] = None) -> bool:
+    """Whether the provider capability gates allow parallel tool calls for ``model``.
+
+    The same gates ``build_model_settings`` applies: the provider catalog flag, then
+    provider-specific overrides (for example Groq's opt-in setting).
+    """
+    provider = resolve_model_provider(model, provider_override)
+    allowed = bool(_get_provider_definition(provider).supports_parallel_tool_calls)
+    _, allowed = _apply_provider_tool_call_overrides(
+        provider=provider, temperature=None, parallel_tool_calls=allowed,
+    )
+    return allowed
+
+
 @dataclass
 class AgentConfig:
     """Configuration for a single agent."""
@@ -2084,6 +2098,37 @@ def get_batching_nudge_threshold() -> int:
     repeated single calls before reminding it. Default 3.
     """
     return max(1, _get_env_int_with_fallback("BATCHING_NUDGE_THRESHOLD", 3))
+
+
+# --- Fan-out extraction (plan, then parallel writers) ---
+
+def get_extraction_fanout_min_items() -> int:
+    """Planned records at which a builder extraction fans out (EXTRACTION_FANOUT_MIN_ITEMS).
+
+    0 (default) turns fan-out off: every builder extraction runs as one writer.
+    A positive value makes builder agents plan first; plans with at least this
+    many records are written by parallel writers, and smaller plans are staged
+    by the planner itself. Production sets 6.
+    """
+    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MIN_ITEMS", 0))
+
+
+def get_extraction_fanout_items_per_writer() -> int:
+    """Planned records given to each parallel writer (EXTRACTION_FANOUT_ITEMS_PER_WRITER).
+
+    Fewer records per writer means more writers and a shorter writing phase,
+    at a higher cost. Default 5.
+    """
+    return max(1, _get_env_int_with_fallback("EXTRACTION_FANOUT_ITEMS_PER_WRITER", 5))
+
+
+def get_extraction_fanout_max_writers() -> int:
+    """Most parallel writers one extraction may start (EXTRACTION_FANOUT_MAX_WRITERS).
+
+    Each writer opens its own model connection. Larger plans give each writer
+    more records instead of starting more writers. Default 8.
+    """
+    return max(1, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_WRITERS", 8))
 
 
 def get_layer2_force_tool_finalization_enabled() -> bool:

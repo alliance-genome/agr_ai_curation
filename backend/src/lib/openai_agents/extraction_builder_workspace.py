@@ -60,12 +60,24 @@ class ExtractionBuilderValidationError(ExtractionBuilderError):
     """Raised when finalization is attempted with validation errors."""
 
 
+class ExtractionBuilderPlanningError(ExtractionBuilderError):
+    """Raised when a candidate mutation arrives while the run is still planning."""
+
+
+class ExtractionBuilderOwnershipError(ExtractionBuilderError):
+    """Raised when a parallel writer would overwrite another writer's draft."""
+
+
 _ACTIVE_EXTRACTION_BUILDER_WORKSPACE: ContextVar[
     "ExtractionBuilderWorkspace | None"
 ] = ContextVar(
     "active_extraction_builder_workspace",
     default=None,
 )
+
+# Fan-out extraction runs several writers at once. Each writer task binds its own
+# owner label here; asyncio.to_thread copies it into the staging tool's thread.
+_STAGING_OWNER: ContextVar[str | None] = ContextVar("extraction_builder_staging_owner", default=None)
 
 
 @dataclass
@@ -149,7 +161,12 @@ class ExtractionBuilderWorkspace:
         )
         self.revision = 0
         self.state = BUILDER_STATE_ACTIVE
+        # Set by fan-out extraction while its planner reads the paper: candidate
+        # mutations are refused until the plan is submitted.
+        self.planning = False
         self.candidates: dict[str, ExtractionBuilderCandidate] = {}
+        # Runtime bookkeeping for fan-out writers; never part of the snapshot.
+        self._staged_by: dict[str, str] = {}
         self.validation_errors: list[dict[str, Any]] = []
         self.finalization: ExtractionBuilderFinalization | None = None
         self.finalized_candidate_ids: tuple[str, ...] = ()
@@ -169,25 +186,41 @@ class ExtractionBuilderWorkspace:
         """Allocate and upsert a draft under the same lock as its journal write."""
         self._ensure_mutable()
         prefix = _required_string(id_prefix, "id_prefix")
+        owner = _STAGING_OWNER.get()
         candidate_id = None
         if pending_ref_id:
             for candidate in self.candidates.values():
                 if pending_ref_id in candidate.pending_ref_ids:
                     candidate_id = candidate.candidate_id
                     break
+        if candidate_id is not None and owner is not None and self._staged_by.get(candidate_id) != owner:
+            raise ExtractionBuilderOwnershipError(
+                f"The pending_ref_id {pending_ref_id!r} already belongs to a record another "
+                "writer staged. Stage your record again with a different pending_ref_id, "
+                "or leave pending_ref_id out."
+            )
+        is_new = candidate_id is None
         if candidate_id is None:
             number = len(self.candidates) + 1
             candidate_id = f"{prefix}-{number}"
             while candidate_id in self.candidates:
                 number += 1
                 candidate_id = f"{prefix}-{number}"
-        return self.upsert_candidate(
+        candidate = self.upsert_candidate(
             candidate_id=candidate_id,
             staged_fields=staged_fields,
             pending_ref_ids=[pending_ref_id] if pending_ref_id else [],
             evidence_record_ids=evidence_record_ids,
             status=status,
         )
+        if is_new and owner is not None:
+            self._staged_by[candidate.candidate_id] = owner
+        return candidate
+
+    @_synchronized_workspace
+    def candidates_staged_by(self, owner: str) -> list[str]:
+        """Candidate IDs a fan-out writer created, in staging order."""
+        return [candidate_id for candidate_id, staged_by in self._staged_by.items() if staged_by == owner]
 
     @_synchronized_workspace
     def upsert_candidate(
@@ -497,6 +530,11 @@ class ExtractionBuilderWorkspace:
             raise ExtractionBuilderError(
                 f"Extraction builder workspace is {self.state}; candidate mutations are rejected."
             )
+        if self.planning:
+            raise ExtractionBuilderPlanningError(
+                "Staging and corrections are disabled during planning. Do not stage records "
+                "now: finish reading and submit your plan with submit_extraction_plan."
+            )
 
     def _ensure_scope_value(self, field_name: str, value: str | None) -> None:
         normalized = _optional_string(value)
@@ -576,6 +614,15 @@ def reset_active_extraction_builder_workspace(
     token: Token[ExtractionBuilderWorkspace | None],
 ) -> None:
     _ACTIVE_EXTRACTION_BUILDER_WORKSPACE.reset(token)
+
+
+def set_staging_owner(owner: str | None) -> Token[str | None]:
+    """Attribute candidates staged in this context to one fan-out writer."""
+    return _STAGING_OWNER.set(owner)
+
+
+def reset_staging_owner(token: Token[str | None]) -> None:
+    _STAGING_OWNER.reset(token)
 
 
 def get_active_extraction_builder_workspace() -> ExtractionBuilderWorkspace:
@@ -780,11 +827,15 @@ __all__ = [
     "ExtractionBuilderFinalization",
     "ExtractionBuilderFinalizationConflict",
     "ExtractionBuilderFinalizedError",
+    "ExtractionBuilderOwnershipError",
+    "ExtractionBuilderPlanningError",
     "ExtractionBuilderValidationError",
     "ExtractionBuilderWorkspace",
     "build_internal_extraction_result_event",
     "get_active_extraction_builder_workspace",
     "reset_active_extraction_builder_workspace",
+    "reset_staging_owner",
     "set_active_extraction_builder_workspace",
+    "set_staging_owner",
     "stage_extraction_payload",
 ]

@@ -1144,3 +1144,37 @@ def test_validator_worker_capacity_reaches_all_consumers(monkeypatch, configured
     else:
         monkeypatch.setenv(key, configured)
     assert get_max_parallel_validators() == expected
+
+
+FANOUT_CONTRACT = [
+    line.split("|") for line in (
+        WORKSPACE_ROOT / "scripts/testing/fixtures/extraction_fanout_env.txt"
+    ).read_text().splitlines() if line and not line.startswith("#")
+]
+
+
+@pytest.mark.parametrize("key,default,override", FANOUT_CONTRACT)
+def test_extraction_fanout_settings_reach_every_extraction_consumer(key, default, override, monkeypatch):
+    from src.lib.openai_agents import config
+
+    getter = getattr(config, "get_" + key.lower())
+    monkeypatch.delenv(key, raising=False)
+    assert getter() == int(default)
+    expected = "${" + key + ":-" + default + "}"
+    for path in (DEV_COMPOSE_PATH, COMPOSE_PATH):
+        services = yaml.safe_load(path.read_text())["services"]
+        for name in ("backend", "benchmark_worker"):
+            env = services[name]["environment"]
+            if isinstance(env, list):
+                env = _list_environment(env)
+            assert env[key] == expected
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
+    monkeypatch.setenv(key, override)
+    assert getter() == int(override)
+
+
+def test_extraction_fanout_contract_covers_every_getter():
+    from src.lib.openai_agents import config
+
+    getters = {name for name in dir(config) if name.startswith("get_extraction_fanout_")}
+    assert getters == {"get_" + key.lower() for key, _, _ in FANOUT_CONTRACT}
