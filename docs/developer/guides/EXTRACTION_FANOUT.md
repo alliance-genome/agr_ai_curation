@@ -17,9 +17,10 @@ plans first, and the plan size decides the path:
 | `EXTRACTION_FANOUT_MIN_ITEMS` or more | Parallel writers stage the plan, then the planner's thread checks the result. |
 
 A builder extraction agent is any agent carrying a tool with `builder_finalization: true`
-binding metadata. Fan-out also needs exactly one such finalize tool and at least one tool
-with `builder_stage: true` (a tool that adds one new draft record). Agents without these
-run as one writer; the run records an `extraction_fanout.not_applicable` trace event.
+binding metadata. Fan-out also needs exactly one such finalize tool, at least one tool
+with `builder_stage: true` (a tool that adds one new draft record), and the document scope
+its document tools were built for. Agents without these run as one writer; the run
+records an `extraction_fanout.not_applicable` trace event with the reason.
 
 Settings (all in `.env.example` under Operational limits, forwarded to `backend` and
 `benchmark_worker`):
@@ -40,8 +41,11 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
 
 - **Planner (the agent itself).** Reads the paper and calls `submit_extraction_plan`, a
   strict-schema tool: a short label and the evidence `chunk_index` values per record, plus
-  up to 5 paper-wide notes. No field values. Code checks the plan's structure only.
-  Staging is refused while it plans (`ExtractionBuilderWorkspace.planning`).
+  up to 5 paper-wide notes. No field values. Code checks the plan's structure and that
+  every cited chunk exists in the document (one tenant-scoped query); a plan citing a
+  missing chunk is rejected with the missing numbers so the planner corrects it in the
+  same thread, and a failed query fails the step. Staging is refused while it plans
+  (`ExtractionBuilderWorkspace.planning`).
 - **Code.** Counts the plan, slices it in order into balanced contiguous batches, reads each
   cited chunk once through the agent's own `read_chunk` tool and renders it exactly as the
   model sees a `read_chunk` result, starts the writers, and counts what each writer staged.
@@ -55,7 +59,8 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
   records than it was assigned, that writer's assigned items, staged records and final
   reply. The model decides what is missing, duplicated or wrong, and is asked to make
   every fix in one response with parallel tool calls. Code never matches labels or merges
-  records. The planner thread and the writers always run with parallel tool calls on.
+  records. The planner thread and the writers run with parallel tool calls on wherever
+  the provider's capability gates allow them.
 - **Finalize.** Code calls the agent's own finalize tool with every retained record
   (writers' records in plan order, then the rest). Validation problems go back to the
   planner's thread once; if the second attempt also fails, the step fails exactly as a

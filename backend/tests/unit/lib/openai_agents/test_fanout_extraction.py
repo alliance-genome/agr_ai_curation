@@ -270,6 +270,7 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
     def __init__(self, scenario):
         super().__init__()
         self.scenario = scenario
+        self._agr_provider_id = "openai"
         self.requests = []
         self.writer_barrier = {"arrived": 0, "event": None}
 
@@ -345,6 +346,10 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
                               (STAGE, "plan-early-stage", {"label": "too early", "evidence_record_ids": []}))
             if plan is None or self.scenario.get("first_run_text"):
                 return _final("I read the paper.", response_id="plan-text")
+            submitted = {item.get("call_id") for item in items
+                         if isinstance(item, dict) and item.get("type") == "function_call_output"}
+            if self.scenario.get("first_plan") and "plan-submit-first" not in submitted:
+                return _calls("plan-1a", (fanout.SUBMIT_PLAN_TOOL_NAME, "plan-submit-first", self.scenario["first_plan"]))
             return _calls("plan-1", (fanout.SUBMIT_PLAN_TOOL_NAME, "plan-submit", plan))
         if message.startswith("[Planning phase] You have not"):
             if self.scenario.get("submit_on_reminder") and plan is not None:
@@ -426,14 +431,25 @@ def harness(monkeypatch):
     monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
     monkeypatch.setattr(fanout, "write_extraction_trace_event", lambda **event: trace.append(event) or event)
     monkeypatch.setattr(builder, "write_extraction_trace_event", lambda **event: event)
+    chunk_checks = []
+    existing_chunks = {"indexes": set(range(50)), "error": None}
+
+    async def _existing_chunk_indexes(*, chunk_indexes, user_id, document_id):
+        chunk_checks.append({"chunk_indexes": list(chunk_indexes), "user_id": user_id, "document_id": document_id})
+        if existing_chunks["error"] is not None:
+            raise existing_chunks["error"]
+        return {index for index in chunk_indexes if index in existing_chunks["indexes"]}
+
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_existing_chunk_indexes", _existing_chunk_indexes)
 
     class Harness:
         def __init__(self):
             self.events, self.trace, self.finalize_calls, self.reads = events, trace, [], []
             self.workspaces = []
+            self.chunk_checks, self.existing_chunks = chunk_checks, existing_chunks
 
         def agent(self, model):
-            return Agent(
+            agent = Agent(
                 name="Test Builder",
                 instructions="Extract every reagent the paper uses.",
                 model=model,
@@ -442,6 +458,9 @@ def harness(monkeypatch):
                 tools=[*_source_tools(self.reads), _stage_test_object, _patch_test_object, _discard_test_object,
                        _finalize_tool(self.finalize_calls)],
             )
+            # The scope catalog_service records for the agent's document tools.
+            agent.cost_boundary = {"document_id": "doc-1", "user_id": "curator-1"}
+            return agent
 
         async def run(self, model):
             original = builder.ExtractionBuilderWorkspace.__init__
@@ -748,3 +767,152 @@ async def test_fanout_does_not_apply_without_exactly_one_finalize_tool(harness, 
     assert prepared is None
     assert agent.tools == tools_before
     assert harness.trace_types() == ["extraction_fanout.not_applicable"]
+
+
+@pytest.mark.asyncio
+async def test_plan_citing_a_missing_chunk_is_rejected_then_corrected(harness):
+    model = ScriptedFanoutModel({
+        "first_plan": {"notes": [], "items": [{"label": "reagent 1", "chunks": [1, 99]},
+                                              {"label": "reagent 2", "chunks": [2]}]},
+        "plan": _plan("reagent 1", "reagent 2"),
+    })
+
+    await harness.run(model)
+
+    rejected = next(
+        item["output"] for request in model.requests for item in request["input"]
+        if isinstance(item, dict) and item.get("call_id") == "plan-submit-first"
+        and item.get("type") == "function_call_output"
+    )
+    assert json.loads(rejected)["status"] == "rejected"
+    assert json.loads(rejected)["missing_chunk_indexes"] == [99]
+    assert "do not exist in this document: 99." in json.loads(rejected)["message"]
+    assert harness.chunk_checks == [
+        {"chunk_indexes": [1, 2, 99], "user_id": "curator-1", "document_id": "doc-1"},
+        {"chunk_indexes": [1, 2], "user_id": "curator-1", "document_id": "doc-1"},
+    ]
+    plan_event = next(event["output_summary"] for event in harness.trace
+                      if event["event_type"] == "extraction_fanout.plan_submitted")
+    assert [item["chunks"] for item in plan_event["items"]] == [[1, 2], [1, 2]]
+    assert sorted(_finalized_labels(harness)) == ["reagent 1", "reagent 2"]
+    # Nothing tried to read the missing chunk.
+    assert 99 not in harness.reads
+
+
+@pytest.mark.asyncio
+async def test_chunk_check_infrastructure_failure_fails_the_step(harness):
+    from agents.exceptions import UserError
+
+    harness.existing_chunks["error"] = RuntimeError("chunk store unavailable")
+    model = ScriptedFanoutModel({"plan": _plan("reagent 1", "reagent 2")})
+
+    with pytest.raises(UserError, match="chunk store unavailable"):
+        await harness.run(model)
+
+    assert harness.finalize_calls == []
+    assert harness.workspaces[-1].state == builder.BUILDER_STATE_ABORTED
+    assert not [event for event in harness.trace if event["event_type"] == "extraction_fanout.plan_submitted"]
+
+
+def test_fanout_needs_the_document_tools_scope(harness):
+    agent = harness.agent(ScriptedFanoutModel({}))
+    agent.cost_boundary = {"document_id": None, "user_id": "curator-1"}
+    tools_before = list(agent.tools)
+
+    prepared = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="trace-scope"),
+        specialist_name="Test Builder", input_text="x", emit_event=harness.events.append,
+    )
+
+    assert prepared is None
+    assert agent.tools == tools_before
+    assert [event["output_summary"]["reason"] for event in harness.trace] == ["no_document_scope"]
+
+
+@pytest.mark.parametrize("provider,groq_enabled,expected", [
+    ("openai", None, True),
+    ("groq", None, None),
+    ("groq", "true", True),
+])
+def test_parallel_tool_calls_follow_the_provider_gate(harness, monkeypatch, provider, groq_enabled, expected):
+    from types import SimpleNamespace
+
+    if groq_enabled is None:
+        monkeypatch.delenv("GROQ_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("GROQ_PARALLEL_TOOL_CALLS_ENABLED", groq_enabled)
+    model = ScriptedFanoutModel({})
+    model._agr_provider_id = provider
+    agent = harness.agent(model)
+
+    prepared = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="trace-gate"),
+        specialist_name="Test Builder", input_text="x", emit_event=harness.events.append,
+    )
+    prepared.start(planner_agent=agent, max_turns=4, run_config=None, base_run_config=None,
+                   surface=SimpleNamespace(runtime="specialist"))
+
+    assert agent.model_settings.parallel_tool_calls is expected
+
+
+# ---------------------------------------------------------------------------
+# Chunk existence query
+# ---------------------------------------------------------------------------
+
+
+def _chunk_store(monkeypatch, objects):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from src.lib.weaviate_client import chunks
+
+    collection = MagicMock()
+    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[
+        SimpleNamespace(properties={"documentId": document_id, "chunkIndex": index})
+        for document_id, index in objects
+    ])
+
+    @contextmanager
+    def session():
+        yield MagicMock()
+
+    connection = MagicMock()
+    connection.session.side_effect = session
+    monkeypatch.setattr(chunks, "get_connection", lambda: connection)
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", MagicMock(return_value=(collection, None)))
+    return chunks, collection
+
+
+@pytest.mark.asyncio
+async def test_existing_chunk_indexes_uses_one_tenant_scoped_query(monkeypatch):
+    chunks, collection = _chunk_store(monkeypatch, [("doc-a", 1), ("doc-a", 3)])
+
+    found = await chunks.get_existing_chunk_indexes(chunk_indexes=[3, 1, 5, 1], user_id="alice", document_id="doc-a")
+
+    assert found == {1, 3}
+    collection.query.fetch_objects.assert_called_once()
+    arguments = collection.query.fetch_objects.call_args.kwargs
+    assert arguments["limit"] == 6
+    assert arguments["return_properties"] == ["documentId", "chunkIndex"]
+
+
+@pytest.mark.asyncio
+async def test_existing_chunk_indexes_rejects_inconsistent_results_and_bad_input(monkeypatch):
+    chunks, collection = _chunk_store(monkeypatch, [("doc-b", 1)])
+
+    with pytest.raises(ValueError, match="inconsistent"):
+        await chunks.get_existing_chunk_indexes(chunk_indexes=[1], user_id="alice", document_id="doc-a")
+    with pytest.raises(ValueError, match="non-negative"):
+        await chunks.get_existing_chunk_indexes(chunk_indexes=[-1], user_id="alice", document_id="doc-a")
+    assert await chunks.get_existing_chunk_indexes(chunk_indexes=[], user_id="alice", document_id="doc-a") == set()
+    assert collection.query.fetch_objects.call_count == 1
+
+
+def test_provider_gate_matches_model_settings_gates(monkeypatch):
+    from src.lib.openai_agents import config
+
+    monkeypatch.delenv("GROQ_PARALLEL_TOOL_CALLS_ENABLED", raising=False)
+    assert config.provider_allows_parallel_tool_calls("gpt-test", "openai") is True
+    assert config.provider_allows_parallel_tool_calls("gpt-test", "groq") is False
+

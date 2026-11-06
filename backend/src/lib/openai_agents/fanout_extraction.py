@@ -52,7 +52,12 @@ from .extraction_builder_workspace import (
 from .extraction_trace_events import write_extraction_trace_event
 from .model_request_measurement import install_model_request_measurement
 from .run_history import exact_json
-from .tool_surface import ToolSurface, apply_tool_surface, tool_surface_trace_attributes
+from .tool_surface import (
+    ToolSurface,
+    _agent_model_and_provider,
+    apply_tool_surface,
+    tool_surface_trace_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -309,22 +314,17 @@ def prepare_fanout_extraction(
     finalize_tools = [tool for tool in tools if _tool_name(tool) in finalize_names]
     stage_tools = [tool for tool in tools if _tool_name(tool) in stage_names]
     if len(finalize_tools) != 1 or not stage_tools:
-        logger.info(
-            "Fan-out extraction does not apply to %s (finalize tools=%s, stage tools=%s)",
-            specialist_name,
-            [_tool_name(tool) for tool in finalize_tools],
-            [_tool_name(tool) for tool in stage_tools],
-            extra={"specialist_name": specialist_name, "operation": "extraction_fanout_not_applicable"},
+        return _not_applicable(
+            builder_workspace, specialist_name, reason="builder_tools",
+            finalize_tools=[_tool_name(tool) for tool in finalize_tools],
+            stage_tools=[_tool_name(tool) for tool in stage_tools],
         )
-        write_extraction_trace_event(
-            event_type="extraction_fanout.not_applicable",
-            output_summary={
-                "finalize_tools": [_tool_name(tool) for tool in finalize_tools],
-                "stage_tools": [_tool_name(tool) for tool in stage_tools],
-            },
-            metadata={"agent": specialist_name, "builder_run_id": builder_workspace.run_id},
-        )
-        return None
+    # The document and owner the agent's document tools were built for; plan chunks
+    # are checked against this document when the plan is submitted.
+    scope = getattr(runtime_agent, "cost_boundary", None) or {}
+    document_id, user_id = scope.get("document_id"), scope.get("user_id")
+    if not document_id or not user_id:
+        return _not_applicable(builder_workspace, specialist_name, reason="no_document_scope")
     if SUBMIT_PLAN_TOOL_NAME in names:
         raise ValueError(f"Agent tool collides with the reserved {SUBMIT_PLAN_TOOL_NAME} tool")
     fanout = FanoutExtraction(
@@ -334,6 +334,8 @@ def prepare_fanout_extraction(
         plain_tools=tools,
         finalize_tool=finalize_tools[0],
         stage_tools=stage_tools,
+        document_id=str(document_id),
+        user_id=str(user_id),
         min_items=min_items,
         items_per_writer=config.get_extraction_fanout_items_per_writer(),
         max_writers=config.get_extraction_fanout_max_writers(),
@@ -344,6 +346,28 @@ def prepare_fanout_extraction(
     ] + [fanout.submit_tool]
     runtime_agent.tool_use_behavior = fanout.tool_use_behavior
     return fanout
+
+
+def _not_applicable(
+    builder_workspace: ExtractionBuilderWorkspace,
+    specialist_name: str,
+    *,
+    reason: str,
+    **detail: Any,
+) -> None:
+    logger.info(
+        "Fan-out extraction does not apply to %s (%s: %s)",
+        specialist_name,
+        reason,
+        detail,
+        extra={"specialist_name": specialist_name, "operation": "extraction_fanout_not_applicable"},
+    )
+    write_extraction_trace_event(
+        event_type="extraction_fanout.not_applicable",
+        output_summary={"reason": reason, **detail},
+        metadata={"agent": specialist_name, "builder_run_id": builder_workspace.run_id},
+    )
+    return None
 
 
 class FanoutExtraction:
@@ -364,12 +388,16 @@ class FanoutExtraction:
         plain_tools: Sequence[Any],
         finalize_tool: Any,
         stage_tools: Sequence[Any],
+        document_id: str,
+        user_id: str,
         min_items: int,
         items_per_writer: int,
         max_writers: int,
         emit_event: Callable[[dict[str, Any]], None],
     ) -> None:
         self.workspace = workspace
+        self.document_id = document_id
+        self.user_id = user_id
         self.specialist_name = specialist_name
         self.input_text = input_text
         self.plain_tools = list(plain_tools)
@@ -418,11 +446,13 @@ class FanoutExtraction:
         """Bind the compiled planner agent and run configs; streaming starts lazily."""
 
         # The check pass fixes several records in one turn and writers stage all their
-        # items in one turn, so the planner thread and its writer clones always allow
-        # parallel tool calls.
+        # items in one turn, so the planner thread and its writer clones allow parallel
+        # tool calls wherever the provider's capability gates permit them.
         settings = planner_agent.model_settings
         if settings.parallel_tool_calls is not True:
-            planner_agent.model_settings = replace(settings, parallel_tool_calls=True)
+            model_id, provider_id = _agent_model_and_provider(planner_agent)
+            if model_id and config.provider_allows_parallel_tool_calls(model_id, provider_id):
+                planner_agent.model_settings = replace(settings, parallel_tool_calls=True)
         self.planner_agent = planner_agent
         self.max_turns = max_turns
         self.run_config = run_config
@@ -445,6 +475,26 @@ class FanoutExtraction:
             plan = parse_plan_arguments(arguments)
         except PlanFormatError as exc:
             return json.dumps({"status": "rejected", "message": str(exc)})
+        cited = sorted({chunk for item in plan.items for chunk in item.chunks})
+        if cited:
+            # Structural reference check: every cited chunk must exist in this document.
+            # Query failures raise and fail the step; only absent indexes are rejected.
+            from src.lib.weaviate_client.chunks import get_existing_chunk_indexes
+
+            existing = await get_existing_chunk_indexes(
+                chunk_indexes=cited, user_id=self.user_id, document_id=self.document_id,
+            )
+            missing = [chunk for chunk in cited if chunk not in existing]
+            if missing:
+                return json.dumps({
+                    "status": "rejected",
+                    "missing_chunk_indexes": missing,
+                    "message": (
+                        "These chunk_index values do not exist in this document: "
+                        f"{', '.join(str(chunk) for chunk in missing)}. Cite the chunk_index "
+                        "values of passages you read, then submit the corrected plan."
+                    ),
+                })
         self.plan = plan
         return json.dumps({"status": "accepted", "planned_records": len(plan.items)})
 

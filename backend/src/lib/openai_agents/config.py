@@ -948,6 +948,20 @@ def build_model_settings(
     )
 
 
+def provider_allows_parallel_tool_calls(model: str, provider_override: Optional[str] = None) -> bool:
+    """Whether the provider capability gates allow parallel tool calls for ``model``.
+
+    The same gates ``build_model_settings`` applies: the provider catalog flag, then
+    provider-specific overrides (for example Groq's opt-in setting).
+    """
+    provider = resolve_model_provider(model, provider_override)
+    allowed = bool(_get_provider_definition(provider).supports_parallel_tool_calls)
+    _, allowed = _apply_provider_tool_call_overrides(
+        provider=provider, temperature=None, parallel_tool_calls=allowed,
+    )
+    return allowed
+
+
 @dataclass
 class AgentConfig:
     """Configuration for a single agent."""
