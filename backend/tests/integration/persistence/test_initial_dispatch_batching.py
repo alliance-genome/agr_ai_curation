@@ -27,6 +27,7 @@ from src.models.sql.validation_history import ValidationFact
 from src.models.sql.validation_review import (
     ValidationReviewEpisode as Episode,
     ValidationReviewReservation as Reservation,
+    ValidationReviewScope as Scope,
     ValidationReviewWork as Work,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
@@ -37,7 +38,8 @@ from tests.integration.persistence.test_validation_history import (
 from tests.unit.lib.domain_packs.test_validator_dispatch import _multivalued_dispatch_pack
 
 RECORDS = 5  # Batches of two: run groups of 2, 2 and 1 requests.
-SCHEDULED_KINDS = {"execution", "attempt", "review_reservation", "review_work", "review_budget_warning"}
+SCHEDULED_KINDS = {"execution", "attempt", "review_reservation", "review_work", "review_budget_warning",
+                   "review_reopened"}
 
 
 @pytest.fixture
@@ -110,6 +112,7 @@ def durable_rows(adapter):
         reservations = {row.id: row for row in db.scalars(
             select(Reservation).where(Reservation.episode_id == adapter.episode_id))}
         episode = db.get(Episode, adapter.episode_id)
+        scope_row = db.get(Scope, episode.scope_id)
         return {
             "facts": [{"kind": fact.kind, "operation_id": fact.operation_id, "target_id": fact.target_id,
                        "parent_id": fact.parent_id, "content": content}
@@ -126,6 +129,7 @@ def durable_rows(adapter):
             "work_count": len(work),
             "reservation_count": len(reservations),
             "episode": {"charged": episode.charged, "state": episode.state, "started": episode.started_at is not None},
+            "scope_charged": scope_row.charged,
         }
 
 
@@ -183,10 +187,8 @@ def test_queueing_again_returns_the_same_work_and_writes_nothing(scope, tmp_path
     assert durable_rows(adapter) == rows
 
 
-def test_an_earlier_single_item_is_kept_when_the_rest_are_queued(scope, tmp_path, monkeypatch, agents):
-    reference = admitted_plan(scope, tmp_path)
-    queue_initial_work(reference, monkeypatch)
-    adapter = admitted_plan(scope, tmp_path)
+def queue_first_item_only(adapter, monkeypatch):
+    """Run the real initial() but queue only its first work item; return every item."""
     items = []
     real = scheduling.initial
 
@@ -198,6 +200,14 @@ def test_an_earlier_single_item_is_kept_when_the_rest_are_queued(scope, tmp_path
     monkeypatch.setattr(adapter, "execute", AsyncMock(return_value={"state": "not_started"}))
     asyncio.run(adapter.initial())
     monkeypatch.setattr(scheduling, "initial", real)
+    return items
+
+
+def test_an_earlier_single_item_is_kept_when_the_rest_are_queued(scope, tmp_path, monkeypatch, agents):
+    reference = admitted_plan(scope, tmp_path)
+    queue_initial_work(reference, monkeypatch)
+    adapter = admitted_plan(scope, tmp_path)
+    items = queue_first_item_only(adapter, monkeypatch)
 
     ids = scheduling.initial(adapter.scope, adapter.episode_id, items)
     with store.SessionLocal() as db:
@@ -257,6 +267,67 @@ def test_a_failure_part_way_leaves_no_queued_work(scope, tmp_path, monkeypatch, 
     monkeypatch.setattr(scheduling, "enqueue_in_transaction", real_enqueue)
     queue_initial_work(adapter, monkeypatch)
     assert without_identities(durable_rows(adapter)) == without_identities(durable_rows(reference))
+
+
+def test_budget_charges_of_every_item_are_kept(scope, tmp_path, monkeypatch, agents):
+    # Initial work charges nothing today. Charge one extra attempt per item so a
+    # later item would reveal an earlier item's charge being lost.
+    real = scheduling.enqueue_in_transaction
+
+    def charging(db, scope, episode_id, *, operation_id, payload, charges, kind="validator"):
+        return real(db, scope, episode_id, operation_id=operation_id, payload=payload,
+                    charges={"extra_attempts": 1}, kind=kind)
+
+    monkeypatch.setattr(scheduling, "enqueue_in_transaction", charging)
+    per_item = admitted_plan(scope, tmp_path)
+    batched = admitted_plan(scope, tmp_path)
+    queue_initial_work(per_item, monkeypatch, one_transaction_per_item=True)
+    queue_initial_work(batched, monkeypatch)
+
+    rows_per_item, rows_batched = durable_rows(per_item), durable_rows(batched)
+    assert rows_per_item["episode"]["charged"] == rows_per_item["scope_charged"] == {"extra_attempts": 3}
+    assert rows_batched["episode"]["charged"] == rows_batched["scope_charged"] == {"extra_attempts": 3}
+    assert without_identities(rows_batched) == without_identities(rows_per_item)
+
+
+def completed_with_late_answers(scope, tmp_path, monkeypatch):
+    """A complete episode whose first work item answered, with two initial items still unqueued."""
+    adapter = admitted_plan(scope, tmp_path)
+    items = queue_first_item_only(adapter, monkeypatch)
+    with store.SessionLocal() as db:
+        attempts = db.scalar(select(Work).where(
+            Work.episode_id == adapter.episode_id, Work.operation_id == items[0]["operation_id"]
+        )).payload["invocation"]["attempt_ids"]
+    for attempt in attempts:
+        store.complete_attempt(adapter.scope, adapter.artifact_id, attempt, state="completed",
+                               result={"value": "late answer"}, diagnostics={})
+    # Only the review state matters here: an answer arrived after the episode completed.
+    with store.SessionLocal.begin() as db:
+        db.get(Episode, adapter.episode_id).state = "complete"
+    return adapter, items[1:]
+
+
+def test_a_complete_episode_reopens_as_it_did_with_one_transaction_per_item(scope, tmp_path, monkeypatch, agents):
+    per_item, per_item_rest = completed_with_late_answers(scope, tmp_path, monkeypatch)
+    batched, batched_rest = completed_with_late_answers(scope, tmp_path, monkeypatch)
+    assert len(per_item_rest) == len(batched_rest) == 2
+
+    for item in per_item_rest:
+        scheduling.initial(per_item.scope, per_item.episode_id, [item])
+    scheduling.initial(batched.scope, batched.episode_id, batched_rest)
+
+    rows_per_item, rows_batched = durable_rows(per_item), durable_rows(batched)
+    facts = rows_batched["facts"]
+    reopened = [index for index, fact in enumerate(facts) if fact["kind"] == "review_reopened"]
+    executions = [index for index, fact in enumerate(facts) if fact["kind"] == "execution"]
+    assert all(facts[index]["content"]["reason"] == "late_answer_review_pending" for index in reopened)
+    # Only the first queued item reopens the episode; the second finds it open.
+    # (That item records two reopen facts within its own transaction, as each
+    # of its locks reloads the episode; one transaction per item did the same.)
+    assert len(reopened) == 2 and max(reopened) < executions[2]
+    assert rows_batched["episode"]["state"] == rows_per_item["episode"]["state"] == "open"
+    assert rows_batched["work_count"] == rows_per_item["work_count"] == 3
+    assert without_identities(rows_batched) == without_identities(rows_per_item)
 
 
 def test_job_targets_resolve_off_the_event_loop_in_one_transaction(scope, tmp_path, monkeypatch, agents):

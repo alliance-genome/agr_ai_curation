@@ -175,6 +175,7 @@ def get_current_extraction_trace_run() -> ExtractionTraceRun | None:
     return _current_run.get()
 
 
+# 4096 only bounds an internal memo, not an operational limit: output is identical at any size.
 @functools.lru_cache(maxsize=4096)
 def _is_secret_key(key: str) -> bool:
     # Pure in the key. Payloads repeat the same keys thousands of times.

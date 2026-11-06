@@ -115,7 +115,14 @@ def initial(scope, episode_id, items):
     Returns the work IDs in item order.
     """
     with store.SessionLocal.begin() as db:
-        return [_initial_in_transaction(db, scope, episode_id, **item) for item in items]
+        ids = []
+        for item in items:
+            ids.append(_initial_in_transaction(db, scope, episode_id, **item))
+            # Sessions do not autoflush, and the next item's locks reload the
+            # episode and scopes. Flush so it sees this item's charges, state and
+            # rows, as it did when each item committed on its own.
+            db.flush()
+        return ids
 
 
 def _initial_in_transaction(db, scope, episode_id, *, operation_id, requests, receipt):
