@@ -143,10 +143,13 @@ def record_packet_decisions(context, *, checkpoint_request, operation_id, packet
                                     operation_id=operation_id, entries=entries)
     except store.HistoryAccessError:
         raise  # Authorization keeps its own type and never names a record.
-    except store.HistoryConflict as error:
-        raise store.HistoryConflict(_name_handles(str(error), handles, entries)) from error
     except ValueError as error:
-        raise ValueError(_name_handles(str(error), handles, entries)) from error
+        found = getattr(error, "assessment_refusal", None)
+        if found is not None:
+            from src.lib.validation_history.assessments import refusal
+            raise refusal(*found, names=dict(enumerate(handles))) from error
+        kind = store.HistoryConflict if isinstance(error, store.HistoryConflict) else ValueError
+        raise kind(_name_handles(str(error), handles, entries)) from error
     return {**response, "packet_id": packet_id, "applied": [
         {**applied, "handle": handle, "target_id": entry["target_id"]}
         for applied, handle, entry in zip(response["applied"], handles, entries, strict=True)]}

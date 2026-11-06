@@ -381,15 +381,78 @@ def test_every_unknown_uncertain_field_is_named_with_its_handle_and_the_valid_fi
             checkpoint_request=checkpoint(), operation_id="bad-paths", packet_id=page["packet_id"],
             packet_decisions=decided)
     message = str(caught.value)
-    assert f"{first}: unresolved field attributes.reagent_name does not exist" in message
-    assert f"{second}: unresolved field detail does not exist" in message
-    assert "attributes.source does not exist" not in message
+    assert f'{first}: unresolved field "attributes.reagent_name" does not exist' in message
+    assert f'{second}: unresolved field "detail" does not exist' in message
+    assert '"attributes.source" does not exist' not in message
     for valid in ("label", "rationale", "attributes.reagent_names", "attributes.source",
                   "attributes.absent_detail", "semantic_class"):
         assert valid in message
     assert not any(target in message for target in targets)
     with store.SessionLocal() as db:
         assert {store._current(db, artifact, target)["version"] for target in targets} == {0}
+
+
+def test_a_malformed_path_is_named_and_the_other_entries_are_still_checked(scope):
+    odd = _object(0, ["e1"])
+    odd = odd.model_copy(update={"payload": {**odd.payload, "attributes": {**odd.payload["attributes"],
+                                                                           "odd key": "unaddressable"}}})
+    _, _, episode, _, checkpoint = _build(scope, [odd, _object(1, ["e1"])], [_evidence("e1")])
+    page = reads.review_packet(scope, episode)
+    first, second = (_handles(record)[0] for record in page["records"])
+    decided = [
+        {"handle": first, "action": "accept", "reason": "Supported.",
+         "unresolved_fields": [{"field_path": "attributes source", "explanation": "Space in the path."}]},
+        {"handle": second, "action": "accept", "reason": "Supported.",
+         "unresolved_fields": [{"field_path": "missing", "explanation": "Wrong path."}]},
+    ]
+    with pytest.raises(ValueError) as caught:
+        decisions.record_packet_decisions(ReviewContext(scope, episode, "fixture-reviewer"),
+            checkpoint_request=checkpoint(), operation_id="malformed", packet_id=page["packet_id"],
+            packet_decisions=decided)
+    message = str(caught.value)
+    assert f'{first}: unresolved field "attributes source" is not a valid field path:' in message
+    assert f'{second}: unresolved field "missing" does not exist' in message
+    assert "odd key" not in message, "fields no path can name are not offered"
+    assert message.count("attributes.reagent_names") == 2, "each record's fields are listed once"
+
+
+def test_explicit_entries_sharing_a_record_list_its_fields_once_and_long_lists_are_cut(scope, monkeypatch):
+    envelope, _, episode, baseline, checkpoint = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
+    target = _targets(envelope)[0]
+    entry = {"target_id": target, "decision_unit_id": target, "expected_version": 0, "action": "accept",
+             "reason": "Supported.", "extraction_ref": baseline,
+             "unresolved_fields": [{"field_path": "nope", "explanation": "Wrong path."}]}
+    context = ReviewContext(scope, episode, "fixture-reviewer")
+    with pytest.raises(ValueError) as caught:
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="shared",
+                                   entries=[entry, {**entry, "action": "accept"}])
+    message = str(caught.value)
+    assert 'entry 1: unresolved field "nope"' in message and 'entry 2: unresolved field "nope"' in message
+    assert "Fields that can be assessed for entry 1 and entry 2:" in message
+    assert message.count("attributes.reagent_names") == 1 and target not in message
+    monkeypatch.setenv("VALIDATION_REVIEW_PACKET_BYTES", "260")
+    with pytest.raises(ValueError, match="more not listed; this message was cut") as cut:
+        decisions.record_decisions(context, checkpoint_request=checkpoint(), operation_id="cut", entries=[entry])
+    assert len(str(cut.value)) <= 260
+
+
+def test_the_curator_api_keeps_a_conflict_for_a_missing_field_and_names_entries_by_position(scope):
+    from fastapi import HTTPException
+    from src.api.curation_workspace import _workspace_review_error
+
+    envelope, _, episode, baseline, checkpoint = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
+    target = _targets(envelope)[0]
+    entry = {"target_id": target, "decision_unit_id": target, "expected_version": 0, "action": "accept",
+             "reason": "Supported.", "extraction_ref": baseline,
+             "unresolved_fields": [{"field_path": "missing", "explanation": "Wrong path."}]}
+    with pytest.raises(store.HistoryConflict) as refused:
+        decisions.record_decisions(ReviewContext(scope, episode, "fixture-reviewer"),
+                                   checkpoint_request=checkpoint(), operation_id="curator", entries=[entry])
+    with pytest.raises(HTTPException) as response:
+        _workspace_review_error(refused.value)
+    assert response.value.status_code == 409
+    assert 'entry 1: unresolved field "missing" does not exist' in response.value.detail
+    assert target not in response.value.detail
 
 
 def test_handles_are_valid_only_with_their_own_packet_and_round(scope):
