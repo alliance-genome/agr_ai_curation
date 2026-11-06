@@ -290,8 +290,15 @@ def condition_decision_contract(request, result_schema, *, profile_mapped=False)
             assembled["missing_expected_fields"] = missing_fields
         return assembled
 
+    def component_selected_refs(decision):
+        # Root identity slots copy the record a component selected; assemble_domain
+        # checks each of those selections against its component's own lookups.
+        return {assessment.record_ref for component in decision.components
+                for assessment in component.candidates if assessment.disposition == "selected"}
+
     return DecisionContract(request=request, result_schema=result_schema,
                             profile_mapped=profile_mapped, decision_schema=ConditionDecision,
+                            selected_refs=component_selected_refs,
                             record_slot_fields={
                                 **{name + "_curie": ("curie",) for name in _TERM_COMPONENTS},
                                 **{name + "_name": ("name",) for name in _TERM_COMPONENTS},

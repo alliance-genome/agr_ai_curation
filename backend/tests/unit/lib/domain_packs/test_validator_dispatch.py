@@ -672,9 +672,8 @@ def test_validator_request_payload_for_agent_omits_semantic_duplicates():
     assert payload["selected_inputs"] == request.selected_inputs
     assert "validation_guidance" not in payload
     assert "input_selectors" not in payload
-    assert payload["evidence"] == request.evidence
+    assert payload["evidence"] == [{"evidence_record_id": "evidence-1", "verified_quote": "crb quote"}]
     assert "input_values" not in payload["target"]
-    assert payload["evidence"] == request.evidence
     assert payload["runtime_compaction"]["omitted_fields"] == [
         "input_selectors",
         "target.input_values",
@@ -734,11 +733,125 @@ def test_validator_request_payload_reports_runtime_capabilities_for_scoped_evide
     payload = validator_request_payload_for_agent(request)
 
     assert "validator_runtime_capabilities" not in payload
-    assert payload["evidence"] == request.evidence
+    # The same quote is already in selected_inputs.evidence_quotes.
+    assert payload["evidence"] == []
+    assert payload["selected_inputs"] == request.selected_inputs
 
 
-def test_validator_request_dedupe_key_includes_field_and_evidence_context():
-    base_request = _validation_request().model_copy(
+def _paper_evidence_record(identifier: str, quote: str, **extra: Any) -> dict[str, Any]:
+    """A full evidence record as attached to a target, with its provenance detail."""
+    return {
+        "evidence_record_id": identifier, "verified_quote": quote,
+        "section": "Results", "subsection": "Fig. 1", "page": 3,
+        "chunk_id": "chunk-1", "chunk_ids": ["chunk-1"], "document_id": "doc-123",
+        "entity": "Fig. 1 treatment", "figure_reference": "Fig. 1B",
+        "envelope_targets": [{"field_path": "condition", "pending_ref_id": "object-1"}],
+        "source_fragments": [{"chunk_id": "chunk-1", "char_start": 0, "char_end": len(quote),
+                              "span_id": "chunk-1:s0001", "spanizer_version": "pdf_sentence_v1",
+                              "text": quote}],
+        "source_span_ids": ["chunk-1:s0001"],
+        **extra,
+    }
+
+
+def _model_evidence(identifier: str | None, quote: str, *, page: int = 3) -> dict[str, Any]:
+    """What the validator model sees of a _paper_evidence_record."""
+    return {
+        **({"evidence_record_id": identifier} if identifier is not None else {}),
+        "entity": "Fig. 1 treatment", "section": "Results", "subsection": "Fig. 1",
+        "page": page, "figure_reference": "Fig. 1B", "verified_quote": quote,
+    }
+
+
+def _quoted_evidence_request(request_id: str, records: list[dict[str, Any]],
+                             quoted: list[dict[str, Any]]) -> DomainValidationRequest:
+    return _validation_request().model_copy(update={
+        "request_id": request_id,
+        "selected_inputs": {
+            "identifier": "BAD:0001",
+            "evidence_quotes": [
+                {"evidence_record_id": record["evidence_record_id"], "field_path": "gene.identifier",
+                 "verified_quote": record["verified_quote"], "section": record["section"],
+                 "document_id": record["document_id"]}
+                for record in quoted
+            ],
+        },
+        "evidence": records,
+    }, deep=True)
+
+
+def test_validator_request_payload_shows_compact_evidence_once():
+    quoted = _paper_evidence_record("evidence-1", "Treatment disrupted segmentation.")
+    other = _paper_evidence_record("evidence-2", "Controls were untreated.", page=4)
+    request = _quoted_evidence_request("domain-validation:compact", [quoted, other], [quoted])
+    persisted = request.model_dump(mode="json")
+
+    payload = validator_request_payload_for_agent(request)
+
+    assert payload["evidence"] == [_model_evidence("evidence-2", "Controls were untreated.", page=4)]
+    # Custom validators read this input by name; it keeps its name and shape.
+    assert payload["selected_inputs"] == request.selected_inputs
+    assert "evidence_record_id" in payload["selected_inputs"]["evidence_quotes"][0]
+    assert payload["runtime_compaction"]["evidence_view"]
+    # The persisted request keeps every provenance field.
+    assert request.model_dump(mode="json") == persisted
+
+
+def test_validator_request_payload_keeps_evidence_whose_quote_differs_from_its_selected_quote():
+    record = _paper_evidence_record("evidence-1", "Revised quote text.")
+    stale = {**record, "verified_quote": "Earlier quote text."}
+    request = _quoted_evidence_request("domain-validation:revised", [record], [stale])
+
+    payload = validator_request_payload_for_agent(request)
+
+    assert [item["verified_quote"] for item in payload["evidence"]] == ["Revised quote text."]
+
+
+def test_validator_batch_payload_lists_each_distinct_evidence_record_once():
+    from src.lib.domain_packs.validator_dispatch import validator_batch_payload_for_agent
+
+    shared = _paper_evidence_record("evidence-shared", "Both larvae were treated.")
+    first_only = _paper_evidence_record("evidence-first", "Only the first was imaged.")
+    unnamed = {key: value for key, value in _paper_evidence_record("x", "No ID.").items()
+               if key != "evidence_record_id"}
+    conflicting = {**shared, "verified_quote": "A different quote with the same ID."}
+    first = _quoted_evidence_request("domain-validation:first", [shared, first_only], [])
+    second = _quoted_evidence_request("domain-validation:second", [shared, unnamed], [])
+    third = _quoted_evidence_request("domain-validation:third", [conflicting], [])
+
+    payload = validator_batch_payload_for_agent([first, second, third], compact_runtime=True)
+
+    assert payload["mode"] == "domain_validator_batch"
+    assert "evidence_records" in payload["instructions"]
+    assert payload["evidence_records"] == [
+        _model_evidence("evidence-shared", "Both larvae were treated."),
+        _model_evidence("evidence-first", "Only the first was imaged."),
+    ]
+    by_id = {item["request_id"]: item for item in payload["requests"]}
+    assert by_id["domain-validation:first"]["evidence_record_ids"] == ["evidence-shared", "evidence-first"]
+    assert "evidence" not in by_id["domain-validation:first"]
+    # A record that cannot be named by an ID it shares exactly stays with its request.
+    assert by_id["domain-validation:second"]["evidence_record_ids"] == ["evidence-shared"]
+    assert by_id["domain-validation:second"]["evidence"] == [_model_evidence(None, "No ID.")]
+    assert by_id["domain-validation:third"]["evidence_record_ids"] == []
+    assert by_id["domain-validation:third"]["evidence"][0]["verified_quote"] == (
+        "A different quote with the same ID.")
+    assert [item["request_id"] for item in payload["requests"]] == [
+        "domain-validation:first", "domain-validation:second", "domain-validation:third"]
+
+
+def _quote_bundle_request(**changes: Any) -> DomainValidationRequest:
+    selected_inputs = {
+        "identifier": "BAD:0001",
+        "evidence_quotes": [
+            {
+                "evidence_record_id": "evidence-1",
+                "field_path": "gene.identifier",
+                "verified_quote": "First quote.",
+            }
+        ],
+    }
+    return _validation_request().model_copy(
         update={
             "target": ValidationTarget(
                 domain_pack_id="fixture.dispatch",
@@ -746,52 +859,70 @@ def test_validator_request_dedupe_key_includes_field_and_evidence_context():
                 object_id="object-1",
                 field_path="gene.identifier",
             ),
-            "selected_inputs": {
-                "identifier": "BAD:0001",
-                "evidence_quotes": [
-                    {
-                        "evidence_record_id": "evidence-1",
-                        "field_path": "gene.identifier",
-                        "verified_quote": "First quote.",
-                    }
-                ],
-            },
-        },
-        deep=True,
-    )
-    different_evidence = base_request.model_copy(
-        update={
-            "selected_inputs": {
-                "identifier": "BAD:0001",
-                "evidence_quotes": [
-                    {
-                        "evidence_record_id": "evidence-2",
-                        "field_path": "gene.identifier",
-                        "verified_quote": "Second quote.",
-                    }
-                ],
-            }
-        },
-        deep=True,
-    )
-    different_field = base_request.model_copy(
-        update={
-            "target": ValidationTarget(
-                domain_pack_id="fixture.dispatch",
-                object_type="GeneAssertion",
-                object_id="object-1",
-                field_path="gene.symbol",
-            ),
+            "selected_inputs": selected_inputs,
+            "evidence": [_paper_evidence_record("evidence-1", "First quote.")],
+            **changes,
         },
         deep=True,
     )
 
-    assert _validator_request_dedupe_key(base_request) != _validator_request_dedupe_key(
-        different_evidence
+
+def test_validator_request_dedupe_key_shares_identical_requests_across_records():
+    base_request = _quote_bundle_request()
+    other_record = _quote_bundle_request(target=ValidationTarget(
+        domain_pack_id="fixture.dispatch",
+        object_type="GeneAssertion",
+        object_id="object-2",
+        field_path="gene.symbol",
+    ))
+
+    assert _validator_request_dedupe_key(base_request) == _validator_request_dedupe_key(other_record)
+
+
+@pytest.mark.parametrize("changes", [
+    pytest.param({"selected_inputs": {"identifier": "BAD:0001", "evidence_quotes": [
+        {"evidence_record_id": "evidence-2", "field_path": "gene.identifier", "verified_quote": "Second quote."},
+    ]}}, id="different quote bundle"),
+    # Identical means exactly equal: one extra space is a different input.
+    pytest.param({"selected_inputs": {"identifier": "BAD:0001", "evidence_quotes": [
+        {"evidence_record_id": "evidence-1", "field_path": "gene.identifier", "verified_quote": "First  quote."},
+    ]}}, id="quote differs by whitespace"),
+    pytest.param({"selected_inputs": {"identifier": "BAD:0001", "evidence_record_id": "evidence-1", "evidence_quotes": [
+        {"evidence_record_id": "evidence-1", "field_path": "gene.identifier", "verified_quote": "First quote."},
+    ]}}, id="different evidence id hint"),
+    pytest.param({"evidence": [_paper_evidence_record("evidence-1", "First quote."),
+                               _paper_evidence_record("evidence-3", "Another record's quote.")]},
+                 id="different request evidence"),
+    pytest.param({"evidence": [_paper_evidence_record("evidence-1", "First quote.", page=9)]},
+                 id="different evidence location"),
+    pytest.param({"validation_guidance": "Prefer the zebrafish gene."}, id="different guidance"),
+])
+def test_validator_request_dedupe_key_keeps_requests_with_any_different_input_apart(changes):
+    assert _validator_request_dedupe_key(_quote_bundle_request()) != _validator_request_dedupe_key(
+        _quote_bundle_request(**changes)
     )
-    assert _validator_request_dedupe_key(base_request) != _validator_request_dedupe_key(
-        different_field
+
+
+def test_validator_batch_summary_reports_the_shared_evidence_once():
+    from src.lib.domain_packs.validator_dispatch import validator_batch_payload_for_agent
+    from src.lib.runtime_payload_budget import json_size
+
+    shared = _paper_evidence_record("evidence-shared", "Both larvae were treated. " * 40)
+    requests = [_quoted_evidence_request(f"domain-validation:{name}", [shared], []) for name in ("a", "b")]
+    binding = SimpleNamespace(binding_id="fixture.identifier_lookup", batch_family=None, validator_agent=None)
+    jobs = [SimpleNamespace(request=request, match=SimpleNamespace(binding=binding)) for request in requests]
+
+    summary = _validator_batch_summary(cast(Any, jobs))["payload_summary"]
+
+    sent = validator_batch_payload_for_agent(requests, compact_runtime=True)
+    assert summary["request_payload_json_chars"] == (
+        sum(json_size(item).json_chars for item in sent["requests"])
+        + json_size(sent["evidence_records"]).json_chars
     )
+    assert summary["request_payload_json_chars"] < sum(
+        json_size(validator_request_payload_for_agent(request)).json_chars for request in requests
+    )
+    assert summary["largest_request_json_chars"] == max(json_size(item).json_chars for item in sent["requests"])
 
 
 def test_validator_batch_summary_reports_payload_sizes_and_large_scalars():
@@ -1350,6 +1481,139 @@ def test_dispatch_batches_after_dedupe_and_remaps_to_original_requests(
     assert len(result.validator_results) == 3
     assert result.validator_results[0].request_id != result.validator_results[1].request_id
     assert {item.status for item in result.validator_results} == {"resolved"}
+    # These records share an answer although their quotes differ, so the copy
+    # does not claim they had the same evidence.
+    assert {item.explanation for item in result.validator_results} == {"Fixture validator result."}
+
+
+def _quote_bundle_pack(tmp_path: Path, *, both_gene_fields: bool = False) -> LoadedDomainPack:
+    pack_path = tmp_path / "fixture.quote-bundle-dispatch"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    text = _pack_text().replace(
+        "          evidence_quote:\n"
+        "            source: evidence_record\n"
+        "            path: quote\n"
+        "            required: false\n",
+        "          evidence_quotes:\n"
+        "            source: evidence_record\n"
+        "            output: quote_bundle\n"
+        "            allow_multiple: true\n"
+        "            required: false\n"
+        "            context_only: true\n",
+        1,
+    )
+    if both_gene_fields:
+        # Like disease_ontology_term_lookup (curie and name) or go_term_validation
+        # (curie and label): one binding matches two field paths of one object.
+        text = text.replace(
+            "          field_paths:\n            - gene.identifier\n",
+            "          field_paths:\n            - gene.identifier\n            - gene.symbol\n",
+            1,
+        )
+    metadata_path.write_text(text, encoding="utf-8")
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id, display_name=metadata.display_name, version=metadata.version,
+        pack_path=pack_path, metadata_path=metadata_path, metadata=metadata,
+    )
+
+
+def _shared_quote_envelope(quotes: list[str]) -> DomainEnvelope:
+    """One object per quote, every object with the same identifier."""
+    return DomainEnvelope(
+        envelope_id="dispatch-env",
+        domain_pack_id="fixture.dispatch",
+        extracted_objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id=f"object-{index}",
+                payload={
+                    "gene": {"identifier": "BAD:0001", "symbol": "ABC-1"},
+                    "evidence_records": [{
+                        "evidence_record_id": f"evidence-{quote}", "verified_quote": quote,
+                        "section": "Results", "page": 2,
+                    }],
+                },
+                evidence_record_ids=[f"evidence-{quote}"],
+            )
+            for index, quote in enumerate(quotes, start=1)
+        ],
+    )
+
+
+def test_dispatch_checks_records_with_the_same_value_and_evidence_once(tmp_path: Path):
+    pack = _quote_bundle_pack(tmp_path)
+    runs: list[str] = []
+
+    def _runner(request, *, binding):
+        runs.append(request.target.object_id)
+        return _result_payload(request)
+
+    shared = "BAD:0001 knockdown shortened the axis."
+    result = dispatch_active_validator_bindings(
+        _shared_quote_envelope([shared, shared, shared, "A different quote."]),
+        pack,
+        runner=_runner,
+        max_parallel_validators=1,
+    )
+
+    assert runs == ["object-1", "object-4"]
+    assert result.validator_agent_run_count == 2
+    by_object = {item.target.object_id: item for item in result.validator_results}
+    assert by_object["object-1"].explanation == "Fixture validator result."
+    assert by_object["object-4"].explanation == "Fixture validator result."
+    for copied in ("object-2", "object-3"):
+        assert by_object[copied].request_id != by_object["object-1"].request_id
+        assert by_object[copied].explanation == (
+            "Fixture validator result.\n"
+            "Checked once with 2 other records that had the same value and evidence."
+        )
+
+
+def _dispatch_both_gene_fields(tmp_path: Path, object_count: int):
+    pack = _quote_bundle_pack(tmp_path, both_gene_fields=True)
+    runs: list[tuple[str, str]] = []
+
+    def _runner(request, *, binding):
+        runs.append((request.target.object_id, request.target.field_path))
+        return _result_payload(request)
+
+    shared = "BAD:0001 knockdown shortened the axis."
+    result = dispatch_active_validator_bindings(
+        _shared_quote_envelope([shared] * object_count), pack, runner=_runner, max_parallel_validators=1,
+    )
+    return runs, result
+
+
+def test_one_record_checked_for_two_fields_does_not_claim_another_record(tmp_path: Path):
+    runs, result = _dispatch_both_gene_fields(tmp_path, object_count=1)
+
+    assert len(runs) == 1
+    assert sorted(item.target.field_path for item in result.validator_results) == ["gene.identifier", "gene.symbol"]
+    # The copy for the second field keeps exactly the first field's explanation.
+    assert {item.explanation for item in result.validator_results} == {"Fixture validator result."}
+
+
+def test_shared_check_counts_other_records_not_other_fields(tmp_path: Path):
+    runs, result = _dispatch_both_gene_fields(tmp_path, object_count=2)
+
+    assert len(runs) == 1
+    note = "Fixture validator result.\nChecked once with 1 other record that had the same value and evidence."
+    explanations = {
+        (item.target.object_id, item.target.field_path): item.explanation for item in result.validator_results
+    }
+    representative = (runs[0][0], runs[0][1])
+    assert explanations.pop(representative) == "Fixture validator result."
+    assert set(explanations.values()) == {note}
+    assert len(explanations) == 3
+
+
+def test_shared_check_note_counts_one_other_record():
+    from src.lib.domain_packs.validator_dispatch import _shared_check_note
+
+    assert _shared_check_note(1) == "Checked once with 1 other record that had the same value and evidence."
+    assert _shared_check_note(3) == "Checked once with 3 other records that had the same value and evidence."
 
 
 def test_dispatch_batches_mixed_validator_agents_separately_and_preserves_order(
@@ -2713,8 +2977,7 @@ def test_package_scoped_validator_agent_uses_compact_finalization_schema(
     assert runtime_payload["selected_inputs"] == request.selected_inputs
     assert "input_values" not in runtime_payload["target"]
     assert "input_selectors" not in runtime_payload
-    assert runtime_payload["evidence"] == request.evidence
-    assert runtime_payload["evidence"] == request.evidence
+    assert runtime_payload["evidence"] == [{"evidence_record_id": "evidence-1", "verified_quote": "crb quote"}]
     assert captured["kwargs"]["max_turns"] == 18
     assert captured["agent_lookup"][1] == {
         "authenticated_groups": ["RGD"],
@@ -2971,7 +3234,9 @@ def test_package_scoped_validator_agent_keeps_lookup_and_supplied_context_only(
         "agr_curation_query", "finalize_validator_result",
     ]
     assert "cannot search/read the paper" in captured["agent"].instructions
-    assert captured["payload"]["evidence"] == request.evidence
+    # The supplied quote reaches the model once, through selected_inputs.evidence_quotes.
+    assert captured["payload"]["evidence"] == []
+    assert captured["payload"]["selected_inputs"]["evidence_quotes"] == request.selected_inputs["evidence_quotes"]
     assert "validator_runtime_capabilities" not in captured["payload"]
 
 
@@ -3197,6 +3462,10 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     assert "one bulk lookup tool call per compatible shared lookup group" in payload[
         "instructions"
     ]
+    assert payload["evidence_records"] == [
+        {"evidence_record_id": "evidence-1", "verified_quote": "crb quote"}
+    ]
+    assert payload["requests"][0]["evidence_record_ids"] == ["evidence-1"]
     assert captured_preflight["provider"] == "gemini"
     assert captured_preflight["model"] == "validator-batch-model"
     assert "tool's declared bulk/list input" in payload["instructions"]
@@ -3205,9 +3474,8 @@ def test_package_scoped_validator_batch_agent_uses_compact_finalization_schema(
     assert payload["requests"][0]["request_id"] == request.request_id
     assert payload["requests"][0]["selected_inputs"] == request.selected_inputs
     assert "input_selectors" not in payload["requests"][0]
-    assert payload["requests"][0]["evidence"] == request.evidence
+    assert "evidence" not in payload["requests"][0]
     assert "input_values" not in payload["requests"][0]["target"]
-    assert payload["requests"][0]["evidence"] == request.evidence
     assert captured["kwargs"]["max_turns"] == 6
     assert captured["agent_lookup"][1] == {"authenticated_groups": ["RGD"]}
 

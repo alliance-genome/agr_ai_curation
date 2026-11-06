@@ -114,6 +114,13 @@ _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS = frozenset(
 _VALIDATOR_EXECUTION_FAILURE_EXPLANATION = (
     "Validator execution could not be completed. Curator review is required."
 )
+# Fields of a supplied evidence record the validator model sees: its ID, label,
+# locators and quote. Span, chunk and envelope provenance stays on the persisted
+# request and in _check_evidence.
+_MODEL_EVIDENCE_RECORD_FIELDS = (
+    "evidence_record_id", "entity", "section", "subsection", "page",
+    "figure_reference", "verified_quote",
+)
 
 
 class _ValidatorDispatchRuntimeError(RuntimeError):
@@ -1247,14 +1254,9 @@ def _execute_validator_run_group_uncaptured(
         batch_results,
         strict=True,
     ):
-        group = grouped_jobs[group_index]
-        representative = group[0]
-        dedupe_group_results[group_index] = [
-            representative_result
-            if job is representative
-            else _remap_validator_result_for_request(representative_result, job.request)
-            for job in group
-        ]
+        dedupe_group_results[group_index] = _shared_group_results(
+            grouped_jobs[group_index], representative_result,
+        )
 
     return _ValidatorRunGroupResult(
         dedupe_group_results=dedupe_group_results,
@@ -1279,12 +1281,18 @@ def _dedupe_validator_jobs(jobs: list[ValidatorDispatchJob]) -> list[list[Valida
 
 
 def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
-    selected_identity_inputs = {
-        key: value
-        for key, value in request.selected_inputs.items()
-        if key not in _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS
-    }
-    if not selected_identity_inputs:
+    evidence_context = _validator_evidence_context_identity(request)
+    if evidence_context is None:
+        selected_identity_inputs = {
+            key: value
+            for key, value in request.selected_inputs.items()
+            if key not in _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS
+        }
+        if not selected_identity_inputs:
+            selected_identity_inputs = dict(request.selected_inputs)
+    else:
+        # Requests with quote evidence share one run across records only when
+        # every input is exactly equal; only the record they belong to differs.
         selected_identity_inputs = dict(request.selected_inputs)
 
     target_identity: dict[str, Any] = {
@@ -1293,10 +1301,6 @@ def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
         "object_role": request.target.object_role,
         "expected_fields": list(request.target.expected_fields),
     }
-    evidence_context = _validator_evidence_context_identity(request)
-    if evidence_context is not None:
-        target_identity["object_id"] = request.target.object_id
-        target_identity["field_path"] = request.target.field_path
 
     return json.dumps(
         {
@@ -1323,15 +1327,31 @@ def _run_validator_job_group(
     *,
     agent_runner: DomainValidatorAgentRunner,
 ) -> list[DomainValidatorResultBase]:
-    representative = jobs[0]
     validator_result = _run_single_validator_job(
-        representative,
+        jobs[0],
         agent_runner=agent_runner,
     )
+    return _shared_group_results(jobs, validator_result)
+
+
+def _shared_group_results(
+    jobs: list[ValidatorDispatchJob],
+    representative_result: DomainValidatorResultBase,
+) -> list[DomainValidatorResultBase]:
+    """Give every request of one dedupe group the representative's answer.
+
+    One binding can match two fields of one record with identical inputs, so a
+    group's size is not its record count. Each copy counts the other records.
+    """
+    representative = jobs[0]
+    record_ids = {job.request.target.object_id for job in jobs}
     return [
-        validator_result
+        representative_result
         if job is representative
-        else _remap_validator_result_for_request(validator_result, job.request)
+        else _remap_validator_result_for_request(
+            representative_result, job.request,
+            other_record_count=len(record_ids - {job.request.target.object_id}),
+        )
         for job in jobs
     ]
 
@@ -1573,18 +1593,34 @@ def _finalize_validator_result(
     )
 
 
+def _shared_check_note(other_record_count: int) -> str:
+    records = "record" if other_record_count == 1 else "records"
+    return (
+        f"Checked once with {other_record_count} other {records} "
+        "that had the same value and evidence."
+    )
+
+
 def _remap_validator_result_for_request(
     validator_result: DomainValidatorResultBase,
     request: DomainValidationRequest,
+    *,
+    other_record_count: int,
 ) -> DomainValidatorResultBase:
-    remapped = validator_result.model_copy(
-        update={
-            "request_id": request.request_id,
-            "validator_binding_id": request.validator_binding_id,
-            "validator_agent": request.validator_agent,
-            "target": request.target,
-        }
-    )
+    update: dict[str, Any] = {
+        "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent,
+        "target": request.target,
+    }
+    # Only requests with quote evidence are grouped on exactly equal inputs and
+    # evidence; other groups ignore context quotes, so they make no such claim.
+    # A copy for another field of the same record keeps the answer unchanged.
+    if other_record_count and _validator_evidence_context_identity(request) is not None:
+        update["explanation"] = (
+            f"{validator_result.explanation}\n{_shared_check_note(other_record_count)}"
+        )
+    remapped = validator_result.model_copy(update=update)
     return _finalize_validator_result(remapped, request=request)
 
 
@@ -1937,31 +1973,9 @@ def run_package_scoped_validator_agent_batch(
         ),
     )
 
-    provider_payload = {
-        "mode": "domain_validator_batch",
-        "instructions": (
-            "Validate every DomainValidationRequest in requests. Return a "
-            "JSON object with a results array containing exactly one "
-            "DomainValidatorResultBase-compatible result per request_id. "
-            "Copy dispatcher-owned identity fields from each request. Use "
-            "one bulk lookup tool call per compatible shared lookup group "
-            "when a bulk method exists, using list inputs such as "
-            "gene_symbols or allele_symbols. Map the returned items back to "
-            "their request_ids, and do not loop one lookup call per request "
-            "when one shared bulk call can answer the group."
-        ),
-        "requests": [
-            validator_request_payload_for_agent(job.request)
-            for job in jobs
-        ],
-    }
-    if compact_runtime is not None:
-        provider_payload["instructions"] = (
-            "Assess every request scientifically and finalize exactly one compact decision per request_id. "
-            "Use one bulk lookup tool call per compatible shared lookup group when a bulk method exists, "
-            "using the tool's declared bulk/list input. Do not loop one lookup per request "
-            "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
-        )
+    provider_payload = validator_batch_payload_for_agent(
+        [job.request for job in jobs], compact_runtime=compact_runtime is not None,
+    )
     from src.lib.validation_review.validator_adapter import attach_reconsideration_context
     provider_payload = attach_reconsideration_context(agent, provider_payload)
     validator_model = str(getattr(agent, "model", "") or "")
@@ -2177,8 +2191,6 @@ def _validator_evidence_context_identity(
     if not bundles:
         return None
     return {
-        "target_object_id": request.target.object_id,
-        "target_field_path": request.target.field_path,
         "evidence_quote_bundles": [
             {
                 "evidence_record_id": _optional_string(bundle.get("evidence_record_id")),
@@ -2187,7 +2199,36 @@ def _validator_evidence_context_identity(
             }
             for bundle in bundles
         ],
+        "evidence": [_model_evidence_record(record) for record in request.evidence],
     }
+
+
+def _model_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a supplied evidence record a validator reads: ID, label, locators, quote."""
+    return {
+        key: record[key]
+        for key in _MODEL_EVIDENCE_RECORD_FIELDS
+        if record.get(key) is not None
+    }
+
+
+def _model_evidence_records(request: DomainValidationRequest) -> list[dict[str, Any]]:
+    """Request evidence for the model, minus records already in ``evidence_quotes``.
+
+    ``selected_inputs.evidence_quotes`` keeps its name and shape: custom
+    validators read it. A record is left out only when that input carries the
+    same ID with the same quote.
+    """
+    quoted = {
+        (bundle.get("evidence_record_id"), bundle.get("verified_quote"))
+        for bundle in request.selected_inputs.get("evidence_quotes", [])
+        if isinstance(bundle, Mapping)
+    }
+    return [
+        model_record
+        for model_record in map(_model_evidence_record, request.evidence)
+        if (model_record.get("evidence_record_id"), model_record.get("verified_quote")) not in quoted
+    ]
 
 
 def validator_request_payload_for_agent(
@@ -2196,28 +2237,102 @@ def validator_request_payload_for_agent(
     """Return the compact request shape sent to validator agents.
 
     The canonical ``DomainValidationRequest`` intentionally keeps dispatcher
-    metadata for persistence and materialization. The runtime model input should
-    avoid repeating that same data, especially ``target.input_values`` which is
-    a copy of ``selected_inputs`` for most bindings.
+    metadata and full evidence provenance for persistence and materialization.
+    The runtime model input should avoid repeating that same data, especially
+    ``target.input_values`` which is a copy of ``selected_inputs`` for most
+    bindings, and evidence provenance the validator does not read.
     """
 
     payload = request.model_dump(
         mode="json",
         exclude_none=True,
-        exclude={"input_selectors"},
+        exclude={"input_selectors", "evidence"},
     )
     target = payload.get("target")
     if isinstance(target, dict):
         target.pop("input_values", None)
+    payload["evidence"] = _model_evidence_records(request)
     payload["runtime_compaction"] = {
         "omitted_fields": [
             "input_selectors",
             "target.input_values",
         ],
         "input_values_source": "selected_inputs",
+        "evidence_view": (
+            "Evidence records show their ID, entity, location (section, page, figure) and "
+            "verified quote. A record already in selected_inputs.evidence_quotes appears only there."
+        ),
         "canonical_identity_restored_by": "finalize_validator_result",
     }
     return payload
+
+
+def validator_batch_payload_for_agent(
+    requests: list[DomainValidationRequest],
+    *,
+    compact_runtime: bool,
+) -> dict[str, Any]:
+    """Return the batch model input, listing each distinct evidence record once.
+
+    Each request names its records in ``evidence_record_ids``. A record without
+    an ID, or whose ID an earlier request supplied with different content, stays
+    in that request's own ``evidence`` list, so only identical records are shared.
+    """
+
+    if compact_runtime:
+        instructions = (
+            "Assess every request scientifically and finalize exactly one compact decision per request_id. "
+            "Use one bulk lookup tool call per compatible shared lookup group when a bulk method exists, "
+            "using the tool's declared bulk/list input. Do not loop one lookup per request "
+            "when a shared bulk call answers the group. The program partitions records and assembles canonical results."
+        )
+    else:
+        instructions = (
+            "Validate every DomainValidationRequest in requests. Return a "
+            "JSON object with a results array containing exactly one "
+            "DomainValidatorResultBase-compatible result per request_id. "
+            "Copy dispatcher-owned identity fields from each request. Use "
+            "one bulk lookup tool call per compatible shared lookup group "
+            "when a bulk method exists, using list inputs such as "
+            "gene_symbols or allele_symbols. Map the returned items back to "
+            "their request_ids, and do not loop one lookup call per request "
+            "when one shared bulk call can answer the group."
+        )
+    instructions += (
+        " evidence_records lists each supplied evidence record once; a request's "
+        "evidence_record_ids name the records supplied for that request. Judge each "
+        "request only with its own evidence."
+    )
+    evidence_records, request_payloads = _batch_model_requests(requests)
+    return {
+        "mode": "domain_validator_batch",
+        "instructions": instructions,
+        "evidence_records": evidence_records,
+        "requests": request_payloads,
+    }
+
+
+def _batch_model_requests(
+    requests: list[DomainValidationRequest],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The batch's distinct evidence records and its request views that name them."""
+    evidence_records: dict[str, dict[str, Any]] = {}
+    request_payloads = []
+    for request in requests:
+        payload = validator_request_payload_for_agent(request)
+        record_ids: list[str] = []
+        own_records: list[dict[str, Any]] = []
+        for record in payload.pop("evidence"):
+            record_id = record.get("evidence_record_id")
+            if record_id is not None and evidence_records.setdefault(record_id, record) == record:
+                record_ids.append(record_id)
+            else:
+                own_records.append(record)
+        payload["evidence_record_ids"] = record_ids
+        if own_records:
+            payload["evidence"] = own_records
+        request_payloads.append(payload)
+    return list(evidence_records.values()), request_payloads
 
 
 def _append_validator_finalization_instructions(
@@ -3075,11 +3190,11 @@ def _validator_batch_summary(jobs: list[ValidatorDispatchJob]) -> dict[str, Any]
         if binding.validator_agent is not None
         else representative.request.validator_agent.model_dump(mode="json")
     )
-    request_payloads = [
-        validator_request_payload_for_agent(job.request)
-        for job in jobs
-    ]
+    # Measure what the batch sends: each request view plus the evidence records
+    # it lists once for all of them.
+    evidence_records, request_payloads = _batch_model_requests([job.request for job in jobs])
     request_payload_sizes = [json_size(payload) for payload in request_payloads]
+    evidence_records_size = json_size(evidence_records)
     selected_input_large_scalar_paths = [
         {
             "request_id": job.request.request_id,
@@ -3098,8 +3213,12 @@ def _validator_batch_summary(jobs: list[ValidatorDispatchJob]) -> dict[str, Any]
         "request_ids": [job.request.request_id for job in jobs],
         "first_request_id": jobs[0].request.request_id,
         "payload_summary": {
-            "request_payload_json_chars": sum(size.json_chars for size in request_payload_sizes),
-            "request_payload_estimated_tokens": sum(size.estimated_tokens for size in request_payload_sizes),
+            "request_payload_json_chars": evidence_records_size.json_chars + sum(
+                size.json_chars for size in request_payload_sizes
+            ),
+            "request_payload_estimated_tokens": evidence_records_size.estimated_tokens + sum(
+                size.estimated_tokens for size in request_payload_sizes
+            ),
             "largest_request_json_chars": max(
                 (size.json_chars for size in request_payload_sizes),
                 default=0,
@@ -3469,5 +3588,6 @@ __all__ = [
     "run_package_scoped_validator_agent_batch_in_worker_thread",
     "run_package_scoped_validator_agent_in_worker_thread",
     "run_package_scoped_validator_agent",
+    "validator_batch_payload_for_agent",
     "validator_request_payload_for_agent",
 ]

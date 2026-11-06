@@ -94,7 +94,10 @@ names, allowed statuses, owning lookup methods and component-slot rules. Include
 supplemental `relation` and `evidence_quotes` components as `not_checked` when
 listed, with no candidate, slot or lookup assertions. Component slots use record
 field names (for example, `curie` copies `curie`); root slots such as
-`condition_class_curie` are separate. Missing, extra or duplicate components and
+`condition_class_curie` are separate. A root slot may copy a record that a
+component selected, without repeating it as a root candidate (the contract's
+`selected_refs` hook); every component check still applies to that selection, and
+a root slot pointing at a record nothing selected is rejected. Missing, extra or duplicate components and
 invalid component-slot mappings return explicit repair diagnostics. This
 guidance is request-specific even in a batch and does not copy provider records
 or weaken the existing grounding checks.
