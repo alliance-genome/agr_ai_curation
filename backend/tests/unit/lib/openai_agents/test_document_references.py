@@ -328,13 +328,14 @@ def test_record_evidence_schema_is_non_strict_with_only_entity_and_selections_re
     schema = tool.params_json_schema
     assert tool.strict_json_schema is False
     assert sorted(schema["required"]) == ["entity", "selections"]
+    assert schema["additionalProperties"] is False
     # The optional targets stay available; the model omits them instead of writing nulls.
     assert {"evidence_record_id", "object_id", "pending_ref_id", "field_path",
             "object_type", "validation_finding_id"} <= set(schema["properties"])
 
 
 @pytest.mark.parametrize("raw_arguments,field", [
-    (json.dumps({"entity": "example", "span_ids": ["old-id"]}), "selections"),
+    (json.dumps({"entity": "example", "span_ids": ["old-id"]}), "span_ids"),
     (json.dumps({"entity": "example", "selections": [{"chunk_index": 42, "span_index": False}]}),
      "selections.0.span_index"),
     (json.dumps({"selections": [{"chunk_index": 42, "span_index": 0}]}), "entity"),
@@ -422,6 +423,47 @@ async def test_old_document_history_refreshes_only_backend_guidance(monkeypatch)
     assert "span_id" not in payload["chunk"]["span_text_access"]
     assert payload["chunk"]["content"] == "Scientific span_id text is unchanged."
     assert "Select evidence_spans[].span_id." in original["payload"]["output"]
+
+
+@pytest.mark.parametrize("extra", [
+    {"objectId": "AGR:1", "field_path": "label"},
+    {"evidenceRecordId": "existing"},
+    {"evidence_record": "existing"},
+    {"span_ids": ["old-id"]},
+])
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_undeclared_arguments_instead_of_ignoring_them(
+    store, scope, monkeypatch, extra,
+):
+    from src.lib.observability.tool_results import classify_tool_result
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    chunk, spans = source()
+    value = binding(store, scope)
+    value.retain(chunk, spans, [0])
+    loads = []
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: loads.append(args) or value)
+    canonical_lookup = AsyncMock(return_value=chunk)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    existing = {"evidence_record_id": "existing", "document_id": "doc-a", "status": "verified",
+                "verified_quote": "Original quote", "source_span_ids": ["original"]}
+    workspace = [existing]
+    tool = record_evidence.create_record_evidence_tool("doc-a", "alice", workspace_records=workspace)
+    args = {"entity": "example", "selections": [{"chunk_index": 42, "span_index": 0}], **extra}
+    output = await tool.on_invoke_tool(_build_tool_context(tool.name, args), json.dumps(args))
+    result = json.loads(output)
+    assert result["status"] == "invalid_arguments" and result["saved"] is False
+    assert [problem["field"] for problem in result["argument_errors"]] == sorted(
+        key for key in extra if key != "field_path")
+    assert "AGR:1" not in output and "old-id" not in output
+    assert classify_tool_result(output).success is False
+    assert loads == []  # Nothing ran, not even the source binding.
+    canonical_lookup.assert_not_awaited()
+    assert workspace == [existing] and existing["verified_quote"] == "Original quote"
+    assert value.staged_updates == []
 
 
 def _verified_record_result(chunk, spans):

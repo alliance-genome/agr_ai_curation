@@ -1134,6 +1134,10 @@ def _argument_error_result(context: Any, error: Exception) -> str | None:
         ]
     else:
         problems = [{"field": None, "message": "Arguments must be one JSON object."}]
+    return _invalid_arguments_result(problems)
+
+
+def _invalid_arguments_result(problems: list[dict[str, Any]]) -> str:
     return json.dumps(
         {
             "status": "invalid_arguments",
@@ -1147,6 +1151,36 @@ def _argument_error_result(context: Any, error: Exception) -> str | None:
         },
         ensure_ascii=False,
     )
+
+
+def _reject_unknown_arguments(tool: Any) -> Any:
+    """Report undeclared top-level arguments instead of ignoring them.
+
+    The non-strict argument model ignores extra keys, so a misspelled
+    evidence_record_id would create a second record and a misspelled target
+    would save evidence attached to nothing. Nothing runs, including the source
+    binding, when a key is unknown. Unparseable JSON goes on to the SDK, whose
+    error the failure function reports the same way.
+    """
+    tool.params_json_schema["additionalProperties"] = False
+    declared = frozenset(tool.params_json_schema["properties"])
+    invoke = tool.on_invoke_tool
+
+    async def checked(context: Any, arguments: str) -> Any:
+        try:
+            parsed = json.loads(arguments) if arguments else {}
+        except ValueError:
+            parsed = None
+        unknown = sorted(set(parsed) - declared) if isinstance(parsed, dict) else []
+        if unknown:
+            return _invalid_arguments_result(
+                [{"field": key, "message": "Unknown argument; use only the declared arguments."}
+                 for key in unknown]
+            )
+        return await invoke(context, arguments)
+
+    tool.on_invoke_tool = checked
+    return tool
 
 
 def create_record_evidence_tool(
@@ -1221,7 +1255,9 @@ def create_record_evidence_tool(
             result["selections"] = [selection.model_dump() for selection in selections]
         return result
 
-    return scoped_document_tool(record_evidence, document_id=document_id, user_id=user_id)
+    return _reject_unknown_arguments(
+        scoped_document_tool(record_evidence, document_id=document_id, user_id=user_id)
+    )
 
 
 __all__ = [
