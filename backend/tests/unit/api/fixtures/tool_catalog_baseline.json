@@ -5028,6 +5028,7 @@
     "binding_kind": "static",
     "builder_output_mode": "domain",
     "builder_run_state": true,
+    "builder_stage": true,
     "category": "Database",
     "description": "Add one new draft allele to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
@@ -5118,6 +5119,7 @@
     "binding_kind": "static",
     "builder_output_mode": "domain",
     "builder_run_state": true,
+    "builder_stage": true,
     "category": "Database",
     "description": "Add one new draft disease annotation to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
@@ -5268,6 +5270,7 @@
     "binding_kind": "static",
     "builder_output_mode": "domain",
     "builder_run_state": true,
+    "builder_stage": true,
     "category": "Database",
     "description": "Add one new draft gene-expression observation to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
@@ -5353,6 +5356,7 @@
     "binding_kind": "static",
     "builder_output_mode": "domain",
     "builder_run_state": true,
+    "builder_stage": true,
     "category": "Database",
     "description": "Add one new draft gene to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
@@ -5456,6 +5460,7 @@
     "binding_kind": "static",
     "builder_output_mode": "generic",
     "builder_run_state": true,
+    "builder_stage": true,
     "category": "Database",
     "description": "Add one new generic extraction object to the run's working list, backed by saved paper evidence.",
     "documentation": {
@@ -5553,6 +5558,7 @@
     "binding_kind": "static",
     "builder_output_mode": "domain",
     "builder_run_state": true,
+    "builder_stage": true,
     "category": "Database",
     "description": "Stage one evidence-backed RGD GO recommendation for canonical finalization.",
     "documentation": {
@@ -5711,6 +5717,7 @@
     "binding_kind": "static",
     "builder_output_mode": "domain",
     "builder_run_state": true,
+    "builder_stage": true,
     "category": "Database",
     "description": "Add one new draft phenotype annotation to the run's working list, backed by the exact wording the agent found in the paper.",
     "documentation": {
