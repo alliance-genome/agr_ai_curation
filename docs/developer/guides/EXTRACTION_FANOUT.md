@@ -27,7 +27,7 @@ Settings (all in `.env.example` under Operational limits, forwarded to `backend`
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `EXTRACTION_FANOUT_MIN_ITEMS` | `0` (off) | Planned records at which the plan goes to parallel writers. Production uses 6. |
+| `EXTRACTION_FANOUT_MIN_ITEMS` | `0` (off) | Planned records at which the plan goes to parallel writers. Production uses 15. |
 | `EXTRACTION_FANOUT_ITEMS_PER_WRITER` | `5` | Planned records per writer. Writers = ceil(records / this), capped below. |
 | `EXTRACTION_FANOUT_MAX_WRITERS` | `8` | Most writers one extraction may start; each opens its own model connection. |
 
