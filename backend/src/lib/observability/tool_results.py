@@ -50,11 +50,14 @@ def classify_tool_result(output: Any, *, studio: bool = False) -> ToolOutcome:
             return ToolOutcome(False, "lookup_dependency_failure")
         return ToolOutcome(value.get("status") != "error")
     if (
-        value.get("status") == "needs_source_read"
-        and value.get("error_code") == "unissued_document_selection"
+        (value.get("status"), value.get("error_code")) in {
+            ("needs_source_read", "unissued_document_selection"),
+            ("invalid_arguments", "invalid_tool_arguments"),
+        }
         and value.get("saved") is False
     ):
-        # A rejected selection is visible as unsuccessful, but is not an outage.
+        # A rejected selection or malformed call is visible as unsuccessful,
+        # but is not an outage.
         return ToolOutcome(False)
     if studio:
         return ToolOutcome(

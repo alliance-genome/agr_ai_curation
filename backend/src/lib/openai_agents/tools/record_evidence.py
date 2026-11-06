@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from agents import function_tool
+from agents.exceptions import ModelBehaviorError
+from pydantic import ValidationError
 from agr_ai_curation_runtime.document_references import DocumentSelection, resolve_selections, scoped_document_tool
 
 from src.lib.openai_agents.config import get_record_evidence_preview_chars
@@ -1110,6 +1113,41 @@ def _create_canonical_evidence_recorder(
     return record_evidence
 
 
+def _argument_error_result(context: Any, error: Exception) -> str | None:
+    """Return malformed arguments to the model; re-raise every other failure.
+
+    The tool is non-strict, so the model may send arguments its schema rejects.
+    That saves nothing and is reported back for a corrected call. Returning
+    None makes the SDK re-raise the original exception unchanged, so source-read
+    failures (DocumentReadError), cancellation and unexpected errors stay terminal.
+    """
+    if not isinstance(error, ModelBehaviorError):
+        return None
+    cause = error.__cause__
+    if isinstance(cause, ValidationError):
+        problems = [
+            {
+                "field": ".".join(str(part) for part in issue["loc"]),
+                "message": issue["msg"],
+            }
+            for issue in cause.errors(include_url=False, include_input=False)
+        ]
+    else:
+        problems = [{"field": None, "message": "Arguments must be one JSON object."}]
+    return json.dumps(
+        {
+            "status": "invalid_arguments",
+            "error_code": "invalid_tool_arguments",
+            "saved": False,
+            "argument_errors": problems,
+            "message": (
+                "Nothing was saved. Call record_evidence again with entity and "
+                "selections as chunk_index/span_index pairs from read_chunk."
+            ),
+        },
+        ensure_ascii=False,
+    )
+
 
 def create_record_evidence_tool(
     document_id: str, user_id: str, tracker=None, *, workspace_records=None,
@@ -1119,7 +1157,9 @@ def create_record_evidence_tool(
         document_id, user_id, tracker, workspace_records=workspace_records, defer_source_updates=True,
     )
 
-    @function_tool(failure_error_function=None)
+    # Non-strict lets the model omit unused optional targets instead of writing
+    # six nulls on every call.
+    @function_tool(strict_mode=False, failure_error_function=_argument_error_result)
     async def record_evidence(
         entity: str,
         selections: list[DocumentSelection],

@@ -296,8 +296,6 @@ async def test_history_arguments_project_structured_ids_without_rewriting_quote(
     ("read_chunk", {"chunk_index": True}),
     ("read_chunk", {"chunk_index": "42"}),
     ("read_chunk", {"chunk_index": -1}),
-    ("record_evidence", {"entity": "example", "span_ids": ["old-id"]}),
-    ("record_evidence", {"entity": "example", "selections": [{"chunk_index": 42, "span_index": False}]}),
 ])
 @pytest.mark.asyncio
 async def test_public_sdk_rejects_old_or_invalid_references_before_source_lookup(
@@ -317,6 +315,63 @@ async def test_public_sdk_rejects_old_or_invalid_references_before_source_lookup
     with pytest.raises(DocumentReadError):
         await tool.on_invoke_tool(_build_tool_context(tool.name, {}), json.dumps(arguments))
     lookup.assert_not_awaited()
+
+
+def test_record_evidence_schema_is_non_strict_with_only_entity_and_selections_required():
+    from agr_ai_curation_alliance.tools import documents
+    tool = documents.create_record_evidence_tool({"document_id": "doc-a", "user_id": "alice"})
+    schema = tool.params_json_schema
+    assert tool.strict_json_schema is False
+    assert sorted(schema["required"]) == ["entity", "selections"]
+    # The optional targets stay available; the model omits them instead of writing nulls.
+    assert {"evidence_record_id", "object_id", "pending_ref_id", "field_path",
+            "object_type", "validation_finding_id"} <= set(schema["properties"])
+
+
+@pytest.mark.parametrize("raw_arguments,field", [
+    (json.dumps({"entity": "example", "span_ids": ["old-id"]}), "selections"),
+    (json.dumps({"entity": "example", "selections": [{"chunk_index": 42, "span_index": False}]}),
+     "selections.0.span_index"),
+    (json.dumps({"selections": [{"chunk_index": 42, "span_index": 0}]}), "entity"),
+    ('{"entity": "example", "selections": [', None),
+    ("[]", None),
+])
+@pytest.mark.asyncio
+async def test_record_evidence_returns_malformed_arguments_to_the_model_without_saving(
+    store, scope, monkeypatch, raw_arguments, field,
+):
+    from agr_ai_curation_alliance.tools import documents
+    from src.lib.observability.tool_results import classify_tool_result
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    value = binding(store, scope)
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: value)
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    selection_lookup, canonical_lookup = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(refs, "get_chunk_by_index", selection_lookup)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    tool = documents.create_record_evidence_tool({"document_id": "doc-a", "user_id": "alice"})
+    output = await tool.on_invoke_tool(_build_tool_context(tool.name, {}), raw_arguments)
+    result = json.loads(output)
+    assert result["status"] == "invalid_arguments"
+    assert result["saved"] is False
+    assert "record_evidence again" in result["message"]
+    if field is not None:
+        assert field in [problem["field"] for problem in result["argument_errors"]]
+    assert "old-id" not in output  # Problems name fields; they do not echo inputs.
+    assert classify_tool_result(output).success is False
+    selection_lookup.assert_not_awaited()
+    canonical_lookup.assert_not_awaited()
+    assert value.staged_updates == []
+    assert refs._ACTIVE_SOURCE.get() is None
+    # The model view carries the correction request through unchanged.
+    items = [{"type": "function_call", "name": "record_evidence", "call_id": "bad", "arguments": raw_arguments},
+             {"type": "function_call_output", "call_id": "bad", "output": output}]
+    projected = await refs.project_model_source_items(items, user_id="alice", cache={})
+    assert json.loads(projected[1]["output"]) == result
 
 
 @pytest.mark.parametrize("changed", [False, True])
