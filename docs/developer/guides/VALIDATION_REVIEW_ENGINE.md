@@ -181,6 +181,14 @@ A response stays within `VALIDATION_REVIEW_PACKET_BYTES` and returns at most
 call and nothing is truncated. Outstanding rows carry `evidence_group`, a key for the
 evidence a record cites, and are ordered by it.
 
+### Review progress lines
+
+While review runs, each review tool adds one plain-language progress line to a live
+curator stream (`reviewPhase: supervisor_review`), for example "Supervisor review:
+reading 12 saved records" or "Supervisor review: saving 12
+decisions". Calls of the same tool that overlap, such as a parallel burst of history
+reads, share one line. Runs without a live stream emit nothing.
+
 Each review carries the instructions its own extractor ran under, taken from the
 extraction's saved provenance, so scope is judged against the actual criteria. They
 sit in the phase instructions, which every request resends and compaction leaves

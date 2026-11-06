@@ -204,3 +204,100 @@ async def test_curator_stop_subclass_survives_resume_task_boundary(direct):
             await anext(stream)
     finally:
         await stream.aclose()
+
+
+def _lines(events):
+    return [event["details"]["friendlyName"] for event in events]
+
+
+def test_review_tool_lines_need_a_live_curator_stream(monkeypatch):
+    from src.lib.validation_review.progress import ReviewLines
+
+    added = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", added.append)
+    streaming_tools.set_live_event_list(None)
+    lines = ReviewLines("episode")
+    lines.start("record_validation_review", {"entries": [{}]})
+    lines.finish("record_validation_review", {"applied": []})
+    assert added == []
+    live = []
+    streaming_tools.set_live_event_list(live)
+    try:
+        lines.start("record_validation_review", {"entries": [{}, {}]})
+        lines.finish("record_validation_review", {"applied": []})
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(added) == ["Supervisor review: saving 2 decisions"]
+    details = added[0]["details"]
+    assert added[0]["type"] == "TOOL_START"
+    assert (details["reviewPhase"], details["agentRole"], details["episodeId"]) == (
+        "supervisor_review", "supervisor", "episode")
+
+
+def test_a_burst_of_one_tool_shows_one_line_and_the_next_burst_another(events):
+    from src.lib.validation_review.progress import ReviewLines
+
+    streaming_tools.set_live_event_list([])
+    try:
+        lines = ReviewLines("episode")
+        for _ in range(3):
+            lines.start("read_validation_history", {})
+        lines.start("get_validation_record_sources", {"target_ids": ["a", "b"]})
+        for _ in range(3):
+            lines.finish("read_validation_history", {})
+        lines.finish("get_validation_record_sources", {})
+        lines.start("read_validation_history", {})
+        lines.finish("read_validation_history", None)
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == [
+        "Supervisor review: reading saved validation history",
+        "Supervisor review: reading 2 saved records",
+        "Supervisor review: reading saved validation history",
+    ]
+
+
+def test_every_review_tool_has_a_plain_language_line():
+    from src.lib.validation_review.progress import _start_line
+    from src.lib.validation_review.tools import runtime_tool_contract
+
+    for tool in runtime_tool_contract():
+        name = tool["name"]
+        line = _start_line(name, {})
+        assert line, name
+        assert "_" not in line and name not in line
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_from_one_model_turn_collapse_into_one_line(events, monkeypatch):
+    import json
+    import threading
+    from unittest.mock import Mock
+    from agents.tool_context import ToolContext
+    from src.lib.validation_history.store import HistoryScope
+    from src.lib.validation_review import reads
+    from src.lib.validation_review.decisions import ReviewContext
+    from src.lib.validation_review.tools import create_tools
+
+    barrier = threading.Barrier(3, timeout=5)
+
+    def read(*args, **kwargs):
+        barrier.wait()
+        return {"content": "{}", "next_offset": None}
+
+    monkeypatch.setattr(reads, "read", read)
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    tool = next(t for t in create_tools(context, checkpoint_provider=Mock()) if t.name == "read_validation_history")
+    arguments = json.dumps({"fact_id": "f", "sha256": "s", "offset": 0})
+
+    async def call(index):
+        return await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name, tool_call_id=f"c{index}",
+                                                     tool_arguments=arguments), arguments)
+
+    streaming_tools.set_live_event_list([])
+    try:
+        await asyncio.gather(*(call(index) for index in range(3)))
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == ["Supervisor review: reading saved validation history"]

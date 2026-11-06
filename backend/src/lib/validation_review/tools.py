@@ -7,8 +7,9 @@ from agents import function_tool
 
 from . import decisions, reads, scheduling
 from .admission import ReviewStopped
+from .progress import ReviewLines
 from src.lib.validation_history import store
-from functools import wraps
+from functools import partial, wraps
 from typing import Literal
 from inspect import signature
 from .decisions import ReviewEntry
@@ -23,7 +24,7 @@ class EvidenceReference(BaseModel):
     sha256: StrictStr
 
 
-def _recoverable_tool(function):
+def _recoverable_tool(function, *, lines):
     contract = signature(function)
 
     @wraps(function)
@@ -31,6 +32,8 @@ def _recoverable_tool(function):
         from .observations import record_tool
 
         arguments = contract.bind(*args, **kwargs).arguments
+        lines.start(function.__name__, arguments)
+        result = None
         try:
             result = await function(*args, **kwargs)
         except ReviewStopped as exc:
@@ -74,6 +77,8 @@ def _recoverable_tool(function):
                     e.decision_unit_id for e in arguments.get("entries", [])
                 ],
             }
+        finally:
+            lines.finish(function.__name__, result)
 
         return record_tool(function.__name__, arguments, result)
 
@@ -84,9 +89,11 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
                  execute_work=None, advance_work=None, prepare_inputs=None,
                  request_extraction=None, select_source=None, assess_source=None):
     """Context and checkpoint loader come from authenticated runtime, never JSON."""
+    recoverable = partial(_recoverable_tool,
+                          lines=ReviewLines(None if context is None else context.episode_id))
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_validation_review_packet(operation_id: str) -> dict:
         """Pin exact original/answer/decision/prerequisite references and budget state.
 
@@ -101,7 +108,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_outstanding_validation_reviews(cursor: str | None = None) -> dict:
         """Find current outstanding units and exact answer/applicability references.
 
@@ -117,7 +124,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
                                       context.episode_id, cursor=cursor)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_validation_record_sources(target_ids: list[str]) -> dict:
         """Read related original records together, inline, with shared evidence once.
 
@@ -141,7 +148,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_validation_record_source(target_id: str) -> dict:
         """Reference one original record and all its attached supporting evidence.
 
@@ -160,7 +167,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def read_validation_history(
         fact_id: str, sha256: str, offset: int = 0
     ) -> dict:
@@ -179,7 +186,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def record_validation_review(
         operation_id: str, entries: list[ReviewEntry]
     ) -> dict:
@@ -231,7 +238,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         return result
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def request_validation_reconsideration(
         operation_id: str,
         parent_decision_id: str,
@@ -264,7 +271,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         return {"state": "queued", "work_id": work_id, "coverage": target_ids}
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_validation_review_status() -> dict:
         """Return readiness and an exact history reference to full budgets/uncovered work.
 
@@ -276,7 +283,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def request_targeted_extraction(operation_id: str, parent_decision_id: str,
                                            entry_ids: list[str], instructions: str) -> dict:
         """Ask the saved extractor to investigate named existing entries in this paper.
@@ -295,7 +302,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             entry_ids=entry_ids, instructions=instructions)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def select_extraction_contribution(operation_id: str, contribution: EvidenceReference,
             field_paths: list[str], evidence_ids: list[str], expected_source_sha: str, reason: str) -> dict:
         """Approve exact proposed source fields/evidence and their item relationships.
@@ -316,7 +323,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             evidence_ids=evidence_ids, expected_source_sha=expected_source_sha, reason=reason)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def decide_record_retirement(operation_id: str, contribution: EvidenceReference,
             decision: Literal["approve", "decline"], expected_source_sha: str, reason: str) -> dict:
         """Approve or decline an extractor's whole-record retirement recommendation.
@@ -334,7 +341,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             expected_source_sha=expected_source_sha, reason=reason)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def validate_selected_extraction_source(operation_id: str, selection_id: str,
             target_ids: list[str], instructions: str) -> dict:
         """Validate changed inputs from an explicitly approved extraction contribution.
