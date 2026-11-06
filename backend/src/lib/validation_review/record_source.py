@@ -125,18 +125,22 @@ PACKET_QUOTE_FIELDS = (
     "verified_quote", "quote", "source_quote", "evidence_quote", "snippet", "snippet_text",
     "sentence_text", "text",
 )
-PACKET_EVIDENCE_FIELDS = PACKET_QUOTE_FIELDS + (
+# Where a quote sits in the paper; equal quotes may share these.
+PACKET_LOCATION_FIELDS = (
     "section", "section_title", "subsection", "subsection_title", "page", "page_number",
-    "page_label", "figure_reference", "table_reference", "entity", "agent_note",
+    "page_label", "figure_reference", "table_reference",
 )
+# What one saved evidence record says about its use; never shared between records.
+PACKET_CITATION_FIELDS = ("entity", "agent_note", "field_path", "field_paths")
+PACKET_EVIDENCE_FIELDS = PACKET_QUOTE_FIELDS + PACKET_LOCATION_FIELDS + PACKET_CITATION_FIELDS
 
 
 # Identity, chunk, span and attachment bookkeeping of a saved evidence record.
 EVIDENCE_LOCATOR_FIELDS = frozenset({
     "evidence_record_id", "chunk_id", "chunk_ids", "source_chunk_id", "document_id",
     "source_document_id", "pdf_document_id", "source_span_ids", "source_fragments",
-    "field_path", "field_paths", "envelope_target", "envelope_targets", "object_ref",
-    "object_id", "pending_ref_id", "evidence_revision_history",
+    "envelope_target", "envelope_targets", "object_ref", "object_id", "pending_ref_id",
+    "evidence_revision_history",
 })
 
 

@@ -18,6 +18,7 @@ _current = ContextVar("validation_review_observations", default=None)
 class Observations:
     reads: set[tuple] = field(default_factory=set)
     refusals: dict[tuple, dict] = field(default_factory=dict)
+    _packet_handles: set[str] = field(default_factory=set, repr=False)
     _seen_states: set[str] = field(default_factory=set, repr=False)
     _seen_reads: set[tuple] = field(default_factory=set, repr=False)
     _lock: Lock = field(default_factory=Lock, repr=False)
@@ -55,12 +56,21 @@ class Observations:
         for entry in arguments.get("entries") or []:
             value = entry if isinstance(entry, dict) else entry.model_dump()
             identities.add(value.get("decision_unit_id") or value["target_id"])
+        handles = set()
         for decision in arguments.get("packet_decisions") or []:
             value = decision if isinstance(decision, dict) else decision.model_dump()
-            identities.add(f"{arguments.get('packet_id')}:{value['handle']}")
+            handles.add(f"{arguments.get('packet_id')}:{value['handle']}")
+        identities |= handles
         # Never retain free text, evidence bodies, or operation IDs in diagnostics.
         keys = [(name, identity) for identity in sorted(identities)] or [(name, None)]
         with self._lock:
+            self._packet_handles |= handles
+            if name == "read_review_packet" and isinstance(result.get("packet_id"), str) and "records" in result:
+                # Handles of an older packet cannot be retried; a fresh packet supersedes them.
+                current = result["packet_id"] + ":"
+                for key in [key for key in self.refusals
+                            if key[1] in self._packet_handles and not key[1].startswith(current)]:
+                    del self.refusals[key]
             for key in keys:
                 if result.get("state") in {"not_applied", "conflict", "not_runnable"}:
                     self.refusals[key] = {

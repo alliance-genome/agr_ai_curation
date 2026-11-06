@@ -186,6 +186,48 @@ def test_references_between_records_and_evidence_shaped_values_use_handles(scope
                                             "object_type": "generic_object"}], "only records in this packet get handles"
 
 
+def test_an_answer_not_yet_received_waits_without_a_handle(planned):
+    from dataclasses import replace
+    from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
+    from src.lib.validation_history import runtime
+    from src.lib.validation_history.candidates import retain_candidates
+    from src.schemas.domain_validator import DomainValidatorResultBase
+
+    item = planned
+    jobs = [replace(job, history_episode_id=item.ep) for job in item.plan.initial_jobs]
+    invocation = runtime.begin_jobs(item.plan.history_binding, jobs, operation_id="in-flight", receipt={})
+    page = reads.review_packet(item.scope, item.ep)
+    assert page["decision_count"] == 0 and page["answer_count"] == 0
+    entries = [entry for record in page["records"] for entry in record["review"]]
+    assert entries and all(entry["review"] == "waiting" and "execution_pending" in entry["codes"]
+                           and "handle" not in entry for entry in entries)
+    results = [DomainValidatorResultBase.model_validate(
+        {**_result_payload(job.request, resolved_values={"curie": "ECO:LATE"}), "resolved_objects": []})
+        for job in jobs]
+    runtime.complete_jobs(item.plan.history_binding, invocation, results)
+    retain_candidates(item.plan.envelope, [ValidatorResultMaterializationInput(job.match, job.request, result)
+                                           for job, result in zip(jobs, results, strict=True)],
+                      scope=item.scope, source_envelope_revision=1)
+    fresh = reads.review_packet(item.scope, item.ep)
+    assert fresh["packet_id"] != page["packet_id"] and fresh["answer_count"] == len(jobs)
+    handles = [handle for record in fresh["records"] for handle in _handles(record)]
+    assert decisions.record_packet_decisions(ReviewContext(item.scope, item.ep, "supervisor"),
+        checkpoint_request=checkpoint_provider(item)(), operation_id="late-answers",
+        packet_id=fresh["packet_id"], packet_decisions=_decide(handles))["ready"]
+
+
+def test_two_decisions_for_one_record_field_are_refused_naming_the_handles(scope):
+    envelope, artifact, episode, _, checkpoint = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
+    page = reads.review_packet(scope, episode)
+    handle, = _handles(page["records"][0])
+    with pytest.raises(ValueError, match=f"{handle}, {handle}: "):
+        decisions.record_packet_decisions(ReviewContext(scope, episode, "fixture-reviewer"),
+            checkpoint_request=checkpoint(), operation_id="twice", packet_id=page["packet_id"],
+            packet_decisions=[*_decide([handle]), *_decide([handle], "defer")])
+    with store.SessionLocal() as db:
+        assert store._current(db, artifact, _targets(envelope)[0])["version"] == 0
+
+
 def test_a_changed_record_conflicts_by_handle_and_nothing_in_the_call_applies(scope):
     objects = [_object(index, ["e1"]) for index in range(3)]
     envelope, artifact, episode, baseline, checkpoint = _build(scope, objects, [_evidence("e1")])

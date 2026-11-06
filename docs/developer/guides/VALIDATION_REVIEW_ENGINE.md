@@ -190,21 +190,26 @@ whole-record pages of at most `VALIDATION_REVIEW_PACKET_BYTES`; pass the returne
 pins the same packet, and any decision, answer or source change pins a new one.
 
 Each record shows its original extracted values in full, the evidence it cites as `E`
-handles (each quote appears once under `evidence`, with its section, page and other
-place fields), references to other records in the packet as `R` handles, its
-`target_id` for follow-up tools, and its review items:
+handles, references to other records in the packet as `R` handles, its `target_id`
+for follow-up tools, and its review items. Each quote appears once under `evidence`
+with its place in the paper. Copies of a quote share an entry only when their place
+agrees and their citation fields (entity, agent note, supported field paths) are
+equal; any other copy keeps its own fields and points at the first entry with
+`same_quote_as` instead of repeating the quote. The review items are:
 
 - `record`: the extracted record itself, for extraction-only review.
 - `validator_answer`: the validator, field, values sent (evidence cited by handle),
   status, resolved values, explanation, curator message, questions, issues, missing
   fields, per-component decisions and the scalar fields of resolved objects. An
   unresolved answer keeps every candidate it considered, with each candidate's own
-  assessment. Lookup logs, request bookkeeping and result-schema extension fields stay
-  in exact history; `more_in_history` names the extension fields that were left out.
+  assessment. Fields a validator's own result schema adds, such as a policy decision
+  or its violations, are shown as returned under `additional_fields`. Lookup logs
+  and request bookkeeping stay in exact history.
 - `optional_input_absent` and `lookup_not_supported`: the declared absence or the
   configured refusal, with the values and evidence the binding would have sent.
-- `waiting`: work that cannot be decided now (no answer yet, a curator-owned record,
-  an earlier rejection awaiting reconsideration). It has no handle.
+- `waiting`: work that cannot be decided now (an answer not yet received, a
+  curator-owned record, an earlier rejection awaiting reconsideration). It has no
+  handle, so a save can never select an answer the reviewer did not read.
 
 Every decidable item carries a `D` handle, or one handle per covered component. The
 pinned fact maps each handle to its target, decision unit, attempt or extraction or
@@ -213,7 +218,8 @@ applicability reference, and the unit version at the time the packet was read.
 `action`, `reason` and, where allowed, `absence_assessment` or `unresolved_fields`.
 The server expands each handle into the same exact entry the explicit form uses, so
 decision facts keep their existing shape, and the pinned version makes any change
-since the read a stale-version conflict. A conflict that names a record uses its handle; the response
+since the read a stale-version conflict. Two handles for one record field in a call
+are refused, naming both. A conflict that names a record uses its handle; the response
 lists each applied handle with its `decision_unit_id` and binding `target_id`. A
 record too large for one page is listed under `too_large` with its target and handles
 for the exact-history tools. The explicit `entries` form is unchanged.

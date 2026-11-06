@@ -109,6 +109,13 @@ def packet_entries(context, *, packet_id, packet_decisions):
             "unresolved_fields": (None if decision.unresolved_fields is None else
                                   [item.model_dump(mode="json") for item in decision.unresolved_fields]),
         })
+    units = {}
+    for decision, entry in zip(decided, entries, strict=True):
+        units.setdefault(entry["decision_unit_id"], []).append(decision.handle)
+    for same in units.values():
+        if len(same) > 1:
+            raise ValueError(", ".join(same) + ": these handles decide the same record field; "
+                             "send only one of them in a call")
     return [decision.handle for decision in decided], entries
 
 

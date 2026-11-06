@@ -315,8 +315,10 @@ def _filled(value):
 class _PacketEvidence:
     """Each quoted text once, under a short handle.
 
-    The same quote saved with more or fewer locator fields is one entry. Saved
-    copies that disagree on a shared field stay separate entries.
+    Copies of one quote share an entry when their place in the paper agrees and
+    their citation fields (entity, agent note, supported field paths) are equal;
+    missing place fields are filled from the agreeing copy. Any other copy gets
+    its own entry that points at the first one instead of repeating the quote.
     """
 
     def __init__(self):
@@ -327,28 +329,37 @@ class _PacketEvidence:
         self._ids = {}
 
     def handle(self, record):
-        from .record_source import packet_evidence, packet_quote
+        from .record_source import PACKET_CITATION_FIELDS, PACKET_LOCATION_FIELDS, packet_evidence, packet_quote
 
         compact = packet_evidence(record)
         identity = record.get("evidence_record_id")
         quote = packet_quote(compact)
         handle = None
         if quote is None:
-            handle = self._unquoted.get(store.canonical({"view": compact, "id": identity})[0])
+            key = store.canonical({"view": compact, "id": identity})[0]
+            handle = self._unquoted.get(key)
         else:
-            for candidate in self._quotes.get(quote, []):
-                entry = self.entries[candidate]
-                if all(entry[key] == value for key, value in compact.items() if key in entry):
-                    entry.update({key: value for key, value in compact.items() if key not in entry})
+            place = {name: compact[name] for name in PACKET_LOCATION_FIELDS if name in compact}
+            citation = {name: compact.get(name) for name in PACKET_CITATION_FIELDS}
+            for candidate, (known_place, known_citation) in self._quotes.get(quote, {}).items():
+                if known_citation == citation and all(known_place[name] == value for name, value in place.items()
+                                                      if name in known_place):
+                    known_place.update(place)
+                    self.entries[candidate].update(place)
                     handle = candidate
                     break
         if handle is None:
             handle = "E" + str(len(self.entries) + 1)
-            self.entries[handle] = compact
             if quote is None:
-                self._unquoted[store.canonical({"view": compact, "id": identity})[0]] = handle
+                self.entries[handle] = compact
+                self._unquoted[key] = handle
             else:
-                self._quotes.setdefault(quote, []).append(handle)
+                copies = self._quotes.setdefault(quote, {})
+                if copies:
+                    compact = {"same_quote_as": next(iter(copies)),
+                               **{name: value for name, value in compact.items() if packet_quote({name: value}) is None}}
+                self.entries[handle] = compact
+                copies[handle] = (place, citation)
         if isinstance(identity, str):
             self._ids.setdefault(identity, handle)
         self.cited.append(handle)
@@ -413,11 +424,26 @@ def _packet_result(result, evidence):
             candidates.append(item)
         if candidates:
             view["candidates"] = candidates
-    more = sorted(key for key, value in result.items()
-                  if key not in DomainValidatorResultBase.model_fields and _filled(value))
-    if more:
-        view["more_in_history"] = more
+    # Validator-specific result fields can hold the whole verdict, so they are
+    # shown as returned; only lookup logs stay in exact history, at any depth.
+    additional = _without_lookup_logs(evidence.inline({
+        key: value for key, value in result.items()
+        if key not in DomainValidatorResultBase.model_fields and _filled(value)}), evidence)
+    if additional:
+        view["additional_fields"] = additional
     return view
+
+
+def _without_lookup_logs(value, evidence):
+    if isinstance(value, dict):
+        return {key: ([evidence.known(identity) for identity in item]
+                      if key.endswith("evidence_record_ids") and isinstance(item, list)
+                      and all(isinstance(identity, str) for identity in item)
+                      else _without_lookup_logs(item, evidence))
+                for key, item in value.items() if key != "lookup_attempts"}
+    if isinstance(value, list):
+        return [_without_lookup_logs(item, evidence) for item in value]
+    return value
 
 
 def _packet_answer(attempt, completion, evidence):
@@ -434,9 +460,6 @@ def _packet_answer(attempt, completion, evidence):
     cited = _cite(evidence, request.get("evidence"))
     if cited:
         item["evidence"] = cited
-    if completion is None:
-        item["answer"] = "not yet received"
-        return item
     if completion["state"] != "completed":
         item["outcome"] = completion["state"]
         reason = (completion.get("diagnostics") or {}).get("reason")
@@ -498,8 +521,10 @@ def _build_packet(db, scope, ep, episode_id):
         for row in unit_rows:
             if not row["agent_may_decide"]:
                 continue
-            if "attempt_ref" in row:
+            if "completion_ref" in row:
                 found.setdefault(("answer", row["attempt_ref"]["fact_id"]), row)
+            elif "attempt_ref" in row:
+                continue  # No answer yet: nothing to decide, so it waits without a handle.
             elif "applicability_ref" in row:
                 found.setdefault(("applicability", row["applicability_ref"]["fact_id"]), row)
             elif "extraction_ref" in row:
@@ -562,11 +587,8 @@ def _build_packet(db, scope, ep, episode_id):
                         completion = db.scalar(select(ValidationFact).where(
                             ValidationFact.artifact_id == ep.artifact_id, ValidationFact.kind == "completion",
                             ValidationFact.parent_id == attempt.id))
-                        entry = _packet_answer(store._content(db, attempt),
-                                               None if completion is None else store._content(db, completion), evidence)
-                        reads_.append(["attempt", attempt.body_sha])
-                        if completion is not None:
-                            reads_.append(["completion", completion.body_sha])
+                        entry = _packet_answer(store._content(db, attempt), store._content(db, completion), evidence)
+                        reads_.extend([["attempt", attempt.body_sha], ["completion", completion.body_sha]])
                         ref = {"logical_attempt_id": subject}
                     elif kind == "applicability":
                         declared = store._content(db, store._fact(
