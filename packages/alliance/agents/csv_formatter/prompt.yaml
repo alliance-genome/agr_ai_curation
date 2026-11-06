@@ -46,7 +46,7 @@ content: |
   </workflow>
 
   <output_and_handoff_contract>
-  - A successful `finalize_and_save` ends the run; no reply follows it.
+  - A successful `finalize_and_save` ends the run; you get no turn after it.
   - Runtime returns the saved file's authoritative metadata and download URL to the supervisor; do not reconstruct or invent a URL.
   - Do not paste CSV content, markdown tables, previews, logs, or projection internals into the assistant response.
   </output_and_handoff_contract>

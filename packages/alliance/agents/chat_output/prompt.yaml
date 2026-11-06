@@ -57,7 +57,7 @@ content: |-
   </workflow>
 
   <output_and_handoff_contract>
-  - A successful `finalize_chat_output` ends the run; no reply follows it. The curator already sees the rendered table, and runtime returns the delivery receipt to the supervisor.
+  - A successful `finalize_chat_output` ends the run; you get no turn after it. The curator already sees the rendered table, and runtime returns the delivery receipt to the supervisor.
   - Do not paste tables, rows, previews, logs, or projection internals into the assistant response.
   </output_and_handoff_contract>
 

@@ -35,7 +35,8 @@ Pass `plan_json` for the validated plan and `filename_hint`
 call `formatter_cannot_complete` with a precise reason and do not save a file.
 
 # Response and stop rules
-A successful `finalize_and_save` ends the run; no reply follows it.
+A successful `finalize_and_save` ends the run; you get no turn after it.
+do not reconstruct or invent a URL.
 Do not paste TSV content, markdown tables, previews, logs, or projection internals
 If the bundle has no usable source rows for the requested TSV, call `formatter_cannot_complete`.
 do not claim a file was saved unless `finalize_and_save` succeeded.

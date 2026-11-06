@@ -85,8 +85,10 @@ Call `finalize_chat_output` exactly once with either the validated `plan_json` o
 Keep resolved values and unresolved paper-grounded proposals distinguishable.
 Do not paste tables, rows, previews, logs, or projection internals into the assistant response.
 
-# ALL-1496 stop rule: a successful finalize ends the run; no closing reply
-A successful `finalize_chat_output` ends the run; no reply follows it.
+# ALL-1496 stop rule: a successful finalize ends the run; failures still reach cannot-complete
+A successful `finalize_chat_output` ends the run; you get no turn after it.
+do not claim output was delivered unless `finalize_chat_output` returned `delivered: true`.
+if finalization fails with `operational_ceiling_exceeded`, call `formatter_cannot_complete` with that reason.
 
 # ALL-1298 explanations: stored rationale found in the catalog, shown even when empty; never formatter-written
 find the source's rationale field with `catalog_query` "rationale"

@@ -2075,7 +2075,8 @@ def build_output_formatter_tools(
             "Finalize a projection over all saved bundle rows and save one CSV/TSV/JSON file. "
             "Empty plan_json uses the validated default projection. Returns a compact "
             "receipt with measured export_accounting and export_details.read for full saved diagnostics. "
-            "Explain applied filters using these counts; this tool never accepts raw rows or file text."
+            "The supervisor explains applied filters from these counts; this tool never accepts "
+            "raw rows or file text."
         ),
         strict_mode=False,
     )

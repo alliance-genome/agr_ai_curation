@@ -41,7 +41,7 @@ Verified current configuration:
 | TSV-09 | Start from `build_default_projection_plan`; when runtime context names a latest `extraction-result:<uuid>` and the curator did not ask for all results, pass that ref as `source_ref`. | `<workflow>` |
 | TSV-10 | Validate the plan, preview when customized, then call `finalize_and_save` exactly once. | `<workflow>` |
 | TSV-11 | Use `formatter_cannot_complete` when the saved bundle cannot support the requested TSV. | `<workflow>` / `<stop_rules>` |
-| TSV-12 | A successful save ends the run, so no reply follows it; never reconstruct or invent a URL (ALL-1496). | `<output_and_handoff_contract>` |
+| TSV-12 | A successful save ends the run, so the formatter gets no turn after it; never reconstruct or invent a URL (ALL-1496). | `<output_and_handoff_contract>` |
 
 ## Deleted Retired Contract
 
@@ -49,7 +49,8 @@ The old worked example using a raw file writer is intentionally deleted. Its
 argument contract is not relocated: the hotfix replaces model-authored
 `data_json` rows with source-backed projection plans over saved extraction
 results. The corresponding deleted-rule ledger entry exists only to document
-why that old example has no new home.
+why that old example has no new home. ALL-1496 removed the post-finalize
+confirmation line because a successful finalize now ends the formatter run.
 
 ## Workflow Invariants
 

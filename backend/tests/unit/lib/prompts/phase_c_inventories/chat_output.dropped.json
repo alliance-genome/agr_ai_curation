@@ -121,7 +121,7 @@
   {
     "phrase": "After a successful `finalize_chat_output`, respond only with a brief confirmation such as \"Chat output delivered.\"",
     "category": "deleted",
-    "reason": "ALL-1496 formatter stop rule. A successful finalize_chat_output now ends the run, so the model never writes a confirmation after it. The curator sees the application-rendered table and the supervisor receives the delivery receipt. The cannot-complete and failed-finalize guidance is unchanged.",
+    "reason": "ALL-1496 formatter stop rule. A successful finalize_chat_output now ends the run, so the model never writes a confirmation after it. The line is replaced by \"A successful `finalize_chat_output` ends the run; you get no turn after it.\" The curator sees the application-rendered table and the supervisor receives the delivery receipt. The cannot-complete and failed-finalize guidance is unchanged.",
     "old_source": "packages/alliance/agents/chat_output/prompt.yaml:<output_and_handoff_contract>",
     "new_home": ""
   }

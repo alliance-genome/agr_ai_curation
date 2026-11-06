@@ -146,7 +146,7 @@ def test_packaged_formatter_prompts_do_not_ask_for_a_reply_after_finalize(
     prompt_path = _REPO_ROOT / "packages" / "alliance" / "agents" / agent_folder / "prompt.yaml"
     content = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))["content"]
 
-    assert f"A successful `{finalizer}` ends the run; no reply follows it." in content
+    assert f"A successful `{finalizer}` ends the run; you get no turn after it." in content
     assert "respond only with a brief" not in content
     assert "separately from your confirmation" not in content
 
@@ -248,6 +248,16 @@ def _formatter_agent(model: Model, saver: _Saver) -> Agent:
         ),
         tool_use_behavior=formatter_completion_tool_use_behavior,
     )
+
+
+def test_finalize_and_save_description_leaves_filter_explanations_to_the_supervisor():
+    """The formatter gets no turn after saving, so it cannot explain the counts."""
+
+    tools = _formatter_agent(_ScriptedFormatterModel([]), _Saver()).tools
+    finalize = next(tool for tool in tools if tool.name == "finalize_and_save")
+
+    assert "The supervisor explains applied filters from these counts" in finalize.description
+    assert "Explain applied filters" not in finalize.description
 
 
 async def _run(agent: Agent):
