@@ -547,6 +547,96 @@ def test_stored_condition_resolves_without_its_absent_components(schemas):
     assert result.missing_expected_fields == []
 
 
+def _component_selected_condition(schemas):
+    """Doug's run 492f1878: root slots copy the class and chemical records selected in
+    their components, with no root candidates. Every first finalize was rejected."""
+    from agr_ai_curation_alliance.compact_conditions import condition_decision_contract
+    from src.lib.domain_packs.compact_decisions import CanonicalValidatorRecord, ValidatorDecisionWorkspace
+    from src.schemas.domain_validator import DomainValidationRequest, ValidatorCandidate, ValidatorLookupAttempt
+
+    request = DomainValidationRequest(
+        request_id="doug-condition", validator_binding_id="experimental_condition_validation",
+        validator_agent={"package_id": "agr.alliance", "agent_id": "experimental_condition_validation"},
+        target={"domain_pack_id": "fixture"}, expected_result_fields=_CONDITION_EXPECTED,
+        selected_inputs={
+            "condition_components": {"condition_class": _stored_component("Pharmacological treatment", "ZECO:0000111"),
+                                     "condition_chemical": _stored_component("MTEP", "CHEBI:1"),
+                                     "condition_free_text": "200 uM"},
+            "condition_class_name": "Pharmacological treatment", "condition_chemical_name": "MTEP",
+            "condition_free_text": "200 uM", "condition_relation_type": "has_condition",
+            "evidence_quotes": [{"evidence_record_id": "evidence-1", "verified_quote": "Larvae were treated with MTEP."}],
+        },
+    )
+    contract = condition_decision_contract(request, schemas["ExperimentalConditionValidationResult"])
+    workspace = ValidatorDecisionWorkspace([contract])
+
+    def lookup(call_id, records):
+        return workspace.record_lookup("doug-condition", call_id=call_id, attempt=ValidatorLookupAttempt(
+            provider="agr_curation_query", method="search_ontology_terms", query={"term": call_id},
+            result_count=len(records), outcome="success",
+        ), records=[CanonicalValidatorRecord(candidate=ValidatorCandidate(value=curie, label=name),
+                                             values={"curie": curie, "name": name})
+                    for curie, name in records])
+
+    class_ref, = lookup("class-lookup", [("ZECO:0000111", "chemical treatment")])
+    chemical_ref, alternative_ref = lookup("chemical-lookup", [("CHEBI:1", "MTEP"), ("CHEBI:2", "MPEP")])
+
+    def record(ref, field):
+        return {"kind": "record", "record_ref": ref, "field": field}
+
+    decision = {
+        "request_id": "doug-condition", "status": "resolved", "explanation": "Both components resolved.",
+        "slots": {"condition_class_curie": record(class_ref, "curie"), "condition_class_name": record(class_ref, "name"),
+                  "condition_chemical_curie": record(chemical_ref, "curie"),
+                  "condition_chemical_name": record(chemical_ref, "name")},
+        "components": [
+            {"component_type": "condition_class", "status": "resolved", "candidates": [_assessment(class_ref)],
+             "slots": {"curie": record(class_ref, "curie"), "name": record(class_ref, "name")},
+             "lookup_refs": ["class-lookup"], "explanation": "Pharmacological treatment."},
+            {"component_type": "condition_chemical", "status": "resolved",
+             "candidates": [_assessment(chemical_ref), _assessment(alternative_ref, "plausible")],
+             "slots": {"curie": record(chemical_ref, "curie"), "name": record(chemical_ref, "name")},
+             "lookup_refs": ["chemical-lookup"], "explanation": "MTEP matches."},
+            {"component_type": "relation", "status": "not_checked", "explanation": "Relation context."},
+            {"component_type": "free_text", "status": "not_checked", "explanation": "Dose context."},
+            {"component_type": "evidence_quotes", "status": "not_checked", "explanation": "Paper context."},
+        ],
+    }
+    return contract, workspace, decision, alternative_ref
+
+
+def test_condition_root_slots_may_copy_component_selected_records(schemas):
+    contract, workspace, decision, _ = _component_selected_condition(schemas)
+
+    result = workspace.assemble(contract.decision_schema.model_validate(decision))
+
+    assert result.status == "resolved"
+    assert result.is_complete, result.output_issues
+    assert {key: result.resolved_values[key] for key in decision["slots"]} == {
+        "condition_class_curie": "ZECO:0000111", "condition_class_name": "chemical treatment",
+        "condition_chemical_curie": "CHEBI:1", "condition_chemical_name": "MTEP",
+    }
+    assert set(result.field_resolutions) == {"condition_class_curie", "condition_chemical_curie"}
+    assert result.candidates == []
+    assert [len(row.candidates) for row in result.component_validations[:2]] == [1, 2]
+
+
+def test_condition_root_slot_for_a_record_no_component_selected_is_rejected(schemas):
+    contract, workspace, decision, alternative_ref = _component_selected_condition(schemas)
+    decision["slots"]["condition_chemical_curie"]["record_ref"] = alternative_ref
+
+    with pytest.raises(ValueError, match="selected candidate"):
+        workspace.assemble(contract.decision_schema.model_validate(decision))
+
+
+def test_condition_component_checks_still_apply_to_records_they_select(schemas):
+    contract, workspace, decision, _ = _component_selected_condition(schemas)
+    decision["components"][1]["lookup_refs"] = ["class-lookup"]
+
+    with pytest.raises(ValueError, match="one of its recorded lookups"):
+        workspace.assemble(contract.decision_schema.model_validate(decision))
+
+
 @pytest.mark.parametrize("batch", [False, True])
 def test_stored_condition_finalization_preserves_component_completeness(schemas, batch):
     """The dispatcher must not demand absent taxon/chemical/ID slots after assembly."""
