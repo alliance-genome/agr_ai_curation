@@ -79,8 +79,9 @@ class FlowReview(ChatReview):
                 return _record_to_schema(row)
         self.record = await asyncio.to_thread(load)
         self.source_agent = source_agent
-        adapter = ValidatorAdapter(binding.scope, binding.artifact_id, episode_id, plan_ref,
-            authenticated_groups=self.authenticated_groups, event_emitter=event_emitter)
+        # Reading the saved plan decodes megabytes, so it stays off the event loop.
+        adapter = await asyncio.to_thread(ValidatorAdapter, binding.scope, binding.artifact_id, episode_id,
+            plan_ref, authenticated_groups=self.authenticated_groups, event_emitter=event_emitter)
         try:
             await self.initial_validation(adapter, event_emitter)
         except Exception as error:

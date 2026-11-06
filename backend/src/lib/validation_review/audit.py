@@ -47,7 +47,8 @@ def append_fact(db, artifact_id, **kwargs):
         "kind": fact.kind,
         "parent_id": fact.parent_id,
         "operation_id": fact.operation_id,
-        "content": store._content(db, fact),
+        # Read only, after commit; a copy of a multi-megabyte plan would only add time.
+        "content": store._shared_content(db, fact),
     }
     if not db.info.get("validation_review_listeners"):
         db.info["validation_review_listeners"] = True

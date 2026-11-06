@@ -349,7 +349,9 @@ class ChatReview:
             episode_id=episode_id,
             scope_id=scope_id,
         )
-        adapter = ValidatorAdapter(
+        # Reading the saved plan decodes megabytes, so it stays off the event loop.
+        adapter = await asyncio.to_thread(
+            ValidatorAdapter,
             binding.scope,
             binding.artifact_id,
             episode_id,

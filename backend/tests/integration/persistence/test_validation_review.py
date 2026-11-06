@@ -155,31 +155,12 @@ def test_initial_attempt_and_outbox_are_atomic_and_idempotent(scope):
         "review_episode_id": ep,
         "request": {"evidence": "original"},
     }
-    first = scheduling.initial(
-        scope,
-        ep,
-        operation_id="initial",
-        requests=[request],
-        receipt={"agent_revision": "saved-custom-7"},
-    )
-    assert (
-        scheduling.initial(
-            scope,
-            ep,
-            operation_id="initial",
-            requests=[request],
-            receipt={"agent_revision": "saved-custom-7"},
-        )
-        == first
-    )
+    item = {"operation_id": "initial", "requests": [request],
+            "receipt": {"agent_revision": "saved-custom-7"}}
+    first = scheduling.initial(scope, ep, [item])
+    assert scheduling.initial(scope, ep, [item]) == first
     with pytest.raises(h.HistoryConflict, match="initial attempt"):
-        scheduling.initial(
-            scope,
-            ep,
-            operation_id="another",
-            requests=[request],
-            receipt={"agent_revision": "saved-custom-7"},
-        )
+        scheduling.initial(scope, ep, [{**item, "operation_id": "another"}])
     with h.SessionLocal() as db:
         attempts = db.scalars(
             select(ValidationFact).where(
@@ -231,13 +212,11 @@ async def test_reconsideration_retains_saved_custom_receipt_and_caps_attempts(sc
         "review_episode_id": ep,
         "request": {"evidence": "original"},
     }
-    wid = scheduling.initial(
-        scope,
-        ep,
-        operation_id="initial",
-        requests=[request],
-        receipt={"agent_revision": "custom-7", "fingerprint": "exact"},
-    )
+    [wid] = scheduling.initial(scope, ep, [{
+        "operation_id": "initial",
+        "requests": [request],
+        "receipt": {"agent_revision": "custom-7", "fingerprint": "exact"},
+    }])
     with h.SessionLocal() as db:
         att = db.get(Work, wid).payload["invocation"]["attempt_ids"][0]
     completion = h.complete_attempt(
@@ -464,12 +443,10 @@ def test_dependent_wave_waits_for_explicit_review_then_pins_selected_answer(scop
         scope, operation_id=uuid4().hex, kind="document_run", targets=2, episodes=1
     )
     a.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
-    wid = scheduling.initial(
-        scope,
-        ep,
-        operation_id="initial",
-        receipt={"revision": "fixed"},
-        requests=[
+    [wid] = scheduling.initial(scope, ep, [{
+        "operation_id": "initial",
+        "receipt": {"revision": "fixed"},
+        "requests": [
             {
                 "target_id": first,
                 "binding_id": "fixture",
@@ -477,7 +454,7 @@ def test_dependent_wave_waits_for_explicit_review_then_pins_selected_answer(scop
                 "request": {"mention": "original"},
             }
         ],
-    )
+    }])
     with h.SessionLocal() as db:
         att = db.get(Work, wid).payload["invocation"]["attempt_ids"][0]
     completion = h.complete_attempt(
@@ -656,12 +633,10 @@ async def test_fake_executor_uses_frozen_requests_and_leaves_answer_unreviewed(s
                 ValidationFact.artifact_id == aid, ValidationFact.kind == "target"
             )
         )
-    wid = scheduling.initial(
-        scope,
-        ep,
-        operation_id="initial",
-        receipt={"revision": "custom-7"},
-        requests=[
+    [wid] = scheduling.initial(scope, ep, [{
+        "operation_id": "initial",
+        "receipt": {"revision": "custom-7"},
+        "requests": [
             {
                 "target_id": tid,
                 "binding_id": "fixture",
@@ -669,7 +644,7 @@ async def test_fake_executor_uses_frozen_requests_and_leaves_answer_unreviewed(s
                 "request": {"mention": "original"},
             }
         ],
-    )
+    }])
     calls = []
 
     async def fake(payload):
@@ -821,12 +796,10 @@ def test_uncertain_attempt_can_be_acknowledged_without_fabricating_a_completion(
                 ValidationFact.artifact_id == aid, ValidationFact.kind == "target"
             )
         )
-    wid = scheduling.initial(
-        scope,
-        ep,
-        operation_id="initial",
-        receipt={"revision": "fixed"},
-        requests=[
+    [wid] = scheduling.initial(scope, ep, [{
+        "operation_id": "initial",
+        "receipt": {"revision": "fixed"},
+        "requests": [
             {
                 "target_id": tid,
                 "binding_id": "fixture",
@@ -834,7 +807,7 @@ def test_uncertain_attempt_can_be_acknowledged_without_fabricating_a_completion(
                 "request": {"mention": "original"},
             }
         ],
-    )
+    }])
     claim = w.claim(scope, wid)
     w.mark_submitted(scope, wid, claim["lease_token"])
     w.mark_uncertain(scope, wid, claim["lease_token"], reason="worker_disconnected")
@@ -978,12 +951,10 @@ async def test_pre_send_refusal_records_reason_without_unknown_completion(
                 ValidationFact.artifact_id == aid, ValidationFact.kind == "target"
             )
         )
-    wid = scheduling.initial(
-        scope,
-        ep,
-        operation_id="initial",
-        receipt={},
-        requests=[
+    [wid] = scheduling.initial(scope, ep, [{
+        "operation_id": "initial",
+        "receipt": {},
+        "requests": [
             {
                 "target_id": tid,
                 "binding_id": "fixture",
@@ -991,7 +962,7 @@ async def test_pre_send_refusal_records_reason_without_unknown_completion(
                 "request": {},
             }
         ],
-    )
+    }])
 
     reports = []
     monkeypatch.setattr(
@@ -1219,13 +1190,11 @@ def test_late_answer_reopens_public_review_without_refilling_budgets(
     a.attach_episode(scope, artifact_id=x.aid, episode_id=x.episode, scope_id=sid)
     request = deepcopy(old_attempt["content"]["input"])
     request["review_episode_id"] = x.episode
-    wid = scheduling.initial(
-        scope,
-        x.episode,
-        operation_id="unknown",
-        requests=[request],
-        receipt={"revision": "saved"},
-    )
+    [wid] = scheduling.initial(scope, x.episode, [{
+        "operation_id": "unknown",
+        "requests": [request],
+        "receipt": {"revision": "saved"},
+    }])
     claimed = w.claim(scope, wid)
     w.mark_submitted(scope, wid, claimed["lease_token"])
     w.mark_uncertain(scope, wid, claimed["lease_token"], reason="disconnected")

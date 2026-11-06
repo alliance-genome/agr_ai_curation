@@ -170,10 +170,11 @@ def save_plan(plan, *, context):
     from types import SimpleNamespace
     from src.lib.domain_packs.validation_registry import ValidationBindingState
     binding = plan.history_binding
-    matches = {}
-    for match in plan.matches:
-        tid = runtime.binding_target(binding, match)
-        matches[tid] = serialize_match(match)
+    # One transaction resolves every saved target identity, not one per match.
+    with store.SessionLocal.begin() as db:
+        targets = [runtime.binding_target(binding, match, db=db) for match in plan.matches]
+        initial_requests = runtime.frozen_job_requests(binding, plan.initial_jobs, db=db)
+    matches = {tid: serialize_match(match) for tid, match in zip(targets, plan.matches, strict=True)}
     registry = REGISTRY.dump_python(plan.registry, mode="json")
     registry["bindings"] = [_serialize_binding(binding_definition) for binding_definition in plan.registry.bindings]
     REGISTRY.validate_python(registry)
@@ -187,7 +188,7 @@ def save_plan(plan, *, context):
             if (definition.validator_agent is not None or definition.routes is not None)
             and definition.state == ValidationBindingState.ACTIVE
         },
-        "initial_requests": runtime.frozen_job_requests(binding, plan.initial_jobs),
+        "initial_requests": initial_requests,
         "authenticated_groups": list(context.authenticated_groups or ()),
     }
     with store.SessionLocal.begin() as db:
@@ -496,7 +497,11 @@ class ValidatorAdapter:
         return match
 
     def job(self, frozen):
-        match = self.match(frozen["target_id"])
+        self.refresh_source_plan()
+        return self._plan_job(self.plan, frozen)
+
+    def _plan_job(self, plan, frozen):
+        match = self._plan_match(plan, frozen["target_id"])
         request = DomainValidationRequest.model_validate(frozen["request"])
         if (
             match.binding.validator_agent is None
@@ -519,8 +524,19 @@ class ValidatorAdapter:
         )
 
     def jobs(self, frozen_requests):
-        """Build dispatch jobs; reads the database, so async callers use a thread."""
-        return [self.job(frozen) for frozen in frozen_requests]
+        """Build dispatch jobs from one source-plan refresh.
+
+        Reads the database, so async callers use a thread. One plan builds
+        every job, even if a concurrent selection swaps it.
+        """
+        self.refresh_source_plan()
+        plan = self.plan
+        return [self._plan_job(plan, frozen) for frozen in frozen_requests]
+
+    def job_targets(self, jobs):
+        """Saved target identity of every job, resolved in one transaction."""
+        with store.SessionLocal.begin() as db:
+            return [runtime.request_target(self.binding, job, db=db) for job in jobs]
 
     def receipt(self, jobs, *, batch_key):
         contracts = {
@@ -581,42 +597,37 @@ class ValidatorAdapter:
         pending = [item for item in frozen if item["target_id"] not in scheduled
                    and not await asyncio.to_thread(self.retained_ready, item["target_id"])]
         jobs = await asyncio.to_thread(self.jobs, pending)
+        targets = await asyncio.to_thread(self.job_targets, jobs)
         from . import source_inputs
 
         executable = []
-        for job in jobs:
-            unsupported = source_inputs.unsupported_input(
-                job.match, job.request, runtime.request_target(self.binding, job)
-            )
+        for job, target in zip(jobs, targets, strict=True):
+            unsupported = source_inputs.unsupported_input(job.match, job.request, target)
             if unsupported is None:
-                executable.append(job)
+                executable.append((job, target))
             else:
                 await asyncio.to_thread(source_inputs.record_initial, self.binding, unsupported,
                                         episode_id=self.episode_id)
-        jobs = executable
+        jobs = [job for job, _ in executable]
+        # Keyed by object identity: grouping below returns these same job objects.
+        target_of = {id(job): target for job, target in executable}
         by_target = {item["target_id"]: item for item in frozen}
         grouped = _dedupe_validator_jobs(jobs)
-        work_ids = []
+        items = []
         for group in _plan_validator_run_groups(grouped):
             selected = [
                 job for index in group.dedupe_group_indexes for job in grouped[index]
             ]
-            requests = [
-                by_target[runtime.request_target(self.binding, job)] for job in selected
-            ]
+            requests = [by_target[target_of[id(job)]] for job in selected]
             op = (
                 "initial:" + self.episode_id + ":"
                 + store.canonical({"targets": [r["target_id"] for r in requests]})[0]
             )
-            wid = await asyncio.to_thread(
-                scheduling.initial,
-                self.scope,
-                self.episode_id,
-                operation_id=op,
-                requests=requests,
-                receipt=self.receipt(selected, batch_key=group.batch_key),
-            )
-            work_ids.append(wid)
+            items.append({"operation_id": op, "requests": requests,
+                          "receipt": self.receipt(selected, batch_key=group.batch_key)})
+        if items:
+            # One transaction queues every initial work item, in run-group order.
+            await asyncio.to_thread(scheduling.initial, self.scope, self.episode_id, items)
         # Existing configured validator concurrency applies; no new operational cap.
         from src.lib.openai_agents.config import get_max_parallel_validators
 
