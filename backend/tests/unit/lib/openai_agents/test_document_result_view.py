@@ -67,10 +67,31 @@ def test_read_chunk_view_states_shared_span_metadata_once_and_drops_nulls_and_ha
         "span_type": "sentence", "spanizer_version": "pdf_sentence_v1",
         "evidence_spans": [
             {"span_index": 0, "char_start": 0, "char_end": 15},
-            {"span_index": 1, "char_start": 16, "char_end": len(text), "page_number": 4},
+            # Values that differ from the chunk's stay, including an explicit null.
+            {"span_index": 1, "char_start": 16, "char_end": len(text), "page_number": 4,
+             "section_title": None},
         ]}}
     assert "content_start" in view["chunk"]["span_text_access"]
     assert raw == original
+
+
+def test_span_values_are_never_attributed_to_a_chunk_that_lacks_them():
+    text = "One sentence. Two sentence."
+    raw = {"chunk": {"chunk_id": "c", "content": text, "page_number": None, "section_title": None,
+                     "evidence_spans": [
+        {"span_id": "s0", "span_index": 0, "span_type": "sentence", "text": text[:13], "char_start": 0,
+         "char_end": 13, "page_number": 4, "section_title": None, "spanizer_version": None},
+        {"span_id": "s1", "span_index": 1, "span_type": "sentence", "text": text[14:], "char_start": 14,
+         "char_end": len(text), "page_number": 4, "section_title": None, "spanizer_version": None}]}}
+    view, _ = document_result_view("read_chunk", raw)
+    chunk = view["chunk"]
+    # Only span-only metadata moves to the chunk; the chunk's unknown page stays unknown.
+    assert "page_number" not in chunk and "section_title" not in chunk and "spanizer_version" not in chunk
+    assert chunk["span_type"] == "sentence"
+    assert chunk["evidence_spans"] == [
+        {"span_index": 0, "char_start": 0, "char_end": 13, "page_number": 4},
+        {"span_index": 1, "char_start": 14, "char_end": len(text), "page_number": 4},
+    ]
 
 
 def test_mixed_span_metadata_stays_on_each_span():

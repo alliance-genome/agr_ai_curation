@@ -91,14 +91,15 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
                 raise ValueError("Evidence span does not match the exact returned document text")
             del span["text"]
             span.pop("span_id", None)
-            _drop_none(span)
         _state_shared_span_fields_once(record)
     _drop_none(view)
     return view, events
 
 
-# Span metadata that usually repeats the chunk's own value on every span.
-_SHARED_SPAN_FIELDS = ("page_number", "section_title", "span_type", "spanizer_version")
+# Span-only metadata every span usually shares; stated once on the record.
+_SPAN_ONLY_SHARED_FIELDS = ("span_type", "spanizer_version")
+# Each span's own position, always kept on the span.
+_SPAN_POSITION_FIELDS = frozenset({"span_index", "char_start", "char_end"})
 
 
 def _drop_none(mapping: dict) -> None:
@@ -109,16 +110,19 @@ def _drop_none(mapping: dict) -> None:
 def _state_shared_span_fields_once(record: dict) -> None:
     """Keep each span's own position; state values every span repeats once.
 
-    A span keeps a field only where it differs from the record's value. A field
-    the record lacks but every span shares moves to the record. Lossless.
+    A span field that is absent takes the record's value (none when the record
+    has none). So a span drops a field only where its value equals the record's,
+    including null against an absent record value; a null against a record value
+    stays explicit. A span-only field every span shares moves to the record.
     """
     spans = record["evidence_spans"]
-    for field in _SHARED_SPAN_FIELDS:
-        if field not in record:
-            values = [span.get(field) for span in spans]
-            if not spans or field not in spans[0] or any(value != values[0] for value in values):
-                continue
+    for field in _SPAN_ONLY_SHARED_FIELDS:
+        values = [span.get(field) for span in spans]
+        if field not in record and values and values[0] is not None and all(
+            field in span and value == values[0] for span, value in zip(spans, values)
+        ):
             record[field] = values[0]
-        for span in spans:
-            if field in span and span[field] == record[field]:
-                del span[field]
+    for span in spans:
+        for field in [field for field, value in span.items()
+                      if field not in _SPAN_POSITION_FIELDS and value == record.get(field)]:
+            del span[field]
