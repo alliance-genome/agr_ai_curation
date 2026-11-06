@@ -114,10 +114,12 @@ _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS = frozenset(
 _VALIDATOR_EXECUTION_FAILURE_EXPLANATION = (
     "Validator execution could not be completed. Curator review is required."
 )
-# Fields of a supplied evidence record the validator model sees. Span, chunk and
-# envelope provenance stays on the persisted request and in _check_evidence.
+# Fields of a supplied evidence record the validator model sees: its ID, label,
+# locators and quote. Span, chunk and envelope provenance stays on the persisted
+# request and in _check_evidence.
 _MODEL_EVIDENCE_RECORD_FIELDS = (
-    "evidence_record_id", "section", "subsection", "page", "verified_quote",
+    "evidence_record_id", "entity", "section", "subsection", "page",
+    "figure_reference", "verified_quote",
 )
 
 
@@ -2202,7 +2204,7 @@ def _validator_evidence_context_identity(
 
 
 def _model_evidence_record(record: Mapping[str, Any]) -> dict[str, Any]:
-    """The part of a supplied evidence record a validator reads: ID, location, quote."""
+    """The part of a supplied evidence record a validator reads: ID, label, locators, quote."""
     return {
         key: record[key]
         for key in _MODEL_EVIDENCE_RECORD_FIELDS
@@ -2257,8 +2259,8 @@ def validator_request_payload_for_agent(
         ],
         "input_values_source": "selected_inputs",
         "evidence_view": (
-            "Evidence records show their ID, location and verified quote. A record "
-            "already in selected_inputs.evidence_quotes appears only there."
+            "Evidence records show their ID, entity, location (section, page, figure) and "
+            "verified quote. A record already in selected_inputs.evidence_quotes appears only there."
         ),
         "canonical_identity_restored_by": "finalize_validator_result",
     }

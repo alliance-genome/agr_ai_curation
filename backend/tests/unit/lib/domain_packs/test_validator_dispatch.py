@@ -744,13 +744,22 @@ def _paper_evidence_record(identifier: str, quote: str, **extra: Any) -> dict[st
         "evidence_record_id": identifier, "verified_quote": quote,
         "section": "Results", "subsection": "Fig. 1", "page": 3,
         "chunk_id": "chunk-1", "chunk_ids": ["chunk-1"], "document_id": "doc-123",
-        "entity": "Fig. 1 treatment", "figure_reference": None,
+        "entity": "Fig. 1 treatment", "figure_reference": "Fig. 1B",
         "envelope_targets": [{"field_path": "condition", "pending_ref_id": "object-1"}],
         "source_fragments": [{"chunk_id": "chunk-1", "char_start": 0, "char_end": len(quote),
                               "span_id": "chunk-1:s0001", "spanizer_version": "pdf_sentence_v1",
                               "text": quote}],
         "source_span_ids": ["chunk-1:s0001"],
         **extra,
+    }
+
+
+def _model_evidence(identifier: str | None, quote: str, *, page: int = 3) -> dict[str, Any]:
+    """What the validator model sees of a _paper_evidence_record."""
+    return {
+        **({"evidence_record_id": identifier} if identifier is not None else {}),
+        "entity": "Fig. 1 treatment", "section": "Results", "subsection": "Fig. 1",
+        "page": page, "figure_reference": "Fig. 1B", "verified_quote": quote,
     }
 
 
@@ -779,10 +788,7 @@ def test_validator_request_payload_shows_compact_evidence_once():
 
     payload = validator_request_payload_for_agent(request)
 
-    assert payload["evidence"] == [{
-        "evidence_record_id": "evidence-2", "section": "Results", "subsection": "Fig. 1",
-        "page": 4, "verified_quote": "Controls were untreated.",
-    }]
+    assert payload["evidence"] == [_model_evidence("evidence-2", "Controls were untreated.", page=4)]
     # Custom validators read this input by name; it keeps its name and shape.
     assert payload["selected_inputs"] == request.selected_inputs
     assert "evidence_record_id" in payload["selected_inputs"]["evidence_quotes"][0]
@@ -818,18 +824,15 @@ def test_validator_batch_payload_lists_each_distinct_evidence_record_once():
     assert payload["mode"] == "domain_validator_batch"
     assert "evidence_records" in payload["instructions"]
     assert payload["evidence_records"] == [
-        {"evidence_record_id": "evidence-shared", "section": "Results", "subsection": "Fig. 1",
-         "page": 3, "verified_quote": "Both larvae were treated."},
-        {"evidence_record_id": "evidence-first", "section": "Results", "subsection": "Fig. 1",
-         "page": 3, "verified_quote": "Only the first was imaged."},
+        _model_evidence("evidence-shared", "Both larvae were treated."),
+        _model_evidence("evidence-first", "Only the first was imaged."),
     ]
     by_id = {item["request_id"]: item for item in payload["requests"]}
     assert by_id["domain-validation:first"]["evidence_record_ids"] == ["evidence-shared", "evidence-first"]
     assert "evidence" not in by_id["domain-validation:first"]
     # A record that cannot be named by an ID it shares exactly stays with its request.
     assert by_id["domain-validation:second"]["evidence_record_ids"] == ["evidence-shared"]
-    assert by_id["domain-validation:second"]["evidence"] == [
-        {"section": "Results", "subsection": "Fig. 1", "page": 3, "verified_quote": "No ID."}]
+    assert by_id["domain-validation:second"]["evidence"] == [_model_evidence(None, "No ID.")]
     assert by_id["domain-validation:third"]["evidence_record_ids"] == []
     assert by_id["domain-validation:third"]["evidence"][0]["verified_quote"] == (
         "A different quote with the same ID.")

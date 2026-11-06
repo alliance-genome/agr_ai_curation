@@ -40,7 +40,7 @@ change does not merge those objects. Validator dispatch retains its existing
 batching policy: requests carrying quote bundles retain isolated runs where
 configured. Requests with quote bundles for different records share one run only
 when every input is exactly equal: the selected inputs (including every quote
-bundle), the request evidence (ID, location and quote), the guidance and
+bundle), the request evidence (ID, entity, locators and quote), the guidance and
 the binding. No similarity matching is used. Each record keeps its own answer.
 A copy for another record ends its explanation with "Checked once with N other
 records that had the same value and evidence.", where N counts records, not
@@ -53,8 +53,8 @@ the supervisor without an automatic extraction retry.
 
 The persisted request keeps every evidence record whole. The model input
 (`validator_request_payload_for_agent`) shows each request-level `evidence`
-record as `evidence_record_id`, `section`, `subsection`, `page` and
-`verified_quote` only, and leaves out a record whose ID and quote already appear
+record as `evidence_record_id`, `entity`, `section`, `subsection`, `page`,
+`figure_reference` and `verified_quote` only, and leaves out a record whose ID and quote already appear
 in `selected_inputs.evidence_quotes`. That input keeps its name and shape, because
 custom validators read it. A batch input lists each distinct record once in
 `evidence_records`; each request names its own in `evidence_record_ids`. A record
