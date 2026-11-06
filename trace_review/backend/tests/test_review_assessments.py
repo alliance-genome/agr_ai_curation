@@ -71,3 +71,32 @@ def test_unsupported_lookup_history_is_preserved_without_a_validator_answer():
     ])["tool_calls"]
     assert calls[0]["tool_result"]["parsed"]["json_data"] == output
     assert calls[0]["input"] == fact
+
+
+def test_packet_save_and_read_keep_handles_resolvable_to_exact_targets():
+    arguments = {"operation_id": "save", "packet_id": "packet-fact", "entries": None,
+                 "packet_decisions": [{"handle": "D2", "action": "defer", "reason": "Scope unclear",
+                                       "absence_assessment": None, "unresolved_fields": None}]}
+    result = {"decision_id": "fact", "ready": False, "packet_id": "packet-fact", "applied": [
+        {"decision_unit_id": "component", "action": "defer", "handle": "D2", "target_id": "binding"}]}
+    packet = {"packet_id": "packet-fact", "page": 1, "pages": 1, "next_page": None, "records": [
+        {"record": "R1", "target_id": "record", "values": {"name": "value"}, "evidence": ["E1"],
+         "review": [{"review": "validator_answer", "handle": "D2", "status": "unresolved"}]}],
+        "evidence": {"E1": {"verified_quote": "Quoted text", "page": 1}}}
+    calls = ToolCallAnalyzer.extract_tool_calls([
+        {"id": "call", "type": "GENERATION", "output": [
+            {"type": "function_call", "name": "read_review_packet", "call_id": "r",
+             "arguments": json.dumps({"packet_id": None, "page": None})},
+            {"type": "function_call", "name": "record_validation_review", "call_id": "s",
+             "arguments": json.dumps(arguments)}]},
+        {"id": "result", "type": "GENERATION", "input": [
+            {"type": "function_call_output", "call_id": "r", "output": json.dumps(packet)},
+            {"type": "function_call_output", "call_id": "s", "output": json.dumps(result)}]},
+    ])["tool_calls"]
+    read, save = calls
+    assert read["name"] == "read_review_packet"
+    assert read["tool_result"]["parsed"]["json_data"] == packet
+    decisions = save["validation_review_decisions"]
+    assert decisions["arguments"] == arguments and decisions["result"] == result
+    assert decisions["packet_handles"] == {"D2": {"decision_unit_id": "component", "target_id": "binding",
+                                                  "action": "defer"}}

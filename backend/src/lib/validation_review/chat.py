@@ -473,7 +473,7 @@ class ChatReview:
                     input=json.dumps(
                         {
                             "user_request": self.user_request,
-                            "instruction": "Review this saved extraction. Find outstanding work with get_outstanding_validation_reviews, then read related records together with get_validation_record_sources and their answer references. Record explicit decisions for each group. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
+                            "instruction": "Review this saved extraction. Read all outstanding work once with read_review_packet, decide every record, and save the decisions together. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
                             "result_ref": (
                                 "extraction-result:" + record.extraction_result_id
                             ),

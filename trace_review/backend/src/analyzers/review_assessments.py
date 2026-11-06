@@ -14,3 +14,9 @@ def annotate_review_assessments(calls):
             "result_available": body is not None,
             "note": "An accepted assessment can remain scientifically unresolved; explicit unresolved_fields or absence_assessment=unresolved retain scientific uncertainty, including configured unsupported lookups that did not execute.",
         }
+        applied = body.get("applied") if isinstance(body, dict) else None
+        if isinstance(arguments, dict) and arguments.get("packet_id") and isinstance(applied, list):
+            # Packet saves name short handles; the save result resolves each one.
+            call["validation_review_decisions"]["packet_handles"] = {
+                item["handle"]: {key: item.get(key) for key in ("decision_unit_id", "target_id", "action")}
+                for item in applied if isinstance(item, dict) and "handle" in item}

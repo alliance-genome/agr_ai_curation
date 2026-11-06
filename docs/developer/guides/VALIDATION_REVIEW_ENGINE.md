@@ -181,6 +181,70 @@ A response stays within `VALIDATION_REVIEW_PACKET_BYTES` and returns at most
 call and nothing is truncated. Outstanding rows carry `evidence_group`, a key for the
 evidence a record cites, and are ordered by it.
 
+### Compact review packet
+
+`read_review_packet()` is the first-pass read. It pins every outstanding record of
+the bound episode in one immutable `review_decision_packet` fact and returns it in
+whole-record pages of at most `VALIDATION_REVIEW_PACKET_BYTES`; pass the returned
+`packet_id` and `next_page` to read the rest of the same packet. The same live state
+pins the same packet, and any decision, answer or source change pins a new one.
+
+Each record shows its original extracted values in full, the evidence it cites as `E`
+handles, references to other records in the packet as `R` handles, its `target_id`
+for follow-up tools, and its review items. Each quote appears once under `evidence`
+with its place in the paper. Copies of a quote share an entry only when their place
+agrees and their citation fields (entity, agent note, supported field paths) are
+equal; any other copy keeps its own fields and points at the first entry with
+`same_quote_as` instead of repeating the quote. The review items are:
+
+- `record`: the extracted record itself, for extraction-only review.
+- `validator_answer`: the validator, field, values sent (evidence cited by handle),
+  status, resolved values, explanation, curator message, questions, issues, missing
+  fields, per-component decisions and the scalar fields of resolved objects. An
+  unresolved answer keeps every candidate it considered, with each candidate's own
+  assessment. Fields a validator's own result schema adds, such as a policy decision
+  or its violations, are shown as returned under `additional_fields`. A dependent
+  answer's `prerequisites` lists each selection it used and the answer or source that
+  selection chose, as exact references for `read_validation_history`. An item decided
+  before shows `earlier_decision` (`earlier_decisions` per component). Lookup logs and
+  request bookkeeping stay in exact history.
+- `optional_input_absent` and `lookup_not_supported`: the declared absence or the
+  configured refusal, with the values and evidence the binding would have sent.
+- `uncertain_outcome`: a validation that stopped without an answer and has a recorded
+  operational uncertainty, for example after a worker crash. Its handle accepts only
+  `acknowledge_failure`, which clears the blocker without a scientific verdict.
+- `waiting`: work that cannot be decided now (a field whose newest validation is
+  still running, even if an older answer exists; a curator-owned record; an earlier
+  rejection awaiting reconsideration). It has no handle, so a save can never select an
+  answer the reviewer did not read or one a running validation may replace.
+
+Every decidable item carries a `D` handle, or one handle per covered component. The
+pinned fact maps each handle to its target, decision unit, attempt or extraction or
+applicability reference, and the unit version at the time the packet was read.
+`record_validation_review(operation_id, packet_id, packet_decisions)` takes `handle`,
+`action`, `reason` and, where allowed, `absence_assessment` or `unresolved_fields`.
+The server expands each handle into the same exact entry the explicit form uses, so
+decision facts keep their existing shape, and the pinned version makes any change
+since the read a stale-version conflict. Two handles for one record field in a call
+are refused, naming both. A conflict that names a record uses its handle; the response
+lists each applied handle with its `decision_unit_id` and binding `target_id`. A
+record too large for one page is listed under `too_large` with its target and handles
+for the exact-history tools. The explicit `entries` form is unchanged.
+
+Protocol v5 asks the supervisor to read the packet once, decide every handle with a
+reason specific to each record, save in one call (more only when the decisions exceed
+`VALIDATION_REVIEW_DECISION_ENTRIES`), and send one targeted follow-up covering all
+deferred records. Curator-requested rounds, follow-up contribution selection and
+retirement keep the exact-history tools.
+
+### Review progress lines
+
+While review runs, each review tool adds one plain-language progress line to a live
+curator stream (`reviewPhase: supervisor_review`), for example "Supervisor review:
+reviewing 8 records and 24 validation results" or "Supervisor review: saving 32
+decisions". Calls of the same tool that overlap, such as a parallel burst of history
+reads, share one line. Runs without a live stream emit nothing.
+
 Each review carries the instructions its own extractor ran under, taken from the
 extraction's saved provenance, so scope is judged against the actual criteria. They
 sit in the phase instructions, which every request resends and compaction leaves

@@ -7,11 +7,12 @@ from agents import function_tool
 
 from . import decisions, reads, scheduling
 from .admission import ReviewStopped
+from .progress import ReviewLines
 from src.lib.validation_history import store
-from functools import wraps
+from functools import partial, wraps
 from typing import Literal
 from inspect import signature
-from .decisions import ReviewEntry
+from .decisions import PacketDecision, ReviewEntry
 
 
 from pydantic import BaseModel, ConfigDict, StrictStr
@@ -23,7 +24,7 @@ class EvidenceReference(BaseModel):
     sha256: StrictStr
 
 
-def _recoverable_tool(function):
+def _recoverable_tool(function, *, lines):
     contract = signature(function)
 
     @wraps(function)
@@ -31,6 +32,8 @@ def _recoverable_tool(function):
         from .observations import record_tool
 
         arguments = contract.bind(*args, **kwargs).arguments
+        lines.start(function.__name__, arguments)
+        result = None
         try:
             result = await function(*args, **kwargs)
         except ReviewStopped as exc:
@@ -71,9 +74,13 @@ def _recoverable_tool(function):
                 "operation_id": arguments.get("operation_id"),
                 "targets": arguments.get("target_ids", []),
                 "decision_units": [
-                    e.decision_unit_id for e in arguments.get("entries", [])
+                    e.decision_unit_id for e in arguments.get("entries") or []
                 ],
             }
+            if arguments.get("packet_decisions"):
+                result["handles"] = [d.handle for d in arguments["packet_decisions"]]
+        finally:
+            lines.finish(function.__name__, result)
 
         return record_tool(function.__name__, arguments, result)
 
@@ -84,9 +91,39 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
                  execute_work=None, advance_work=None, prepare_inputs=None,
                  request_extraction=None, select_source=None, assess_source=None):
     """Context and checkpoint loader come from authenticated runtime, never JSON."""
+    recoverable = partial(_recoverable_tool,
+                          lines=ReviewLines(None if context is None else context.episode_id))
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
+    async def read_review_packet(packet_id: str | None = None, page: int | None = None) -> dict:
+        """Read all outstanding review work once: records, evidence and validator answers.
+
+        Call with no packet_id to pin a fresh packet of the current state. If
+        next_page is set, read it with the same packet_id before deciding. Each
+        record shows its originally extracted values, the evidence it cites (E
+        handles; each quote appears once under evidence, and same_quote_as marks
+        another use of an earlier quote) and review items. Items with a D handle
+        are decided with record_validation_review using this packet_id: record
+        (the extracted record itself; no validator ran), validator_answer
+        (additional_fields holds the validator's own verdict fields; prerequisites
+        lists each selection a dependent answer used and the answer or source it
+        chose, as exact references for read_validation_history),
+        optional_input_absent, lookup_not_supported, or uncertain_outcome (a
+        validation that stopped without an answer; only acknowledge_failure
+        applies). A component answer lists one handle per component. waiting
+        items, including fields whose newest validation is still running, cannot
+        be decided now. A record's target_id is for follow-up tools. too_large
+        names records to read with the exact-history tools instead. Handles
+        belong to this packet only.
+        """
+        return await asyncio.to_thread(
+            reads.review_packet, context.history_scope, context.episode_id,
+            packet_id=packet_id, page=page,
+        )
+
+    @function_tool(failure_error_function=None)
+    @recoverable
     async def get_validation_review_packet(operation_id: str) -> dict:
         """Pin exact original/answer/decision/prerequisite references and budget state.
 
@@ -101,7 +138,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_outstanding_validation_reviews(cursor: str | None = None) -> dict:
         """Find current outstanding units and exact answer/applicability references.
 
@@ -117,7 +154,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
                                       context.episode_id, cursor=cursor)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_validation_record_sources(target_ids: list[str]) -> dict:
         """Read related original records together, inline, with shared evidence once.
 
@@ -141,7 +178,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_validation_record_source(target_id: str) -> dict:
         """Reference one original record and all its attached supporting evidence.
 
@@ -160,7 +197,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def read_validation_history(
         fact_id: str, sha256: str, offset: int = 0
     ) -> dict:
@@ -179,14 +216,21 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def record_validation_review(
-        operation_id: str, entries: list[ReviewEntry]
+        operation_id: str,
+        packet_id: str | None = None,
+        packet_decisions: list[PacketDecision] | None = None,
+        entries: list[ReviewEntry] | None = None,
     ) -> dict:
         """Atomically record explicit decisions for exact target/answer components.
 
-        Send one call per reviewed group, with a reason specific to each record.
-        If any entry conflicts, nothing in the call applies: refresh and resend it.
+        Give a reason specific to each record. If any decision conflicts, nothing
+        in the call applies. From read_review_packet, send its packet_id and one
+        packet_decisions item per D handle, with entries null; the server fills in
+        the exact target, answer and the version pinned when the packet was read.
+        After a conflict, read a fresh packet and resend. Otherwise
+        send entries with packet_id and packet_decisions null, one call per group.
         For answers, target_id is attempt input.target_id; decision_unit_id is a
         covered ID matching the manifest unit target_id. No component units means
         decision_unit_id equals target_id: null decision_unit / empty decision_units
@@ -204,16 +248,28 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """
+        if (entries is None) == (packet_decisions is None) or (packet_id is None) != (packet_decisions is None):
+            raise ValueError("Send either packet_id with packet_decisions, or entries")
         started = perf_counter()
         request = await asyncio.to_thread(checkpoint_provider)
         checkpointed = perf_counter()
-        result = await asyncio.to_thread(
-            decisions.record_decisions,
-            context,
-            checkpoint_request=request,
-            operation_id=operation_id,
-            entries=[entry.model_dump(mode="json") for entry in entries],
-        )
+        if packet_decisions is not None:
+            result = await asyncio.to_thread(
+                decisions.record_packet_decisions,
+                context,
+                checkpoint_request=request,
+                operation_id=operation_id,
+                packet_id=packet_id,
+                packet_decisions=[item.model_dump(mode="json") for item in packet_decisions],
+            )
+        else:
+            result = await asyncio.to_thread(
+                decisions.record_decisions,
+                context,
+                checkpoint_request=request,
+                operation_id=operation_id,
+                entries=[entry.model_dump(mode="json") for entry in entries],
+            )
         recorded = perf_counter()
         if advance_work is not None:
             result = {**result, "dependent_work": await advance_work()}
@@ -222,7 +278,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         write_extraction_trace_event(
             event_type="runtime.review_save_timing",
             output_summary={
-                "entries": len(entries),
+                "entries": len(result["applied"]),
                 "checkpoint_ms": round((checkpointed - started) * 1000),
                 "record_decisions_ms": round((recorded - checkpointed) * 1000),
                 "advance_work_ms": round((perf_counter() - recorded) * 1000),
@@ -231,7 +287,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         return result
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def request_validation_reconsideration(
         operation_id: str,
         parent_decision_id: str,
@@ -264,7 +320,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         return {"state": "queued", "work_id": work_id, "coverage": target_ids}
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def get_validation_review_status() -> dict:
         """Return readiness and an exact history reference to full budgets/uncovered work.
 
@@ -276,7 +332,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def request_targeted_extraction(operation_id: str, parent_decision_id: str,
                                            entry_ids: list[str], instructions: str) -> dict:
         """Ask the saved extractor to investigate named existing entries in this paper.
@@ -295,7 +351,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             entry_ids=entry_ids, instructions=instructions)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def select_extraction_contribution(operation_id: str, contribution: EvidenceReference,
             field_paths: list[str], evidence_ids: list[str], expected_source_sha: str, reason: str) -> dict:
         """Approve exact proposed source fields/evidence and their item relationships.
@@ -305,8 +361,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         field_paths select complete proposals including their explicit predecessor
         mappings; the runtime never guesses identity from matching text or indices.
         Include the evidence required by selected fields. expected_source_sha is the
-        current source_state_sha256 from get_outstanding_validation_reviews or the
-        latest retirement response; do not read the packet for it. Originals stay in history;
+        current source_state_sha256 from read_review_packet, get_outstanding_validation_reviews
+        or the latest retirement response, never from get_validation_review_packet. Originals stay in history;
         only affected validator inputs become stale. This does not accept validation
         or establish submission readiness. Curators do not manage item IDs.
         """
@@ -316,7 +372,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             evidence_ids=evidence_ids, expected_source_sha=expected_source_sha, reason=reason)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def decide_record_retirement(operation_id: str, contribution: EvidenceReference,
             decision: Literal["approve", "decline"], expected_source_sha: str, reason: str) -> dict:
         """Approve or decline an extractor's whole-record retirement recommendation.
@@ -324,8 +380,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Read its exact contribution, evidence and uncertainty first. Approval omits
         the record from current results without deleting original data or history;
         decline preserves current values and readiness. Curator authority is protected.
-        Use the current source_state_sha256 from get_outstanding_validation_reviews or
-        the latest retirement response; do not read the packet for it. A field or nested-item
+        Use the current source_state_sha256 from read_review_packet,
+        get_outstanding_validation_reviews or the latest retirement response, never from
+        get_validation_review_packet. A field or nested-item
         correction belongs to select_extraction_contribution instead.
         """
         assert select_source is not None
@@ -334,7 +391,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             expected_source_sha=expected_source_sha, reason=reason)
 
     @function_tool(failure_error_function=None)
-    @_recoverable_tool
+    @recoverable
     async def validate_selected_extraction_source(operation_id: str, selection_id: str,
             target_ids: list[str], instructions: str) -> dict:
         """Validate changed inputs from an explicitly approved extraction contribution.
@@ -355,6 +412,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             target_ids=target_ids, instructions=instructions)
 
     result = [
+        read_review_packet,
         get_validation_review_packet,
         get_outstanding_validation_reviews,
         get_validation_record_sources,
