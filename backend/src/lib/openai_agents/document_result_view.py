@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -75,11 +74,10 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
         record.pop("next_chunk_id", None)
         for source in record.get("source_chunks") or []:
             source.pop("chunk_id", None)
+            _drop_none(source)
+        _drop_none(record)
         text = record.get("content")
-        if not isinstance(text, str):
-            continue
-        record["content_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        if "evidence_spans" not in record:
+        if not isinstance(text, str) or "evidence_spans" not in record:
             continue
         start = (record.get("content_range") or {}).get("start", 0)
         record["content_start"] = start
@@ -93,4 +91,34 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
                 raise ValueError("Evidence span does not match the exact returned document text")
             del span["text"]
             span.pop("span_id", None)
+            _drop_none(span)
+        _state_shared_span_fields_once(record)
+    _drop_none(view)
     return view, events
+
+
+# Span metadata that usually repeats the chunk's own value on every span.
+_SHARED_SPAN_FIELDS = ("page_number", "section_title", "span_type", "spanizer_version")
+
+
+def _drop_none(mapping: dict) -> None:
+    for key in [key for key, value in mapping.items() if value is None]:
+        del mapping[key]
+
+
+def _state_shared_span_fields_once(record: dict) -> None:
+    """Keep each span's own position; state values every span repeats once.
+
+    A span keeps a field only where it differs from the record's value. A field
+    the record lacks but every span shares moves to the record. Lossless.
+    """
+    spans = record["evidence_spans"]
+    for field in _SHARED_SPAN_FIELDS:
+        if field not in record:
+            values = [span.get(field) for span in spans]
+            if not spans or field not in spans[0] or any(value != values[0] for value in values):
+                continue
+            record[field] = values[0]
+        for span in spans:
+            if field in span and span[field] == record[field]:
+                del span[field]
