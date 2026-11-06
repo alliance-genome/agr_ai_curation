@@ -8,9 +8,14 @@ const NON_RENDERED_METADATA_EVENTS = [
  * Filter function to determine which audit events should show in chat progress.
  * Chat shows: SUPERVISOR_START, CREW_START, TOOL_START, TOOL_COMPLETE,
  * LLM_CALL, SUPERVISOR_COMPLETE, DOMAIN_SKIPPED, DOMAIN_WARNING,
- * PENDING_USER_INPUT, and STOP_CONFIRMED.
+ * PENDING_USER_INPUT, STOP_CONFIRMED, and phase-level supervisor review and
+ * extraction progress.
  */
 export function shouldShowInChat(eventType: string, details?: SSEEvent['details']): boolean {
+  if (eventType === 'AGENT_GENERATING' && typeof details?.extractionPhase === 'string') {
+    // Plain-language extraction phases: planning, parallel writing and checking.
+    return true
+  }
   if (['AGENT_GENERATING', 'AGENT_COMPLETE', 'SUPERVISOR_ERROR'].includes(eventType)) {
     return details?.reviewPhase === 'supervisor_review'
   }
