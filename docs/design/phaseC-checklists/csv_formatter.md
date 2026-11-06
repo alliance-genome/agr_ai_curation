@@ -41,7 +41,7 @@ Verified current configuration:
 | CSV-09 | Start from `build_default_projection_plan`; when runtime context names a latest `extraction-result:<uuid>` and the curator did not ask for all results, pass that ref as `source_ref`. | `<workflow>` |
 | CSV-10 | Validate the plan, preview when customized, then call `finalize_and_save` exactly once. | `<workflow>` |
 | CSV-11 | Use `formatter_cannot_complete` when the saved bundle cannot support the requested CSV. | `<workflow>` / `<stop_rules>` |
-| CSV-12 | After a successful save, respond only with a brief ready confirmation. | `<output_and_handoff_contract>` |
+| CSV-12 | A successful save ends the run, so no reply follows it; never reconstruct or invent a URL (ALL-1496). | `<output_and_handoff_contract>` |
 
 ## Deleted Retired Contract
 
