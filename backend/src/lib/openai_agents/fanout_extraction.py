@@ -49,6 +49,7 @@ from .extraction_builder_workspace import (
     reset_staging_owner,
     set_staging_owner,
 )
+from .evidence_summary import build_record_evidence_summary_record
 from .extraction_trace_events import write_extraction_trace_event
 from .model_request_measurement import install_model_request_measurement
 from .run_history import exact_json
@@ -308,6 +309,7 @@ def prepare_fanout_extraction(
     specialist_name: str,
     input_text: str,
     emit_event: Callable[[dict[str, Any]], None],
+    record_live_evidence: Callable[[dict[str, Any]], None],
 ) -> "FanoutExtraction | None":
     """Return the fan-out run for a builder agent, or None when it does not apply.
 
@@ -352,6 +354,7 @@ def prepare_fanout_extraction(
         items_per_writer=config.get_extraction_fanout_items_per_writer(),
         max_writers=config.get_extraction_fanout_max_writers(),
         emit_event=emit_event,
+        record_live_evidence=record_live_evidence,
     )
     runtime_agent.tools = [
         fanout.refused_finalize_tool if tool is fanout.finalize_tool else tool for tool in tools
@@ -406,6 +409,7 @@ class FanoutExtraction:
         items_per_writer: int,
         max_writers: int,
         emit_event: Callable[[dict[str, Any]], None],
+        record_live_evidence: Callable[[dict[str, Any]], None],
     ) -> None:
         self.workspace = workspace
         self.document_id = document_id
@@ -419,6 +423,7 @@ class FanoutExtraction:
         self.items_per_writer = items_per_writer
         self.max_writers = max_writers
         self.emit_event = emit_event
+        self.record_live_evidence = record_live_evidence
         self.read_tool = next(
             (tool for tool in self.plain_tools if _tool_name(tool) == PREFETCH_TOOL_NAME), None
         )
@@ -778,7 +783,7 @@ class FanoutExtraction:
         ]
         writer = self.planner_agent.clone(
             instructions=self.base_instructions,
-            tools=[self._timed(tool) for tool in tools],
+            tools=[self._writer_tool(tool) for tool in tools],
             tool_use_behavior="run_llm_again",
         )
         agent_key = getattr(self.planner_agent, "agent_key", None)
@@ -787,21 +792,35 @@ class FanoutExtraction:
         apply_tool_surface(writer, runtime=self.surface.runtime)
         return writer
 
-    def _timed(self, tool: Any) -> Any:
-        """Record a writer tool's real start and end, so its replayed audit keeps them."""
+    def _writer_tool(self, tool: Any) -> Any:
+        """Wrap one writer tool for the run's shared state.
 
-        timed = copy(tool)
+        Records the call's real start and end, so its replayed audit keeps them. A
+        verified record_evidence result joins the run's live evidence list as soon as
+        the call returns, as the stream loop would add it for a single writer, so the
+        writer can update that record by ID before the writers finish. The later replay
+        merges the same record by ID.
+        """
+
+        wrapped = copy(tool)
         invoke = tool.on_invoke_tool
+        name = _tool_name(tool)
 
         async def on_invoke(ctx: Any, arguments: str) -> Any:
             started = datetime.now(timezone.utc)
             try:
-                return await invoke(ctx, arguments)
+                output = await invoke(ctx, arguments)
             finally:
                 self._tool_timings[ctx.tool_call_id] = (started, datetime.now(timezone.utc))
+            record = build_record_evidence_summary_record(
+                tool_name=name, tool_input=arguments, tool_output=output,
+            )
+            if record is not None:
+                self.record_live_evidence(record)
+            return output
 
-        timed.on_invoke_tool = on_invoke
-        return timed
+        wrapped.on_invoke_tool = on_invoke
+        return wrapped
 
     def _writer_assignment(
         self,

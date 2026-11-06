@@ -221,15 +221,20 @@ def _source_tools(reads):
         return {"hits": []}
 
     async def record_evidence(_ctx, arguments):
-        entity = json.loads(arguments)["entity"]
+        # Like the real tool: a new record joins the run's evidence list only when the
+        # specialist stream loop handles its result; an update by ID looks the record up
+        # in that list and changes it in place.
+        args = json.loads(arguments)
+        entity = args["entity"]
         record = {"status": "verified", "evidence_record_id": f"ev-{entity}", "entity": entity,
                   "verified_quote": f"quote for {entity}", "page": 1, "section": "Methods", "chunk_id": "chunk-1"}
-        records = evidence_workspace._ACTIVE_EVIDENCE_RECORDS.get()
-        # Like the real tool, re-recording the same evidence updates it in place.
-        existing = next((item for item in records if item["evidence_record_id"] == record["evidence_record_id"]), None)
-        if existing is None:
-            records.append(dict(record))
-        else:
+        if args.get("evidence_record_id"):
+            records = evidence_workspace._ACTIVE_EVIDENCE_RECORDS.get()
+            existing = next((item for item in records if item["evidence_record_id"] == args["evidence_record_id"]), None)
+            if existing is None:
+                return json.dumps({"status": "not_found", "entity": entity,
+                                   "evidence_record_id": args["evidence_record_id"]})
+            record.update(evidence_record_id=args["evidence_record_id"], verified_quote=f"updated quote for {entity}")
             existing.update(record)
         return json.dumps(record)
 
@@ -328,7 +333,13 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
                 ("record_evidence", f"w{writer}-ev-{n}", {"entity": label, "selections": [{"chunk_index": 1, "span_index": 0}]})
                 for n, label in enumerate(labels)
             ])
-        if turn == len(labels):
+        answered = {item.get("call_id") for item in items
+                    if isinstance(item, dict) and item.get("type") == "function_call_output"}
+        if writer == self.scenario.get("updating_writer") and f"w{writer}-upd" not in answered:
+            return _calls(f"w{writer}-0u", ("record_evidence", f"w{writer}-upd", {
+                "entity": labels[0], "evidence_record_id": f"ev-{labels[0]}",
+                "selections": [{"chunk_index": 1, "span_index": 1}]}))
+        if not any(str(call_id).startswith(f"w{writer}-st-") for call_id in answered):
             if writer == self.scenario.get("short_writer"):
                 labels = labels[:1]
             return _calls(f"w{writer}-1", *[
@@ -774,6 +785,7 @@ async def test_fanout_does_not_apply_without_exactly_one_finalize_tool(harness, 
     prepared = fanout.prepare_fanout_extraction(
         agent, builder_workspace=workspace, specialist_name="Test Builder",
         input_text="x", emit_event=harness.events.append,
+        record_live_evidence=lambda record: None,
     )
 
     assert prepared is None
@@ -834,6 +846,7 @@ def test_fanout_needs_the_document_tools_scope(harness):
     prepared = fanout.prepare_fanout_extraction(
         agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="trace-scope"),
         specialist_name="Test Builder", input_text="x", emit_event=harness.events.append,
+        record_live_evidence=lambda record: None,
     )
 
     assert prepared is None
@@ -860,6 +873,7 @@ def test_parallel_tool_calls_follow_the_provider_gate(harness, monkeypatch, prov
     prepared = fanout.prepare_fanout_extraction(
         agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="trace-gate"),
         specialist_name="Test Builder", input_text="x", emit_event=harness.events.append,
+        record_live_evidence=lambda record: None,
     )
     prepared.start(planner_agent=agent, max_turns=4, run_config=None, base_run_config=None,
                    surface=SimpleNamespace(runtime="specialist"))
@@ -928,3 +942,22 @@ def test_provider_gate_matches_model_settings_gates(monkeypatch):
     assert config.provider_allows_parallel_tool_calls("gpt-test", "openai") is True
     assert config.provider_allows_parallel_tool_calls("gpt-test", "groq") is False
 
+
+
+
+@pytest.mark.asyncio
+async def test_writer_updates_its_own_new_evidence_record_by_id(harness):
+    labels = [f"reagent {n}" for n in range(1, 8)]
+    model = ScriptedFanoutModel({"plan": _plan(*labels), "updating_writer": 1})
+
+    await harness.run(model)
+
+    update = next(
+        item["output"] for request in model.requests for item in request["input"]
+        if isinstance(item, dict) and item.get("call_id") == "w1-upd" and item.get("type") == "function_call_output"
+    )
+    assert json.loads(update)["status"] == "verified"
+    summary = next(event for event in harness.events if event.get("type") == "SPECIALIST_SUMMARY")["details"]
+    records = {record["evidence_record_id"]: record for record in summary["liveEvidenceRecords"]}
+    assert len(records) == 7
+    assert records["ev-reagent 1"]["verified_quote"] == "updated quote for reagent 1"
