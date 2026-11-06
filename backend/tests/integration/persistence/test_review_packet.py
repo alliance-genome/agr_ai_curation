@@ -363,6 +363,35 @@ def test_a_changed_record_conflicts_by_handle_and_nothing_in_the_call_applies(sc
         packet_id=fresh["packet_id"], packet_decisions=_decide(handles))["ready"]
 
 
+def test_every_unknown_uncertain_field_is_named_with_its_handle_and_the_valid_fields(scope):
+    objects = [_object(0, ["e1"]), _object(1, ["e1"])]
+    envelope, artifact, episode, _, checkpoint = _build(scope, objects, [_evidence("e1")])
+    targets = _targets(envelope)
+    page = reads.review_packet(scope, episode)
+    first, second = (_handles(record)[0] for record in page["records"])
+    decided = [
+        {"handle": first, "action": "accept", "reason": "Name supported; source unclear.",
+         "unresolved_fields": [{"field_path": "attributes.source", "explanation": "Stock centre not named."},
+                               {"field_path": "attributes.reagent_name", "explanation": "Typo in the path."}]},
+        {"handle": second, "action": "accept", "reason": "Supported except its detail.",
+         "unresolved_fields": [{"field_path": "detail", "explanation": "Wrong path."}]},
+    ]
+    with pytest.raises(ValueError) as caught:
+        decisions.record_packet_decisions(ReviewContext(scope, episode, "fixture-reviewer"),
+            checkpoint_request=checkpoint(), operation_id="bad-paths", packet_id=page["packet_id"],
+            packet_decisions=decided)
+    message = str(caught.value)
+    assert f"{first}: unresolved field attributes.reagent_name does not exist" in message
+    assert f"{second}: unresolved field detail does not exist" in message
+    assert "attributes.source does not exist" not in message
+    for valid in ("label", "rationale", "attributes.reagent_names", "attributes.source",
+                  "attributes.absent_detail", "semantic_class"):
+        assert valid in message
+    assert not any(target in message for target in targets)
+    with store.SessionLocal() as db:
+        assert {store._current(db, artifact, target)["version"] for target in targets} == {0}
+
+
 def test_handles_are_valid_only_with_their_own_packet_and_round(scope):
     envelope, _, episode, _, checkpoint = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
     other_envelope, _, other_episode, _, _ = _build(scope, [_object(1, ["e1"])], [_evidence("e1")])

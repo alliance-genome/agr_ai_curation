@@ -13,63 +13,114 @@ from .curator_authority import anchor_for_path, anchored_path
 FINDING_CODE = "validation_review.assessment_unresolved"
 
 
+def _assessable_paths(obj, specs, profile_context):
+    """Every plain field the binding check below would accept, for an exact refusal message."""
+    from src.lib.domain_packs.resolvable_values import _format_path, declared_spec_for, has_resolution_state
+
+    paths = []
+
+    def walk(value, tokens):
+        if declared_spec_for(specs, tokens) is not None or has_resolution_state(value):
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, (*tokens, key))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, (*tokens, index))
+        elif tokens:
+            path = _format_path(tokens)
+            if profile_context is None or profile_context.profile.resolvable_container(path) is None:
+                paths.append(path)
+
+    walk(obj.payload, ())
+    return paths
+
+
+def _bind_one(obj, path, specs, profile_context):
+    """The plain value at an assessed path, or the reason it cannot be assessed."""
+    from src.lib.domain_packs.resolvable_values import declared_spec_for, has_resolution_state
+
+    parts = parse_field_path(path)
+    value = obj.payload
+    for length, part in enumerate(parts):
+        if declared_spec_for(specs, parts[:length]) is not None or has_resolution_state(value):
+            return "is a structured identity that keeps its validator resolution contract"
+        if isinstance(part, int):
+            if not isinstance(value, list):
+                return "uses an index on a value that is not a collection"
+            if not -len(value) <= part < len(value):
+                return "does not exist in the source record"
+        elif not isinstance(value, dict):
+            return "uses a key on a value that is not an object"
+        elif part not in value:
+            return "does not exist in the source record"
+        value = value[part]
+    if declared_spec_for(specs, parts) is not None or (
+            profile_context is not None and profile_context.profile.resolvable_container(path) is not None):
+        return "is a structured identity that keeps its validator resolution contract"
+    if isinstance(value, (dict, list)):
+        return "is not an individual plain field"
+    return None
+
+
 def bind_assessments(db, scope, artifact_id, envelope, entries, *, domain_pack, profile_context):
-    """Bind model-provided paths to server-owned source identities before commit."""
+    """Bind model-provided paths to server-owned source identities before commit.
+
+    Every entry is checked before anything is refused, so one refusal names each
+    entry's target and every path it could not use, with the plain fields of that
+    record that can be assessed. Which field was meant stays the model's choice.
+    """
     from .projection import source_envelope_in_transaction
-    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields, declared_spec_for, has_resolution_state
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
 
     if not any(entry.get("unresolved_fields") is not None for entry in entries):
         return entries
     source = source_envelope_in_transaction(db, scope, artifact_id, envelope)
     objects = {obj.metadata["validation_history"]["target_id"]: obj for obj in source.extracted_objects}
     bound = deepcopy(entries)
+    problems = []
     for entry in bound:
         assessments = entry.get("unresolved_fields")
         if assessments is None:
             continue
+        target = entry["target_id"]
         if entry["action"] != "accept" or entry.get("subject") != "baseline":
-            raise ValueError("Field uncertainty requires extraction-only acceptance")
+            problems.append(f"{target}: field uncertainty requires extraction-only acceptance")
+            continue
         if not assessments:
-            raise ValueError("Unresolved fields must be nonempty")
-        obj = objects.get(entry["target_id"])
+            problems.append(f"{target}: unresolved fields must be nonempty")
+            continue
+        obj = objects.get(target)
         if obj is None:
-            raise store.HistoryConflict("Field assessment must name its extraction record")
+            problems.append(f"{target}: field assessment must name its extraction record")
+            continue
         refs = obj.metadata["validation_history"]
+        specs = declared_resolvable_fields(domain_pack.metadata, obj.object_type)
+        unusable = []
         paths = set()
         for index, raw in enumerate(assessments):
             assessment = UnresolvedFieldAssessment.model_validate(raw)
             path = assessment.field_path
             if path in paths:
-                raise ValueError("Unresolved fields must be distinct")
+                unusable.append(f"{target}: unresolved field {path} is listed more than once")
+                continue
             paths.add(path)
-            parts = parse_field_path(path)
-            value = obj.payload
-            specs = declared_resolvable_fields(domain_pack.metadata, obj.object_type)
-            try:
-                for length, part in enumerate(parts):
-                    if declared_spec_for(specs, parts[:length]) is not None or has_resolution_state(value):
-                        raise ValueError("Structured identities retain their validator resolution contract")
-                    if isinstance(part, int):
-                        if not isinstance(value, list):
-                            raise store.HistoryConflict("Assessment index must address a collection")
-                        value = value[part]
-                    else:
-                        if not isinstance(value, dict):
-                            raise store.HistoryConflict("Assessment key must address an object")
-                        value = value[part]
-            except (KeyError, IndexError, TypeError) as exc:
-                raise store.HistoryConflict("Assessment field does not exist in the source record") from exc
-            if declared_spec_for(specs, parts) is not None:
-                raise ValueError("Structured identities retain their validator resolution contract")
-            if profile_context is not None and profile_context.profile.resolvable_container(path) is not None:
-                raise ValueError("Structured identities retain their validator resolution contract")
-            if isinstance(value, (dict, list)):
-                raise ValueError("An assessment must identify an individual plain field")
+            problem = _bind_one(obj, path, specs, profile_context)
+            if problem is not None:
+                unusable.append(f"{target}: unresolved field {path} {problem}")
+                continue
             assessments[index] = {
                 **assessment.model_dump(mode="json"),
                 "object_target_id": refs["target_id"],
                 "anchor": anchor_for_path(refs, path),
             }
+        if unusable:
+            valid = _assessable_paths(obj, specs, profile_context)
+            problems.append("; ".join(unusable) + ". Fields that can be assessed for " + target + ": "
+                            + (", ".join(valid) if valid else "none"))
+    if problems:
+        raise ValueError("Nothing in this call was saved. " + " | ".join(problems))
     return bound
 
 
