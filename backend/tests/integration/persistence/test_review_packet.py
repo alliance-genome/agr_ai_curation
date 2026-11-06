@@ -216,6 +216,31 @@ def test_an_answer_not_yet_received_waits_without_a_handle(planned):
         packet_id=fresh["packet_id"], packet_decisions=_decide(handles))["ready"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["dependent"], indirect=True)
+async def test_a_dependent_answer_names_the_selected_prerequisites_it_used(planned, monkeypatch):
+    item = planned
+    _answers(monkeypatch, lambda request: {**_result_payload(request, resolved_values={"curie": "ECO:SELECTED"}),
+                                           "resolved_objects": []})
+    checkpoint = checkpoint_provider(item)
+    await item.adapter.initial()
+    first = reads.review_packet(item.scope, item.ep)
+    assert not any("prerequisites" in entry for record in first["records"] for entry in record["review"])
+    handles = [entry["handle"] for record in first["records"] for entry in record["review"]
+               if entry.get("validator") == "fixture.evidence_lookup"]
+    context = ReviewContext(item.scope, item.ep, "supervisor")
+    decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="prerequisites",
+        packet_id=first["packet_id"], packet_decisions=_decide(handles))
+    await item.adapter.advance(checkpoint)
+    second = reads.review_packet(item.scope, item.ep)
+    dependent = [entry for record in second["records"] for entry in record["review"]
+                 if entry.get("validator") == "fixture.dependent"]
+    assert dependent and all(entry["prerequisites"] for entry in dependent)
+    for reference in dependent[0]["prerequisites"]:
+        selection = json.loads(reads.read(item.scope, item.ep, **reference)["content"])
+        assert selection["action"] == "accept"
+
+
 def test_two_decisions_for_one_record_field_are_refused_naming_the_handles(scope):
     envelope, artifact, episode, _, checkpoint = _build(scope, [_object(0, ["e1"])], [_evidence("e1")])
     page = reads.review_packet(scope, episode)

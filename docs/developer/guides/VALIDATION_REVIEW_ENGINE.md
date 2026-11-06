@@ -203,8 +203,10 @@ equal; any other copy keeps its own fields and points at the first entry with
   fields, per-component decisions and the scalar fields of resolved objects. An
   unresolved answer keeps every candidate it considered, with each candidate's own
   assessment. Fields a validator's own result schema adds, such as a policy decision
-  or its violations, are shown as returned under `additional_fields`. Lookup logs
-  and request bookkeeping stay in exact history.
+  or its violations, are shown as returned under `additional_fields`. A dependent
+  answer lists the exact selections of the prerequisite answers it used under
+  `prerequisites`, readable with `read_validation_history`. Lookup logs and request
+  bookkeeping stay in exact history.
 - `optional_input_absent` and `lookup_not_supported`: the declared absence or the
   configured refusal, with the values and evidence the binding would have sent.
 - `waiting`: work that cannot be decided now (an answer not yet received, a

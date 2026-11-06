@@ -396,6 +396,10 @@ def test_protocol_v5_reads_the_packet_once_and_keeps_record_specific_reasons():
                  "using the exact-history tools and explicit entries"):
         assert text in protocol, text
     assert "group_limit" not in protocol and "evidence_group" not in protocol
+    for text in ("inspect previous decisions and selected prerequisites", "earlier_decision",
+                 "need not trigger another validation", "judge its record on the evidence"):
+        assert text in protocol, text
+    assert "Accept caveated or unresolved answers when appropriate" not in protocol
     save = tools["record_validation_review"]
     assert "reason specific to each record" in save["description"]
     assert "packet_id" in save["description"] and "packet_decisions" in save["description"]

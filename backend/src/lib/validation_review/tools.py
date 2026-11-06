@@ -106,7 +106,8 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         another use of an earlier quote) and review items. Items with a D handle
         are decided with record_validation_review using this packet_id: record
         (the extracted record itself; no validator ran), validator_answer
-        (additional_fields holds the validator's own verdict fields),
+        (additional_fields holds the validator's own verdict fields; prerequisites
+        gives exact references to selected answers a dependent answer used),
         optional_input_absent or lookup_not_supported. A component answer lists
         one handle per component. waiting items, including answers not yet
         received, cannot be decided now. A record's target_id is for follow-up

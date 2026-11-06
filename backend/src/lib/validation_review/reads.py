@@ -533,6 +533,11 @@ def _build_packet(db, scope, ep, episode_id):
                 found.setdefault(("answer", units[unit_id]["attempt_id"]), row)
         return found
 
+    def prerequisite_refs(pins):
+        """Exact selections a dependent request used, readable with read_validation_history."""
+        facts = [store._fact(db, pin["artifact_id"], pin["selection_id"], kind="selection") for pin in pins]
+        return [{"fact_id": fact.id, "sha256": fact.body_sha} for fact in facts]
+
     evidence = _PacketEvidence()
     records, handles, index, record_labels = [], {}, [], {}
     numbered = 0
@@ -587,13 +592,18 @@ def _build_packet(db, scope, ep, episode_id):
                         completion = db.scalar(select(ValidationFact).where(
                             ValidationFact.artifact_id == ep.artifact_id, ValidationFact.kind == "completion",
                             ValidationFact.parent_id == attempt.id))
-                        entry = _packet_answer(store._content(db, attempt), store._content(db, completion), evidence)
+                        frozen = store._content(db, attempt)
+                        entry = _packet_answer(frozen, store._content(db, completion), evidence)
+                        if frozen["input"].get("prerequisites"):
+                            entry["prerequisites"] = prerequisite_refs(frozen["input"]["prerequisites"])
                         reads_.extend([["attempt", attempt.body_sha], ["completion", completion.body_sha]])
                         ref = {"logical_attempt_id": subject}
                     elif kind == "applicability":
                         declared = store._content(db, store._fact(
                             db, ep.artifact_id, subject, kind="validation_source_input"))
                         entry = _packet_applicability(declared, evidence)
+                        if declared["input"].get("prerequisites"):
+                            entry["prerequisites"] = prerequisite_refs(declared["input"]["prerequisites"])
                         reads_.append(["validation_source_input", store.canonical(
                             source_inputs.applicability_scientific_content(declared))[0]])
                         ref = {"applicability_ref": row["applicability_ref"]}

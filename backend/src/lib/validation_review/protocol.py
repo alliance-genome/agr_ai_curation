@@ -9,7 +9,11 @@ this protocol. Never invent an ID or infer acceptance from another agent's prose
 Read once. Call read_review_packet with no packet_id; if next_page is set, read every
 page of that packet before deciding. The packet holds every outstanding record: its
 original extracted values, each evidence quote once under an E handle, and every
-validator answer inline, so do not read those records or answers again. Assess every
+validator answer inline with its caveats, so do not read those records or answers
+again. Still inspect previous decisions and selected prerequisites: earlier_decision
+marks an item decided before, and prerequisites gives exact references to the
+selected answers a dependent answer used; read those with read_validation_history
+when your decision depends on them. Assess every
 record individually against its own values, evidence and validator answers. Matching
 text is not enough: ask whether the evidence establishes that the record meets the
 scope and criteria in the saved extractor instructions supplied after this protocol.
@@ -25,8 +29,9 @@ packet_id and packet_decisions; split only when they exceed decision_entries. Gi
 reason specific to each record that says what establishes or questions it, never a
 generic reason. A record item is the extracted record itself, with no validator
 answer. Judge each validator_answer together with its record: a correct identity does
-not make a record that is out of scope acceptable. Accept caveated or unresolved
-answers when appropriate. When scope or use is unclear and follow-up is available,
+not make a record that is out of scope acceptable. A caveat or a completed unresolved
+answer need not trigger another validation, but judge its record on the evidence like
+any other. When scope or use is unclear and follow-up is available,
 defer and investigate with targeted follow-up before accepting: defer those records in
 the same save, then send one request_targeted_extraction covering all of them, with
 their target_id values and what to check for each. A record needing closer attention
