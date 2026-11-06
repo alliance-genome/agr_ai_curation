@@ -10,10 +10,12 @@ formatter_cannot_complete still leads to the closing turn.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 from agents import Agent, RunConfig, Runner
 from agents.items import ModelResponse
 from agents.models.interface import Model
@@ -124,6 +126,31 @@ def test_other_results_keep_the_run_going(tool_name, output):
     assert decision.final_output is None
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[6]
+
+
+@pytest.mark.parametrize(
+    ("agent_folder", "finalizer"),
+    [
+        ("csv_formatter", "finalize_and_save"),
+        ("tsv_formatter", "finalize_and_save"),
+        ("json_formatter", "finalize_and_save"),
+        ("chat_output", "finalize_chat_output"),
+    ],
+)
+def test_packaged_formatter_prompts_do_not_ask_for_a_reply_after_finalize(
+    agent_folder, finalizer
+):
+    """The packaged prompts describe the run ending at a successful finalize."""
+
+    prompt_path = _REPO_ROOT / "packages" / "alliance" / "agents" / agent_folder / "prompt.yaml"
+    content = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))["content"]
+
+    assert f"A successful `{finalizer}` ends the run; you get no turn after it." in content
+    assert "respond only with a brief" not in content
+    assert "separately from your confirmation" not in content
+
+
 def test_no_tool_results_keep_the_run_going():
     assert formatter_completion_tool_use_behavior(None, []).is_final_output is False
 
@@ -221,6 +248,16 @@ def _formatter_agent(model: Model, saver: _Saver) -> Agent:
         ),
         tool_use_behavior=formatter_completion_tool_use_behavior,
     )
+
+
+def test_finalize_and_save_description_leaves_filter_explanations_to_the_supervisor():
+    """The formatter gets no turn after saving, so it cannot explain the counts."""
+
+    tools = _formatter_agent(_ScriptedFormatterModel([]), _Saver()).tools
+    finalize = next(tool for tool in tools if tool.name == "finalize_and_save")
+
+    assert "The supervisor explains applied filters from these counts" in finalize.description
+    assert "Explain applied filters" not in finalize.description
 
 
 async def _run(agent: Agent):
