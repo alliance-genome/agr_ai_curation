@@ -105,6 +105,7 @@ from .extraction_builder_workspace import (
     set_active_extraction_builder_workspace,
 )
 from .curation_context_registry import register_internal_extraction_event
+from .fanout_extraction import prepare_fanout_extraction
 from .extraction_trace_events import (
     get_current_extraction_trace_run,
     write_extraction_trace_event,
@@ -4933,6 +4934,20 @@ async def run_specialist_with_events(
             if hasattr(runtime_tool, "profile_bound_schema"):
                 assert_profile_tool_contract(runtime_tool)
 
+        # ALL-1483: builder agents plan first and fan out to parallel writers when
+        # EXTRACTION_FANOUT_MIN_ITEMS is set (0, the default, keeps one writer).
+        fanout = (
+            prepare_fanout_extraction(
+                runtime_agent,
+                builder_workspace=builder_workspace,
+                specialist_name=specialist_name,
+                input_text=input_text,
+                emit_event=add_specialist_event,
+            )
+            if builder_materializer_agent
+            else None
+        )
+
         # ALL-1280: compile the provider-facing tool surface LAST, after run-state
         # rebinding (which rebuilds tools without deferral metadata).
         tool_surface = apply_tool_surface(
@@ -5088,13 +5103,24 @@ async def run_specialist_with_events(
 
     benchmark_route_token = set_benchmark_invocation_route(runtime_agent)
     try:
-        with tool_surface_trace_attributes(tool_surface):
-            result = Runner.run_streamed(
-                runtime_agent,
-                input=input_text,
+        if fanout is not None:
+            # Same stream loop and post-run handling; the planner thread streams live
+            # and writers' recorded items follow once they finish.
+            result = fanout.start(
+                planner_agent=runtime_agent,
                 max_turns=max_turns,
-                run_config=specialist_run_config
+                run_config=specialist_run_config,
+                base_run_config=effective_config,
+                surface=tool_surface,
             )
+        else:
+            with tool_surface_trace_attributes(tool_surface):
+                result = Runner.run_streamed(
+                    runtime_agent,
+                    input=input_text,
+                    max_turns=max_turns,
+                    run_config=specialist_run_config
+                )
     except BaseException as exc:
         reset_benchmark_invocation_route(benchmark_route_token)
         if provider_policy_error(exc) is not None:
