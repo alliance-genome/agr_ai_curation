@@ -30,6 +30,7 @@ from tests.unit.lib.openai_agents.test_model_request_measurement import (
 STAGE = "stage_test_object"
 FINALIZE = "finalize_test_extraction"
 DISCARD = "discard_test_object"
+PATCH = "patch_test_object"
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +150,21 @@ def _stage_test_object(label: str, evidence_record_ids: list[str], pending_ref_i
         evidence_record_ids=evidence_record_ids,
     )
     return json.dumps({"status": "ok", "candidate_id": candidate.candidate_id})
+
+
+@function_tool(name_override=PATCH)
+def _patch_test_object(candidate_id: str, label: str) -> str:
+    """Correct one record's label."""
+    workspace = builder.get_active_extraction_builder_workspace()
+    candidate = workspace.get_candidate(candidate_id)
+    workspace.upsert_candidate(
+        candidate_id=candidate_id,
+        staged_fields={"label": label},
+        pending_ref_ids=candidate.pending_ref_ids,
+        evidence_record_ids=candidate.evidence_record_ids,
+        status=candidate.status,
+    )
+    return json.dumps({"status": "ok"})
 
 
 @function_tool(name_override=DISCARD)
@@ -292,7 +308,8 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
         items = kwargs["input"]
         tool_names = sorted(getattr(tool, "name", "") for tool in kwargs["tools"])
         writer = self._writer_index(items)
-        self.requests.append({"writer": writer, "tools": tool_names, "input": items})
+        self.requests.append({"writer": writer, "tools": tool_names, "input": items,
+                              "parallel": kwargs["model_settings"].parallel_tool_calls})
         if writer is not None:
             return self._writer_reply(writer, items)
         return self._planner_reply(items)
@@ -349,12 +366,24 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
                 ])
             return _final(f"Staged {len(labels)} records from the paper.", response_id="stage-final")
         if message.startswith("[Check phase]"):
+            calls = []
             missing = self.scenario.get("tidy_stages")
-            if turn == 0 and missing:
-                return _calls("check-0",
-                              ("record_evidence", "check-ev", {"entity": missing, "selections": [{"chunk_index": 1, "span_index": 0}]}),
-                              (STAGE, "check-st", {"label": missing, "evidence_record_ids": [f"ev-{missing}"]}),
-                              (FINALIZE, "check-finalize", {"candidate_ids": []}))
+            if missing:
+                calls += [
+                    ("record_evidence", "check-ev", {"entity": missing, "selections": [{"chunk_index": 1, "span_index": 0}]}),
+                    (STAGE, "check-st", {"label": missing, "evidence_record_ids": [f"ev-{missing}"]}),
+                    (FINALIZE, "check-finalize", {"candidate_ids": []}),
+                ]
+            listing = dict(
+                (label, candidate_id)
+                for candidate_id, label in re.findall(r'^(obj-\d+): \{"label":"(.+)"\}$', message, flags=re.MULTILINE)
+            )
+            calls += [
+                (PATCH, f"check-patch-{n}", {"candidate_id": listing[label], "label": f"{label} [fixed]"})
+                for n, label in enumerate(self.scenario.get("tidy_patches", []))
+            ]
+            if turn == 0 and calls:
+                return _calls("check-0", *calls)
             return _final("Checked the records; one missing record was restored.", response_id="check-final")
         if message.startswith("[Finalize check]"):
             if turn == 0 and self.scenario.get("fix_on_finalize_check"):
@@ -408,8 +437,9 @@ def harness(monkeypatch):
                 name="Test Builder",
                 instructions="Extract every reagent the paper uses.",
                 model=model,
-                model_settings=ModelSettings(parallel_tool_calls=True),
-                tools=[*_source_tools(self.reads), _stage_test_object, _discard_test_object,
+                # Saved agents may leave parallel tool calls unset; fan-out turns them on.
+                model_settings=ModelSettings(),
+                tools=[*_source_tools(self.reads), _stage_test_object, _patch_test_object, _discard_test_object,
                        _finalize_tool(self.finalize_calls)],
             )
 
@@ -535,6 +565,36 @@ async def test_planner_three_writers_tidy_and_code_finalize(harness):
     ]
     payload = _internal_result(harness.events)["internal"]["canonical_payload"]
     assert payload["specialist_explanation"] == "Checked the records; one missing record was restored."
+
+
+@pytest.mark.asyncio
+async def test_check_pass_applies_several_patches_from_one_turn(harness):
+    labels = [f"reagent {n}" for n in range(1, 8)]
+    fixes = ["reagent 2", "reagent 4", "reagent 6"]
+    model = ScriptedFanoutModel({"plan": _plan(*labels), "tidy_patches": fixes})
+
+    await harness.run(model)
+
+    check_requests = [
+        request for request in model.requests
+        if request["writer"] is None and any(
+            isinstance(item, dict) and _text(item).startswith("[Check phase]") for item in request["input"])
+    ]
+    # One response carried every patch; the next request is the closing reply.
+    assert len(check_requests) == 2
+    patch_outputs = [item for item in check_requests[1]["input"]
+                     if isinstance(item, dict) and item.get("type") == "function_call_output"
+                     and str(item.get("call_id", "")).startswith("check-patch-")]
+    assert len(patch_outputs) == 3
+    check_prompt = next(_text(item) for item in check_requests[0]["input"]
+                        if isinstance(item, dict) and _text(item).startswith("[Check phase]"))
+    assert "Make every fix in one response: call the correction and stage tools in parallel" in check_prompt
+    finalized = sorted(_finalized_labels(harness))
+    assert finalized == sorted(
+        f"{label} [fixed]" if label in fixes else label for label in labels
+    )
+    # The planner thread and every writer run with parallel tool calls on.
+    assert {request["parallel"] for request in model.requests} == {True}
 
 
 @pytest.mark.asyncio

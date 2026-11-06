@@ -53,8 +53,9 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
 - **Check pass.** The planner's own thread is resumed with the full listing of staged
   records (candidate ID and exact staged fields) and, for any writer that staged fewer
   records than it was assigned, that writer's assigned items, staged records and final
-  reply. The model decides what is missing, duplicated or wrong. Code never matches labels
-  or merges records.
+  reply. The model decides what is missing, duplicated or wrong, and is asked to make
+  every fix in one response with parallel tool calls. Code never matches labels or merges
+  records. The planner thread and the writers always run with parallel tool calls on.
 - **Finalize.** Code calls the agent's own finalize tool with every retained record
   (writers' records in plan order, then the rest). Validation problems go back to the
   planner's thread once; if the second attempt also fails, the step fails exactly as a

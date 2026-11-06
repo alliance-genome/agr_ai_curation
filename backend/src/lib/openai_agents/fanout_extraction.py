@@ -28,7 +28,7 @@ import asyncio
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from copy import copy
 from typing import Any, Callable, Sequence
@@ -93,8 +93,10 @@ CHECK_INTRO = (
     "[Check phase] Writers have staged the records below from your plan. Compare each "
     "against what you read and your instructions, and fix only clear errors or "
     "omissions, for example a missing or incomplete source, citation or identifier, a "
-    "wrong category, or a missing name. Make all fixes in one turn with the correction "
-    "tools, discard duplicates, and stage any planned record that is missing. Do not "
+    "wrong category, or a missing name. Discard duplicates and stage any planned record "
+    "that is missing. Make every fix in one response: call the correction and stage "
+    "tools in parallel, one call per record that needs a change, rather than one record "
+    "per turn. Do not "
     "review evidence records, do not list or find staged records (this listing is "
     "complete), and do not finalize; the system finalizes. Do not rewrite records that "
     "are already correct. Then reply with your final explanation (what was extracted, "
@@ -415,6 +417,12 @@ class FanoutExtraction:
     ) -> "FanoutExtraction":
         """Bind the compiled planner agent and run configs; streaming starts lazily."""
 
+        # The check pass fixes several records in one turn and writers stage all their
+        # items in one turn, so the planner thread and its writer clones always allow
+        # parallel tool calls.
+        settings = planner_agent.model_settings
+        if settings.parallel_tool_calls is not True:
+            planner_agent.model_settings = replace(settings, parallel_tool_calls=True)
         self.planner_agent = planner_agent
         self.max_turns = max_turns
         self.run_config = run_config
@@ -847,7 +855,8 @@ class FanoutExtraction:
         async for event in self._run_planner_thread(
             "[Finalize check] The system tried to finalize the staged records, and validation "
             "reported the problems below. Fix them with your correction tools: patch a record, "
-            "discard one that should not be kept, or stage a missing one. Do not finalize; the "
+            "discard one that should not be kept, or stage a missing one. Make every fix in one "
+            "response, calling the tools in parallel. Do not finalize; the "
             "system finalizes again after you reply. Then reply with your final explanation "
             "(what was extracted, exclusions and uncertainty), as your instructions describe."
             f"\n\nValidation result:\n{output}"
