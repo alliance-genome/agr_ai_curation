@@ -13,10 +13,19 @@ not conversation history.
    numeric references in model-facing PDF tools and canonical UUID provenance in
    storage. Never summarize scientific findings in application code.
 2. Assemble the actual installed SDK Responses request, including instructions,
-   tools, structured output, reasoning and provider settings. Count input through
-   `/responses/input_tokens`. This adds an HTTP preflight and its latency to every
-   native request; count failures stop before generation and are recorded. The
-   OpenAI client's existing retry policy applies, without an extra retry loop.
+   tools, structured output, reasoning and provider settings. When the request's
+   count body, as UTF-8 JSON, is no larger than the token capacity and every input
+   item is byte-bounded (text, or reasoning and compaction items carrying their
+   encrypted content inline), it fits and no count call is made. Byte-level BPE
+   gives every text token at least one byte, the encrypted items measured
+   0.03-0.07 tokens per byte, and whole real requests 0.19-0.22, on
+   gpt-6.1-sol and gpt-6-astra in November 2026. Re-measure before trusting this
+   bound for a new model family. The trace event records `count_skipped` and
+   `request_bytes`, and the response usage reports the exact count. Any other
+   request (images, files, items sent by reference, or a larger body) is counted
+   through `/responses/input_tokens` first. Count failures stop before generation
+   and are recorded. The OpenAI client's existing retry policy applies, without
+   an extra retry loop.
 3. Send complete input that fits the model's verified input/context capacity.
    `context_management` requests native compaction at the configured token
    threshold (default 250000). Crossing this threshold is not a local rejection

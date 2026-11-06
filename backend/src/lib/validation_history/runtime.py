@@ -169,8 +169,8 @@ def bind_artifact(envelope, runtime_context) -> CapturedArtifact:
     return CapturedArtifact(scope, ref["artifact_id"])
 
 
-def request_target(binding: CapturedArtifact, job) -> str:
-    return binding_target(binding, job.match)
+def request_target(binding: CapturedArtifact, job, *, db=None) -> str:
+    return binding_target(binding, job.match, db=db)
 
 
 def binding_location(obj, field):

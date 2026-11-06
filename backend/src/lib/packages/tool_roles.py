@@ -5,6 +5,8 @@ platform derives these sets from the registry instead of hardcoded tool names:
 
 - ``builder_finalization: true``: a builder-materializer finalize tool. An agent
   that carries one is an extraction agent.
+- ``builder_stage: true``: a builder tool that adds one new draft record to the
+  run's working list. Fan-out extraction gives parallel writers these tools.
 - ``paper_source: true``: paper reading/search or evidence management; validators
   must use supplied context and cannot carry these tools.
 - ``identity_lookup: true``: a tool that searches a database or service for an
@@ -19,6 +21,7 @@ from functools import lru_cache
 from typing import Any
 
 BUILDER_FINALIZATION_METADATA_KEY = "builder_finalization"
+BUILDER_STAGE_METADATA_KEY = "builder_stage"
 IDENTITY_LOOKUP_METADATA_KEY = "identity_lookup"
 # The saved output contract state of an agent that produces structured extraction.
 STRUCTURED_EXTRACTION_OUTPUT_STATE = "structured_extraction"
@@ -51,6 +54,13 @@ def builder_finalization_tool_names() -> frozenset[str]:
     """Tools whose binding metadata declares ``builder_finalization: true``."""
 
     return _flagged_tool_names(BUILDER_FINALIZATION_METADATA_KEY)
+
+
+@lru_cache(maxsize=1)
+def builder_stage_tool_names() -> frozenset[str]:
+    """Tools whose binding metadata declares ``builder_stage: true``."""
+
+    return _flagged_tool_names(BUILDER_STAGE_METADATA_KEY)
 
 
 @lru_cache(maxsize=1)
@@ -177,14 +187,17 @@ def reset_cache() -> None:
 
     tool_metadata_by_name.cache_clear()
     builder_finalization_tool_names.cache_clear()
+    builder_stage_tool_names.cache_clear()
     identity_lookup_tool_names.cache_clear()
 
 
 __all__ = [
     "BUILDER_FINALIZATION_METADATA_KEY",
+    "BUILDER_STAGE_METADATA_KEY",
     "IDENTITY_LOOKUP_METADATA_KEY",
     "STRUCTURED_EXTRACTION_OUTPUT_STATE",
     "builder_finalization_tool_names",
+    "builder_stage_tool_names",
     "extraction_identity_lookup_message",
     "identity_lookup_tool_names",
     "identity_lookup_tools_on_extraction_agent",

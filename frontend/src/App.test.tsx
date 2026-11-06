@@ -3,7 +3,8 @@ import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Outlet, useLocation } from 'react-router-dom';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
+import App, {
+  ANSWER_READY_TITLE_PREFIX,
   AppContent,
   getRunCompletionToastAutoHideMs,
   ProtectedRoutes,
@@ -62,6 +63,11 @@ vi.mock('./pages/HomePage', () => ({
   },
 }));
 vi.mock('./pages/AgentStudioPage', () => ({ default: () => <div>Agent Studio</div> }));
+vi.mock('./contexts/AgentMetadataContext', () => ({
+  AgentMetadataProvider: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="agent-metadata-provider">{children}</div>
+  ),
+}));
 vi.mock('./pages/BatchPage', () => ({ default: () => <div>Batch</div> }));
 vi.mock('./pages/ChangelogPage', () => ({ default: () => <div>Changelog Page</div> }));
 vi.mock('./pages/CurationInventoryPage', () => ({ default: () => <div>Curation Inventory Page</div> }));
@@ -376,9 +382,9 @@ describe('AppContent global notifications', () => {
     expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
   });
 
-  it('uses the substantive v0.11.0 release notes for the changelog popup', () => {
-    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-10-29-v0.11.0');
-    expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.11.0');
+  it('uses the substantive v0.11.3 release notes for the changelog popup', () => {
+    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-11-06-v0.11.3');
+    expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.11.3');
   });
 
   it('seeds existing PDF terminal jobs and only toasts new terminal updates on subsequent polls', async () => {
@@ -868,5 +874,90 @@ describe('ProtectedRoutes logout suppression', () => {
       expect(login).toHaveBeenCalledTimes(1);
     });
     expect(sessionStorage.getItem('intendedPath')).toBe('/curation?view=mine');
+  });
+});
+
+
+describe('AppContent page weight and finished-run tab title', () => {
+  const setHidden = (hidden: boolean) => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queryClient.clear();
+    localStorage.clear();
+    localStorage.setItem(`changelog:last-seen:user-1`, POPUP_CHANGELOG_ENTRY!.id);
+    mockUseAuth.mockReturnValue({
+      user: { uid: 'user-1', name: 'Test User' },
+      logout: vi.fn().mockResolvedValue(undefined),
+      isAuthenticated: true,
+    });
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [], next_cursor: null, coverage: 'recent_window', window_start: '2026-10-17T00:00:00Z', window_end: '2026-10-17T01:00:00Z' });
+      }
+      return jsonResponse({});
+    });
+    document.title = 'AI Curation';
+    setHidden(false);
+  });
+
+  afterEach(() => {
+    queryClient.clear();
+    setHidden(false);
+    document.title = 'AI Curation';
+  });
+
+  it('does not wrap ordinary pages of the full app in the agent metadata provider', async () => {
+    window.history.pushState({}, '', '/');
+    render(<App />);
+    expect(await screen.findByTestId('home-page')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-metadata-provider')).toBeNull();
+  });
+
+  it('wraps Agent Studio in the agent metadata provider', async () => {
+    renderAppContent('/agent-studio');
+    const provider = await screen.findByTestId('agent-metadata-provider');
+    expect(provider).toHaveTextContent('Agent Studio');
+  });
+
+  const finishRun = (status: string) => {
+    act(() => {
+      window.dispatchEvent(new CustomEvent(CHAT_RUN_TERMINAL_EVENT, {
+        detail: { sessionId: 'session-1', runKind: 'chat', status, eventStreamVersion: 1 },
+      }));
+    });
+  };
+
+  it('marks the tab title when a run finishes in a hidden tab and restores it on return', async () => {
+    renderAppContent('/weaviate/documents');
+    expect(await screen.findByText('Documents Page')).toBeInTheDocument();
+    setHidden(true);
+    finishRun('completed');
+    expect(document.title).toBe(`${ANSWER_READY_TITLE_PREFIX}AI Curation`);
+    finishRun('completed');
+    expect(document.title).toBe(`${ANSWER_READY_TITLE_PREFIX}AI Curation`);
+    setHidden(false);
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(document.title).toBe('AI Curation');
+  });
+
+  it('leaves the tab title alone for a visible tab or an unfinished run', async () => {
+    renderAppContent('/weaviate/documents');
+    expect(await screen.findByText('Documents Page')).toBeInTheDocument();
+    finishRun('completed');
+    expect(document.title).toBe('AI Curation');
+    setHidden(true);
+    for (const status of ['error', 'review_pending', 'review_exhausted', 'interrupted']) {
+      finishRun(status);
+      expect(document.title).toBe('AI Curation');
+    }
   });
 });

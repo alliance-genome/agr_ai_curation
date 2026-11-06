@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast, get_args
 
 from agents import function_tool
+from agents.agent import ToolsToFinalOutputResult
 from pydantic import BaseModel, ValidationError
 
 from src.lib.flows.chat_output_delivery import (
@@ -2074,7 +2075,8 @@ def build_output_formatter_tools(
             "Finalize a projection over all saved bundle rows and save one CSV/TSV/JSON file. "
             "Empty plan_json uses the validated default projection. Returns a compact "
             "receipt with measured export_accounting and export_details.read for full saved diagnostics. "
-            "Explain applied filters using these counts; this tool never accepts raw rows or file text."
+            "The supervisor explains applied filters from these counts; this tool never accepts "
+            "raw rows or file text."
         ),
         strict_mode=False,
     )
@@ -2425,8 +2427,65 @@ def build_output_formatter_tools(
     ]
 
 
+_FORMATTER_FINALIZER_TOOL_NAMES = frozenset({"finalize_and_save", "finalize_chat_output"})
+
+
+def _tool_result_status(output: Any) -> str | None:
+    """Return the status a formatter tool reported, or None for other output."""
+
+    if not isinstance(output, str):
+        return None
+    try:
+        payload = json.loads(output)
+    except ValueError:
+        # Not a formatter receipt (for example the SDK's text for a tool that
+        # raised), so it does not complete the run.
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    status = payload.get("status")
+    return status if isinstance(status, str) else None
+
+
+def formatter_completion_tool_use_behavior(
+    _context: Any,
+    tool_results: list[Any],
+) -> ToolsToFinalOutputResult:
+    """End a formatter run as soon as its file is saved or chat output delivered.
+
+    The run ends when ``finalize_and_save`` or ``finalize_chat_output`` returns
+    status ``ok``, and that receipt becomes the run's final output. Callers read
+    the runtime's file handoff or chat delivery, never the model's closing
+    text, so the closing turn is skipped (ALL-1496).
+
+    Every other result keeps the run going:
+
+    - A failed or invalid finalize. The model can still repair the plan, retry
+      the save, or call ``formatter_cannot_complete`` with the reason the
+      curator sees. The chat output prompt requires that call after
+      ``operational_ceiling_exceeded``, and the flow executor reports the
+      cannot-complete reason with the chat finalize failure and in place of a
+      file finalize failure, so stopping on a failure would change the message
+      curators see.
+    - ``formatter_cannot_complete``. The model still writes its closing text,
+      and each caller returns what it returned before: a flow file output step
+      and an ad hoc chat export return that closing text to the supervisor, and
+      a flow chat output step returns the recorded cannot-complete payload.
+    """
+
+    for result in tool_results:
+        tool_name = getattr(getattr(result, "tool", None), "name", None)
+        if (
+            tool_name in _FORMATTER_FINALIZER_TOOL_NAMES
+            and _tool_result_status(result.output) == "ok"
+        ):
+            return ToolsToFinalOutputResult(is_final_output=True, final_output=result.output)
+    return ToolsToFinalOutputResult(is_final_output=False, final_output=None)
+
+
 __all__ = [
     "ChatDeliveryCallback",
     "FormatterSaveCallback",
     "build_output_formatter_tools",
+    "formatter_completion_tool_use_behavior",
 ]

@@ -173,7 +173,7 @@ For custom `ca_` agents, inspect the run's exact pinned revision with `inspect_s
 
 When a curator shares a trace or run ID:
 1. Resolve owned run traces if necessary and start with `get_trace_summary`.
-2. For extraction or review questions, read `get_extraction_diagnostic_report` and relevant `get_extraction_timeline` sections. Use reconstruction to locate exact events when needed.
+2. For extraction or review questions, read `get_extraction_diagnostic_report` and relevant `get_extraction_timeline` sections. Use reconstruction to locate exact events when needed. When the timeline summary has an `extraction_fanout` section, read studio guide topic `extraction_fanout` before explaining the extraction.
 3. Retrieve the relevant exact model/tool payloads and complete their returned continuations before making claims. Read conversation fields or tool summaries when needed to understand the request or outcome; do not fetch unrelated sections merely to satisfy a checklist.
 4. Compare the executed configuration, observed decisions and current state. Use the custom/built-in prompt distinction above. Read review_history guidance for uncertainty, follow-up, retirement or curator revalidation.
 5. Explain the observed outcome, cite supporting evidence, state what remains unknown, and propose the smallest relevant remedy. Do not label unresolved science as an infrastructure error or suggest prompt edits for a structural configuration mismatch.
@@ -188,7 +188,7 @@ The runtime measures the actual model request against the selected model's confi
 
 - Native compaction can replace earlier live context while the exact authorized archive remains available. Main chat and Studio maintain separate sessions.
 - If a single new payload cannot fit after compaction, the runtime retains its complete text and supplies an exact-read descriptor. Use `read_pending_context` as instructed to consume contiguous ranges and resume the task. Do not rerun a completed write or invent missing source text.
-- TraceReview `token_info.serialized_chars` and `estimated_tokens` describe returned content. The estimate is advisory; request admission uses the provider's token count.
+- TraceReview `token_info.serialized_chars` and `estimated_tokens` describe returned content. The estimate is advisory. Request admission uses the provider's token count, except that a request made only of text and inline reasoning items whose size in bytes already fits the model's capacity skips that count. Its `runtime.context_capacity` trace event then shows `count_skipped=true`, `request_bytes` and an empty `input_tokens_before`, and the model response's usage still reports the exact tokens. A skipped count is not missing data.
 - Use summaries and inventories to locate relevant evidence. Explicit filters and row pages select which records to inspect; follow their `next_call` when more selected records remain.
 - For completed chat turns, use `get_chat_turn(session_id, turn_id)` and exact field reads. Use `search_chat_history` and `get_chat_conversation` when locating a prior session.
 - For exact trace material, use `get_trace_payloads` / `get_trace_payload`, `get_tool_calls_page` / `get_tool_call_detail`, or `get_trace_conversation`. Preserve owner/session scope, hashes and filters while following any explicit continuation.

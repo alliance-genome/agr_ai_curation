@@ -38,10 +38,29 @@ the correct biological decision.
 Gene extraction still emits one object per candidate/evidence pairing; this
 change does not merge those objects. Validator dispatch retains its existing
 batching policy: requests carrying quote bundles retain isolated runs where
-configured. Validators receive supplied evidence directly, cannot search/read
+configured. Requests with quote bundles for different records share one run only
+when every input is exactly equal: the selected inputs (including every quote
+bundle), the request evidence (ID, entity, locators and quote), the guidance and
+the binding. No similarity matching is used. Each record keeps its own answer.
+A copy for another record ends its explanation with "Checked once with N other
+records that had the same value and evidence.", where N counts records, not
+fields; a copy for another field of the same record keeps the answer unchanged. Validators receive supplied evidence directly, cannot search/read
 the paper or manage source evidence, and return resolutions/questions separately.
 Database/ontology lookup tools remain available. Missing context is reported to
 the supervisor without an automatic extraction retry.
+
+### What the validator model sees
+
+The persisted request keeps every evidence record whole. The model input
+(`validator_request_payload_for_agent`) shows each request-level `evidence`
+record as `evidence_record_id`, `entity`, `section`, `subsection`, `page`,
+`figure_reference` and `verified_quote` only, and leaves out a record whose ID and quote already appear
+in `selected_inputs.evidence_quotes`. That input keeps its name and shape, because
+custom validators read it. A batch input lists each distinct record once in
+`evidence_records`; each request names its own in `evidence_record_ids`. A record
+without an ID, or one whose ID another request supplies with different content,
+stays in that request's own `evidence` list. Evidence references in decisions are
+still checked against the persisted request.
 
 ## Rollout
 

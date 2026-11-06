@@ -1117,8 +1117,8 @@ def _make_flow_chat_output_tool(
             isolate_run_config=True, propagate_errors=True,
         ))
         tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=getattr(ctx, "run_config", None))
-        # The specialist's own final text is a confirmation; delivered content
-        # and the receipt come only from the application-held delivery.
+        # The specialist run's own output is not used; delivered content and the
+        # receipt come only from the application-held delivery.
         post_delivery_error: str | None = None
         try:
             await streaming_tool.on_invoke_tool(tool_ctx, json.dumps({"query": query}))

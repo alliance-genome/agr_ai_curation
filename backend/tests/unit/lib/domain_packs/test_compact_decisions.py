@@ -241,6 +241,46 @@ def test_domain_assembler_cannot_fabricate_or_replace_lookup_audit():
         store.assemble(CompactValidatorDecision.model_validate(payload))
 
 
+def _package_selection_store(*, package_selects_first):
+    """A root decision without root candidates; the package hook may select the first record."""
+    refs = []
+    store = ValidatorDecisionWorkspace([DecisionContract(
+        request(), selected_refs=lambda decision: set(refs[:1]) if package_selects_first else set(),
+    )])
+    refs.extend(store.record_lookup("first", call_id="call-1", attempt=ValidatorLookupAttempt(
+        provider="fixture", method="search", query={"mention": "conditional allele"},
+        result_count=2, outcome="ambiguous",
+    ), records=[
+        CanonicalValidatorRecord(candidate=ValidatorCandidate(value="EX:101"), values={"identifier": "EX:101"}),
+        CanonicalValidatorRecord(candidate=ValidatorCandidate(value="EX:102"), values={"identifier": "EX:102"}),
+    ]))
+    payload = decision(refs[0])
+    payload["candidates"] = []
+    payload["slots"].pop("design_matches")
+    return store, payload, refs
+
+
+def test_a_package_declared_selection_lets_a_root_slot_copy_its_record():
+    """A package may select records outside root candidates, e.g. in its own components."""
+    store, payload, _ = _package_selection_store(package_selects_first=True)
+
+    result = store.assemble(CompactValidatorDecision.model_validate(payload))
+
+    assert result.resolved_values == {"identifier": "EX:101"}
+    assert result.candidates == []
+
+
+def test_a_root_slot_outside_every_selection_is_still_rejected():
+    store, payload, _ = _package_selection_store(package_selects_first=False)
+    with pytest.raises(ValueError, match="selected candidate"):
+        store.assemble(CompactValidatorDecision.model_validate(payload))
+
+    store, payload, refs = _package_selection_store(package_selects_first=True)
+    payload["slots"]["identifier"]["record_ref"] = refs[1]
+    with pytest.raises(ValueError, match="selected candidate"):
+        store.assemble(CompactValidatorDecision.model_validate(payload))
+
+
 def test_follow_up_questions_preserve_complete_resolved_judgment():
     store, ref = workspace()
     payload = decision(ref)

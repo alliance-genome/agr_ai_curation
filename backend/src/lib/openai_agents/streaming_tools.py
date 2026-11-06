@@ -105,6 +105,11 @@ from .extraction_builder_workspace import (
     set_active_extraction_builder_workspace,
 )
 from .curation_context_registry import register_internal_extraction_event
+from .fanout_extraction import (
+    REPLAYED_TOOL_COMPLETED_AT,
+    REPLAYED_TOOL_STARTED_AT,
+    prepare_fanout_extraction,
+)
 from .extraction_trace_events import (
     get_current_extraction_trace_run,
     write_extraction_trace_event,
@@ -4933,6 +4938,23 @@ async def run_specialist_with_events(
             if hasattr(runtime_tool, "profile_bound_schema"):
                 assert_profile_tool_contract(runtime_tool)
 
+        # ALL-1483: builder agents plan first and fan out to parallel writers when
+        # EXTRACTION_FANOUT_MIN_ITEMS is set (0, the default, keeps one writer).
+        fanout = (
+            prepare_fanout_extraction(
+                runtime_agent,
+                builder_workspace=builder_workspace,
+                specialist_name=specialist_name,
+                input_text=input_text,
+                emit_event=add_specialist_event,
+                record_live_evidence=lambda record: _append_live_evidence_record(
+                    live_evidence_records, record
+                ),
+            )
+            if builder_materializer_agent
+            else None
+        )
+
         # ALL-1280: compile the provider-facing tool surface LAST, after run-state
         # rebinding (which rebuilds tools without deferral metadata).
         tool_surface = apply_tool_surface(
@@ -5088,13 +5110,24 @@ async def run_specialist_with_events(
 
     benchmark_route_token = set_benchmark_invocation_route(runtime_agent)
     try:
-        with tool_surface_trace_attributes(tool_surface):
-            result = Runner.run_streamed(
-                runtime_agent,
-                input=input_text,
+        if fanout is not None:
+            # Same stream loop and post-run handling; the planner thread streams live
+            # and writers' recorded items follow once they finish.
+            result = fanout.start(
+                planner_agent=runtime_agent,
                 max_turns=max_turns,
-                run_config=specialist_run_config
+                run_config=specialist_run_config,
+                base_run_config=effective_config,
+                surface=tool_surface,
             )
+        else:
+            with tool_surface_trace_attributes(tool_surface):
+                result = Runner.run_streamed(
+                    runtime_agent,
+                    input=input_text,
+                    max_turns=max_turns,
+                    run_config=specialist_run_config
+                )
     except BaseException as exc:
         reset_benchmark_invocation_route(benchmark_route_token)
         if provider_policy_error(exc) is not None:
@@ -5392,7 +5425,13 @@ async def run_specialist_with_events(
                         # Reset is_generating flag - new tool call means a new generation phase after
                         is_generating = False
 
-                        tool_started_at = datetime.now(timezone.utc)
+                        # A fan-out writer's finished call is replayed with its recorded time.
+                        replayed_started_at = getattr(item, REPLAYED_TOOL_STARTED_AT, None)
+                        tool_started_at = (
+                            replayed_started_at
+                            if isinstance(replayed_started_at, datetime)
+                            else datetime.now(timezone.utc)
+                        )
                         current_tool_name = canonical_tool_name(
                             getattr(item, "name", None) or
                             getattr(item, "tool_name", None) or
@@ -5477,9 +5516,15 @@ async def run_specialist_with_events(
                             output_preview += "..."
 
                         duration_ms = None
+                        replayed_completed_at = getattr(item, REPLAYED_TOOL_COMPLETED_AT, None)
+                        tool_completed_at = (
+                            replayed_completed_at
+                            if isinstance(replayed_completed_at, datetime)
+                            else datetime.now(timezone.utc)
+                        )
                         tool_started_at = completed_tool.get("tool_started_at")
                         if isinstance(tool_started_at, datetime):
-                            duration = datetime.now(timezone.utc) - tool_started_at
+                            duration = tool_completed_at - tool_started_at
                             duration_ms = int(duration.total_seconds() * 1000)
 
                         logger.info(
@@ -5541,7 +5586,7 @@ async def run_specialist_with_events(
                         completed_tool_id = completed_tool.get("tool_id")
                         add_specialist_event({
                             "type": "TOOL_COMPLETE",
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "timestamp": tool_completed_at.isoformat(),
                             "details": {
                                 "toolName": current_tool_name,
                                 "friendlyName": build_specialist_internal_friendly_name(

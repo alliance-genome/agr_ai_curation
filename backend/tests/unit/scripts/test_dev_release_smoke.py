@@ -94,7 +94,7 @@ def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
     assert args.stream_chat_message == smoke.DEFAULT_STREAM_CHAT_MESSAGE
     assert args.stream_chat_message == smoke.DEFAULT_CHAT_MESSAGE
     assert "focus of the publication" in args.stream_chat_message
-    assert args.chat_model == "gpt-6-astra"
+    assert args.chat_model == "gpt-6.1-sol"
     assert args.specialist_model == "gpt-6.1-sol"
     assert args.flow_model == "gpt-6.1-sol"
 

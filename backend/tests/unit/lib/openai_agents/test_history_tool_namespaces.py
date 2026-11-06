@@ -222,6 +222,11 @@ async def test_measured_generation_matches_real_sdk_count_after_checkpoint_resto
         policy.replacement_items = deepcopy(saved)
 
     monkeypatch.setattr(policy, "restore", restore)
+    # Exercise the counted path; a provably fitting request skips the count call.
+    monkeypatch.setattr(
+        "src.lib.openai_agents.context_capacity.NativeCapacityRequest.provable_fit_bytes",
+        lambda self, items: None,
+    )
     model = MeasuredModel(inner, agent=None, context_policy=policy)
     args = (
         "Inspect the draft",

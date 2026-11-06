@@ -179,10 +179,15 @@ async def test_public_sdk_discovery_read_record_and_model_projection_preserve_ca
     run_config = run_config_with_history(RunConfig(), None)
     projected = await run_config.call_model_input_filter(SimpleNamespace(model_data=ModelInputData(input=items, instructions="Keep exact source.")))
     model_result = json.loads(projected.input[1]["output"])
-    assert model_result["selections"] == args["selections"]
+    # The model sees the new record once: identity, location and the exact quote.
+    assert model_result == {
+        "status": "verified", "evidence_record_id": canonical["evidence_record_id"],
+        "chunk_index": 42, "page": 3, "section": "Results",
+        "verified_quote": canonical["verified_quote"],
+    }
     assert chunk["id"] not in projected.input[1]["output"]
-    assert model_result["verified_quote"] == canonical["verified_quote"]
     assert chunk["id"] in items[1]["output"]  # SDK/runtime/UI original is untouched.
+    assert "source_fragments" in items[1]["output"]
 
 
 @pytest.mark.asyncio
@@ -296,8 +301,6 @@ async def test_history_arguments_project_structured_ids_without_rewriting_quote(
     ("read_chunk", {"chunk_index": True}),
     ("read_chunk", {"chunk_index": "42"}),
     ("read_chunk", {"chunk_index": -1}),
-    ("record_evidence", {"entity": "example", "span_ids": ["old-id"]}),
-    ("record_evidence", {"entity": "example", "selections": [{"chunk_index": 42, "span_index": False}]}),
 ])
 @pytest.mark.asyncio
 async def test_public_sdk_rejects_old_or_invalid_references_before_source_lookup(
@@ -317,6 +320,64 @@ async def test_public_sdk_rejects_old_or_invalid_references_before_source_lookup
     with pytest.raises(DocumentReadError):
         await tool.on_invoke_tool(_build_tool_context(tool.name, {}), json.dumps(arguments))
     lookup.assert_not_awaited()
+
+
+def test_record_evidence_schema_is_non_strict_with_only_entity_and_selections_required():
+    from agr_ai_curation_alliance.tools import documents
+    tool = documents.create_record_evidence_tool({"document_id": "doc-a", "user_id": "alice"})
+    schema = tool.params_json_schema
+    assert tool.strict_json_schema is False
+    assert sorted(schema["required"]) == ["entity", "selections"]
+    assert schema["additionalProperties"] is False
+    # The optional targets stay available; the model omits them instead of writing nulls.
+    assert {"evidence_record_id", "object_id", "pending_ref_id", "field_path",
+            "object_type", "validation_finding_id"} <= set(schema["properties"])
+
+
+@pytest.mark.parametrize("raw_arguments,field", [
+    (json.dumps({"entity": "example", "span_ids": ["old-id"]}), "span_ids"),
+    (json.dumps({"entity": "example", "selections": [{"chunk_index": 42, "span_index": False}]}),
+     "selections.0.span_index"),
+    (json.dumps({"selections": [{"chunk_index": 42, "span_index": 0}]}), "entity"),
+    ('{"entity": "example", "selections": [', None),
+    ("[]", None),
+])
+@pytest.mark.asyncio
+async def test_record_evidence_returns_malformed_arguments_to_the_model_without_saving(
+    store, scope, monkeypatch, raw_arguments, field,
+):
+    from agr_ai_curation_alliance.tools import documents
+    from src.lib.observability.tool_results import classify_tool_result
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    value = binding(store, scope)
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: value)
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+    selection_lookup, canonical_lookup = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(refs, "get_chunk_by_index", selection_lookup)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    tool = documents.create_record_evidence_tool({"document_id": "doc-a", "user_id": "alice"})
+    output = await tool.on_invoke_tool(_build_tool_context(tool.name, {}), raw_arguments)
+    result = json.loads(output)
+    assert result["status"] == "invalid_arguments"
+    assert result["saved"] is False
+    assert "record_evidence again" in result["message"]
+    if field is not None:
+        assert field in [problem["field"] for problem in result["argument_errors"]]
+    assert "old-id" not in output  # Problems name fields; they do not echo inputs.
+    assert classify_tool_result(output).success is False
+    selection_lookup.assert_not_awaited()
+    canonical_lookup.assert_not_awaited()
+    assert value.staged_updates == []
+    assert refs._ACTIVE_SOURCE.get() is None
+    # The model view carries the correction request through unchanged.
+    items = [{"type": "function_call", "name": "record_evidence", "call_id": "bad", "arguments": raw_arguments},
+             {"type": "function_call_output", "call_id": "bad", "output": output}]
+    projected = await refs.project_model_source_items(items, user_id="alice", cache={})
+    assert json.loads(projected[1]["output"]) == result
 
 
 @pytest.mark.parametrize("changed", [False, True])
@@ -362,6 +423,122 @@ async def test_old_document_history_refreshes_only_backend_guidance(monkeypatch)
     assert "span_id" not in payload["chunk"]["span_text_access"]
     assert payload["chunk"]["content"] == "Scientific span_id text is unchanged."
     assert "Select evidence_spans[].span_id." in original["payload"]["output"]
+
+
+@pytest.mark.parametrize("extra", [
+    {"objectId": "AGR:1", "field_path": "label"},
+    {"evidenceRecordId": "existing"},
+    {"evidence_record": "existing"},
+    {"span_ids": ["old-id"]},
+])
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_undeclared_arguments_instead_of_ignoring_them(
+    store, scope, monkeypatch, extra,
+):
+    from src.lib.observability.tool_results import classify_tool_result
+    from src.lib.openai_agents.tools import record_evidence
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    chunk, spans = source()
+    value = binding(store, scope)
+    value.retain(chunk, spans, [0])
+    loads = []
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: loads.append(args) or value)
+    canonical_lookup = AsyncMock(return_value=chunk)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
+    existing = {"evidence_record_id": "existing", "document_id": "doc-a", "status": "verified",
+                "verified_quote": "Original quote", "source_span_ids": ["original"]}
+    workspace = [existing]
+    tool = record_evidence.create_record_evidence_tool("doc-a", "alice", workspace_records=workspace)
+    args = {"entity": "example", "selections": [{"chunk_index": 42, "span_index": 0}], **extra}
+    output = await tool.on_invoke_tool(_build_tool_context(tool.name, args), json.dumps(args))
+    result = json.loads(output)
+    assert result["status"] == "invalid_arguments" and result["saved"] is False
+    assert [problem["field"] for problem in result["argument_errors"]] == sorted(
+        key for key in extra if key != "field_path")
+    assert "AGR:1" not in output and "old-id" not in output
+    assert classify_tool_result(output).success is False
+    assert loads == []  # Nothing ran, not even the source binding.
+    canonical_lookup.assert_not_awaited()
+    assert workspace == [existing] and existing["verified_quote"] == "Original quote"
+    assert value.staged_updates == []
+
+
+def _verified_record_result(chunk, spans):
+    span = spans[0]
+    fragment = {"span_id": span["span_id"], "chunk_id": chunk["id"], "document_id": "doc-a",
+                "text": span["text"], "char_start": span["char_start"], "char_end": span["char_end"],
+                "span_index": 0, "span_type": span["span_type"], "spanizer_version": span["spanizer_version"],
+                "page": 3, "section": "Results"}
+    return {"status": "verified", "entity": "example", "span_ids": [span["span_id"]],
+            "source_span_ids": [span["span_id"]], "verified_quote": span["text"], "document_id": "doc-a",
+            "chunk_id": chunk["id"], "chunk_ids": [chunk["id"]], "source_fragments": [fragment],
+            "envelope_target": {"object_id": "candidate-1", "field_path": "label"},
+            "page": 3, "section": "Results", "subsection": "Expression", "evidence_record_id": "evidence-0123456789abcdef",
+            "selections": [{"chunk_index": 42, "span_index": 0}]}
+
+
+@pytest.mark.asyncio
+async def test_model_view_shows_a_verified_record_once_while_history_keeps_the_full_result(monkeypatch):
+    chunk, spans = source()
+    chunk["document_id"] = "doc-a"
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(return_value=chunk))
+    canonical = _verified_record_result(chunk, spans)
+    output = str(canonical)  # The SDK sends Python dictionary results as repr.
+    items = [{"type": "function_call", "name": "record_evidence", "call_id": "one", "arguments": "{}"},
+             {"type": "function_call_output", "call_id": "one", "output": output}]
+    projected = await refs.project_model_source_items(items, user_id="alice", cache={})
+    assert json.loads(projected[1]["output"]) == {
+        "status": "verified", "evidence_record_id": "evidence-0123456789abcdef", "chunk_index": 42,
+        "page": 3, "section": "Results", "subsection": "Expression", "verified_quote": spans[0]["text"]}
+    assert projected[1]["output"].count(spans[0]["text"]) == 1
+    assert items[1]["output"] == output  # The SDK, evidence and UI keep the original.
+
+    history = await refs.project_history_source_result({
+        "event": {"tool_name": "record_evidence", "kind": "input_item"},
+        "payload": {"type": "function_call_output", "call_id": "one", "output": output}}, user_id="alice")
+    archived = json.loads(history["payload"]["output"])
+    assert archived["entity"] == "example"
+    assert archived["source_fragments"][0]["text"] == spans[0]["text"]
+    assert archived["envelope_target"] == canonical["envelope_target"]
+    assert archived["selections"] == [{"chunk_index": 42, "span_index": 0}]
+
+
+@pytest.mark.asyncio
+async def test_model_view_of_unverified_record_results_is_unchanged(monkeypatch):
+    rejected = {"status": "needs_source_read", "error_code": "unissued_document_selection", "saved": False,
+                "selection": {"chunk_index": 42, "span_index": 0}, "message": "Nothing was saved."}
+    items = [{"type": "function_call", "name": "record_evidence", "call_id": "one", "arguments": "{}"},
+             {"type": "function_call_output", "call_id": "one", "output": str(rejected)}]
+    projected = await refs.project_model_source_items(items, user_id="alice", cache={})
+    assert json.loads(projected[1]["output"]) == rejected
+
+
+@pytest.mark.asyncio
+async def test_model_view_of_evidence_list_drops_repeated_document_and_empty_targets(monkeypatch):
+    chunk, _ = source()
+    chunk["document_id"] = "doc-a"
+    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunk_by_id", AsyncMock(return_value=chunk))
+    attached = [{"object_id": "candidate-1", "field_path": "label"}]
+    listed = {"status": "ok", "document_id": "doc-a", "count": 2, "evidence_records": [
+        {"evidence_record_id": "evidence-1", "status": "active", "entity": "first", "page": 3,
+         "section": "Results", "chunk_id": chunk["id"], "document_id": "doc-a", "source_span_count": 1,
+         "envelope_targets": [], "verified_quote_chars": 40},
+        {"evidence_record_id": "evidence-2", "status": "active", "entity": "second", "page": 3,
+         "section": "Results", "chunk_id": chunk["id"], "document_id": "doc-a", "source_span_count": 1,
+         "envelope_targets": attached, "verified_quote_chars": 12}]}
+    items = [{"type": "function_call", "name": "list_recorded_evidence", "call_id": "list", "arguments": "{}"},
+             {"type": "function_call_output", "call_id": "list", "output": json.dumps(listed)}]
+    projected = json.loads((await refs.project_model_source_items(items, user_id="alice", cache={}))[1]["output"])
+    assert projected["document_id"] == "doc-a"
+    first, second = projected["evidence_records"]
+    assert first == {"evidence_record_id": "evidence-1", "status": "active", "entity": "first", "page": 3,
+                     "section": "Results", "chunk_index": 42, "source_span_count": 1, "verified_quote_chars": 40}
+    assert second["envelope_targets"] == attached
+    assert "document_id" not in second
+    assert json.loads(items[1]["output"]) == listed
 
 
 @pytest.mark.asyncio

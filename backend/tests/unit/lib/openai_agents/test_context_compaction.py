@@ -413,6 +413,9 @@ async def test_token_count_failure_is_recorded_and_never_dispatches_generation(h
     from src.lib.openai_agents import model_request_measurement as measurement
     measurement.install_model_request_measurement()
     events, generations = [], []
+    # Exercise the counted path; a provably fitting request skips the count call.
+    monkeypatch.setattr("src.lib.openai_agents.context_capacity.NativeCapacityRequest.provable_fit_bytes",
+                        lambda self, items: None)
     monkeypatch.setattr("src.lib.openai_agents.context_capacity.NativeCapacityRequest.count",
                         AsyncMock(side_effect=ConnectionError("count endpoint unavailable")))
     monkeypatch.setattr("src.lib.openai_agents.extraction_trace_events.write_extraction_trace_event",

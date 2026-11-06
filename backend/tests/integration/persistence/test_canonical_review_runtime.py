@@ -834,12 +834,7 @@ async def test_canonical_saved_profile_uses_pinned_agent_and_real_generic_builde
                 return _tool_call("read_chunk", "read", '{"chunk_index":0}')
             outputs = [entry for entry in kwargs["input"] if entry.get("type") == "function_call_output"]
             raw_output = outputs[-1]["output"]
-            if isinstance(raw_output, str) and raw_output.startswith("status='ok' data="):
-                # The SDK renders the native AgrQueryResult as text for these
-                # bound builder tools. Read its actual controlled fixture data.
-                output = {"status": "ok", "data": ast.literal_eval(
-                    raw_output.split(" data=", 1)[1].split(" count=", 1)[0])}
-            elif isinstance(raw_output, str):
+            if isinstance(raw_output, str):
                 try:
                     output = json.loads(raw_output)
                 except json.JSONDecodeError:

@@ -61,6 +61,11 @@ class ToolResultParser:
                 except json.JSONDecodeError:
                     json_data = ast.literal_eval(raw_result.strip())
                 result["parsed"] = {"json_data": json_data}
+                # Lookup and builder results (AgrQueryResult) arrive as compact JSON;
+                # keep their warnings visible as the literal format does.
+                warnings = cls._text_warnings(json_data)
+                if warnings:
+                    result["parsed"]["warnings"] = warnings
                 result["summary"] = cls._generate_json_summary(json_data)
                 result["parse_status"] = "full"
                 return result
@@ -189,7 +194,11 @@ class ToolResultParser:
             if "error" in json_data:
                 return f"Error: {json_data['error']}"
             if "status" in json_data:
-                return f"Status: {json_data['status']}"
+                parts = [f"Status: {json_data['status']}"]
+                if "count" in json_data:
+                    parts.append(f"Count: {json_data['count']}")
+                parts.extend(cls._warning_summaries(cls._text_warnings(json_data)))
+                return " | ".join(parts)
             # Generic dict summary
             keys = list(json_data.keys())[:3]
             return f"JSON object with keys: {', '.join(keys)}"
@@ -465,7 +474,22 @@ class ToolResultParser:
             elif "curie" in first:
                 parts.append(f"Curie: {first['curie']}")
 
-        for warning in parsed.get("warnings") or []:
+        parts.extend(cls._warning_summaries(parsed.get("warnings") or []))
+
+        return " | ".join(parts) if parts else raw[:100]
+
+    @staticmethod
+    def _text_warnings(json_data: Any) -> List[str]:
+        """Warnings of a result mapping, when they are a list of text."""
+        warnings = json_data.get("warnings") if isinstance(json_data, dict) else None
+        if isinstance(warnings, list) and all(isinstance(warning, str) for warning in warnings):
+            return warnings
+        return []
+
+    @staticmethod
+    def _warning_summaries(warnings: List[str]) -> List[str]:
+        parts = []
+        for warning in warnings:
             warning_parts = warning.split(":", 2)
             if (
                 len(warning_parts) == 3
@@ -477,8 +501,7 @@ class ToolResultParser:
                 )
             else:
                 parts.append(f"Warning: {warning}")
-
-        return " | ".join(parts) if parts else raw[:100]
+        return parts
 
 
 class ToolCallAnalyzer:

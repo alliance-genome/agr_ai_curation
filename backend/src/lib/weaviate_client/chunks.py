@@ -450,6 +450,49 @@ async def get_chunk_by_index(
     return chunk
 
 
+async def get_existing_chunk_indexes(
+    *, chunk_indexes: List[int], user_id: str, document_id: str,
+) -> set[int]:
+    """Return which of ``chunk_indexes`` exist in the authenticated document.
+
+    A structural reference check in one tenant-scoped query: no chunk text is read.
+    Query failures raise; an empty result means the indexes do not exist.
+    """
+    wanted = sorted(set(chunk_indexes))
+    if any(type(index) is not int or index < 0 for index in wanted):
+        raise ValueError("chunk_index values must be non-negative integers")
+    if not document_id or not user_id:
+        raise ValueError("Document and user scope are required")
+    if not wanted:
+        return set()
+    connection = get_connection()
+
+    def query() -> set[int]:
+        with connection.session() as client:
+            from ..weaviate_helpers import get_user_collections
+            collection, _ = get_user_collections(client, user_id)
+            response = collection.query.fetch_objects(
+                filters=Filter.all_of([
+                    Filter.by_property("documentId").equal(document_id),
+                    Filter.any_of([Filter.by_property("chunkIndex").equal(index) for index in wanted]),
+                ]),
+                # Duplicated indexes would return more; read_chunk rejects those itself.
+                limit=2 * len(wanted), include_vector=False,
+                return_properties=["documentId", "chunkIndex"],
+            )
+            if response.objects is None:
+                raise TypeError("Chunk index query omitted objects")
+            found = set()
+            for obj in response.objects:
+                index = obj.properties.get("chunkIndex")
+                if obj.properties.get("documentId") != document_id or index not in wanted:
+                    raise ValueError("Chunk index query returned an inconsistent source")
+                found.add(index)
+            return found
+
+    return query() if _run_sync_in_package_tool_subprocess() else await asyncio.to_thread(query)
+
+
 async def get_chunk_neighbor_ids(
     *,
     document_id: str,

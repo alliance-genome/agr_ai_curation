@@ -117,5 +117,12 @@
     "reason": "ALL-1275 tool-rendered chat output. The chat formatter no longer authors a markdown message: it chooses projection operations with runtime tools, and the application renders every requested row and delivers it to the curator once. Rules about the model writing the message shape (summary-first sections, headings, bullets, bold/code formatting, returning markdown, stopping after the message) no longer describe the contract and would contradict the no-authored-rows invariant. Fidelity, no-invention, domain-envelope and audit-trail rules are retained verbatim; brief caveats move to finalize_chat_output notes.",
     "old_source": "packages/alliance/agents/chat_output/prompt.yaml (pre-ALL-1275 markdown-authoring contract)",
     "new_home": ""
+  },
+  {
+    "phrase": "After a successful `finalize_chat_output`, respond only with a brief confirmation such as \"Chat output delivered.\"",
+    "category": "deleted",
+    "reason": "ALL-1496 formatter stop rule. A successful finalize_chat_output now ends the run, so the model never writes a confirmation after it. The line is replaced by \"A successful `finalize_chat_output` ends the run; you get no turn after it.\" The curator sees the application-rendered table and the supervisor receives the delivery receipt. The cannot-complete and failed-finalize guidance is unchanged.",
+    "old_source": "packages/alliance/agents/chat_output/prompt.yaml:<output_and_handoff_contract>",
+    "new_home": ""
   }
 ]

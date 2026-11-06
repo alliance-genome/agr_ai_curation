@@ -91,7 +91,7 @@ tools:
 output_schema: MyAgentEnvelope
 
 model_config:
-  model: "${AGENT_MY_AGENT_MODEL:-gpt-6-astra}"
+  model: "${AGENT_MY_AGENT_MODEL:-gpt-6.1-sol}"
   temperature: 0.1
   reasoning: "low"
 

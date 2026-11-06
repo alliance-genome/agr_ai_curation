@@ -8,6 +8,7 @@ preflight="${script_dir}/production_compose_preflight.py"
 fixture_dir="${script_dir}/fixtures"
 provider_boundary_contract="${fixture_dir}/agent_studio_provider_boundary_env.txt"
 review_limit_contract="${fixture_dir}/validation_review_env.txt"
+fanout_contract="${fixture_dir}/extraction_fanout_env.txt"
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "${temp_dir}"' EXIT
 
@@ -71,6 +72,12 @@ write_test_env() {
     fi
     printf '%s=%s\n' "${key}" "${override}" >>"${env_file}"
   done <"${review_limit_contract}"
+  while IFS='|' read -r key default override; do
+    if [[ -z "${key}" || "${key}" == \#* ]]; then
+      continue
+    fi
+    printf '%s=%s\n' "${key}" "${override}" >>"${env_file}"
+  done <"${fanout_contract}"
 }
 
 render_with_override() {
@@ -104,7 +111,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -Ev '^(MAX_PARALLEL_VALIDATORS=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(MAX_PARALLEL_VALIDATORS=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -322,6 +329,25 @@ for index, path in enumerate(sys.argv[2:]):
     services = json.loads(Path(path).read_text())["services"]
     for service in ("backend", "benchmark_worker"):
         assert str(services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == ("8" if index < 2 else "3")
+    for key, default, override in settings:
+        expected = default if index < 2 else override
+        for service in ("backend", "benchmark_worker"):
+            actual = services[service]["environment"].get(key)
+            assert str(actual) == expected, f"{path}: {service}.{key}: {actual!r} != {expected}"
+PY
+
+# Exercise every fan-out extraction setting in both consumers and both deployments.
+python3 - "${fanout_contract}" "${default_rendered_file}" "${development_rendered_file}" \
+  "${rendered_file}" "${development_override_file}" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+settings = [line.split("|") for line in Path(sys.argv[1]).read_text().splitlines()
+            if line and not line.startswith("#")]
+assert len(settings) == 3
+for index, path in enumerate(sys.argv[2:]):
+    services = json.loads(Path(path).read_text())["services"]
     for key, default, override in settings:
         expected = default if index < 2 else override
         for service in ("backend", "benchmark_worker"):

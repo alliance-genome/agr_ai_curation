@@ -388,3 +388,62 @@ def test_flush_failure_keeps_lock_until_close_and_releases_it(tmp_path, monkeypa
         fcntl.flock(contender.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     with original_open(path) as reader:
         assert json.load(reader) == {"event_id": "one"}
+
+
+class _InterleavingSequenceRun:
+    """A trace run whose sequence reads yield the GIL, exposing unlocked read-modify-write."""
+
+    def __init__(self, trace_id):
+        import time
+
+        self._sleep = time.sleep
+        self.trace_id = trace_id
+        self.session_id = None
+        self.user_id_hash = None
+        self.observation_id = None
+        self.source = "backend"
+        self._sequence = 0
+
+    @property
+    def sequence(self):
+        value = self._sequence
+        self._sleep(0.002)
+        return value
+
+    @sequence.setter
+    def sequence(self, value):
+        self._sequence = value
+
+
+def test_concurrent_writers_never_reuse_a_trace_sequence_number(tmp_path, monkeypatch):
+    """Fan-out writers stage from several threads into one trace run (ALL-1483 W1)."""
+    import contextvars
+    import threading
+
+    monkeypatch.setenv("EXTRACTION_TRACE_EVENT_DIR", str(tmp_path))
+    monkeypatch.setattr(events, "_mirror_to_langfuse", lambda _event: None)
+    run = _InterleavingSequenceRun("sequence-race")
+    token = events._current_run.set(run)
+    threads, per_thread = 4, 10
+    barrier = threading.Barrier(threads)
+    sequences, lock = [], threading.Lock()
+
+    def write_many():
+        barrier.wait()
+        for _ in range(per_thread):
+            event = events.write_extraction_trace_event(event_type="extraction_builder.candidate_mutation")
+            with lock:
+                sequences.append(event["sequence"])
+
+    try:
+        # Each tool thread runs in a copy of the run's context, as asyncio.to_thread does.
+        workers = [threading.Thread(target=contextvars.copy_context().run, args=(write_many,))
+                   for _ in range(threads)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+    finally:
+        events._current_run.reset(token)
+
+    assert sorted(sequences) == list(range(1, threads * per_thread + 1))

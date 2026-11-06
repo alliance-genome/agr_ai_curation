@@ -12,8 +12,16 @@ and capacity recovery; no last-N tool retirement or per-tool byte quota remains.
    `content` appears once; evidence spans retain their original IDs and absolute
    Unicode character offsets. `content_start` makes offsets usable within a paged
    chunk. Every removed span text is checked against the exact returned slice.
-   Page/section/chunk identities and continuation fields remain. Geometry travels
+   Page/section/chunk identities and continuation fields remain. The model view
+   leaves out null fields, a content hash, and span page, section, type and
+   spanizer values that repeat the chunk's; each span keeps `span_index`,
+   `char_start` and `char_end`. Geometry travels
    in `CHUNK_PROVENANCE` events, including for `read_chunk` and `read_subsection`.
+   Evidence results are model views too: a verified `record_evidence` result
+   shows the record's ID, location and `verified_quote` once, and
+   `list_recorded_evidence` drops each record's repeated document ID and empty
+   target list. Stored evidence, history reads, the UI and tool-span outputs keep
+   the full result.
    Evidence recording still resolves canonical spans. Explicit source ranges are
    conservative and unchanged; this change does not claim that an unread page
    has been read, nor enlarge document reads by discarding source information.
