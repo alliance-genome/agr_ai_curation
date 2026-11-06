@@ -21,6 +21,9 @@ class FakeRequest:
     async def count(self, items):
         self.count_calls += 1
         return len(exact_json(items))
+    def provable_fit_bytes(self, items):
+        # Synthetic units: always count, so recovery paths stay exercised.
+        return None
     def set_settings(self, settings):
         self.settings = settings
     async def compact(self, items):
@@ -254,6 +257,81 @@ async def test_effective_extra_body_instructions_and_output_reserve_are_counted(
         assert request.capacity == 7000
         await request.count([{"role": "user", "content": "task"}])
         assert sent[0]["instructions"] == request.effective_instructions == "actual instructions"
+
+
+def _sdk_request(monkeypatch, *, capacity=None, sent=None):
+    """A real SDK wire with a mocked provider; records token-count calls."""
+    import httpx
+    import json
+    from openai import AsyncOpenAI
+    from agents.models.openai_responses import OpenAIResponsesModel
+    if capacity is not None:
+        monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
+            "context_window_tokens": capacity + 1000, "max_input_tokens": capacity, "max_output_tokens": 1000}}))
+    sent = [] if sent is None else sent
+    def reply(request):
+        sent.append(request.url.path)
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply)))
+    model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
+    request = NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="Extract records.",
+        tools=[], output_schema=None, handoffs=[])
+    return request, sent, client
+
+
+_TEXT_TURN = [
+    {"role": "user", "content": "Find alleles in Methods α😀"},
+    {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "Plan"}],
+     "encrypted_content": "gAAAAAB-opaque"},
+    {"type": "function_call", "call_id": "c1", "name": "read_chunk", "arguments": "{}"},
+    {"type": "function_call_output", "call_id": "c1", "output": "Methods text"},
+    {"type": "compaction", "encrypted_content": "gAAAAAB-compacted"},
+]
+
+
+@pytest.mark.asyncio
+async def test_request_that_provably_fits_skips_the_token_count_call(monkeypatch):
+    request, sent, client = _sdk_request(monkeypatch)
+    policy = ContextCapacityPolicy(MemoryHistory())
+    result, _ = await policy.prepare(request, deepcopy(_TEXT_TURN), ModelSettings())
+    assert result == _TEXT_TURN
+    assert sent == []
+    assert request.count_calls == 0
+    metrics = policy.metrics
+    assert metrics["count_skipped"] is True
+    assert 0 < metrics["request_bytes"] <= request.capacity
+    assert metrics["input_tokens_before"] is None and metrics["input_tokens_after"] is None
+    await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("item", [
+    {"role": "user", "content": [{"type": "input_image", "image_url": "https://example.org/figure.png"}]},
+    {"role": "user", "content": [{"type": "input_file", "file_id": "file-1"}]},
+    {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_image", "file_id": "file-2"}]},
+    {"type": "reasoning", "id": "rs_by_reference", "summary": []},
+    {"type": "compaction", "id": "cmp_by_reference"},
+    {"type": "item_reference", "id": "msg_1"},
+], ids=["image", "file", "tool-image", "reasoning-by-reference", "compaction-by-reference", "item-reference"])
+async def test_inputs_whose_tokens_are_not_bounded_by_bytes_are_counted(monkeypatch, item):
+    request, sent, client = _sdk_request(monkeypatch)
+    policy = ContextCapacityPolicy(MemoryHistory())
+    await policy.prepare(request, [{"role": "user", "content": "task"}, item], ModelSettings())
+    assert sent == ["/v1/responses/input_tokens"]
+    assert policy.metrics["count_skipped"] is False
+    assert policy.metrics["input_tokens_before"] == 10
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_request_larger_than_capacity_in_bytes_is_counted(monkeypatch):
+    request, sent, client = _sdk_request(monkeypatch, capacity=2000)
+    policy = ContextCapacityPolicy(MemoryHistory())
+    await policy.prepare(request, [{"role": "user", "content": "Methods " * 400}], ModelSettings())
+    assert request.provable_fit_bytes([{"role": "user", "content": "Methods " * 400}]) is None
+    assert sent == ["/v1/responses/input_tokens"]
+    assert policy.metrics["count_skipped"] is False
+    await client.close()
 
 
 @pytest.mark.asyncio

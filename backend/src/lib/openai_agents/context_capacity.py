@@ -18,6 +18,35 @@ from .run_history import exact_json
 CONTEXT_READ_TOOL = "read_pending_context"
 _COUNT_FIELDS = frozenset({"model", "input", "instructions", "tools", "tool_choice",
     "parallel_tool_calls", "reasoning", "text", "previous_response_id", "conversation", "truncation"})
+# Input shapes whose token cost never exceeds their UTF-8 byte length. Text is
+# tokenized by byte-level BPE, so every token spans at least one byte. Encrypted
+# reasoning and compaction items carried inline measured 0.03-0.07 tokens per
+# byte on gpt-6.1-sol (2026-11-05). Anything else, such as images, files or
+# items sent by reference, is counted by the provider.
+_TEXT_ITEM_TYPES = frozenset({"message", "function_call", "function_call_output",
+    "tool_search_call", "tool_search_output"})
+_INLINE_OPAQUE_ITEM_TYPES = frozenset({"reasoning", "compaction"})
+_TEXT_PART_TYPES = frozenset({"input_text", "output_text", "text", "summary_text",
+    "reasoning_text", "refusal"})
+
+
+def byte_bounded_input(items: list) -> bool:
+    """True when every item's token cost is bounded by its serialized bytes."""
+    for item in items:
+        if not isinstance(item, dict):
+            return False
+        kind = item.get("type", "message")
+        if kind in _INLINE_OPAQUE_ITEM_TYPES:
+            if not item.get("encrypted_content"):
+                return False
+        elif kind not in _TEXT_ITEM_TYPES:
+            return False
+        for key in ("content", "output", "summary"):
+            parts = item.get(key)
+            if isinstance(parts, list) and not all(
+                    isinstance(part, dict) and part.get("type") in _TEXT_PART_TYPES for part in parts):
+                return False
+    return True
 
 
 def item_keys(items: list) -> list[str]:
@@ -202,10 +231,15 @@ class ContextCapacityPolicy:
         elif self.deferred_tool_choice:
             settings = replace(settings, tool_choice=self.deferred_tool_choice)
         request.set_settings(settings)
-        count = await request.count(prepared)
+        # A request whose body bytes fit the token capacity provably fits, so it
+        # skips the separate token-count call (about 0.7 s each). The response's
+        # usage still reports its exact token count.
+        request_bytes = request.provable_fit_bytes(prepared)
+        count = None if request_bytes is not None else await request.count(prepared)
         self.metrics = {"input_tokens_before": count, "input_capacity": request.capacity,
+            "count_skipped": count is None, "request_bytes": request_bytes,
             "standalone_compactions": 0, "capacity_ingress_payloads": 0}
-        if count > request.capacity:
+        if count is not None and count > request.capacity:
             if self.history is None or not self.history.healthy:
                 from .model_context_view import HistoryStorageUnavailable
                 raise HistoryStorageUnavailable("Exact context storage is required before capacity recovery.")
@@ -425,6 +459,19 @@ class NativeCapacityRequest:
         if wire.get("truncation") == "auto":
             raise ContextRecoveryError("Automatic provider truncation would bypass exact context continuation.")
         return wire
+
+    def provable_fit_bytes(self, items) -> int | None:
+        """Return the count body's UTF-8 size when it provably fits, else None.
+
+        Tokens never outnumber the bytes of a byte-bounded input (see
+        ``byte_bounded_input``), so a body no larger than the token capacity fits.
+        """
+        wire = self._wire(items)
+        if not byte_bounded_input(wire["input"]):
+            return None
+        body = {key: value for key, value in wire.items() if key in _COUNT_FIELDS}
+        size = len(exact_json(body).encode("utf-8"))
+        return size if size <= self.capacity else None
 
     async def count(self, items):
         wire = self._wire(items)
