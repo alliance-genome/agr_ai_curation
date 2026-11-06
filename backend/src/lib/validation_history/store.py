@@ -299,12 +299,17 @@ def _fact(
 
 
 def _content(db, fact: ValidationFact) -> dict:
+    return deepcopy(_shared_content(db, fact))
+
+
+def _shared_content(db, fact: ValidationFact) -> dict:
+    """The transaction's one copy of an immutable body. Callers must not change it."""
     bodies = _memo(db).bodies
     content = bodies.get(fact.body_sha)
     if content is None:
         content = db.get(ValidationBody, fact.body_sha).content
         bodies[fact.body_sha] = content
-    return deepcopy(content)
+    return content
 
 
 def _append(
@@ -1084,7 +1089,9 @@ def read_fact(scope: HistoryScope, artifact_id: str, fact_id: str) -> dict:
             "sequence": fact.sequence,
             "created_at": fact.created_at.isoformat(),
             "sha256": fact.body_sha,
-            "content": _content(db, fact),
+            # This session ends here, so the body it decoded is returned without
+            # a copy. A saved review plan can be many megabytes.
+            "content": db.get(ValidationBody, fact.body_sha).content,
         }
 
 
