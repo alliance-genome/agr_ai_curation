@@ -74,6 +74,15 @@ def test_curator_domain_docs_match_shipped_scope():
     assert "subject validation routes separately" in disease
 
 
+def test_context_guide_explains_a_skipped_token_count():
+    template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
+    guide = read_studio_guide(template=template, render_diagnostic_tools=str, topic="token_budget")["content"]
+    assert "The estimate is advisory; request admission uses the provider's token count." not in guide
+    for phrase in ("count_skipped=true", "request_bytes", "an empty `input_tokens_before`",
+                   "A skipped count is not missing data."):
+        assert phrase in guide
+
+
 @pytest.mark.parametrize("package", ["core", "alliance"])
 def test_extraction_fanout_guide_is_available_on_demand_for_each_package(package):
     template = (ROOT / f"packages/{package}/config/agent_studio_system_prompt.md").read_text()
