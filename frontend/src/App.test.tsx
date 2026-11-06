@@ -913,12 +913,6 @@ describe('AppContent page weight and finished-run tab title', () => {
     document.title = 'AI Curation';
   });
 
-  it('loads agent metadata only on the Agent Studio page', async () => {
-    renderAppContent('/');
-    expect(await screen.findByTestId('home-page')).toBeInTheDocument();
-    expect(screen.queryByTestId('agent-metadata-provider')).toBeNull();
-  });
-
   it('does not wrap ordinary pages of the full app in the agent metadata provider', async () => {
     window.history.pushState({}, '', '/');
     render(<App />);
@@ -961,7 +955,9 @@ describe('AppContent page weight and finished-run tab title', () => {
     finishRun('completed');
     expect(document.title).toBe('AI Curation');
     setHidden(true);
-    finishRun('failed');
-    expect(document.title).toBe('AI Curation');
+    for (const status of ['error', 'review_pending', 'review_exhausted', 'interrupted']) {
+      finishRun(status);
+      expect(document.title).toBe('AI Curation');
+    }
   });
 });

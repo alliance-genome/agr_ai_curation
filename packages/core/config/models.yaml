@@ -20,7 +20,6 @@ models:
       high: Deeper reasoning for difficult evidence synthesis.
       xhigh: Most intensive supported setting in this application; use for especially difficult cases.
     recommended_for:
-      - Agent Studio AI Chat
       - Paper extraction when explicitly selected
     avoid_for:
       - Routing, formatting, validation and database lookups, where GPT-6.1 Sol is the default
@@ -50,8 +49,6 @@ models:
       - Document extraction and high-stakes interpretation where instruction fidelity matters
       - Validation and database lookups after using search/read tools
       - Complex evidence synthesis and conflict resolution
-    avoid_for:
-      - Agent Studio AI Chat, which uses GPT-6 Astra
 
   - model_id: deepseek/deepseek-v4-pro-0813
     name: DeepSeek V4 Pro 0813 (OpenRouter)

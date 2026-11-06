@@ -439,17 +439,17 @@ models:
   - model_id: gpt-6-astra
     name: GPT-6 Astra
     provider: openai                    # Must match a key in providers.yaml
-    description: Reasoning model for routing, output, and explicitly selected document extraction.
-    guidance: Default for routing and output agents, with low reasoning.
+    description: Used by Agent Studio AI Chat. Available for document extraction by explicit selection.
+    guidance: Agent Studio AI Chat uses GPT-6 Astra; other agents default to GPT-6.1 Sol.
     default: false                      # Exactly one model should be default
     supports_reasoning: true
     supports_temperature: false
     reasoning_options: [low, medium, high, xhigh]
     default_reasoning: low
     recommended_for:
-      - Routing and formatting extracted information
+      - Paper extraction when explicitly selected
     avoid_for:
-      - Routine validation and database lookups where GPT-6.1 Sol is the default
+      - Routing, formatting, validation and database lookups, where GPT-6.1 Sol is the default
 
   - model_id: gpt-6.1-sol
     name: GPT-6.1 Sol

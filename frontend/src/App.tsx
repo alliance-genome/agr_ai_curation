@@ -781,10 +781,11 @@ export function AppContent() {
         <Routes>
           <Route path="/history" element={renderLazyRoute(<HistoryPage />)} />
           <Route path="/changelog" element={renderLazyRoute(<ChangelogPage />)} />
-          {/* Agent metadata (a multi-megabyte registry) is needed only in Agent Studio. */}
+          {/* Agent metadata (a multi-megabyte registry) is needed only in Agent Studio.
+              The provider sits outside Suspense so the fetch starts while the page loads. */}
           <Route
             path="/agent-studio"
-            element={renderLazyRoute(<AgentMetadataProvider><AgentStudioPage /></AgentMetadataProvider>)}
+            element={<AgentMetadataProvider>{renderLazyRoute(<AgentStudioPage />)}</AgentMetadataProvider>}
           />
           <Route path="/batch" element={renderLazyRoute(<BatchPage />)} />
           <Route path="/curation" element={renderLazyRoute(<CurationInventoryPage />)} />

@@ -139,9 +139,22 @@ def test_only_agent_studio_chat_defaults_to_astra(monkeypatch):
     finally:
         reset_cache()
     assert resolve_agent_studio_model() == ('gpt-6-astra', 'medium')
-    astra_env_defaults = sorted(
-        line.split('=', 1)[0]
-        for line in _env_example().read_text().splitlines()
-        if not line.lstrip().startswith('#') and line.strip().endswith('=gpt-6-astra')
-    )
-    assert astra_env_defaults == ['AGENT_STUDIO_OPENAI_MODEL']
+    assert _astra_env_defaults(_env_example().read_text()) == ['AGENT_STUDIO_OPENAI_MODEL']
+
+
+def _astra_env_defaults(text: str) -> list[str]:
+    keys = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or '=' not in stripped:
+            continue
+        key, value = stripped.split('=', 1)
+        value = value.split(' #', 1)[0].strip().strip('"').strip("'")
+        if value == 'gpt-6-astra':
+            keys.append(key.strip())
+    return sorted(keys)
+
+
+def test_astra_env_scan_reads_quoted_and_commented_values():
+    text = 'A=gpt-6-astra\nB="gpt-6-astra"\nC=gpt-6-astra  # note\n# D=gpt-6-astra\nE=gpt-6.1-sol\n'
+    assert _astra_env_defaults(text) == ['A', 'B', 'C']
