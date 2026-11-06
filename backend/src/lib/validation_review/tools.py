@@ -109,11 +109,13 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         (additional_fields holds the validator's own verdict fields; prerequisites
         lists each selection a dependent answer used and the answer or source it
         chose, as exact references for read_validation_history),
-        optional_input_absent or lookup_not_supported. A component answer lists
-        one handle per component. waiting items, including fields whose newest
-        validation has not answered yet, cannot be decided now. A record's target_id is for follow-up
-        tools. too_large names records to read with the exact-history tools
-        instead. Handles belong to this packet only.
+        optional_input_absent, lookup_not_supported, or uncertain_outcome (a
+        validation that stopped without an answer; only acknowledge_failure
+        applies). A component answer lists one handle per component. waiting
+        items, including fields whose newest validation is still running, cannot
+        be decided now. A record's target_id is for follow-up tools. too_large
+        names records to read with the exact-history tools instead. Handles
+        belong to this packet only.
         """
         return await asyncio.to_thread(
             reads.review_packet, context.history_scope, context.episode_id,

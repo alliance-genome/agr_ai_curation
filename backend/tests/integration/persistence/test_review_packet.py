@@ -260,6 +260,35 @@ def _second_attempt(item, job, *, complete):
                           scope=item.scope, source_envelope_revision=1)
 
 
+def test_a_crashed_validation_is_acknowledged_by_its_handle_and_nothing_else(planned):
+    from src.lib.validation_history import runtime
+    from src.lib.validation_review import scheduling, work
+
+    item = planned
+    frozen = runtime.frozen_job_requests(item.plan.history_binding, item.plan.initial_jobs)
+    wid = scheduling.initial(item.scope, item.ep, operation_id="crashed", requests=frozen,
+                             receipt={"revision": "fixture"})
+    claim = work.claim(item.scope, wid)
+    work.mark_submitted(item.scope, wid, claim["lease_token"])
+    work.mark_uncertain(item.scope, wid, claim["lease_token"], reason="worker_disconnected")
+    page = reads.review_packet(item.scope, item.ep)
+    crashed = [entry for record in page["records"] for entry in record["review"]]
+    assert crashed and all(entry["review"] == "uncertain_outcome" and "handle" in entry for entry in crashed)
+    handles = [entry["handle"] for entry in crashed]
+    context = ReviewContext(item.scope, item.ep, "supervisor")
+    checkpoint = checkpoint_provider(item)
+    with pytest.raises(ValueError, match=f"{handles[0]}: .*only acknowledge_failure"):
+        decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="accept-crash",
+            packet_id=page["packet_id"], packet_decisions=_decide(handles))
+    decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="acknowledge-crash",
+        packet_id=page["packet_id"], packet_decisions=_decide(handles, "acknowledge_failure"))
+    manifest = selections.read_manifest(item.scope, item.aid, episode_id=item.ep)
+    assert not any(blocker["code"] == "execution_pending" for blocker in manifest["blockers"])
+    fresh = reads.review_packet(item.scope, item.ep)
+    assert not any(entry["review"] == "uncertain_outcome"
+                   for record in fresh["records"] for entry in record["review"])
+
+
 def _same_field(page, field):
     return [entry for record in page["records"] for entry in record["review"] if entry.get("field") == field]
 

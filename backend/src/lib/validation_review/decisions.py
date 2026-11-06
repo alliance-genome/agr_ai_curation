@@ -99,6 +99,9 @@ def packet_entries(context, *, packet_id, packet_decisions):
         pinned = handles.get(decision.handle)
         if pinned is None:
             raise ValueError(f"{decision.handle}: Unknown handle for this review packet")
+        if pinned.get("uncertain_outcome") and decision.action != "acknowledge_failure":
+            raise ValueError(f"{decision.handle}: this validation stopped without an answer, "
+                             "so only acknowledge_failure can decide it")
         subject = {key: pinned[key] for key in ("logical_attempt_id", "extraction_ref", "applicability_ref")
                    if key in pinned and decision.action != "revoke"}
         entries.append({

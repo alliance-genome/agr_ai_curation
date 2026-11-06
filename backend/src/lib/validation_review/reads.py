@@ -446,10 +446,11 @@ def _without_lookup_logs(value, evidence):
     return value
 
 
-def _packet_answer(attempt, completion, evidence):
+def _packet_request(attempt, evidence, review):
+    """What a validation attempt was asked: validator, field and values sent."""
     frozen = attempt["input"]
     request = frozen["request"]
-    item = {"review": "validator_answer", "validator": frozen["binding_id"]}
+    item = {"review": review, "validator": frozen["binding_id"]}
     if request["target"].get("field_path"):
         item["field"] = request["target"]["field_path"]
     if frozen.get("route_value") is not None:
@@ -460,6 +461,11 @@ def _packet_answer(attempt, completion, evidence):
     cited = _cite(evidence, request.get("evidence"))
     if cited:
         item["evidence"] = cited
+    return item
+
+
+def _packet_answer(attempt, completion, evidence):
+    item = _packet_request(attempt, evidence, "validator_answer")
     if completion["state"] != "completed":
         item["outcome"] = completion["state"]
         reason = (completion.get("diagnostics") or {}).get("reason")
@@ -499,6 +505,8 @@ def _build_packet(db, scope, ep, episode_id):
     original = db.get(ValidationBody, artifact.baseline_sha).content["normalized"]["extracted_objects"]
     record_order = {item.get("object_id") or item.get("pending_ref_id"): index
                     for index, item in enumerate(original)}
+    uncertain = {fact.parent_id for fact in db.scalars(select(ValidationFact).where(
+        ValidationFact.artifact_id == ep.artifact_id, ValidationFact.kind == "review_uncertainty"))}
     grouped, global_blockers = {}, Counter()
     for _, row in rows:
         if row.get("decision_unit_id") is None:
@@ -519,9 +527,12 @@ def _build_packet(db, scope, ep, episode_id):
         """The exact answer, applicability fact or extraction each row offers for decision.
 
         A validation still running for the unit means any older answer may be
-        superseded, so the whole unit waits without a handle.
+        superseded, so the whole unit waits without a handle. An attempt that
+        stopped with a recorded operational uncertainty is not running: it can be
+        acknowledged as a failure.
         """
-        if any("attempt_ref" in row and "completion_ref" not in row for row in unit_rows):
+        if any("attempt_ref" in row and "completion_ref" not in row
+               and row["attempt_ref"]["fact_id"] not in uncertain for row in unit_rows):
             return {}
         found = {}
         for row in unit_rows:
@@ -529,6 +540,8 @@ def _build_packet(db, scope, ep, episode_id):
                 continue
             if "completion_ref" in row:
                 found.setdefault(("answer", row["attempt_ref"]["fact_id"]), row)
+            elif "attempt_ref" in row:
+                found.setdefault(("uncertain", row["attempt_ref"]["fact_id"]), row)
             elif "applicability_ref" in row:
                 found.setdefault(("applicability", row["applicability_ref"]["fact_id"]), row)
             elif "extraction_ref" in row:
@@ -618,6 +631,11 @@ def _build_packet(db, scope, ep, episode_id):
                             entry["prerequisites"] = prerequisite_refs(frozen["input"]["prerequisites"])
                         reads_.extend([["attempt", attempt.body_sha], ["completion", completion.body_sha]])
                         ref = {"logical_attempt_id": subject}
+                    elif kind == "uncertain":
+                        attempt = store._fact(db, ep.artifact_id, subject, kind="attempt")
+                        entry = _packet_request(store._content(db, attempt), evidence, "uncertain_outcome")
+                        reads_.append(["attempt", attempt.body_sha])
+                        ref = {"logical_attempt_id": subject, "uncertain_outcome": True}
                     elif kind == "applicability":
                         declared = store._content(db, store._fact(
                             db, ep.artifact_id, subject, kind="validation_source_input"))

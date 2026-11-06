@@ -210,8 +210,11 @@ equal; any other copy keeps its own fields and points at the first entry with
   request bookkeeping stay in exact history.
 - `optional_input_absent` and `lookup_not_supported`: the declared absence or the
   configured refusal, with the values and evidence the binding would have sent.
-- `waiting`: work that cannot be decided now (a field whose newest validation has
-  not answered yet, even if an older answer exists; a curator-owned record; an earlier
+- `uncertain_outcome`: a validation that stopped without an answer and has a recorded
+  operational uncertainty, for example after a worker crash. Its handle accepts only
+  `acknowledge_failure`, which clears the blocker without a scientific verdict.
+- `waiting`: work that cannot be decided now (a field whose newest validation is
+  still running, even if an older answer exists; a curator-owned record; an earlier
   rejection awaiting reconsideration). It has no handle, so a save can never select an
   answer the reviewer did not read or one a running validation may replace.
 

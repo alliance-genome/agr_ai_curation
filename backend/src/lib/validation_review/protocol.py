@@ -40,7 +40,9 @@ does not hold up the rest. Once follow-up finishes or cannot run, read a fresh p
 and decide what remains; do not leave a record deferred over remaining uncertainty:
 accept with it recorded, or decide any retirement recommendation. If a save conflicts,
 nothing in that call applies; a message naming a handle concerns that record. Read a
-fresh packet and resend. waiting items cannot be decided now. Only ready: true means the requested
+fresh packet and resend. waiting items cannot be decided now. An uncertain_outcome item is a
+validation that stopped without an answer: decide it only with acknowledge_failure, an
+operational acknowledgement, not a scientific decision. Only ready: true means the requested
 review is complete; after source changes, read a fresh packet.
 
 For too_large records, or when an assessment needs a record's or answer's complete
