@@ -396,7 +396,8 @@ def test_protocol_v5_reads_the_packet_once_and_keeps_record_specific_reasons():
                  "using the exact-history tools and explicit entries"):
         assert text in protocol, text
     assert "group_limit" not in protocol and "evidence_group" not in protocol
-    for text in ("inspect previous decisions and selected prerequisites", "earlier_decision",
+    for text in ("inspect previous decisions and selected prerequisites", "earlier_decisions per component",
+                 "each selection it used and the answer or source that selection chose",
                  "need not trigger another validation", "judge its record on the evidence"):
         assert text in protocol, text
     assert "Accept caveated or unresolved answers when appropriate" not in protocol

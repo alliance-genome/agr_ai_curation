@@ -204,14 +204,16 @@ equal; any other copy keeps its own fields and points at the first entry with
   unresolved answer keeps every candidate it considered, with each candidate's own
   assessment. Fields a validator's own result schema adds, such as a policy decision
   or its violations, are shown as returned under `additional_fields`. A dependent
-  answer lists the exact selections of the prerequisite answers it used under
-  `prerequisites`, readable with `read_validation_history`. Lookup logs and request
-  bookkeeping stay in exact history.
+  answer's `prerequisites` lists each selection it used and the answer or source that
+  selection chose, as exact references for `read_validation_history`. An item decided
+  before shows `earlier_decision` (`earlier_decisions` per component). Lookup logs and
+  request bookkeeping stay in exact history.
 - `optional_input_absent` and `lookup_not_supported`: the declared absence or the
   configured refusal, with the values and evidence the binding would have sent.
-- `waiting`: work that cannot be decided now (an answer not yet received, a
-  curator-owned record, an earlier rejection awaiting reconsideration). It has no
-  handle, so a save can never select an answer the reviewer did not read.
+- `waiting`: work that cannot be decided now (a field whose newest validation has
+  not answered yet, even if an older answer exists; a curator-owned record; an earlier
+  rejection awaiting reconsideration). It has no handle, so a save can never select an
+  answer the reviewer did not read or one a running validation may replace.
 
 Every decidable item carries a `D` handle, or one handle per covered component. The
 pinned fact maps each handle to its target, decision unit, attempt or extraction or

@@ -65,8 +65,10 @@ class Observations:
         keys = [(name, identity) for identity in sorted(identities)] or [(name, None)]
         with self._lock:
             self._packet_handles |= handles
-            if name == "read_review_packet" and isinstance(result.get("packet_id"), str) and "records" in result:
-                # Handles of an older packet cannot be retried; a fresh packet supersedes them.
+            if (name == "read_review_packet" and arguments.get("packet_id") is None
+                    and isinstance(result.get("packet_id"), str) and "records" in result):
+                # Pinning a fresh packet supersedes older handles; reading a page
+                # of an older packet does not.
                 current = result["packet_id"] + ":"
                 for key in [key for key in self.refusals
                             if key[1] in self._packet_handles and not key[1].startswith(current)]:

@@ -128,3 +128,16 @@ def test_a_fresh_review_packet_clears_refusals_for_handles_of_older_packets():
     observations.record_tool("read_review_packet", {"packet_id": None, "page": None},
                              {"packet_id": "new-packet", "records": []})
     assert [item["tool"] for item in observations.snapshot()[1]] == ["get_validation_record_source"]
+
+
+def test_reading_a_page_of_an_older_packet_keeps_refusals_for_the_current_packet():
+    from types import SimpleNamespace
+    from src.lib.validation_review.observations import Observations
+
+    observations = Observations()
+    current = {"operation_id": "save", "packet_id": "current", "entries": None,
+               "packet_decisions": [SimpleNamespace(model_dump=lambda: {"handle": "D1"})]}
+    observations.record_tool("record_validation_review", current, {"state": "conflict", "code": "HistoryConflict"})
+    observations.record_tool("read_review_packet", {"packet_id": "older", "page": 2},
+                             {"packet_id": "older", "records": []})
+    assert [item["target_id"] for item in observations.snapshot()[1]] == ["current:D1"]

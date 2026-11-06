@@ -516,15 +516,19 @@ def _build_packet(db, scope, ep, episode_id):
         return store._content(db, store._fact(db, ep.artifact_id, unit_id, kind="target"))
 
     def subjects(unit_id, unit_rows):
-        """The exact answer, applicability fact or extraction each row offers for decision."""
+        """The exact answer, applicability fact or extraction each row offers for decision.
+
+        A validation still running for the unit means any older answer may be
+        superseded, so the whole unit waits without a handle.
+        """
+        if any("attempt_ref" in row and "completion_ref" not in row for row in unit_rows):
+            return {}
         found = {}
         for row in unit_rows:
             if not row["agent_may_decide"]:
                 continue
             if "completion_ref" in row:
                 found.setdefault(("answer", row["attempt_ref"]["fact_id"]), row)
-            elif "attempt_ref" in row:
-                continue  # No answer yet: nothing to decide, so it waits without a handle.
             elif "applicability_ref" in row:
                 found.setdefault(("applicability", row["applicability_ref"]["fact_id"]), row)
             elif "extraction_ref" in row:
@@ -534,9 +538,25 @@ def _build_packet(db, scope, ep, episode_id):
         return found
 
     def prerequisite_refs(pins):
-        """Exact selections a dependent request used, readable with read_validation_history."""
-        facts = [store._fact(db, pin["artifact_id"], pin["selection_id"], kind="selection") for pin in pins]
-        return [{"fact_id": fact.id, "sha256": fact.body_sha} for fact in facts]
+        """Each selection a dependent request used and the answer or source it selected.
+
+        Both are exact references for read_validation_history; a curator-selected
+        value is named, since its authority is the curator's edit history.
+        """
+        references = []
+        for pin in pins:
+            selection = store._fact(db, pin["artifact_id"], pin["selection_id"], kind="selection")
+            chosen = store._content(db, selection)["selected"]
+            if chosen == "baseline":
+                selected = {"fact_id": "baseline", "sha256": artifact.baseline_sha}
+            elif chosen == "curator":
+                selected = "curator"
+            else:
+                fact = store._fact(db, pin["artifact_id"], chosen)
+                selected = {"fact_id": fact.id, "sha256": fact.body_sha}
+            references.append({"selection": {"fact_id": selection.id, "sha256": selection.body_sha},
+                               "selected": selected})
+        return references
 
     evidence = _PacketEvidence()
     records, handles, index, record_labels = [], {}, [], {}
@@ -625,13 +645,16 @@ def _build_packet(db, scope, ep, episode_id):
                 while name in labels:
                     name += "+"
                 labels[name] = handle
+            earlier = {name: units[unit_id]["review"] for name, (unit_id, _) in zip(labels, slot["units"])
+                       if units[unit_id]["review"] not in (None, "pending")}
             if list(labels) == ["whole"]:
                 entry["handle"] = labels["whole"]
-                earlier = units[slot["units"][0][0]]["review"]
-                if earlier not in (None, "pending"):
-                    entry["earlier_decision"] = earlier
+                if earlier:
+                    entry["earlier_decision"] = earlier["whole"]
             elif labels:
                 entry["handles"] = labels
+                if earlier:
+                    entry["earlier_decisions"] = earlier
             review.append(entry)
         item["review"] = review
         records.append(item)

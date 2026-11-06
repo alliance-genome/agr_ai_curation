@@ -237,8 +237,64 @@ async def test_a_dependent_answer_names_the_selected_prerequisites_it_used(plann
                  if entry.get("validator") == "fixture.dependent"]
     assert dependent and all(entry["prerequisites"] for entry in dependent)
     for reference in dependent[0]["prerequisites"]:
-        selection = json.loads(reads.read(item.scope, item.ep, **reference)["content"])
-        assert selection["action"] == "accept"
+        selection = json.loads(reads.read(item.scope, item.ep, **reference["selection"])["content"])
+        assert selection["action"] == "accept" and selection["selected"] == reference["selected"]["fact_id"]
+        answer = json.loads(reads.read(item.scope, item.ep, **reference["selected"])["content"])
+        assert answer["result"]["resolved_values"] == {"curie": "ECO:SELECTED"}
+
+
+def _second_attempt(item, job, *, complete):
+    from dataclasses import replace
+    from src.lib.domain_packs.materialization import ValidatorResultMaterializationInput
+    from src.lib.validation_history import runtime
+    from src.lib.validation_history.candidates import retain_candidates
+    from src.schemas.domain_validator import DomainValidatorResultBase
+
+    job = replace(job, history_episode_id=item.ep)
+    invocation = runtime.begin_jobs(item.plan.history_binding, [job], operation_id=uuid4().hex, receipt={})
+    if complete:
+        result = DomainValidatorResultBase.model_validate(
+            {**_result_payload(job.request, resolved_values={"curie": "ECO:NEWER"}), "resolved_objects": []})
+        runtime.complete_jobs(item.plan.history_binding, invocation, [result])
+        retain_candidates(item.plan.envelope, [ValidatorResultMaterializationInput(job.match, job.request, result)],
+                          scope=item.scope, source_envelope_revision=1)
+
+
+def _same_field(page, field):
+    return [entry for record in page["records"] for entry in record["review"] if entry.get("field") == field]
+
+
+@pytest.mark.asyncio
+async def test_a_newer_validation_still_running_holds_the_older_answer(planned, monkeypatch):
+    item = planned
+    _answers(monkeypatch, lambda request: {**_result_payload(request, resolved_values={"curie": "ECO:OLDER"}),
+                                           "resolved_objects": []})
+    await item.adapter.initial()
+    job = item.plan.initial_jobs[0]
+    _second_attempt(item, job, complete=False)
+    page = reads.review_packet(item.scope, item.ep)
+    held, = _same_field(page, job.request.target.field_path) or [
+        entry for record in page["records"] for entry in record["review"] if entry["review"] == "waiting"]
+    assert held["review"] == "waiting" and "execution_pending" in held["codes"] and "handle" not in held
+    assert page["decision_count"] == len(item.plan.initial_jobs) - 1
+
+
+@pytest.mark.asyncio
+async def test_two_answers_for_one_field_have_two_handles_and_one_save_refuses_both(planned, monkeypatch):
+    item = planned
+    _answers(monkeypatch, lambda request: {**_result_payload(request, resolved_values={"curie": "ECO:OLDER"}),
+                                           "resolved_objects": []})
+    await item.adapter.initial()
+    job = item.plan.initial_jobs[0]
+    _second_attempt(item, job, complete=True)
+    page = reads.review_packet(item.scope, item.ep)
+    older, newer = _same_field(page, job.request.target.field_path)
+    assert {older["values"]["curie"], newer["values"]["curie"]} == {"ECO:OLDER", "ECO:NEWER"}
+    pattern = f"{older['handle']}, {newer['handle']}: these handles decide the same record field"
+    with pytest.raises(ValueError, match=pattern):
+        decisions.record_packet_decisions(ReviewContext(item.scope, item.ep, "supervisor"),
+            checkpoint_request=checkpoint_provider(item)(), operation_id="both-answers",
+            packet_id=page["packet_id"], packet_decisions=_decide([older["handle"], newer["handle"]]))
 
 
 def test_two_decisions_for_one_record_field_are_refused_naming_the_handles(scope):
@@ -320,6 +376,27 @@ def test_component_answer_has_one_handle_per_covered_component(scope, scenario):
     assert result["applied"] == [{"decision_unit_id": child, "action": "accept",
                                   "handle": answer["handles"]["identity"], "target_id": parent}]
     assert result["ready"]
+
+
+@pytest.mark.parametrize("scenario", ["component"], indirect=True)
+def test_a_component_answer_shows_the_earlier_decision_for_its_component(scope, scenario):
+    x = scenario
+    sid = admission.create_scope(scope, operation_id=uuid4().hex, kind="document_run", targets=1, episodes=1)
+    admission.attach_episode(scope, artifact_id=x.aid, episode_id=x.episode, scope_id=sid)
+    x.propose("ECO:FIRST")
+    first = reads.review_packet(scope, x.episode)
+    answer, = (entry for record in first["records"] for entry in record["review"])
+    assert "earlier_decisions" not in answer
+    checkpoint = DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=x.env, expected_revision=x.revision,
+        document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=x.source)
+    decisions.record_packet_decisions(ReviewContext(scope, x.episode, "supervisor"), checkpoint_request=checkpoint,
+        operation_id="reject-first", packet_id=first["packet_id"],
+        packet_decisions=_decide([answer["handles"]["identity"]], "reject"))
+    x.propose("ECO:SECOND")
+    second = reads.review_packet(scope, x.episode)
+    newer, = (entry for record in second["records"] for entry in record["review"])
+    assert newer["values"] == {"curie": "ECO:SECOND"} and set(newer["handles"]) == {"identity"}
+    assert newer["earlier_decisions"] == {"identity": "reject"}
 
 
 @pytest.mark.parametrize("planned", ["optional-absence", "optional-composite-absence"], indirect=True)

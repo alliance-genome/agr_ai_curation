@@ -107,10 +107,11 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         are decided with record_validation_review using this packet_id: record
         (the extracted record itself; no validator ran), validator_answer
         (additional_fields holds the validator's own verdict fields; prerequisites
-        gives exact references to selected answers a dependent answer used),
+        lists each selection a dependent answer used and the answer or source it
+        chose, as exact references for read_validation_history),
         optional_input_absent or lookup_not_supported. A component answer lists
-        one handle per component. waiting items, including answers not yet
-        received, cannot be decided now. A record's target_id is for follow-up
+        one handle per component. waiting items, including fields whose newest
+        validation has not answered yet, cannot be decided now. A record's target_id is for follow-up
         tools. too_large names records to read with the exact-history tools
         instead. Handles belong to this packet only.
         """

@@ -11,9 +11,10 @@ page of that packet before deciding. The packet holds every outstanding record: 
 original extracted values, each evidence quote once under an E handle, and every
 validator answer inline with its caveats, so do not read those records or answers
 again. Still inspect previous decisions and selected prerequisites: earlier_decision
-marks an item decided before, and prerequisites gives exact references to the
-selected answers a dependent answer used; read those with read_validation_history
-when your decision depends on them. Assess every
+(earlier_decisions per component) gives the action last recorded for an item, and a
+dependent answer's prerequisites list each selection it used and the answer or source
+that selection chose, as exact references for read_validation_history. Read them when
+your decision depends on them. Assess every
 record individually against its own values, evidence and validator answers. Matching
 text is not enough: ask whether the evidence establishes that the record meets the
 scope and criteria in the saved extractor instructions supplied after this protocol.
