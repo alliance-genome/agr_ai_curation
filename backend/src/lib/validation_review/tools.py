@@ -12,7 +12,7 @@ from src.lib.validation_history import store
 from functools import partial, wraps
 from typing import Literal
 from inspect import signature
-from .decisions import ReviewEntry
+from .decisions import PacketDecision, ReviewEntry
 
 
 from pydantic import BaseModel, ConfigDict, StrictStr
@@ -74,9 +74,11 @@ def _recoverable_tool(function, *, lines):
                 "operation_id": arguments.get("operation_id"),
                 "targets": arguments.get("target_ids", []),
                 "decision_units": [
-                    e.decision_unit_id for e in arguments.get("entries", [])
+                    e.decision_unit_id for e in arguments.get("entries") or []
                 ],
             }
+            if arguments.get("packet_decisions"):
+                result["handles"] = [d.handle for d in arguments["packet_decisions"]]
         finally:
             lines.finish(function.__name__, result)
 
@@ -91,6 +93,28 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     """Context and checkpoint loader come from authenticated runtime, never JSON."""
     recoverable = partial(_recoverable_tool,
                           lines=ReviewLines(None if context is None else context.episode_id))
+
+    @function_tool(failure_error_function=None)
+    @recoverable
+    async def read_review_packet(packet_id: str | None = None, page: int | None = None) -> dict:
+        """Read all outstanding review work once: records, evidence and validator answers.
+
+        Call with no packet_id to pin a fresh packet of the current state. If
+        next_page is set, read it with the same packet_id before deciding. Each
+        record shows its originally extracted values, the evidence it cites (E
+        handles; each quote appears once under evidence) and review items. Items
+        with a D handle are decided with record_validation_review using this
+        packet_id: record (the extracted record itself; no validator ran),
+        validator_answer, optional_input_absent or lookup_not_supported. A
+        component answer lists one handle per component. waiting items cannot be
+        decided now. A record's target_id is for follow-up tools. too_large names
+        records to read with the exact-history tools instead. Handles belong to
+        this packet only.
+        """
+        return await asyncio.to_thread(
+            reads.review_packet, context.history_scope, context.episode_id,
+            packet_id=packet_id, page=page,
+        )
 
     @function_tool(failure_error_function=None)
     @recoverable
@@ -188,12 +212,19 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     @function_tool(failure_error_function=None)
     @recoverable
     async def record_validation_review(
-        operation_id: str, entries: list[ReviewEntry]
+        operation_id: str,
+        packet_id: str | None = None,
+        packet_decisions: list[PacketDecision] | None = None,
+        entries: list[ReviewEntry] | None = None,
     ) -> dict:
         """Atomically record explicit decisions for exact target/answer components.
 
-        Send one call per reviewed group, with a reason specific to each record.
-        If any entry conflicts, nothing in the call applies: refresh and resend it.
+        Give a reason specific to each record. If any decision conflicts, nothing
+        in the call applies. From read_review_packet, send its packet_id and one
+        packet_decisions item per D handle, with entries null; the server fills in
+        the exact target, answer and the version pinned when the packet was read.
+        After a conflict, read a fresh packet and resend. Otherwise
+        send entries with packet_id and packet_decisions null, one call per group.
         For answers, target_id is attempt input.target_id; decision_unit_id is a
         covered ID matching the manifest unit target_id. No component units means
         decision_unit_id equals target_id: null decision_unit / empty decision_units
@@ -211,16 +242,28 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Reject leaves an older selection intact; revoke withdraws
         it. Operational failures require acknowledge_failure, not scientific rejection.
         """
+        if (entries is None) == (packet_decisions is None) or (packet_id is None) != (packet_decisions is None):
+            raise ValueError("Send either packet_id with packet_decisions, or entries")
         started = perf_counter()
         request = await asyncio.to_thread(checkpoint_provider)
         checkpointed = perf_counter()
-        result = await asyncio.to_thread(
-            decisions.record_decisions,
-            context,
-            checkpoint_request=request,
-            operation_id=operation_id,
-            entries=[entry.model_dump(mode="json") for entry in entries],
-        )
+        if packet_decisions is not None:
+            result = await asyncio.to_thread(
+                decisions.record_packet_decisions,
+                context,
+                checkpoint_request=request,
+                operation_id=operation_id,
+                packet_id=packet_id,
+                packet_decisions=[item.model_dump(mode="json") for item in packet_decisions],
+            )
+        else:
+            result = await asyncio.to_thread(
+                decisions.record_decisions,
+                context,
+                checkpoint_request=request,
+                operation_id=operation_id,
+                entries=[entry.model_dump(mode="json") for entry in entries],
+            )
         recorded = perf_counter()
         if advance_work is not None:
             result = {**result, "dependent_work": await advance_work()}
@@ -229,7 +272,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         write_extraction_trace_event(
             event_type="runtime.review_save_timing",
             output_summary={
-                "entries": len(entries),
+                "entries": len(result["applied"]),
                 "checkpoint_ms": round((checkpointed - started) * 1000),
                 "record_decisions_ms": round((recorded - checkpointed) * 1000),
                 "advance_work_ms": round((perf_counter() - recorded) * 1000),
@@ -362,6 +405,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             target_ids=target_ids, instructions=instructions)
 
     result = [
+        read_review_packet,
         get_validation_review_packet,
         get_outstanding_validation_reviews,
         get_validation_record_sources,

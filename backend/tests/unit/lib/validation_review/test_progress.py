@@ -223,7 +223,7 @@ def test_review_tool_lines_need_a_live_curator_stream(monkeypatch):
     live = []
     streaming_tools.set_live_event_list(live)
     try:
-        lines.start("record_validation_review", {"entries": [{}, {}]})
+        lines.start("record_validation_review", {"packet_decisions": [{}, {}]})
         lines.finish("record_validation_review", {"applied": []})
     finally:
         streaming_tools.set_live_event_list(None)
@@ -257,13 +257,40 @@ def test_a_burst_of_one_tool_shows_one_line_and_the_next_burst_another(events):
     ]
 
 
+@pytest.mark.parametrize("result,line", [
+    ({"records": [{}], "page": 1, "pages": 1, "record_count": 8, "answer_count": 24},
+     "Supervisor review: reviewing 8 records and 24 validation results"),
+    ({"records": [{}], "page": 1, "pages": 2, "record_count": 81, "answer_count": 0},
+     "Supervisor review: reviewing 81 records (part 1 of 2)"),
+    ({"records": [{}], "page": 2, "pages": 2, "record_count": 81, "answer_count": 0},
+     "Supervisor review: reviewing more records (part 2 of 2)"),
+    ({"records": [], "page": 1, "pages": 1, "record_count": 0, "answer_count": 0},
+     "Supervisor review: checking the remaining review work"),
+])
+def test_packet_line_describes_what_the_packet_returned(events, result, line):
+    from src.lib.validation_review.progress import ReviewLines
+
+    streaming_tools.set_live_event_list([])
+    try:
+        lines = ReviewLines("episode")
+        lines.start("read_review_packet", {"packet_id": None, "page": None})
+        lines.finish("read_review_packet", result)
+        lines.start("read_review_packet", {"packet_id": None, "page": None})
+        lines.finish("read_review_packet", {"state": "conflict", "message": "stale"})
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == [line]
+    assert events[0]["type"] == "TOOL_COMPLETE"
+
+
 def test_every_review_tool_has_a_plain_language_line():
-    from src.lib.validation_review.progress import _start_line
+    from src.lib.validation_review.progress import _finish_line, _start_line
     from src.lib.validation_review.tools import runtime_tool_contract
 
+    packet = {"records": [{}], "page": 1, "pages": 1, "record_count": 1, "answer_count": 1}
     for tool in runtime_tool_contract():
         name = tool["name"]
-        line = _start_line(name, {})
+        line = _start_line(name, {}) or _finish_line(name, packet)
         assert line, name
         assert "_" not in line and name not in line
 

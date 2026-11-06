@@ -119,6 +119,67 @@ def _review_evidence(record):
     return compact
 
 
+# Packet views keep quoted text and where it sits. Chunk, span, document and
+# envelope locators stay in the exact record source fact.
+PACKET_QUOTE_FIELDS = (
+    "verified_quote", "quote", "source_quote", "evidence_quote", "snippet", "snippet_text",
+    "sentence_text", "text",
+)
+PACKET_EVIDENCE_FIELDS = PACKET_QUOTE_FIELDS + (
+    "section", "section_title", "subsection", "subsection_title", "page", "page_number",
+    "page_label", "figure_reference", "table_reference", "entity", "agent_note",
+)
+
+
+# Identity, chunk, span and attachment bookkeeping of a saved evidence record.
+EVIDENCE_LOCATOR_FIELDS = frozenset({
+    "evidence_record_id", "chunk_id", "chunk_ids", "source_chunk_id", "document_id",
+    "source_document_id", "pdf_document_id", "source_span_ids", "source_fragments",
+    "field_path", "field_paths", "envelope_target", "envelope_targets", "object_ref",
+    "object_id", "pending_ref_id", "evidence_revision_history",
+})
+
+
+def packet_evidence(record):
+    """One evidence record as quoted text plus its place in the paper."""
+    return {key: record[key] for key in PACKET_EVIDENCE_FIELDS if record.get(key) is not None}
+
+
+def packet_quote(view):
+    """The quoted text of a packet evidence view, if it has one."""
+    return next((view[key] for key in PACKET_QUOTE_FIELDS if key in view), None)
+
+
+def is_packet_evidence(value):
+    """A saved evidence record a packet can cite by handle without losing any field."""
+    return (isinstance(value.get("evidence_record_id"), str) and isinstance(value.get("verified_quote"), str)
+            and set(value) <= EVIDENCE_LOCATOR_FIELDS.union(PACKET_EVIDENCE_FIELDS))
+
+
+def packet_record(record):
+    """Complete extracted values; identity, schema and evidence bookkeeping stay in history.
+
+    Evidence and related records are cited by packet handle by the caller. Draft
+    definitions and references to mentions, exclusions, ambiguities or notes stay
+    visible.
+    """
+    view = {"type": record["object_type"], "values": record["payload"]}
+    if record.get("object_role") not in (None, record["object_type"]):
+        view["role"] = record["object_role"]
+    if record.get("definition_state") not in (None, "stable"):
+        view["definition_state"] = record["definition_state"]
+        view["definition_notes"] = record.get("definition_notes") or []
+    for key in ("object_refs", "field_refs"):
+        if record.get(key):
+            view[key] = record[key]
+    references = [ref for ref in record.get("metadata_refs") or [] if ref.get("role") != "verified_evidence"]
+    if references:
+        view["metadata_refs"] = references
+    if record.get("validation_guidance") is not None:
+        view["validation_guidance"] = record["validation_guidance"]
+    return view
+
+
 TOO_MANY_IDS = "Too many record IDs for one grouped source read; request fewer records"
 
 

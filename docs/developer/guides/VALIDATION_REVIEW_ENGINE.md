@@ -181,11 +181,48 @@ A response stays within `VALIDATION_REVIEW_PACKET_BYTES` and returns at most
 call and nothing is truncated. Outstanding rows carry `evidence_group`, a key for the
 evidence a record cites, and are ordered by it.
 
+### Compact review packet
+
+`read_review_packet()` is the first-pass read. It pins every outstanding record of
+the bound episode in one immutable `review_decision_packet` fact and returns it in
+whole-record pages of at most `VALIDATION_REVIEW_PACKET_BYTES`; pass the returned
+`packet_id` and `next_page` to read the rest of the same packet. The same live state
+pins the same packet, and any decision, answer or source change pins a new one.
+
+Each record shows its original extracted values in full, the evidence it cites as `E`
+handles (each quote appears once under `evidence`, with its section, page and other
+place fields), references to other records in the packet as `R` handles, its
+`target_id` for follow-up tools, and its review items:
+
+- `record`: the extracted record itself, for extraction-only review.
+- `validator_answer`: the validator, field, values sent (evidence cited by handle),
+  status, resolved values, explanation, curator message, questions, issues, missing
+  fields, per-component decisions and the scalar fields of resolved objects. An
+  unresolved answer keeps every candidate it considered, with each candidate's own
+  assessment. Lookup logs, request bookkeeping and result-schema extension fields stay
+  in exact history; `more_in_history` names the extension fields that were left out.
+- `optional_input_absent` and `lookup_not_supported`: the declared absence or the
+  configured refusal, with the values and evidence the binding would have sent.
+- `waiting`: work that cannot be decided now (no answer yet, a curator-owned record,
+  an earlier rejection awaiting reconsideration). It has no handle.
+
+Every decidable item carries a `D` handle, or one handle per covered component. The
+pinned fact maps each handle to its target, decision unit, attempt or extraction or
+applicability reference, and the unit version at the time the packet was read.
+`record_validation_review(operation_id, packet_id, packet_decisions)` takes `handle`,
+`action`, `reason` and, where allowed, `absence_assessment` or `unresolved_fields`.
+The server expands each handle into the same exact entry the explicit form uses, so
+decision facts keep their existing shape, and the pinned version makes any change
+since the read a stale-version conflict. A conflict that names a record uses its handle; the response
+lists each applied handle with its `decision_unit_id` and binding `target_id`. A
+record too large for one page is listed under `too_large` with its target and handles
+for the exact-history tools. The explicit `entries` form is unchanged.
+
 ### Review progress lines
 
 While review runs, each review tool adds one plain-language progress line to a live
 curator stream (`reviewPhase: supervisor_review`), for example "Supervisor review:
-reading 12 saved records" or "Supervisor review: saving 12
+reviewing 8 records and 24 validation results" or "Supervisor review: saving 32
 decisions". Calls of the same tool that overlap, such as a parallel burst of history
 reads, share one line. Runs without a live stream emit nothing.
 

@@ -52,9 +52,12 @@ class Observations:
         for key in ("target_id", "fact_id", "entry_id"):
             if isinstance(arguments.get(key), str):
                 identities.add(arguments[key])
-        for entry in arguments.get("entries", []):
+        for entry in arguments.get("entries") or []:
             value = entry if isinstance(entry, dict) else entry.model_dump()
             identities.add(value.get("decision_unit_id") or value["target_id"])
+        for decision in arguments.get("packet_decisions") or []:
+            value = decision if isinstance(decision, dict) else decision.model_dump()
+            identities.add(f"{arguments.get('packet_id')}:{value['handle']}")
         # Never retain free text, evidence bodies, or operation IDs in diagnostics.
         keys = [(name, identity) for identity in sorted(identities)] or [(name, None)]
         with self._lock:

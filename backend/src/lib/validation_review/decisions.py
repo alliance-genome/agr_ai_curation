@@ -61,6 +61,87 @@ class ReviewEntry(BaseModel):
     ))
 
 
+class PacketDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    handle: StrictStr = Field(description=(
+        "A D handle from the review packet named by packet_id, such as D4. The server "
+        "supplies its exact target, answer and the version pinned when the packet was read."
+    ))
+    action: Literal["accept", "reject", "defer", "acknowledge_failure", "revoke"]
+    reason: StrictStr = Field(description="What establishes or questions this specific record.")
+    absence_assessment: Literal["omission_supported", "unresolved"] | None = Field(default=None, description=(
+        "Only when accepting an optional_input_absent or lookup_not_supported item: optional "
+        "absence permits omission_supported or unresolved; unsupported lookups require unresolved."
+    ))
+    unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
+        "Only when accepting a review: record item (no validator ran): exact plain payload "
+        "field paths and explanations of scientific uncertainty that remains."
+    ))
+
+
+def packet_entries(context, *, packet_id, packet_decisions):
+    """Expand handles from the immutable packet into exact entries.
+
+    Versions are those pinned when the packet was read, so any later change to a
+    record is a stale-version conflict rather than a silent decision on new state.
+    """
+    from .reads import PACKET_KIND
+
+    decided = [PacketDecision.model_validate(item) for item in packet_decisions]
+    with store.SessionLocal.begin() as db:
+        episode, _ = lock_episode(db, context.history_scope, context.episode_id, require_open=False)
+        fact = store._fact(db, episode.artifact_id, packet_id, kind=PACKET_KIND)
+        if fact.parent_id != episode.id:
+            raise store.HistoryConflict("Review packet belongs to another review round; read a fresh packet")
+        handles = store._content(db, fact)["handles"]
+    entries = []
+    for decision in decided:
+        pinned = handles.get(decision.handle)
+        if pinned is None:
+            raise ValueError(f"{decision.handle}: Unknown handle for this review packet")
+        subject = {key: pinned[key] for key in ("logical_attempt_id", "extraction_ref", "applicability_ref")
+                   if key in pinned and decision.action != "revoke"}
+        entries.append({
+            "target_id": pinned["target_id"], "decision_unit_id": pinned["decision_unit_id"],
+            "expected_version": pinned["expected_version"], "action": decision.action,
+            "reason": decision.reason, **subject,
+            "absence_assessment": decision.absence_assessment,
+            "unresolved_fields": (None if decision.unresolved_fields is None else
+                                  [item.model_dump(mode="json") for item in decision.unresolved_fields]),
+        })
+    return [decision.handle for decision in decided], entries
+
+
+def _name_handles(message, handles, entries):
+    """Conflicts name the packet handles the model sent, not internal target IDs."""
+    names = {}
+    for handle, entry in zip(handles, entries, strict=True):
+        for identity in (entry["decision_unit_id"], entry["target_id"]):
+            names.setdefault(identity, [])
+            if handle not in names[identity]:
+                names[identity].append(handle)
+    for identity, labels in names.items():
+        message = message.replace(identity, "/".join(labels))
+    return message
+
+
+def record_packet_decisions(context, *, checkpoint_request, operation_id, packet_id, packet_decisions):
+    """Save decisions named by packet handle; the decision fact keeps exact targets."""
+    handles, entries = packet_entries(context, packet_id=packet_id, packet_decisions=packet_decisions)
+    try:
+        response = record_decisions(context, checkpoint_request=checkpoint_request,
+                                    operation_id=operation_id, entries=entries)
+    except store.HistoryAccessError:
+        raise  # Authorization keeps its own type and never names a record.
+    except store.HistoryConflict as error:
+        raise store.HistoryConflict(_name_handles(str(error), handles, entries)) from error
+    except ValueError as error:
+        raise ValueError(_name_handles(str(error), handles, entries)) from error
+    return {**response, "packet_id": packet_id, "applied": [
+        {**applied, "handle": handle, "target_id": entry["target_id"]}
+        for applied, handle, entry in zip(response["applied"], handles, entries, strict=True)]}
+
+
 def bounded_text(value, limit, name):
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         raise ValueError(

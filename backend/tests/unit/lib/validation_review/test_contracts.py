@@ -31,7 +31,7 @@ def test_tool_schema_cannot_choose_actor_episode_or_validator():
         "reviewer",
     )
     tools = create_tools(context, checkpoint_provider=Mock())
-    assert len(tools) == 8
+    assert len(tools) == 9
     for tool in tools:
         fields = tool.params_json_schema["properties"]
         assert not {
@@ -252,7 +252,7 @@ async def test_followup_tools_bind_runtime_authority_and_forward_exact_selection
     extraction, selection, assessment = AsyncMock(), AsyncMock(), AsyncMock(return_value={"state": "completed"})
     tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
         request_extraction=extraction, select_source=selection, assess_source=assessment)}
-    assert len(tools) == 12
+    assert len(tools) == 13
     for tool in tools.values():
         assert not {"actor_id", "episode_id", "validator_agent", "receipt", "scope_id", "extractor_agent"}.intersection(
             tool.params_json_schema["properties"])
@@ -287,7 +287,8 @@ def test_model_facing_decision_contract_explains_whole_target_and_component_ids(
 
     tool = next(t for t in runtime_tool_contract() if t["name"] == "record_validation_review")
     schema = tool["parameters"]
-    entry_ref = schema["properties"]["entries"]["items"]["$ref"]
+    entries, = (variant for variant in schema["properties"]["entries"]["anyOf"] if variant.get("type") == "array")
+    entry_ref = entries["items"]["$ref"]
     entry = schema["$defs"][entry_ref.rsplit("/", 1)[1]]["properties"]
     assert "input.target_id" in entry["target_id"]["description"]
     unit_description = entry["decision_unit_id"]["description"]
@@ -392,6 +393,35 @@ def test_protocol_and_tools_direct_grouped_review_with_record_specific_reasons()
     assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
     assert "Assess the requested records incrementally" not in REVIEW_PROTOCOL
     assert "reason specific to each record" in tools["record_validation_review"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_save_takes_exactly_one_decision_form(monkeypatch):
+    import json
+    from agents.tool_context import ToolContext
+    from src.lib.validation_review import decisions
+
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    called = Mock(side_effect=AssertionError("must not save"))
+    monkeypatch.setattr(decisions, "record_decisions", called)
+    monkeypatch.setattr(decisions, "record_packet_decisions", called)
+    tool = next(t for t in create_tools(context, checkpoint_provider=Mock())
+                if t.name == "record_validation_review")
+    decision = {"handle": "D1", "action": "accept", "reason": "Supported.",
+                "absence_assessment": None, "unresolved_fields": None}
+    entry = {"target_id": "t", "decision_unit_id": "t", "expected_version": 0, "action": "accept",
+             "reason": "Supported.", "logical_attempt_id": None, "extraction_ref": "b",
+             "applicability_ref": None, "absence_assessment": None, "unresolved_fields": None}
+    for arguments in ({"packet_id": "p", "packet_decisions": [decision], "entries": [entry]},
+                      {"packet_id": None, "packet_decisions": [decision], "entries": None},
+                      {"packet_id": "p", "packet_decisions": None, "entries": [entry]},
+                      {"packet_id": None, "packet_decisions": None, "entries": None}):
+        encoded = json.dumps({"operation_id": "op", **arguments})
+        result = await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name, tool_call_id="c",
+                                                       tool_arguments=encoded), encoded)
+        assert result["state"] == "conflict" and "Send either" in result["message"], arguments
+    assert not called.called
 
 
 def test_source_group_limit_is_configured_and_must_be_positive(monkeypatch):

@@ -22,7 +22,8 @@ def _start_line(tool, arguments):
     if tool == "get_validation_review_status":
         return "checking review status"
     if tool == "record_validation_review":
-        return "saving " + _count(len(arguments.get("entries") or []), "decision", "decisions")
+        decisions = arguments.get("packet_decisions") or arguments.get("entries") or []
+        return "saving " + _count(len(decisions), "decision", "decisions")
     if tool == "request_validation_reconsideration":
         return ("asking a validator to check "
                 + _count(len(arguments.get("target_ids") or []), "result", "results") + " again")
@@ -38,6 +39,22 @@ def _start_line(tool, arguments):
         return ("asking a validator to check "
                 + _count(len(arguments.get("target_ids") or []), "corrected value", "corrected values"))
     return None
+
+
+def _finish_line(tool, result):
+    """Packet reads are described by what they returned."""
+    if tool != "read_review_packet" or not isinstance(result, dict) or "records" not in result:
+        return None
+    if result["page"] > 1:
+        return f"reviewing more records (part {result['page']} of {result['pages']})"
+    if not result["record_count"]:
+        return "checking the remaining review work"
+    line = "reviewing " + _count(result["record_count"], "record", "records")
+    if result["answer_count"]:
+        line += " and " + _count(result["answer_count"], "validation result", "validation results")
+    if result["pages"] > 1:
+        line += f" (part 1 of {result['pages']})"
+    return line
 
 
 class ReviewLines:
@@ -74,6 +91,10 @@ class ReviewLines:
             self._emit("TOOL_START", tool, line)
 
     def finish(self, tool, result):
+        line = _finish_line(tool, result)
+        if line is not None and tool not in self._shown:
+            self._shown.add(tool)
+            self._emit("TOOL_COMPLETE", tool, line)
         self._running[tool] -= 1
         if not self._running[tool]:
             self._shown.discard(tool)
