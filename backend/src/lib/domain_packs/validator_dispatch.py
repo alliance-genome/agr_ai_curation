@@ -2303,6 +2303,19 @@ def validator_batch_payload_for_agent(
         "evidence_record_ids name the records supplied for that request. Judge each "
         "request only with its own evidence."
     )
+    evidence_records, request_payloads = _batch_model_requests(requests)
+    return {
+        "mode": "domain_validator_batch",
+        "instructions": instructions,
+        "evidence_records": evidence_records,
+        "requests": request_payloads,
+    }
+
+
+def _batch_model_requests(
+    requests: list[DomainValidationRequest],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The batch's distinct evidence records and its request views that name them."""
     evidence_records: dict[str, dict[str, Any]] = {}
     request_payloads = []
     for request in requests:
@@ -2319,12 +2332,7 @@ def validator_batch_payload_for_agent(
         if own_records:
             payload["evidence"] = own_records
         request_payloads.append(payload)
-    return {
-        "mode": "domain_validator_batch",
-        "instructions": instructions,
-        "evidence_records": list(evidence_records.values()),
-        "requests": request_payloads,
-    }
+    return list(evidence_records.values()), request_payloads
 
 
 def _append_validator_finalization_instructions(
@@ -3182,11 +3190,11 @@ def _validator_batch_summary(jobs: list[ValidatorDispatchJob]) -> dict[str, Any]
         if binding.validator_agent is not None
         else representative.request.validator_agent.model_dump(mode="json")
     )
-    request_payloads = [
-        validator_request_payload_for_agent(job.request)
-        for job in jobs
-    ]
+    # Measure what the batch sends: each request view plus the evidence records
+    # it lists once for all of them.
+    evidence_records, request_payloads = _batch_model_requests([job.request for job in jobs])
     request_payload_sizes = [json_size(payload) for payload in request_payloads]
+    evidence_records_size = json_size(evidence_records)
     selected_input_large_scalar_paths = [
         {
             "request_id": job.request.request_id,
@@ -3205,8 +3213,12 @@ def _validator_batch_summary(jobs: list[ValidatorDispatchJob]) -> dict[str, Any]
         "request_ids": [job.request.request_id for job in jobs],
         "first_request_id": jobs[0].request.request_id,
         "payload_summary": {
-            "request_payload_json_chars": sum(size.json_chars for size in request_payload_sizes),
-            "request_payload_estimated_tokens": sum(size.estimated_tokens for size in request_payload_sizes),
+            "request_payload_json_chars": evidence_records_size.json_chars + sum(
+                size.json_chars for size in request_payload_sizes
+            ),
+            "request_payload_estimated_tokens": evidence_records_size.estimated_tokens + sum(
+                size.estimated_tokens for size in request_payload_sizes
+            ),
             "largest_request_json_chars": max(
                 (size.json_chars for size in request_payload_sizes),
                 default=0,

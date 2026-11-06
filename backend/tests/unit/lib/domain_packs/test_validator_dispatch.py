@@ -903,6 +903,28 @@ def test_validator_request_dedupe_key_keeps_requests_with_any_different_input_ap
     )
 
 
+def test_validator_batch_summary_reports_the_shared_evidence_once():
+    from src.lib.domain_packs.validator_dispatch import validator_batch_payload_for_agent
+    from src.lib.runtime_payload_budget import json_size
+
+    shared = _paper_evidence_record("evidence-shared", "Both larvae were treated. " * 40)
+    requests = [_quoted_evidence_request(f"domain-validation:{name}", [shared], []) for name in ("a", "b")]
+    binding = SimpleNamespace(binding_id="fixture.identifier_lookup", batch_family=None, validator_agent=None)
+    jobs = [SimpleNamespace(request=request, match=SimpleNamespace(binding=binding)) for request in requests]
+
+    summary = _validator_batch_summary(cast(Any, jobs))["payload_summary"]
+
+    sent = validator_batch_payload_for_agent(requests, compact_runtime=True)
+    assert summary["request_payload_json_chars"] == (
+        sum(json_size(item).json_chars for item in sent["requests"])
+        + json_size(sent["evidence_records"]).json_chars
+    )
+    assert summary["request_payload_json_chars"] < sum(
+        json_size(validator_request_payload_for_agent(request)).json_chars for request in requests
+    )
+    assert summary["largest_request_json_chars"] == max(json_size(item).json_chars for item in sent["requests"])
+
+
 def test_validator_batch_summary_reports_payload_sizes_and_large_scalars():
     request = _verbose_validation_request().model_copy(
         update={
