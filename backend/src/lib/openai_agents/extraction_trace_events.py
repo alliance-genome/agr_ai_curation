@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import re
+import threading
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -49,6 +50,8 @@ _current_run: ContextVar[ExtractionTraceRun | None] = ContextVar(
     "extraction_trace_run",
     default=None,
 )
+# Parallel extraction writers emit events for one run from several tool threads.
+_sequence_lock = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -526,10 +529,11 @@ def write_extraction_trace_event(
     user_id_hash = None
     source = "backend"
     if run is not None and run.trace_id == effective_trace_id:
-        if run.sequence >= MAX_EVENTS_PER_TRACE:
-            return None
-        run.sequence += 1
-        sequence = run.sequence
+        with _sequence_lock:
+            if run.sequence >= MAX_EVENTS_PER_TRACE:
+                return None
+            run.sequence += 1
+            sequence = run.sequence
         session_id = run.session_id
         user_id_hash = run.user_id_hash
         source = run.source
