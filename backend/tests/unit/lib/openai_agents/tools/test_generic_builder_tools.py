@@ -37,10 +37,18 @@ def active_generic_builder_context(monkeypatch):
         builder.reset_active_extraction_builder_workspace(builder_token)
 
 
+def _stage_completed_summaries(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        event["output_summary"]
+        for event in events
+        if event.get("event_type") == "generic_builder.stage_completed"
+    ]
+
+
 def test_generic_object_stage_reports_attributes_and_soft_key_notice(
     active_generic_builder_context,
 ):
-    workspace, _events = active_generic_builder_context
+    workspace, events = active_generic_builder_context
 
     first = generic_builder_tools._stage_generic_object_impl(
         class_key="generic:generic_object",
@@ -58,12 +66,18 @@ def test_generic_object_stage_reports_attributes_and_soft_key_notice(
     )
 
     assert first.status == "ok"
-    assert first.data["attribute_keys"] == [
+    # The model's acknowledgement is compact; the trace event keeps the full summary.
+    assert first.data == {
+        "candidate_id": "generic-candidate-1",
+        "status": builder.CANDIDATE_STATUS_VALID,
+        "workspace_revision": workspace.snapshot()["workspace_revision"],
+    }
+    assert _stage_completed_summaries(events)[0]["attribute_keys"] == [
         "cell_type",
         "tumor_classification_term",
         "species",
     ]
-    assert first.data["notices"] == []
+    assert _stage_completed_summaries(events)[0]["notices"] == []
     assert workspace.candidates["generic-candidate-1"].staged_fields["attributes"] == {
         "cell_type": "B cell",
         "tumor_classification_term": "lymphoma",
@@ -240,6 +254,51 @@ def test_generic_claim_patch_rejects_attributes(active_generic_builder_context):
     assert result.data["validation_issues"][0]["reason"] == (
         "attributes_not_supported_for_class"
     )
+
+
+def test_stage_acknowledgement_model_text_is_compact_and_trace_event_is_complete(
+    active_generic_builder_context,
+):
+    import json
+
+    workspace, events = active_generic_builder_context
+
+    result = _stage_claim()
+
+    text = str(result)  # What the SDK sends to the model for this in-process tool.
+    assert json.loads(text) == {
+        "status": "ok",
+        "data": {
+            "candidate_id": "generic-candidate-1",
+            "status": builder.CANDIDATE_STATUS_VALID,
+            "workspace_revision": workspace.snapshot()["workspace_revision"],
+        },
+        "count": 1,
+        "lookup_status": "success",
+    }
+    assert "reference_access" not in text and "evidence-1" not in text
+    summary = _stage_completed_summaries(events)[0]
+    assert summary["label"] == "Narrative claim"
+    assert summary["evidence_record_ids"] == ["evidence-1"]
+    assert summary["pending_ref_ids"] == ["generic-claim-1"]
+    assert summary["builder"]["workspace_revision"] == result.data["workspace_revision"]
+    assert "reference_access" in summary["builder"]
+
+
+def test_stage_validation_error_model_text_keeps_the_issue(active_generic_builder_context):
+    import json
+
+    result = _stage_claim("   ")
+
+    assert json.loads(str(result)) == {
+        "status": "error",
+        "data": {"validation_issues": result.data["validation_issues"]},
+        "count": 1,
+        "message": result.message,
+        "lookup_status": "blocked",
+        "failure_classification": "validation_failed",
+        "explanation": result.explanation,
+    }
 
 
 def _stage_claim(rationale: Any = "The screen result is reported as the paper's main finding."):

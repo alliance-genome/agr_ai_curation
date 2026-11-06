@@ -31,7 +31,8 @@ def test_sdk_bounded_details_survive_trace_analysis(monkeypatch, surface):
         )
         if surface == "builder":
             output = AgrQueryResult(status="ok", data=page, count=1, lookup_status="success")
-            expected = output.model_dump()
+            # The model text is compact JSON of the set fields; TraceReview reads it whole.
+            expected = {"json_data": {"status": "ok", "data": page, "count": 1, "lookup_status": "success"}}
         else:
             output = page
             expected = {"json_data": page}

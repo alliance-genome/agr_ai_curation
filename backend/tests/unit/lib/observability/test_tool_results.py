@@ -82,6 +82,30 @@ def test_contract_matrix(payload, studio, success, code):
         )
 
 
+@pytest.mark.parametrize(
+    "fields,success,code",
+    [
+        ({"status": "ok", "data": {"candidate_id": "c1"}, "count": 1, "lookup_status": "success"}, True, None),
+        ({"status": "error", "data": {"validation_issues": [{"reason": "invalid"}]}, "count": 1,
+          "message": "rejected", "lookup_status": "blocked", "failure_classification": "validation_failed"},
+         False, None),
+        ({"status": "error", "message": "provider down", "lookup_status": "transient",
+          "failure_classification": "transient"}, False, "lookup_dependency_failure"),
+    ],
+)
+def test_agr_results_classify_from_the_object_and_model_text_drops_unset_fields(monkeypatch, fields, success, code):
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[5] / "packages/alliance/python/src"))
+    from agr_ai_curation_alliance.tools.agr_curation import AgrQueryResult
+
+    result = AgrQueryResult(**fields)
+    outcome = tool_results.classify_tool_result(result)
+    assert (outcome.success, outcome.operational_code) == (success, code)
+    # The SDK sends str(result) to the model; classification never reads it.
+    assert json.loads(str(result)) == fields
+    assert "None" not in str(result) and "null" not in str(result)
+
+
 @pytest.mark.asyncio
 async def test_studio_automatic_explicit_and_linked_terminal_capture_once(monkeypatch):
     from src.api import agent_studio

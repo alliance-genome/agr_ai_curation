@@ -647,7 +647,15 @@ def _stage_generic_object_impl(
         input_summary=attempted_query,
         output_summary=summary,
     )
-    return _ok(data=summary, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
+    # The model already holds what it staged; the trace event keeps the full summary.
+    acknowledgement = {
+        "candidate_id": candidate.candidate_id,
+        "status": candidate.status,
+        "workspace_revision": summary["builder"]["workspace_revision"],
+    }
+    if notices:
+        acknowledgement["notices"] = notices
+    return _ok(data=acknowledgement, count=1, lookup_status=LOOKUP_STATUS_SUCCESS)
 
 
 def _set_nested_patch_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
