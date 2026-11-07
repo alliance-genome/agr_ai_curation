@@ -1,4 +1,4 @@
-"""The review actor retires extraction-only records it judged outside the question (ALL-1502).
+"""The review actor retires records it judged outside the question (ALL-1502).
 
 Code enforces authority, record scope, structure and history; the scope judgment
 itself is the reviewer's and is saved with its reason, never recomputed here.
@@ -216,7 +216,7 @@ async def test_a_stale_packet_cannot_retire(generic):
 
 
 @pytest.mark.asyncio
-async def test_retire_names_only_record_items_and_existing_evidence(generic):
+async def test_retire_cites_only_evidence_from_its_packet(generic):
     item = generic
     packet = reads.review_packet(item.scope, item.ep)
     handle = _record_handles(packet)[item.targets[0]]
@@ -243,20 +243,55 @@ async def test_retire_without_the_bound_adapter_is_refused_plainly(generic):
     assert result["state"] == "conflict" and "not available" in result["message"]
 
 
-def test_a_record_with_validator_answers_keeps_the_extractor_recommendation_path(planned):
-    from src.lib.validation_review.record_retirement import retire_in_transaction
+@pytest.mark.asyncio
+async def test_a_validated_record_is_retired_by_the_reviewer_and_restored_by_a_curator(planned, monkeypatch):
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+    from tests.integration.persistence.test_review_packet import _answers, _handles
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
 
     item = planned
+    _answers(monkeypatch, lambda request: {**_result_payload(request, resolved_values={"curie": "ECO:X"}),
+                                           "resolved_objects": []})
+    await item.adapter.initial()
     root = item.plan.envelope.extracted_objects[0].metadata["validation_history"]["target_id"]
-    context = ReviewContext(item.scope, item.ep, "supervisor")
-    with store.SessionLocal.begin() as db:
-        digest = selections.source_state_digest(db, item.aid)
-        with pytest.raises(store.HistoryConflict, match="validator"):
-            retire_in_transaction(db, context, operation_id="validator-record", expected_source_sha=digest,
-                records=[{"target_id": root, "expected_version": 0, "reason": "Outside.", "evidence": {}}],
-                source_envelope=item.plan.envelope, rebuild_inputs=lambda db, envelope: {},
-                publish=lambda *args: pytest.fail("nothing is published"))
-        assert store._current(db, item.aid, root)["active"]
+    validated = SimpleNamespace(scope=item.scope, aid=item.aid, ep=item.ep, adapter=item.adapter,
+                                checkpoint=checkpoint_provider(item),
+                                context=ReviewContext(item.scope, item.ep, "supervisor.validation_review"))
+    packet = reads.review_packet(item.scope, item.ep)
+    record, = packet["records"]
+    assert record["target_id"] == root
+    handles = _handles(record)
+    assert len(handles) > 1 and all(entry["review"] == "validator_answer" for entry in record["review"])
+    mixed = await _save(validated, packet["packet_id"], [_decision(handles[0], "retire", "Not asked for."),
+        *[_decision(handle, "accept") for handle in handles[1:]]], operation_id="mixed")
+    assert mixed["state"] == "conflict" and "removes the whole record" in mixed["message"]
+    reason = "A wild-type control; the question asks for transgenic flies."
+    result = await _save(validated, packet["packet_id"], [_decision(handle, "retire", reason) for handle in handles],
+                         operation_id="retire-validated")
+    assert result["ready"] is True, result
+    assert {applied["target_id"] for applied in result["applied"]} == {root}
+    assert {applied["retirement_id"] for applied in result["applied"]} == {result["applied"][0]["retirement_id"]}
+    with store.SessionLocal() as db:
+        manifest = selections.manifest_in_transaction(db, item.scope, item.aid, episode_id=item.ep)
+        assert manifest["ready"] and manifest["units"] == [], "the record's validator bindings left coverage"
+        assert store._current(db, item.aid, root)["active"] is False
+        retired, = retired_records(db, item.aid)
+        assert (retired["target_id"], retired["reason"], retired["proposal"]) == (root, reason, None)
+        version = store._current(db, item.aid, root)["version"]
+    assert validated.checkpoint().envelope.extracted_objects == []
+    curator = ReviewContext(item.scope, item.ep, item.scope.owner_id, actor_type="curator")
+    restored = await item.adapter.select_source(curator, validated.checkpoint, operation_id="restore-validated",
+        restore_target_id=root, expected_version=version, reason="The curator wants this record reviewed.")
+    assert restored["publication"]["ready"] is False
+    with store.SessionLocal() as db:
+        assert store._current(db, item.aid, root)["active"] is True
+        assert retired_records(db, item.aid) == []
+        manifest = selections.manifest_in_transaction(db, item.scope, item.aid, episode_id=item.ep)
+        coverage = selections.effective_episode(db, store._fact(db, item.aid, item.ep))["obligations"]
+        assert {obligation["mode"] for obligation in coverage} == {"validation"}, "its validator coverage is back"
+        assert all(root in store._target_lineage(db, item.aid, blocker["target_id"])
+                   for blocker in manifest["blockers"] if blocker["target_id"])
+    assert [entry["target_id"] for entry in reads.review_packet(item.scope, item.ep)["records"]] == [root]
 
 
 @pytest.mark.asyncio
@@ -315,6 +350,7 @@ def test_a_partial_follow_up_runs_the_records_with_a_follow_up_left(planned):
         assert row.payload["entry_ids"] == [second]
         assert set(row.payload["specialist_input"]["context"]["attempt"]) == {second}
     assert ask([first, second], "second-follow-up") == partial, "an exact retry reuses the same work"
-    with pytest.raises(admission.ReviewStopped, match="extraction_attempts_exhausted"):
+    with pytest.raises(admission.ReviewStopped, match="extraction_attempts_exhausted") as stopped:
         ask([first, second], "all-spent")
+    assert stopped.value.exhausted == [first, second], "a full refusal names every spent record"
     assert extraction_scheduling.exhausted_entries(item.scope, ask([third], "third-follow-up")) == []

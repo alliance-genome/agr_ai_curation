@@ -96,7 +96,9 @@ def request(context, *, operation_id, parent_decision_id, entry_ids, instruction
         # rest still run. Only a request where every entry is spent stops.
         exhausted = [entry_id for entry_id in entry_ids if counts[entry_id] >= ceiling]
         if len(exhausted) == len(entry_ids):
-            raise admission.ReviewStopped("extraction_attempts_exhausted", resource=exhausted[0])
+            stopped = admission.ReviewStopped("extraction_attempts_exhausted", resource=exhausted[0])
+            stopped.exhausted = exhausted  # The bound tool reports every spent entry.
+            raise stopped
         entry_ids = [entry_id for entry_id in entry_ids if entry_id not in exhausted]
         attempt = {entry_id: {"ordinal": counts[entry_id] + 1, "ceiling": ceiling,
                              "remaining_after": ceiling - counts[entry_id] - 1}

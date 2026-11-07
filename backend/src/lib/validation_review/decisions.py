@@ -70,8 +70,8 @@ class PacketDecision(BaseModel):
     ))
     action: Literal["accept", "retire", "reject", "defer", "acknowledge_failure", "revoke"] = Field(description=(
         "accept: the paper shows this record or answer is right and answers the question. "
-        "retire (record items only): the record does not answer the question; it leaves current "
-        "results, stays in history and a curator can restore it. "
+        "retire: the record does not answer the question; any of its handles retires the whole record, "
+        "which leaves current results, stays in history and a curator can restore it. "
         "reject: records your opinion only; it does not remove an original record, which stays pending. "
         "defer: pending follow-up. acknowledge_failure: only for uncertain_outcome. "
         "revoke: withdraws an earlier acceptance."
@@ -108,38 +108,45 @@ def _expand(packet, decided):
 
     Versions are those pinned when the packet was read, so any later change to a
     record is a stale-version conflict rather than a silent decision on new state.
+    Retire concerns a whole record: any of its handles names it, and several
+    retire handles of one record become one retirement.
     """
     handles = packet["handles"]
-    entries, retirements = [], []
+    roots = {item["record"]: item["target_id"] for item in packet["records"] if item["record"] is not None}
+    entries, retiring = [], {}
     for decision in decided:
         pinned = handles.get(decision.handle)
         if pinned is None:
             raise ValueError(f"{decision.handle}: Unknown handle for this review packet")
-        if pinned.get("uncertain_outcome") and decision.action != "acknowledge_failure":
-            raise ValueError(f"{decision.handle}: this validation stopped without an answer, "
-                             "so only acknowledge_failure can decide it")
         if decision.evidence is not None and decision.action != "retire":
             raise ValueError(f"{decision.handle}: Only retire takes evidence handles")
         if decision.action == "retire":
-            if "extraction_ref" not in pinned:
-                raise ValueError(f"{decision.handle}: only a record item can be retired with this action; "
-                                 "a record with validator answers needs an extractor retirement recommendation "
-                                 "(request_targeted_extraction, then decide_record_retirement)")
+            root = roots.get(pinned["record"])
+            if root is None:
+                raise ValueError(f"{decision.handle}: this item belongs to no record, so there is nothing to retire")
             unknown = [handle for handle in decision.evidence or [] if handle not in packet["evidence"]]
             if unknown:
                 raise ValueError(f"{decision.handle}: Unknown evidence handle for this review packet: "
                                  + ", ".join(unknown))
-            cited = {}
+            record = retiring.setdefault(root, {"target_id": root, "expected_version": None,
+                                                "reasons": [], "evidence": {}})
+            if pinned["decision_unit_id"] == root:
+                # A record item pins the record's own version; a validator item
+                # pins its field, and the packet's source digest pins the record.
+                record["expected_version"] = pinned["expected_version"]
+            if decision.reason not in record["reasons"]:
+                record["reasons"].append(decision.reason)
             for handle in decision.evidence or []:
-                cited[handle] = packet["evidence"][handle]
-                shared = cited[handle].get("same_quote_as")
+                record["evidence"][handle] = packet["evidence"][handle]
+                shared = record["evidence"][handle].get("same_quote_as")
                 if shared is not None:  # Keep the quote a copy points at.
-                    cited[shared] = packet["evidence"][shared]
-            retirements.append({"target_id": pinned["target_id"], "expected_version": pinned["expected_version"],
-                                "reason": decision.reason, "evidence": cited})
-            entries.append({"target_id": pinned["target_id"], "decision_unit_id": pinned["decision_unit_id"],
+                    record["evidence"][shared] = packet["evidence"][shared]
+            entries.append({"target_id": root, "decision_unit_id": pinned["decision_unit_id"],
                             "action": "retire"})
             continue
+        if pinned.get("uncertain_outcome") and decision.action != "acknowledge_failure":
+            raise ValueError(f"{decision.handle}: this validation stopped without an answer, "
+                             "so only acknowledge_failure (or retire for the whole record) can decide it")
         subject = {key: pinned[key] for key in ("logical_attempt_id", "extraction_ref", "applicability_ref")
                    if key in pinned and decision.action != "revoke"}
         entries.append({
@@ -150,13 +157,23 @@ def _expand(packet, decided):
             "unresolved_fields": (None if decision.unresolved_fields is None else
                                   [item.model_dump(mode="json") for item in decision.unresolved_fields]),
         })
-    units = {}
+    units, mixed = {}, {}
     for decision, entry in zip(decided, entries, strict=True):
-        units.setdefault(entry["decision_unit_id"], []).append(decision.handle)
+        if entry["action"] != "retire":
+            units.setdefault(entry["decision_unit_id"], []).append(decision.handle)
+            root = roots.get(handles[decision.handle]["record"])
+            if root in retiring:
+                mixed.setdefault(handles[decision.handle]["record"], []).append(decision.handle)
     for same in units.values():
         if len(same) > 1:
             raise ValueError(", ".join(same) + ": these handles decide the same record field; "
                              "send only one of them in a call")
+    for label, named in mixed.items():
+        raise ValueError(", ".join(named) + f": retire removes the whole record {label}; "
+                         "send no other decision for it in the same call")
+    retirements = [{"target_id": record["target_id"], "expected_version": record["expected_version"],
+                    "reason": "\n".join(record["reasons"]), "evidence": record["evidence"]}
+                   for record in retiring.values()]
     return [decision.handle for decision in decided], entries, retirements
 
 
@@ -227,7 +244,7 @@ def record_packet_decisions(context, *, checkpoint_request, operation_id, packet
 
 def record_packet_review_in_transaction(db, context, *, checkpoint, retire, operation_id, packet_id,
                                         packet_decisions):
-    """Retire record items and save every other decision of one packet save atomically.
+    """Retire records and save every other decision of one packet save atomically.
 
     The runtime binds retire to the source publication of this same transaction;
     checkpoint returns the envelope request at the revision each publication left.
@@ -251,10 +268,9 @@ def record_packet_review_in_transaction(db, context, *, checkpoint, retire, oper
     names = _handle_names(packet)
     decisions = [entry for entry in entries if entry["action"] != "retire"]
     with _named_errors(handles, entries):
-        retired = {}
+        retired = {"retirement_ids": {}, "affected_bindings": []}
         if retirements:
-            retired = retire(retirements, operation_id=key,
-                             expected_source_sha=packet["source_state_sha256"])["retirement_ids"]
+            retired = retire(retirements, operation_id=key, expected_source_sha=packet["source_state_sha256"])
         saved = None
         if decisions:
             saved = record_decisions_in_transaction(db, context, checkpoint_request=checkpoint(),
@@ -275,11 +291,14 @@ def record_packet_review_in_transaction(db, context, *, checkpoint, retire, oper
         "publication": publication, "envelope_revision": revision,
         "source_state_sha256": manifest["source_state_sha256"],
         "applied": [
-            {"decision_unit_id": entry["target_id"], "action": "retire", "handle": handle,
-             "target_id": entry["target_id"], "retirement_id": retired[entry["target_id"]]}
+            {"decision_unit_id": entry["decision_unit_id"], "action": "retire", "handle": handle,
+             "target_id": entry["target_id"], "retirement_id": retired["retirement_ids"][entry["target_id"]]}
             if entry["action"] == "retire" else {**next(applied), "handle": handle, "target_id": entry["target_id"]}
             for handle, entry in zip(handles, entries, strict=True)],
         **({"decision_id": saved["decision_id"]} if saved is not None else {}),
+        # Validator inputs the retirement changed are assessed with this selection_id.
+        **({"affected_bindings": retired["affected_bindings"], "selection_id": retired["selection_id"]}
+           if retired["affected_bindings"] else {}),
         **({} if ready else {"blocking": blocking(db, episode, manifest, names)}),
     }
     append_fact(db, episode.artifact_id, operation_id="packet-review-response:" + key,

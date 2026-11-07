@@ -49,13 +49,14 @@ fresh packet.
 
 Each record ends accepted, retired or left pending. A record must be shown in the
 paper to answer the question. Reject records an opinion and does not remove an
-original record; it stays pending. To exclude a record item that does not answer the
-question, retire it with a reason and any E handles that show it; it leaves current
-results and a curator can restore it. A record with validator answers is retired
-only through the extractor's retirement recommendation. Each record gets one
-targeted follow-up; a curator-requested round grants a fresh one. If a follow-up
-finds nothing showing a record answers the question, retire it and say in the
-reason what remains uncertain.
+original record; it stays pending. To exclude a record that does not answer the
+question, retire it with a reason and any E handles that show it; retire on any of
+its handles retires the whole record, which leaves current results and a curator
+can restore it. Each record gets one targeted follow-up per review round; a
+curator-requested round grants a fresh one. Each packet record shows
+follow_up_available; check it before deferring for a follow-up. If a follow-up finds
+nothing showing a record answers the question, retire it and say in the reason what
+remains uncertain.
 
 For too_large records, or when an assessment needs a record's or answer's complete
 exact history, use get_outstanding_validation_reviews, get_validation_record_sources,
@@ -119,7 +120,8 @@ not read the paper yourself. State what failed, what needs clarification, and
 where the extractor might investigate. The runtime supplies original extraction,
 exact prior requests/answers/caveats, decisions and attempt state automatically.
 Initial extraction plus one targeted follow-up is the default two-attempt limit
-per original entry. There is no automatic full-extraction restart or budget reset.
+per original entry in each review round. There is no automatic full-extraction
+restart or budget reset.
 
 Inspect the returned contribution and explicitly select scientifically supported
 fields, evidence and proposed item relationships with select_extraction_contribution.

@@ -305,19 +305,24 @@ readable but cannot perform a new targeted follow-up with the changed protocol;
 
 ### Retirement by the reviewer (ALL-1502)
 
-The review actor can also retire an extraction-only record itself, without an
-extractor recommendation, when it judges that the record does not answer the
-curator's question. It does so with `action: "retire"` on the record's `D` handle in
-`record_validation_review`, giving a reason and, optionally, `E` handles from the same
-packet. `reject` is different: it records an opinion and leaves the record pending.
+The review actor can also retire a record itself, without an extractor
+recommendation, when it judges that the record does not answer the curator's
+question. Scope is separate from identity validation, so this applies whether or not
+the record has validator answers. It does so with `action: "retire"` on any of the
+record's `D` handles in `record_validation_review`, giving a reason and, optionally,
+`E` handles from the same packet; several retire handles of one record become one
+retirement, and another decision for the same record in that call is refused.
+`reject` is different: it records an opinion and leaves the record pending.
 
 Code does not judge scope. It checks authority (a review actor, `actor.type ==
-"agent"`, in its own open round; curator decisions, curator row decisions and curator
-edits block retirement as before), the round's record scope, structure (an active
-whole record with an `extraction_only` obligation, present in the current source, at
-the version pinned by the packet), and the packet's `source_state_sha256`. A record
-with validator answers is still retired only through an extractor recommendation and
-`decide_record_retirement`.
+"agent"`, in its own open round; curator decisions, curator row decisions, curator
+edits and curator-authored records block retirement), the round's record scope,
+structure (an active whole record present in the current source; a record item's
+pinned version), and the packet's `source_state_sha256`, which pins every record's
+lifecycle. The record's validator bindings leave coverage through the same
+publication as an approved extractor recommendation; surviving validator inputs that
+change are returned as `affected_bindings` with the `selection_id` to pass to
+`validate_selected_extraction_source`.
 
 Each retired record gets a `record_retirement_decision` fact whose identity has
 `decision: "retire"`, the actor, the reason and the source digest; the body has

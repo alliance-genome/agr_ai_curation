@@ -65,6 +65,9 @@ def _recoverable_tool(function, *, lines):
                 "applied": [],
                 "targets": arguments.get("target_ids", []),
             }
+            if exc.reason == "extraction_attempts_exhausted":
+                # Every requested record had no follow-up left; name them all.
+                result["exhausted"] = list(exc.exhausted)
         except (store.HistoryConflict, store.HistoryAccessError, ValueError) as exc:
             result = {
                 "state": "conflict",
@@ -227,9 +230,11 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
 
         Each record ends accepted, retired or left pending. Reject records an
         opinion; it does not remove an original record, which stays pending. To
-        exclude a record item that does not answer the question, use action retire
-        with a reason (and any E handles that show it); it leaves current results,
-        stays in history, and a curator can restore it. Retire is packet-only.
+        exclude a record that does not answer the question, use action retire on
+        any of its handles with a reason (and any E handles that show it); it
+        leaves current results, stays in history, and a curator can restore it.
+        Retire is packet-only. If the result lists affected_bindings, assess them
+        with validate_selected_extraction_source and the returned selection_id.
         Give a reason specific to each record. If any decision conflicts, nothing
         in the call applies. From read_review_packet, send its packet_id and one
         packet_decisions item per D handle, with entries null; the server fills in
@@ -356,8 +361,9 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         what is missing or ambiguous and useful search guidance. Runtime supplies
         originals, exact prior validator inputs/answers/caveats, your decision and
         current attempt state automatically. The extractor can use only its saved
-        paper tools. Each record gets one follow-up; a curator-requested round grants
-        a fresh one, and changing operation IDs cannot reset it. Records with none
+        paper tools. Each record gets one follow-up per review round; a
+        curator-requested round grants a fresh one, and changing operation IDs or
+        turns cannot reset it. Records with none
         left are not investigated and are listed under exhausted: decide them now
         (accept, retire or leave pending). A proposal is not an accepted
         source or validation. Read it and separately select supported fields and
@@ -394,7 +400,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             decision: Literal["approve", "decline"], expected_source_sha: str, reason: str) -> dict:
         """Approve or decline an extractor's whole-record retirement recommendation.
 
-        To retire a record item yourself, use action retire in record_validation_review.
+        To retire a record yourself, use action retire in record_validation_review.
         Read its exact contribution, evidence and uncertainty first. Approval omits
         the record from current results without deleting original data or history;
         decline preserves current values and readiness. Curator authority is protected.
@@ -415,7 +421,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         """Validate changed inputs from an explicitly approved extraction contribution.
 
         Use the exact selection_id and affected binding target IDs returned by
-        select_extraction_contribution. Explain what the new source clarifies and
+        select_extraction_contribution or by a save that retired records. Explain what the new source clarifies and
         what the saved validator must reassess. Runtime automatically supplies the
         original extraction, previous requests/answers, selected source and your
         selection reason. Existing attempt limits still apply; selecting source

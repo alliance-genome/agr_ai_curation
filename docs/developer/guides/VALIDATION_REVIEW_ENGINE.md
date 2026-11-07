@@ -235,12 +235,13 @@ for the exact-history tools. The explicit `entries` form is unchanged and has no
 `retire` action.
 
 `reject` records an opinion and does not remove an original extraction-only record:
-its selection stays empty and it remains an `unreviewed` blocker. `retire` on a
-`record` item removes the whole record from current results (see Retirement by the
-reviewer in `VALIDATION_HISTORY.md`); a save with any `retire` runs through the bound
-source boundary, so retirements and the other decisions publish atomically, and the
-result names each retired handle with its `retirement_id` plus the new
-`source_state_sha256`. When a save leaves review not ready, its result carries
+its selection stays empty and it remains an `unreviewed` blocker. `retire` on any
+handle of a record removes the whole record, with its validator bindings, from current
+results (see Retirement by the reviewer in `VALIDATION_HISTORY.md`); a save with any
+`retire` runs through the bound source boundary, so retirements and the other
+decisions publish atomically, and the result names each retired handle with its
+`retirement_id` plus the new `source_state_sha256`, and any `affected_bindings` with
+their `selection_id`. When a save leaves review not ready, its result carries
 `blocking`: the round's manifest blockers grouped by code, each with the handles (or
 target IDs for units outside the packet) and a plain `clears_with` step derived from
 the code and the unit's review mode. Curator saves do not get this list.

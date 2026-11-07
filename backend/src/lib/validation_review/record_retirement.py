@@ -14,7 +14,9 @@ from .specialist_context import entry_coverage
 
 
 def _require_no_curator_authority(db, artifact_id, root, descendants, source_envelope):
-    """A curator decision, row decision or edit on the record outranks any review actor."""
+    """A curator decision, row decision, edit or authored record outranks any review actor."""
+    if store._has_curator_subject(db, artifact_id, root.id):
+        raise store.HistoryConflict("Curator authority prevents supervisor retirement")
     if any(store._current(db, artifact_id, target).get("actor", {}).get("type") == "curator"
            for target in descendants | {root.id}):
         raise store.HistoryConflict("Curator authority prevents supervisor retirement")
@@ -120,15 +122,19 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
 
 def retire_in_transaction(db, context, *, operation_id, records, expected_source_sha,
                           source_envelope, rebuild_inputs, publish):
-    """The review actor retires whole extraction-only records it judged not to answer the question.
+    """The review actor retires whole records it judged not to answer the question.
 
-    records: [{"target_id", "expected_version", "reason", "evidence"}], where
-    evidence maps packet E handles to the exact entries the actor cited. The actor's
-    scope judgment and reason are saved, never recomputed: code checks only
-    authority (a review actor in its own open round, no curator decision on the
-    record), the round's record scope, structure (an active whole extraction-only
-    record in the current source) and history. Authority comes from the review
-    actor type, not a model name, so code may call this for another review actor.
+    records: [{"target_id", "expected_version", "reason", "evidence"}]: the record
+    root, its pinned version (None when the caller pinned only a validator field;
+    the expected source digest then pins the record's lifecycle), and the packet E
+    handles mapped to the exact entries the actor cited. The actor's scope judgment
+    and reason are saved, never recomputed: code checks only authority (a review
+    actor in its own open round, no curator decision or authorship on the record),
+    the round's record scope, structure (an active whole record in the current
+    source) and history. The record's validator bindings leave coverage through the
+    same publication as an approved extractor recommendation. Authority comes from
+    the review actor type, not a model name, so code may call this for another
+    review actor.
     """
     ep, _ = admission.lock_episode(db, context.history_scope, context.episode_id)
     artifact_id = ep.artifact_id
@@ -155,7 +161,6 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
         raise store.HistoryConflict("Records changed after this packet was read; read a fresh packet")
     episode = selections.effective_episode(db, store._fact(db, artifact_id, ep.id))
     permitted = allowed_units(episode)
-    modes = {item["target_id"]: item["mode"] for item in episode["obligations"]}
     before = rebuild_inputs(db, source_envelope)
     updated = source_envelope.model_copy(deep=True)
     facts, entries = [], []
@@ -168,10 +173,6 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
             _, descendants = entry_coverage(db, artifact_id, [root.id])
             if not descendants.intersection(permitted):
                 raise store.HistoryAccessError("Retirement is outside the requested record scope")
-            if modes.get(root.id) != "extraction_only":
-                raise store.HistoryConflict(
-                    "A record with validator answers is retired only through an extractor retirement "
-                    "recommendation: request_targeted_extraction, then decide_record_retirement")
             matches = [obj for obj in source_envelope.extracted_objects
                        if obj.metadata["validation_history"]["target_id"] == root.id]
             if len(matches) != 1:
@@ -189,8 +190,10 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
                   "origin": "review", "evidence": record["evidence"],
                   "previous_obligations": episode["obligations"],
                   "entry": matches[0].model_dump(mode="json")}))
-        entries.append({"target_id": root.id, "expected_version": record["expected_version"],
-                        "action": "retire", "reason": record["reason"]})
+        pinned = record["expected_version"]
+        entries.append({"target_id": root.id, "action": "retire", "reason": record["reason"],
+                        "expected_version": store._current(db, artifact_id, root.id)["version"]
+                        if pinned is None else pinned})
         updated.extracted_objects = [obj for obj in updated.extracted_objects
                                      if obj.metadata["validation_history"]["target_id"] != root.id]
     store.apply_decisions_in_transaction(db, context.history_scope, artifact_id,
@@ -201,7 +204,7 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
         before=before, after=after, selection_id=facts[0].id)
     publication = publish(db, updated, after, changed, facts[0].id)
     response = {"retirement_ids": {fact.target_id: fact.id for fact in facts},
-                "affected_bindings": changed, "publication": publication,
+                "selection_id": facts[0].id, "affected_bindings": changed, "publication": publication,
                 "source_state_sha256": selections.source_state_digest(db, artifact_id)}
     append_fact(db, artifact_id, operation_id="record-retirement-response:" + operation_id,
         kind="record_retirement_response", parent_id=facts[0].id,
