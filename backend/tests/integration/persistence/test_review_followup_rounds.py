@@ -129,7 +129,7 @@ def test_an_operational_stop_is_not_reported_as_records_the_reviewer_left(scope)
         "Review paused: cancelled. Saved results and history are retained.")
 
 
-def test_a_curator_decision_never_settles_the_reviewers_view(scope):
+def test_a_curator_decision_in_this_round_stops_reviewer_runs(scope):
     aid, ep, record = extraction_only_record(scope)
     used_followup(aid, ep, record)
     with store.SessionLocal.begin() as db:
@@ -139,8 +139,47 @@ def test_a_curator_decision_never_settles_the_reviewers_view(scope):
             entries=[{"target_id": record, "expected_version": store._current(db, aid, record)["version"],
                       "action": "reject", "subject": "baseline", "reason": "Curator judgment"}])
     view = continuation.inspect(ReviewContext(scope, ep, "supervisor"), EXTRACTION_TOOLS)
-    assert view["eligible"] == {record} and view["causes"] == []
+    assert view["eligible"] == set()
+    assert view["causes"] == [{"target_id": record, "code": "curator_authority_required"}]
     assert view["pending"] == [{"record_target_id": record, "why": "curator_decision", "recheck_left": False}]
+
+
+def test_an_envelope_level_unit_is_pending_for_the_extraction_as_a_whole(scope):
+    from types import SimpleNamespace
+    from src.lib.validation_review.chat import ChatReview
+    from tests.integration.persistence.test_selected_value_authority import answer, episode
+
+    # An unconstrained envelope binding sits directly under the envelope root, outside any record.
+    aid = store.capture_baseline(scope, producer_id=uuid4().hex, subject_kind="extracted",
+                                 typed={"original": "x"}, normalized={"extracted_objects": [], "metadata": {}},
+                                 provenance=CONFIGURED)
+    root = store.register_target(scope, aid, identity="envelope",
+                                 original={"envelope_id": "env", "baseline_target": True})
+    binding = store.register_target(scope, aid, identity="envelope-binding:fixture",
+                                    original={"binding_id": "fixture"}, parent_target_id=root)
+    ep = episode(scope, aid, binding)
+    sid = admission.create_scope(scope, operation_id=uuid4().hex, kind="document_run", targets=1, episodes=1)
+    admission.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
+    answer(scope, aid, binding)
+    view = continuation.inspect(ReviewContext(scope, ep, "supervisor"), EXTRACTION_TOOLS)
+    assert [item["record_target_id"] for item in view["pending"]] == [None]
+    saved = []
+    context = SimpleNamespace(
+        context=lambda record: ReviewContext(scope, ep, "supervisor"),
+        reference=lambda record: {"artifact_id": aid}, review_summary_operation=lambda context: uuid4().hex,
+        turn_id="turn", checkpoint=lambda record: pytest.fail("No record needs the saved source"))
+    context.record_labels = lambda record, ids: ChatReview.record_labels(context, record, ids)
+    outcome = continuation.terminal(view, [], None)
+    ChatReview.retain_review_outcome(context, SimpleNamespace(extraction_result_id="result"), outcome)
+    with store.SessionLocal() as db:
+        from sqlalchemy import select
+        from src.models.sql.validation_history import ValidationFact
+        fact = db.scalar(select(ValidationFact).where(ValidationFact.artifact_id == aid,
+                                                      ValidationFact.kind == "review_supervisor_summary"))
+        saved.append(store._content(db, fact)["outcome"])
+    rendered = ChatReview.render_review_notes(SimpleNamespace(review_notes=lambda **kwargs: [{"outcome": saved[0]}]))
+    assert "Review finished with 1 record still pending: the extraction as a whole (the reviewer did not decide it" \
+        in rendered
 
 
 def curator_round(scope, aid, predecessor, record):

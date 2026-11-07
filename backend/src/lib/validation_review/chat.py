@@ -657,18 +657,24 @@ class ChatReview:
         return "\n\nReviewer's notes:\n" + "\n\n".join(notes) if notes else ""
 
     def record_labels(self, record, target_ids):
-        """Curator-facing names for saved records: the label each workspace row shows."""
+        """Curator-facing names for saved records: the label each workspace row shows.
+
+        A unit bound to the envelope itself has no record (None), as in the review
+        packet; it concerns the extraction as a whole.
+        """
         from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
         from src.lib.domain_packs.materialization import object_display_label
 
-        envelope = self.checkpoint(record).envelope
-        pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
-        if pack is None:
-            raise store.HistoryConflict("Saved domain pack is unavailable")
-        labels = {obj.metadata["validation_history"]["target_id"]:
-                  object_display_label(pack.metadata, obj)
-                  for obj in envelope.extracted_objects
-                  if obj.metadata["validation_history"]["target_id"] in target_ids}
+        labels = {None: "the extraction as a whole"} if None in target_ids else {}
+        if set(target_ids) - {None}:
+            envelope = self.checkpoint(record).envelope
+            pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+            if pack is None:
+                raise store.HistoryConflict("Saved domain pack is unavailable")
+            labels.update({obj.metadata["validation_history"]["target_id"]:
+                           object_display_label(pack.metadata, obj)
+                           for obj in envelope.extracted_objects
+                           if obj.metadata["validation_history"]["target_id"] in target_ids})
         missing = set(target_ids) - set(labels)
         if missing:
             raise store.HistoryConflict("A pending review record is not in the current saved result")

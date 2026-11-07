@@ -76,9 +76,11 @@ def test_new_input_after_a_decision_or_an_unread_answer_keeps_the_record_eligibl
     assert continuation.classify(answered, {"a": unit(settled_by="reject")}) == ({"a"}, [])
 
 
-def test_curator_authority_is_not_a_reviewer_decision():
-    blockers = [{"target_id": "a", "code": "unreviewed"}]
-    eligible, causes = continuation.classify(blockers, {"a": unit(mode="curator", settled_by="reject")})
+@pytest.mark.parametrize("changes", [{"mode": "curator"}, {"curator_decided": True, "can_repair": True},
+                                     {"curator_decided": True}])
+def test_curator_authority_stops_reviewer_runs(changes):
+    blockers = [{"target_id": "a", "code": "unreviewed"}, {"target_id": "a", "code": "answer_review_pending"}]
+    eligible, causes = continuation.classify(blockers, {"a": unit(**changes)})
     assert not eligible and causes == [{"target_id": "a", "code": "curator_authority_required"}]
 
 
@@ -92,10 +94,11 @@ def test_pending_records_name_each_record_once_with_its_plain_reason():
              "b": unit(record="rb", settled_by="reject", can_repair=True),
              "c": unit(record="rc", mode="curator"), "d": unit(record="rd"),
              "e": unit(record="re", settled_by="acknowledge_failure"),
-             # A curator's reject never settles the reviewer's view, yet the curator holds it.
-             "f": unit(record="rf", curator_decided=True)}
+             # A curator's pending decision holds the record; the reviewer cannot change it.
+             "f": unit(record="rf", curator_decided=True, can_repair=True)}
     eligible, causes = continuation.classify(blockers[:-1], units)
-    assert "f" in eligible and "e" not in eligible
+    assert not {"e", "f"} & eligible
+    assert {"target_id": "f", "code": "curator_authority_required"} in causes
     assert continuation.pending_records(blockers, units, eligible, causes) == [
         {"record_target_id": "ra", "why": "not_accepted", "recheck_left": False},
         {"record_target_id": "rb", "why": "not_accepted", "recheck_left": True},

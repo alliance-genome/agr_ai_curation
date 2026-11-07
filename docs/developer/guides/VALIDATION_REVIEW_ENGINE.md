@@ -523,8 +523,9 @@ review action can still change (`continuation.classify`). A unit whose latest
 decision in this episode is the reviewer's reject, defer or acknowledge-failure,
 with no newer saved answer, follow-up request, contribution or source input for its
 lineage and no follow-up or reconsideration left, stops with the typed cause
-`reviewer_left_pending` (flow status `review_pending`). A curator's decision never
-settles the reviewer's view. The check uses decision history, actors, sequences and
+`reviewer_left_pending` (flow status `review_pending`). A curator's reject, defer or
+acknowledge-failure in this episode stops reviewer runs for that unit with
+`curator_authority_required`, since the reviewer cannot override it. The check uses decision history, actors, sequences and
 counts only, never the decision's reason. A targeted follow-up counts as left only
 when `extraction_scheduling.followup_available` says so: the same three conditions
 the request enforces (saved extractor support, a baseline record, this round's
@@ -535,7 +536,8 @@ first cause; refusals seen during the run stay in `causes`. The outcome's `pendi
 list names each pending record once with a plain structural reason
 (`curator_decision`, `cannot_check`, `not_accepted`, `not_decided`) and whether a
 re-check is left. A curator's pending decision reads as `curator_decision` and an
-acknowledged failure as `cannot_check`. Chat saves each record's workspace label
+acknowledged failure as `cannot_check`. A unit bound to the envelope itself has no
+record and is named "the extraction as a whole". Chat saves each record's workspace label
 with the outcome when review stops and renders the saved text only, for example
 "Review finished with 1 record still pending: crb p13A (the reviewer did not
 accept it, and no re-check is left)." Operational stops (cancelled, expired,

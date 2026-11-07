@@ -52,7 +52,9 @@ def classify(blockers, units):
         if unit is None:
             causes.extend(dict(item) for item in pending)
             continue
-        if unit["mode"] == "curator":
+        # A curator's record, or a curator's pending decision in this episode,
+        # is the curator's to change: another reviewer run cannot override it.
+        if unit["mode"] == "curator" or unit["curator_decided"]:
             causes.append({"target_id": target, "code": "curator_authority_required"})
             continue
         codes = {item["code"] for item in pending}
@@ -178,7 +180,7 @@ def inspect(context, tool_names):
 
         def settled_by(tid):
             """The reviewer's latest decision of this episode that left the unit pending,
-            if nothing arrived since. A curator's decision never settles the reviewer's view."""
+            if nothing arrived since. A curator's decision is held separately (curator_decided)."""
             actor, action = pending_decision(tid)
             if action is None or actor == "curator" or heads[tid].sequence < latest_input(tid):
                 return None
