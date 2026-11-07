@@ -145,6 +145,10 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Semantic chat-output fixture reproduces a curator's C. elegans
     # gene-expression result (WormBase identifiers) for the payload hotfix.
     Path("backend/tests/fixtures/flows/semantic_chat_output.py"),
+    # The Decisions quick-check golden test (ALL-1506) replays a real review
+    # packet and its validator answers (FlyBase identifiers) so the calibrated
+    # input stays byte-identical to the trial; core code stays generic.
+    Path("backend/tests/unit/lib/validation_review/test_quick_check.py"),
     # Standard display rendering is checked against the installed Alliance
     # gene-expression pack and production value shapes (ALL-1282).
     Path("backend/tests/unit/lib/flows/test_value_display.py"),
