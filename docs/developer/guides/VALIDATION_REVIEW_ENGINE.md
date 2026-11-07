@@ -215,9 +215,14 @@ equal; any other copy keeps its own fields and points at the first entry with
   operational uncertainty, for example after a worker crash. Its handle accepts only
   `acknowledge_failure`, which clears the blocker without a scientific verdict.
 - `waiting`: work that cannot be decided now (a field whose newest validation is
-  still running, even if an older answer exists; a curator-owned record; an earlier
-  rejection awaiting reconsideration). It has no handle, so a save can never select an
-  answer the reviewer did not read or one a running validation may replace.
+  still running, even if an older answer exists; a curator-owned record; an answer
+  the reviewer rejected or deferred in this round with nothing new since). It has no
+  handle, so a save can never select an answer the reviewer did not read or one a
+  running validation may replace. An answer the reviewer already decided returns as
+  a `validator_answer` with a handle once something new arrives for its record (a
+  follow-up request, a contribution, a source input or another answer) or a later
+  round begins. The newest completed answer whose inputs are still current is the one
+  offered. The packet and continuation use one test for this, `continuation.decidable`.
 
 Every decidable item carries a `D` handle, or one handle per covered component. The
 pinned fact maps each handle to its target, decision unit, attempt or extraction or
@@ -524,7 +529,12 @@ Expected budget/deadline stops are pending outcomes; operational failures use th
 existing sanitized reporting owner.
 
 After each reviewer run, continuation starts another run only for a unit some
-review action can still change (`continuation.classify`). A unit whose latest
+review action can still change (`continuation.classify`): one the reviewer can decide
+now (`continuation.decidable`, computed from `continuation.review_subjects`; the packet
+uses the same test to offer an unreviewed validator answer again, while its other
+handles may offer more) or one a re-check or reconsideration that is still left can
+change. A validation unit has a subject to decide only while it has a
+completed answer whose inputs are still current. A unit whose latest
 decision in this episode is the reviewer's reject, defer or acknowledge-failure,
 with no newer saved answer, follow-up request, contribution or source input for its
 lineage and no follow-up or reconsideration left, stops with the typed cause

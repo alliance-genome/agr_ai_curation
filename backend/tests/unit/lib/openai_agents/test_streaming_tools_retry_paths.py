@@ -815,7 +815,7 @@ def test_validator_lookup_audit_events_dedupe_identical_batch_attempts(monkeypat
     ]
     assert complete_details["friendlyName"] == (
         "Gene Extraction: Validator Lookup review required "
-        "(3 targets, mixed validation) (alliance_gene_reference_lookup)"
+        "(3 targets) (alliance_gene_reference_lookup)"
     )
 
 
@@ -886,6 +886,39 @@ def test_validator_review_outcome_is_distinct_from_technical_failure(monkeypatch
     assert "policy-review" in details["friendlyName"]
     assert details["validatorExplanations"] == [result.explanation]
     assert ("review required" in details["friendlyName"]) is success
+
+
+def _allele_lookup_result(request_id, status, *, outcome="ambiguous"):
+    return SimpleNamespace(
+        request_id=request_id, validator_binding_id="alliance_allele_lookup", status=status, target=None,
+        explanation=None, curator_message=None,
+        lookup_attempts=[SimpleNamespace(provider="agr_curation_query", method="search_alleles",
+                                         query={"data_provider": "FB", "allele_symbol": "w"},
+                                         result_count=20, outcome=outcome, message=None)])
+
+
+@pytest.mark.parametrize("statuses,outcome,label", [
+    # Trace 1b937f7b: the search returned 20 candidates and the validator resolved one.
+    (["resolved"], "ambiguous", "Allele Validation: Validator Lookup resolved (alliance_allele_lookup)"),
+    (["resolved"] * 3, "ambiguous",
+     "Allele Validation: Validator Lookup resolved (3 targets) (alliance_allele_lookup)"),
+    # A genuinely ambiguous validator answer is unresolved, whatever the search step reported.
+    (["unresolved"], "ambiguous", "Allele Validation: Validator Lookup review required (alliance_allele_lookup)"),
+    (["unresolved"], "success", "Allele Validation: Validator Lookup review required (alliance_allele_lookup)"),
+    (["resolved"], "conflict", "Allele Validation: Validator Lookup resolved (alliance_allele_lookup)"),
+])
+def test_validator_lookup_line_reports_the_validator_status_not_the_search_outcome(
+        monkeypatch, statuses, outcome, label):
+    events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
+    results = [_allele_lookup_result(f"request-{index}", status, outcome=outcome)
+               for index, status in enumerate(statuses)]
+    streaming_tools._emit_validator_lookup_audit_events(
+        specialist_name="Allele Validation", dispatch_result=SimpleNamespace(validator_results=results))
+    complete = [event["details"] for event in events if event["type"] == "TOOL_COMPLETE"]
+    assert [details["friendlyName"] for details in complete] == [label]
+    # The search step's own outcome and candidate count stay as event detail only.
+    assert (complete[0]["outcome"], complete[0]["resultCount"], complete[0]["success"]) == (outcome, 20, True)
 
 
 @pytest.mark.asyncio
