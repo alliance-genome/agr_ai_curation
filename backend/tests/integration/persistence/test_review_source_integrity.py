@@ -56,12 +56,14 @@ def _pack(tmp_path):
                    {"field_path": "evidence_code_curies", "field_type": "string",
                     "metadata": {"multivalued": True}}],
     })
-    link = DomainPackObjectDefinition.model_validate({
-        "object_type": "Link", "display_name": "Link",
-        "fields": [{"field_path": "note", "field_type": "string"}],
-    })
+    # Extraction-only types: a link record, and production's quote, association and reference records.
+    extraction_only = [DomainPackObjectDefinition.model_validate({
+        "object_type": object_type, "display_name": object_type,
+        "fields": [{"field_path": field, "field_type": "string"}],
+    }) for object_type, field in (("Link", "note"), ("EvidenceQuote", "quote"), ("Association", "note"),
+                                  ("Reference", "title"))]
     return replace(pack, metadata=pack.metadata.model_copy(update={
-        "object_definitions": [*pack.metadata.object_definitions, supporting, link]}))
+        "object_definitions": [*pack.metadata.object_definitions, supporting, *extraction_only]}))
 
 
 def _answer(request):
@@ -439,3 +441,185 @@ async def test_an_invalid_source_stops_review_once_with_an_alert(scope, monkeypa
     if stage == "the published source":
         assert [issue for issue, _ in source_envelope_guard] == ["edited envelope before publish"]
         source_envelope_guard.clear()
+
+
+# Production trace 1b937f7b in small: a paper reference, the crb family and the w family.
+# Each family is a mention (validated), an evidence quote and an association that refers
+# to the reference, the mention and the quote.
+CRB = ("paper-reference-1", "allele-mention-1", "evidence-quote-1-1", "allele-paper-evidence-association-1")
+W_MENTION, W_QUOTE, W_ASSOCIATION = "allele-mention-4", "evidence-quote-4-1", "allele-paper-evidence-association-4"
+W = (W_MENTION, W_QUOTE, W_ASSOCIATION)
+REVIEW_OUTPUT = "Reviewed every record."
+
+
+def _family(number, curie, quote, note):
+    mention = f"allele-mention-{number}"
+    evidence = f"evidence-quote-{number}-1"
+    return [
+        CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=mention,
+                                payload={"evidence_code_curies": [curie]}),
+        CuratableObjectEnvelope(object_type="EvidenceQuote", pending_ref_id=evidence, payload={"quote": quote}),
+        CuratableObjectEnvelope(object_type="Association", pending_ref_id=f"allele-paper-evidence-association-{number}",
+            payload={"note": note}, object_refs=[ObjectRef(pending_ref_id=ref) for ref in
+                                                 ("paper-reference-1", mention, evidence)]),
+    ]
+
+
+async def _production_chat(scope, tmp_path, monkeypatch):
+    """A real chat review of the production record shape, with validators that contribute references."""
+    from src.lib.config.agent_loader import AgentDefinition
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    from src.lib.validation_review.chat import ChatReview
+    from agents import Agent
+
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service.resolve_tools", lambda *args: [])
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
+    pack = _pack(tmp_path)
+    monkeypatch.setattr("src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package, agent: AgentDefinition(folder_name=agent, agent_id=agent, name=agent, package_id=package))
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id",
+                        lambda _: pack)
+    _answers(monkeypatch, _answer)
+    objects = [CuratableObjectEnvelope(object_type="Reference", pending_ref_id="paper-reference-1",
+                                       payload={"title": "The crumbs paper"}),
+               *_family(1, "eco:crb", "crb mutant clones were examined.", "crb"),
+               *_family(4, "eco:w", "w flies served as the control stock.", "w (paper wording)")]
+    envelope = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=pack.pack_id, extracted_objects=objects)
+    envelope = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
+                                          typed=envelope.model_dump(mode="json"), envelope=envelope, provenance={})
+    supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
+    attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
+    chat = ChatReview(scope.owner_id, scope.document_id, scope.session_id, uuid4().hex, supervisor, (),
+                      "What alleles were examined in the paper?")
+    await chat.receive(envelope, pack, agent_key="fixture", adapter_key="fixture", tool_name="ask_fixture",
+        execution_receipt=None, context=ValidatorRuntimeContext(
+            user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=()))
+    return chat
+
+
+def _recheck(chat, record, decision_id, names, roots):
+    """The extraction agent's targeted re-check of the w records: each proposes its retirement.
+
+    Admitted, run and retained through the real scheduling and result paths, with
+    the current source entries as the extractor adapter supplies them.
+    """
+    context = chat.context(record)
+    aid = chat.reference(record)["artifact_id"]
+    entries = [roots[name] for name in names]
+    with store.SessionLocal.begin() as db:
+        source = projection.source_envelope_in_transaction(db, context.history_scope, aid,
+                                                           chat.checkpoint(record).envelope)
+    current = {obj.metadata["validation_history"]["target_id"]: obj.model_dump(mode="json")
+               for obj in source.extracted_objects if obj.metadata["validation_history"]["target_id"] in entries}
+    wid = extraction_scheduling.request(context, operation_id=uuid4().hex, parent_decision_id=decision_id,
+        entry_ids=entries, instructions="Check whether the w records belong to the question.",
+        receipt={"agent_key": "saved", "execution_receipt": None,
+                 "contract": {"instructions": "Keep alleles examined in this study."}},
+        current_entries=current)
+    claim = work.claim(context.history_scope, wid)
+    work.mark_submitted(context.history_scope, wid, claim["lease_token"])
+    retained = extraction_results.retain(context.history_scope, wid, claim["lease_token"],
+        {"entries": [{"entry_id": entry, **RETIREMENT} for entry in entries]}, evidence_records=[])
+    work.finish(context.history_scope, wid, claim["lease_token"], outcome=retained)
+    with store.SessionLocal() as db:
+        return {store._fact(db, aid, ref["fact_id"]).target_id: ref for ref in retained["contributions"]}
+
+
+def _production_reviewer(chat, monkeypatch, seen):
+    """The reviewer model's first run, through its real bound tools, as production's run 1 went.
+
+    It saves the crb accepts and the w defers, has the w records re-checked, then
+    retires the w records. Every tool result is kept in seen; later runs do nothing.
+    """
+    calls = []
+
+    async def run(agent, input, **kwargs):
+        calls.append(agent.name)
+        if len(calls) == 1:
+            surface = getattr(agent, "tool_surface", None)
+            tools = {tool.name: tool for tool in (surface.source_tools if surface is not None else agent.tools)}
+            record, = chat.records()
+            context = chat.context(record)
+            roots = {obj.pending_ref_id: obj.metadata["validation_history"]["target_id"]
+                     for obj in chat.checkpoint(record).envelope.extracted_objects}
+            seen["roots"] = roots
+
+            async def call(name, arguments):
+                encoded = json.dumps(arguments)
+                return await tools[name].on_invoke_tool(ToolContext(context=None, tool_name=name,
+                    tool_call_id=arguments["operation_id"], tool_arguments=encoded), encoded)
+
+            async def save(operation_id, decided):
+                packet = reads.review_packet(context.history_scope, context.episode_id)
+                decisions = [{"handle": handle, "action": action, "reason": f"{name}: what the paper shows.",
+                              "absence_assessment": None, "unresolved_fields": None}
+                             for name, action in decided.items()
+                             for handle in _handles(_record(packet, roots[name]))]
+                return await call("record_validation_review", {"operation_id": operation_id,
+                    "packet_id": packet["packet_id"], "packet_decisions": decisions, "entries": None})
+
+            seen["initial"] = await save("review-initial-1", {**{name: "accept" for name in CRB},
+                                                              **{name: "defer" for name in W}})
+            seen["published"] = chat.checkpoint(record).envelope
+            contributions = _recheck(chat, record, seen["initial"]["decision_id"], W, roots)
+            packet = reads.review_packet(context.history_scope, context.episode_id)
+            seen["mention_items"] = [entry["review"] for entry in _record(packet, roots[W_MENTION])["review"]]
+            if _handles(_record(packet, roots[W_MENTION])):
+                seen["alone"] = await save("retire-white-mention-alone", {W_MENTION: "retire"})
+                seen["approve_alone"] = await call("decide_record_retirement", {
+                    "operation_id": "retire-white-mention-1", "contribution": contributions[roots[W_MENTION]],
+                    "decision": "approve", "expected_source_sha": packet["source_state_sha256"],
+                    "reason": "w is the control stock, not an allele examined."})
+                seen["family"] = await save("retire-white-family", {name: "retire" for name in W})
+            else:
+                # v0.11.5: the mention has no handle, so only its quote and association can be retired.
+                seen["family"] = await save("retire-white-evidence-association-1",
+                                            {W_QUOTE: "retire", W_ASSOCIATION: "retire"})
+        return SimpleNamespace(final_output=REVIEW_OUTPUT, to_input_list=lambda: [
+            *(input if isinstance(input, list) else [{"role": "user", "content": input}]),
+            {"role": "assistant", "content": REVIEW_OUTPUT}])
+
+    monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_with_owned_openai_resources", run)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_production_trace_1b937f7b_retires_the_white_family_after_accepted_validated_references(
+        scope, tmp_path, monkeypatch):
+    """End to end: accepted references (A), a re-offered deferred answer (D), a named refusal (B), one run."""
+    reports = []
+    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure",
+                        lambda error, **details: reports.append(error))
+    chat = await _production_chat(scope, tmp_path, monkeypatch)
+    seen = {}
+    calls = _production_reviewer(chat, monkeypatch, seen)
+    await chat.resume()
+    assert seen["initial"].get("state") != "conflict", seen["initial"]
+    references = _validated_references(seen["published"])
+    assert references and _anchored(seen["published"], references), "the crb accepts published validated references"
+    roots = seen["roots"]
+    # D: after the re-check, the deferred w answer is offered again with a handle.
+    assert seen["mention_items"] == ["validator_answer"], (
+        f"packet items for the w mention: {seen['mention_items']}; "
+        f"retiring the w records it could: {seen['family'].get('message', seen['family'])}")
+    # B: retiring the mention alone, either way, names the association that still refers to it.
+    referrer = f'record "{W_ASSOCIATION}" ({roots[W_ASSOCIATION]})'
+    assert seen["alone"]["state"] == "conflict" and seen["alone"]["code"] == "HistoryConflict", seen["alone"]
+    assert f"{referrer} still refers to this record; retire them together" in seen["alone"]["message"]
+    assert seen["approve_alone"]["state"] == "conflict", seen["approve_alone"]
+    assert f"{referrer} still refers to the record this recommendation retires" in seen["approve_alone"]["message"]
+    # A: retiring the whole w family in one save applies, and review is ready.
+    assert seen["family"].get("state") != "conflict", seen["family"]
+    assert seen["family"]["ready"] is True
+    assert len(calls) == 1, "review ended ready, so continuation started no further run"
+    outcome = chat.supervisor_handoff()["review_outcomes"][0]["outcome"]
+    assert outcome["review"]["ready"] is True
+    assert {item["label"] for item in outcome["retired"]} == set(W)
+    assert outcome["review_counts"] == {"accepted": 4, "pending": 0, "retired_in_this_review": 3}
+    assert reports == [], "no system error"
+    record, = chat.records()
+    current = chat.checkpoint(record).envelope
+    DomainEnvelope.model_validate(current.model_dump(mode="json"))
+    assert _validated_references(current) and {roots[name] for name in CRB} <= {
+        obj.metadata["validation_history"]["target_id"] for obj in current.extracted_objects}
