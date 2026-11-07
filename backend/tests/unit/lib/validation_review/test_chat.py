@@ -556,3 +556,31 @@ def test_compose_lets_an_empty_review_model_keep_the_supervisor_model():
         pytest.skip("Compose files are not mounted in this test image")
     for path in composes:
         assert "${VALIDATION_REVIEW_MODEL-gpt-6.1-sol}" in path.read_text()
+
+
+def test_finished_review_names_pending_records_instead_of_a_bare_stop_code():
+    from src.lib.validation_review.chat import ChatReview
+
+    record = SimpleNamespace(extraction_result_id="result-1")
+    pending = [{"record_target_id": "crb-entry", "why": "not_accepted", "recheck_left": False}]
+    labels = []
+    context = SimpleNamespace(
+        records=lambda: [record],
+        record_labels=lambda saved, ids: labels.append((saved, ids)) or {"crb-entry": "crb p13A"},
+        review_notes=lambda **kwargs: [
+            {"result_ref": "extraction-result:result-1", "outcome": {
+                "output": "The crb p13A record is out of scope.", "reason": "reviewer_left_pending",
+                "causes": [{"target_id": "crb-unit", "code": "reviewer_left_pending", "decision": "reject"},
+                           {"target_id": "crb-entry", "code": "extraction_attempts_exhausted"}],
+                "pending": pending}},
+            {"result_ref": "extraction-result:result-1", "outcome": {"reason": "budget_exhausted"}},
+        ],
+    )
+    notes = ChatReview.render_review_notes(context)
+    assert labels == [(record, {"crb-entry"})]
+    assert notes == (
+        "\n\nReviewer's notes:\nThe crb p13A record is out of scope.\n\n"
+        "Review finished with 1 record still pending: crb p13A (the reviewer did not accept it, "
+        "and no re-check is left). Saved results and history are retained.\n\n"
+        "Review paused: budget exhausted. Saved results and history are retained.")
+    assert "extraction attempts exhausted" not in notes

@@ -17,16 +17,44 @@ from .decisions import bounded_text
 from .work import enqueue_in_transaction
 
 
-def attempt_counts(db, artifact_id, entry_ids):
-    """Existing immutable request count, shared by admission and continuation."""
+def review_round(db, episode):
+    """The curator-requested round an admitted episode belongs to; None for the original round.
+
+    A round opens only at an episode admitted with ``curator_round`` (the
+    curator's explicit request for another review round). Machine renewals and
+    independently admitted episodes without such an ancestor all share the
+    original round, so they never replenish a follow-up.
+    """
+    while episode is not None:
+        admitted = db.scalar(select(ValidationFact).where(
+            ValidationFact.artifact_id == episode.artifact_id,
+            ValidationFact.operation_id == "review-admission:" + episode.id,
+        ))
+        if store._content(db, admitted)["curator_round"]:
+            return episode.id
+        episode = db.get(Episode, episode.predecessor_id) if episode.predecessor_id else None
+    return None
+
+
+def attempt_counts(db, episode, entry_ids):
+    """Immutable request count in the episode's review round, shared by admission and continuation.
+
+    Every curator-requested round gives each record a fresh re-check. Inside a
+    round, counting requests (not answers) keeps the ceiling across operation
+    IDs, turns, reviewer runs and machine renewals.
+    """
     counts = dict.fromkeys(entry_ids, 1)  # The immutable original is attempt 1.
+    current = review_round(db, episode)
+    rounds = {}
     for fact in db.scalars(select(ValidationFact).where(
-        ValidationFact.artifact_id == artifact_id,
+        ValidationFact.artifact_id == episode.artifact_id,
         ValidationFact.kind == "extraction_followup_request",
     )):
+        if fact.parent_id not in rounds:
+            rounds[fact.parent_id] = review_round(db, db.get(Episode, fact.parent_id))
+        if rounds[fact.parent_id] != current:
+            continue
         body = store._content(db, fact)
-        # Artifact identity preserves entitlement across turns/episodes and
-        # even independently admitted scopes for the same saved original.
         for entry_id in set(body["entry_ids"]).intersection(counts):
             counts[entry_id] += 1
     return counts
@@ -90,7 +118,7 @@ def request(context, *, operation_id, parent_decision_id, entry_ids, instruction
         if not all(any(item["target_id"] in descendants for item in declared)
                    for descendants in coverage.values()):
             raise store.HistoryAccessError("Follow-up entry is outside this episode")
-        counts = attempt_counts(db, ep.artifact_id, entry_ids)
+        counts = attempt_counts(db, ep, entry_ids)
         ceiling = ep.policy["extraction_attempts_per_entry"]
         # Entries with no follow-up left are reported, not investigated; the
         # rest still run. Only a request where every entry is spent stops.

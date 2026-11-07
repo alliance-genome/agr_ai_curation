@@ -511,7 +511,23 @@ A genuinely new curator extraction request has a new durable turn and preserves
 the earlier source/history.
 
 Terminal `validation_review` metadata comes from the ledger, independently of model
-prose. Pending results also get a visible chat notice. Source inspection remains
+prose. Pending results also get a visible chat notice.
+
+After each reviewer run, continuation starts another run only for a unit some
+review action can still change (`continuation.classify`). A unit whose latest
+decision in this episode is reject, defer or acknowledge-failure, with no newer
+saved answer, follow-up request, contribution or source input for its lineage and
+no follow-up or reconsideration left, stops with the typed cause
+`reviewer_left_pending` (flow status `review_pending`). The check uses decision
+history, sequences and counts only, never the decision's reason. The stall guard
+(`VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS`) still bounds runs that make
+no progress. The stop reason is the current state's first cause; refusals seen
+during the run stay in `causes`. The outcome's `pending` list names each pending
+record once with a plain structural reason (`curator_decision`, `cannot_check`,
+`not_accepted`, `not_decided`) and whether a re-check is left. Chat renders it with
+each record's workspace label, for example "Review finished with 1 record still
+pending: crb p13A (the reviewer did not accept it, and no re-check is left)."
+Operational stops without that list keep the "Review paused" notice. Source inspection remains
 available, but selected exports and curation preparation cannot claim pending
 results are complete. TraceReview's `validation_review.*` timeline includes saved
 plans, coverage grants, executable validator configuration and supervisor phases.
@@ -586,13 +602,18 @@ The supervisor owns scientific decisions and the large-scale review. It cannot
 read/search the paper itself. It can ask the original configured extractor to
 investigate existing entries with specialized instructions. The default
 `VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY=2` means the original extraction
-plus one targeted follow-up, not two retries. Multi-entry calls charge each named
-entry that runs. Entries with no follow-up left are not investigated: the request
+plus one targeted follow-up per review round, not two retries. Multi-entry calls
+charge each named entry that runs. Entries with no follow-up left are not investigated: the request
 runs the rest and the tool result lists the skipped ones under `exhausted`; only a
 request whose every entry is spent stops with `extraction_attempts_exhausted`
-and lists every spent entry under `exhausted` as well. Within a review round,
-reconnects, reviewer runs, machine renewals and provider recovery do not replenish
-the follow-up; a curator-requested round grants a fresh one. The targeted follow-up
+and lists every spent entry under `exhausted` as well. A round opens at an episode
+admitted with `curator_round` (the curator's explicit request for another round,
+`extraction_scheduling.review_round`), so each such round gives every record one fresh
+re-check. The original review, machine renewals and independently admitted episodes
+without a curator-round ancestor share one round. Within a round, new operation IDs,
+turns, reconnects, reviewer runs, machine renewals and provider recovery do not
+replenish the follow-up. Each review packet record carries `follow_up_available`
+from the same count and the saved extractor's follow-up support. The targeted follow-up
 protocol stays at version 2, the text pinned in saved extractor contracts, so older
 extractions keep their follow-ups. The scope rule (a record must be shown in the
 paper to answer the question) lives in the review protocol instead.

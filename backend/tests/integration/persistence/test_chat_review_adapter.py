@@ -505,6 +505,12 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
     )
     rendered, delivery_status = chat.direct_delivery(current_turn_only=True)
     assert expected_note in rendered
+    if review_kind == "extraction_concern":
+        # The reviewer stopped without deciding; the record is named by its
+        # workspace label (this fixture pack declares none, so its stable id).
+        assert ("Review finished with 1 record still pending: one (the reviewer did not decide it"
+                in rendered)
+        assert "Review paused" not in rendered
     replay = refresh_saved_response(
         owner_id=scope.owner_id,
         session_id=chat.session_id,
