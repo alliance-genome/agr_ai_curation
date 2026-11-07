@@ -54,9 +54,10 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
   that answer the request under its instructions. Anything it will name only as a
   contrast or an exclusion (a control or other item outside the requested category)
   goes in its final explanation, not in items, even when the request or the
-  supervisor's handoff asks it to distinguish them. An item inside the category, such as
-  a transgenic line used as a control when transgenic lines are requested, is a record. This is guidance to the model; code never reads labels or notes to
-  decide what belongs in the plan.
+  supervisor's handoff asks it to distinguish them. An item inside the requested category
+  is planned even when the paper uses it as a control, such as a transgenic line used as
+  a control when transgenic lines are requested. This is guidance to the model; code never
+  reads labels or notes to decide what belongs in the plan.
 - **Code.** Counts the plan, slices it in order into balanced contiguous batches, reads each
   cited chunk once through the agent's own `read_chunk` tool and renders it exactly as the
   model sees a `read_chunk` result, starts the writers, and counts what each writer staged.

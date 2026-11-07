@@ -99,7 +99,8 @@ PLANNING_INSTRUCTIONS = (
     "one of them, and nothing else. Anything you will name only as a contrast or an "
     "exclusion, such as a control or other item outside the requested category, goes in "
     "your final explanation, not in items, even when you are asked to distinguish it. "
-    "Parallel writers will read the cited chunks and fill in every field. If your "
+    "An item inside the requested category is planned even when the paper uses it as a "
+    "control. Parallel writers will read the cited chunks and fill in every field. If your "
     "instructions call for no records from this paper, submit an empty items list."
 )
 

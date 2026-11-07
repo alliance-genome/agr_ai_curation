@@ -164,6 +164,8 @@ def test_planning_message_plans_only_records_that_answer_the_request():
         "item outside the requested category, goes in your final explanation, not in items, "
         "even when you are asked to distinguish it."
     ) in message
+    # Controls are not outside the category by default.
+    assert "An item inside the requested category is planned even when the paper uses it as a control." in message
     assert "Include every record your instructions require" not in message
     assert "record types" not in message
 
