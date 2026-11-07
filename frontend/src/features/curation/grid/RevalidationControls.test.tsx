@@ -63,4 +63,17 @@ describe('Record revalidation', () => {
     expect(screen.getByText('Review: needs curator review')).toBeInTheDocument()
     expect(screen.queryByText(/source.projection/)).toBeNull()
   })
+  it('offers no continue after a system-error stop, which would only stop again', async () => {
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({ ...saved, state: 'needs_review',
+      outcome: { reason: 'source_projection_invalid' } })
+    const view = render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    await screen.findByText('Revalidation: needs review')
+    expect(screen.queryByRole('button', { name: 'Continue existing round' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Revalidate record' })).toBeEnabled()
+    view.unmount()
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({ ...saved, state: 'needs_review',
+      outcome: { reason: 'reviewer_left_pending' } })
+    render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    expect(await screen.findByRole('button', { name: 'Continue existing round' })).toBeEnabled()
+  })
 })
