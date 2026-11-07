@@ -1,8 +1,9 @@
-"""Explicit supervisor disposition of a retained whole-record proposal."""
+"""Whole-record retirement: an approved extractor recommendation or the review actor's own decision."""
 from sqlalchemy import select
 
 from src.lib.validation_history import selections, store
 from src.lib.validation_history.curator_authority import active_overlays
+from src.lib.validation_history.record_lifecycle import RETIRING_DECISIONS
 from src.models.sql.validation_history import ValidationFact
 from src.schemas.validation_followup import FollowupEntryResult
 from . import admission, source_inputs
@@ -10,6 +11,26 @@ from .audit import append_fact
 from .decisions import bounded_text
 from .record_scope import allowed_units
 from .specialist_context import entry_coverage
+
+
+def _require_no_curator_authority(db, artifact_id, root, descendants, source_envelope):
+    """A curator decision, row decision, edit or authored record outranks any review actor."""
+    if store._has_curator_subject(db, artifact_id, root.id):
+        raise store.HistoryConflict("Curator authority prevents supervisor retirement")
+    if any(store._current(db, artifact_id, target).get("actor", {}).get("type") == "curator"
+           for target in descendants | {root.id}):
+        raise store.HistoryConflict("Curator authority prevents supervisor retirement")
+    from src.lib.curation_workspace.models import CurationCandidate
+    from src.schemas.curation_workspace import CurationCandidateStatus
+    reviewed = db.scalar(select(CurationCandidate.id).where(
+        CurationCandidate.envelope_id == source_envelope.envelope_id,
+        CurationCandidate.object_id == store._content(db, root)["object_ref"],
+        CurationCandidate.status.in_([CurationCandidateStatus.ACCEPTED, CurationCandidateStatus.REJECTED])))
+    if reviewed is not None:
+        raise store.HistoryConflict("Curator row decision prevents supervisor retirement")
+    for _, overlay in active_overlays(db, artifact_id):
+        if any(change["target_id"] == root.id for change in overlay["changes"]):
+            raise store.HistoryConflict("Curator edits prevent supervisor retirement")
 
 
 def decide_in_transaction(db, context, *, operation_id, contribution_ref,
@@ -69,24 +90,11 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
         raise store.HistoryConflict("The entry changed after this retirement proposal")
     state = store._current(db, artifact_id, root.id)
     if retirement_decision == "approve":
-        if any(store._current(db, artifact_id, target).get("actor", {}).get("type") == "curator"
-               for target in descendants | {root.id}):
-            raise store.HistoryConflict("Curator authority prevents supervisor retirement")
-        from src.lib.curation_workspace.models import CurationCandidate
-        from src.schemas.curation_workspace import CurationCandidateStatus
-        reviewed = db.scalar(select(CurationCandidate.id).where(
-            CurationCandidate.envelope_id == source_envelope.envelope_id,
-            CurationCandidate.object_id == store._content(db, root)["object_ref"],
-            CurationCandidate.status.in_([CurationCandidateStatus.ACCEPTED, CurationCandidateStatus.REJECTED])))
-        if reviewed is not None:
-            raise store.HistoryConflict("Curator row decision prevents supervisor retirement")
-        for _, overlay in active_overlays(db, artifact_id):
-            if any(change["target_id"] == root.id for change in overlay["changes"]):
-                raise store.HistoryConflict("Curator edits prevent supervisor retirement")
+        _require_no_curator_authority(db, artifact_id, root, descendants, source_envelope)
     before = rebuild_inputs(db, source_envelope) if retirement_decision == "approve" else None
     fact = append_fact(db, artifact_id, operation_id="record-retirement:" + operation_id,
         kind="record_retirement_decision", target_id=root.id, parent_id=contribution.id,
-        body={"identity": identity, "proposal": contribution_ref,
+        body={"identity": identity, "origin": "extractor_recommendation", "proposal": contribution_ref,
               "evidence_record_ids": proposal.evidence_record_ids,
               "previous_obligations": episode["obligations"], "entry": current})
     publication, changed = None, []
@@ -108,6 +116,105 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
                 "source_state_sha256": selections.source_state_digest(db, artifact_id)}
     append_fact(db, artifact_id, operation_id="record-retirement-response:" + operation_id,
         kind="record_retirement_response", parent_id=fact.id,
+        body={"identity": identity, "response": response})
+    return response
+
+
+def retire_in_transaction(db, context, *, operation_id, records, expected_source_sha,
+                          source_envelope, rebuild_inputs, publish):
+    """The review actor retires whole records it judged not to answer the question.
+
+    records: [{"target_id", "expected_version", "reason", "evidence"}]: the record
+    root, its pinned version (None when the caller pinned only a validator field;
+    the expected source digest then pins the record's lifecycle), and the packet E
+    handles mapped to the exact entries the actor cited. The actor's scope judgment
+    and reason are saved, never recomputed: code checks only authority (a review
+    actor in its own open round, no curator decision or authorship on the record),
+    the round's record scope, structure (an active whole record in the current
+    source) and history. The record's validator bindings leave coverage through the
+    same publication as an approved extractor recommendation. Authority comes from
+    the review actor type, not a model name, so code may call this for another
+    review actor.
+    """
+    ep, _ = admission.lock_episode(db, context.history_scope, context.episode_id)
+    artifact_id = ep.artifact_id
+    if context.actor_type != "agent":
+        raise store.HistoryAccessError("Only a review actor can retire a record in review")
+    bounded_text(operation_id, ep.policy["instruction_chars"], "Operation ID")
+    if not records or len(records) > ep.policy["decision_entries"]:
+        raise ValueError("Retirements exceed configured bounds")
+    if len({record["target_id"] for record in records}) != len(records):
+        raise ValueError("Name each retired record once")
+    for record in records:
+        bounded_text(record["reason"], ep.policy["instruction_chars"], "Retirement reason")
+    actor = {"type": context.actor_type, "id": context.actor_id}
+    identity = {"actor": actor, "decision": "retire", "source_sha": expected_source_sha, "records": records}
+    existing = db.scalar(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact_id,
+        ValidationFact.operation_id == "record-retirement-response:" + operation_id))
+    if existing is not None:
+        body = store._content(db, existing)
+        if body["identity"] != store.canonical(identity)[1]:
+            raise store.HistoryConflict("Retirement operation identity conflict")
+        return body["response"]
+    if selections.source_state_digest(db, artifact_id) != expected_source_sha:
+        raise store.HistoryConflict("Records changed after this packet was read; read a fresh packet")
+    episode = selections.effective_episode(db, store._fact(db, artifact_id, ep.id))
+    permitted = allowed_units(episode)
+    # A curator-requested round names the records the curator asked to re-review;
+    # the curator, not the review actor, decides whether those leave the results.
+    requested = set(episode["review_target_ids"] or ())
+    before = rebuild_inputs(db, source_envelope)
+    updated = source_envelope.model_copy(deep=True)
+    facts, entries = [], []
+    for record in records:
+        try:
+            root = store._fact(db, artifact_id, record["target_id"], kind="target")
+            if "object_ref" not in store._content(db, root):
+                raise store.HistoryConflict("Retirement requires a whole-record target")
+            store._require_active_target(db, artifact_id, root.id)
+            _, descendants = entry_coverage(db, artifact_id, [root.id])
+            if not descendants.intersection(permitted):
+                raise store.HistoryAccessError("Retirement is outside the requested record scope")
+            if descendants.intersection(requested):
+                raise store.HistoryConflict(
+                    "The curator asked to re-review this record in this round, so it cannot be retired here; "
+                    "accept it or leave it pending with a reason, and the curator decides")
+            matches = [obj for obj in source_envelope.extracted_objects
+                       if obj.metadata["validation_history"]["target_id"] == root.id]
+            if len(matches) != 1:
+                raise store.HistoryConflict("Retirement entry is not in the current source")
+            _require_no_curator_authority(db, artifact_id, root, descendants, source_envelope)
+        except store.HistoryAccessError:
+            raise  # Authorization keeps its own type and never names a record.
+        except store.HistoryConflict as error:
+            raise store.HistoryConflict(f"{record['target_id']}: {error}") from error
+        facts.append(append_fact(db, artifact_id,
+            operation_id="record-retirement:" + operation_id + ":" + root.id,
+            kind="record_retirement_decision", target_id=root.id, parent_id=ep.id,
+            body={"identity": {"actor": actor, "decision": "retire", "target_id": root.id,
+                               "source_sha": expected_source_sha, "reason": record["reason"]},
+                  "origin": "review", "evidence": record["evidence"],
+                  "previous_obligations": episode["obligations"],
+                  "entry": matches[0].model_dump(mode="json")}))
+        pinned = record["expected_version"]
+        entries.append({"target_id": root.id, "action": "retire", "reason": record["reason"],
+                        "expected_version": store._current(db, artifact_id, root.id)["version"]
+                        if pinned is None else pinned})
+        updated.extracted_objects = [obj for obj in updated.extracted_objects
+                                     if obj.metadata["validation_history"]["target_id"] != root.id]
+    store.apply_decisions_in_transaction(db, context.history_scope, artifact_id,
+        operation_id="record-retire:" + operation_id, actor=actor, entries=entries)
+    after = rebuild_inputs(db, updated)
+    # One coverage revision and publication carry the whole batch.
+    changed = source_inputs.update(db, artifact_id, operation_id=operation_id,
+        before=before, after=after, selection_id=facts[0].id)
+    publication = publish(db, updated, after, changed, facts[0].id)
+    response = {"retirement_ids": {fact.target_id: fact.id for fact in facts},
+                "selection_id": facts[0].id, "affected_bindings": changed, "publication": publication,
+                "source_state_sha256": selections.source_state_digest(db, artifact_id)}
+    append_fact(db, artifact_id, operation_id="record-retirement-response:" + operation_id,
+        kind="record_retirement_response", parent_id=facts[0].id,
         body={"identity": identity, "response": response})
     return response
 
@@ -147,7 +254,7 @@ def restore_in_transaction(db, context, *, operation_id, restore_target_id,
         ValidationFact.artifact_id == artifact_id,
         ValidationFact.target_id == root.id,
         ValidationFact.kind == "record_retirement_decision").order_by(ValidationFact.sequence.desc()).limit(1))
-    if retirement is None or store._content(db, retirement)["identity"]["decision"] != "approve":
+    if retirement is None or store._content(db, retirement)["identity"]["decision"] not in RETIRING_DECISIONS:
         raise store.HistoryConflict("Record has no approved supervisor retirement")
     saved = store._content(db, retirement)
     before = rebuild_inputs(db, source_envelope)

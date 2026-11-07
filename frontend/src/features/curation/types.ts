@@ -588,7 +588,8 @@ export interface RetiredRecord {
   version: number
   reason: string | null
   original: { fact_id: string; sha256: string }
-  proposal: { fact_id: string; sha256: string }
+  /** Absent when the reviewer retired the record on its own judgment. */
+  proposal: { fact_id: string; sha256: string } | null
   retirement: { fact_id: string; sha256: string }
 }
 

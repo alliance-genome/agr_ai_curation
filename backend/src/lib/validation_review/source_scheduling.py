@@ -2,6 +2,7 @@
 from copy import deepcopy
 
 from src.lib.validation_history import store
+from src.lib.validation_history.record_lifecycle import RETIRING_DECISIONS
 from . import admission, scheduling, source_inputs
 from .decisions import bounded_text
 
@@ -24,7 +25,7 @@ def request(context, *, operation_id, selection_id, target_ids, instructions, re
         if selection.kind not in {"extraction_source_selection", "record_retirement_decision", "record_restoration"}:
             raise store.HistoryConflict("Assessment requires an approved source decision")
         if (selection.kind == "record_retirement_decision"
-                and source["identity"]["decision"] != "approve"):
+                and source["identity"]["decision"] not in RETIRING_DECISIONS):
             raise store.HistoryConflict("Declining retirement cannot change validator inputs")
         requests = []
         for target in target_ids:
