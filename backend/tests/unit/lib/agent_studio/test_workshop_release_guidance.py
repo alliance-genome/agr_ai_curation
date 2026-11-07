@@ -196,6 +196,12 @@ def test_review_guidance_explains_rechecks_and_how_review_ends():
         "a curator's own reject, defer or acknowledged failure in the round stops reviewer runs for that record",
         'named "the extraction as a whole"',
         "a re-check also needs a saved extraction agent that supports re-checks and the record's original extraction",
+        "In AI Chat only, on the turn a removal happened, the notes also name each record the review retired, "
+        "with its saved reason, and the current record count",
+        "\"Review removed 1 record that doesn't answer the question: Crb-GFP (",
+        'this line can sit beside a "Review paused: ..." notice',
+        "the supervisor receives the accepted, pending and retired-in-this-review counts and the list of records "
+        "this review retired",
     ):
         assert phrase in guide
     assert "a time or spending limit" not in guide

@@ -167,8 +167,9 @@ def test_an_envelope_level_unit_is_pending_for_the_extraction_as_a_whole(scope):
     context = SimpleNamespace(
         context=lambda record: ReviewContext(scope, ep, "supervisor"),
         reference=lambda record: {"artifact_id": aid}, review_summary_operation=lambda context: uuid4().hex,
-        turn_id="turn", checkpoint=lambda record: pytest.fail("No record needs the saved source"))
-    context.record_labels = lambda record, ids: ChatReview.record_labels(context, record, ids)
+        turn_id="turn", checkpoint=lambda record: pytest.fail("No record needs the saved source"),
+        saved_review_outcome=lambda record: None)
+    context.record_labels = lambda record, ids, **kwargs: ChatReview.record_labels(context, record, ids, **kwargs)
     outcome = continuation.terminal(view, [], None)
     ChatReview.retain_review_outcome(context, SimpleNamespace(extraction_result_id="result"), outcome)
     with store.SessionLocal() as db:

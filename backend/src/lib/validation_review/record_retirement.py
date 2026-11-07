@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from src.lib.validation_history import selections, store
 from src.lib.validation_history.curator_authority import active_overlays
-from src.lib.validation_history.record_lifecycle import RETIRING_DECISIONS
+from src.lib.validation_history.record_lifecycle import RETIRING_DECISIONS, retired_records
 from src.models.sql.validation_history import ValidationFact
 from src.schemas.validation_followup import FollowupEntryResult
 from . import admission, source_inputs
@@ -37,6 +37,35 @@ def _require_no_curator_authority(db, artifact_id, root, descendants, source_env
     for _, overlay in active_overlays(db, artifact_id):
         if any(change["target_id"] == root.id for change in overlay["changes"]):
             raise store.HistoryConflict("Curator edits prevent supervisor retirement")
+
+
+# The path that retired a record, by its saved decision: the review actor's own
+# retire, or its approval of an extraction agent's recommendation.
+RETIRED_BY = {"retire": "review", "approve": "extractor_recommendation"}
+
+
+def retired_in_review(db, artifact_id, episode_id):
+    """Records this review round retired that are still retired, in record order.
+
+    The review actor's own retirement is saved under the round; an approved
+    recommendation under its extraction contribution, whose follow-up request the
+    round made. A declined recommendation retires nothing and a restored record is
+    current again, so neither is listed. Each item keeps the saved reason and the
+    record entry as it was retired.
+    """
+    result = []
+    for record in retired_records(db, artifact_id):
+        fact = store._fact(db, artifact_id, record["retirement"]["fact_id"], kind="record_retirement_decision")
+        body = store._content(db, fact)
+        round_id = fact.parent_id
+        if record["proposal"] is not None:
+            contribution = store._fact(db, artifact_id, record["proposal"]["fact_id"], kind="extraction_contribution")
+            round_id = store._fact(db, artifact_id, contribution.parent_id,
+                                   kind="extraction_followup_request").parent_id
+        if round_id == episode_id:
+            result.append({"record_target_id": record["target_id"], "reason": body["identity"]["reason"],
+                           "retired_by": RETIRED_BY[body["identity"]["decision"]], "entry": body["entry"]})
+    return result
 
 
 def _record_targets(targets, root_id):
