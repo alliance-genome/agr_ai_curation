@@ -565,6 +565,14 @@ error that stopped a save) carry no `pending` list and keep the "Review paused"
 notice; a reason whose code name reads as internals has plain wording
 (`chat.PAUSE_WORDING`).
 
+A chat turn also resumes the session's earlier unfinished reviews. Each result is
+reviewed against its own question, never the current turn's:
+`ChatReview.review_request` reads the stored user message of the result's
+`chat_review.operation_turn_id`, and a missing message (or chat) refuses the review
+with a history conflict instead of guessing. The supervisor handoff names each
+outcome's `question` the same way. A flow step reviews only its own record against
+its own resolved step query (`FlowReview.review_request`).
+
 Direct extractor follow-ups first use the resolved supervisor to interpret the
 curator's intent. Continuing saved review does not invoke extraction. Only an
 explicit fresh-extraction request permits the already chosen extractor; the

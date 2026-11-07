@@ -430,11 +430,15 @@ async def test_chat_source_checkpoint_and_prep_share_identity_before_and_after_r
     attach_agent_cost_identity(
         supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"}
     )
+    from tests.integration.persistence.chat_turn_support import record_user_turn
+
+    turn_id = uuid4().hex
+    record_user_turn(owner_id=scope.owner_id, session_id=scope.session_id, turn_id=turn_id, question="Extract")
     chat = ChatReview(
         scope.owner_id,
         scope.document_id,
         scope.session_id,
-        uuid4().hex,
+        turn_id,
         supervisor,
         (),
         "Extract",

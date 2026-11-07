@@ -743,6 +743,9 @@ async def test_chat_review_binds_the_scope_only_while_the_reviewer_runs(monkeypa
     monkeypatch.setattr(review, "saved_review_outcome", lambda _: None)
     monkeypatch.setattr(review, "reference", lambda _: dict(artifact_id="artifact", episode_id="episode",
                                                              plan_ref="plan"))
+    # The record's own question, from the turn that extracted it, not this turn's message.
+    earlier = "Which transgenic stocks were used?"
+    monkeypatch.setattr(review, "review_request", lambda reviewed: earlier if reviewed is record else None)
     adapter = SimpleNamespace(initial=AsyncMock(), advance=AsyncMock(), execute=None, prepare_inputs=None,
                               refresh_inputs=None)
     monkeypatch.setattr(chat, "ValidatorAdapter", lambda *a, **kw: adapter)
@@ -760,7 +763,7 @@ async def test_chat_review_binds_the_scope_only_while_the_reviewer_runs(monkeypa
     assert quick_check._SCOPE.get() is None
     assert await review.review_result(record) == {"review": {"ready": True}}
     [scope] = during
-    assert scope.curator_request == QUESTION and scope.record is record and scope.checked == set()
+    assert scope.curator_request == earlier and scope.record is record and scope.checked == set()
     assert quick_check._SCOPE.get() is None
 
 

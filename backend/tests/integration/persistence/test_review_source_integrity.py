@@ -495,8 +495,11 @@ async def _production_chat(scope, tmp_path, monkeypatch):
                                           typed=envelope.model_dump(mode="json"), envelope=envelope, provenance={})
     supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
-    chat = ChatReview(scope.owner_id, scope.document_id, scope.session_id, uuid4().hex, supervisor, (),
-                      "What alleles were examined in the paper?")
+    from tests.integration.persistence.chat_turn_support import record_user_turn
+
+    turn_id, question = uuid4().hex, "What alleles were examined in the paper?"
+    record_user_turn(owner_id=scope.owner_id, session_id=scope.session_id, turn_id=turn_id, question=question)
+    chat = ChatReview(scope.owner_id, scope.document_id, scope.session_id, turn_id, supervisor, (), question)
     await chat.receive(envelope, pack, agent_key="fixture", adapter_key="fixture", tool_name="ask_fixture",
         execution_receipt=None, context=ValidatorRuntimeContext(
             user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=()))

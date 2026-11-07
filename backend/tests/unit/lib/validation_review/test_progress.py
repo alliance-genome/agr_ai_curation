@@ -118,6 +118,7 @@ async def test_real_review_result_streams_before_reviewer_finishes(monkeypatch):
     monkeypatch.setattr(review, "context", lambda _: context)
     monkeypatch.setattr(review, "saved_review_outcome", lambda _: None)
     monkeypatch.setattr(review, "reference", lambda _: dict(artifact_id="artifact", episode_id="episode", plan_ref="plan"))
+    monkeypatch.setattr(review, "review_request", lambda _: "request")
     adapter = SimpleNamespace(initial=AsyncMock(), advance=AsyncMock(), execute=None,
         prepare_inputs=None, refresh_inputs=None)
     monkeypatch.setattr(chat, "ValidatorAdapter", lambda *a, **kw: adapter)
