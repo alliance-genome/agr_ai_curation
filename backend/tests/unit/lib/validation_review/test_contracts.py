@@ -589,8 +589,8 @@ async def test_follow_up_results_name_records_with_no_follow_up_left():
 
     context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
                             "episode", "reviewer")
-    spent = ReviewStopped("extraction_attempts_exhausted", resource="a")
-    spent.exhausted = ["a", "b", "c"]
+    assert ReviewStopped("extraction_attempts_exhausted").exhausted == [], "the list is always present"
+    spent = ReviewStopped("extraction_attempts_exhausted", resource="a", exhausted=["a", "b", "c"])
     partial = {"state": "completed", "work_id": "w", "contributions": [{"fact_id": "f", "sha256": "s"}],
                "exhausted": ["a"], "exhausted_note": "decide them now"}
     extraction = AsyncMock(side_effect=[spent, partial])

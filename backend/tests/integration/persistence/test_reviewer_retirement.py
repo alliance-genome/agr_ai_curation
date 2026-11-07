@@ -424,3 +424,141 @@ async def test_curator_row_decisions_and_edits_block_reviewer_retirement(generic
     assert handle in result["message"]
     with store.SessionLocal() as db:
         assert store._current(db, item.aid, target)["active"]
+
+
+@pytest.mark.parametrize("origin,refusal", [
+    ({"kind": "curator_authored"}, "Curator authority prevents supervisor retirement"),
+    ({"kind": "extraction_contribution", "contribution_id": "later-correction"}, "is not an original extraction"),
+])
+def test_curator_records_and_later_replacements_are_refused_for_what_they_are(generic, origin, refusal):
+    from src.lib.validation_review.record_retirement import retire_in_transaction
+
+    item = generic
+    with store.SessionLocal.begin() as db:
+        record = store._append(db, item.aid, operation_id="later-record:" + origin["kind"], kind="target",
+            body={"object_ref": "later-" + origin["kind"], "payload": {"label": "later"}, "origin": origin}).id
+    with store.SessionLocal.begin() as db:
+        digest = selections.source_state_digest(db, item.aid)
+        with pytest.raises(store.HistoryConflict) as refused:
+            retire_in_transaction(db, item.context, operation_id="later", expected_source_sha=digest,
+                records=[{"target_id": record, "expected_version": None, "reason": "Outside.", "evidence": {}}],
+                source_envelope=item.checkpoint().envelope, rebuild_inputs=lambda db, envelope: {},
+                publish=lambda *args: pytest.fail("nothing is published"))
+    assert str(refused.value).startswith(record + ": ") and refusal in str(refused.value), (
+        "named by record, so a packet save names the handle; not the follow-up provenance message")
+    assert "Follow-up" not in str(refused.value)
+
+
+def _validator_answers(monkeypatch):
+    from tests.integration.persistence.test_review_packet import _answers
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _result_payload
+
+    _answers(monkeypatch, lambda request: {**_result_payload(request, resolved_values={"curie": "ECO:X"}),
+                                           "resolved_objects": []})
+
+
+def _bound(item):
+    from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
+
+    return SimpleNamespace(scope=item.scope, aid=item.aid, ep=item.ep, adapter=item.adapter,
+                           checkpoint=checkpoint_provider(item),
+                           context=ReviewContext(item.scope, item.ep, "supervisor.validation_review"))
+
+
+def _root_of(item, name):
+    return next(obj.metadata["validation_history"]["target_id"] for obj in item.plan.envelope.extracted_objects
+                if obj.pending_ref_id == name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", ["three"], indirect=True)
+async def test_a_retirement_that_changes_a_surviving_input_returns_it_for_validation(planned, monkeypatch):
+    from copy import deepcopy
+    from tests.integration.persistence.test_review_packet import _handles
+    from src.lib.validation_review import record_retirement, source_inputs
+
+    item = planned
+    _validator_answers(monkeypatch)
+    await item.adapter.initial()
+    retired = _root_of(item, "A")
+    surviving = next(deepcopy(request) for request in item.adapter.plan["initial_requests"]
+                     if item.adapter.job(request).match.object_envelope.pending_ref_id == "B")
+    changed = deepcopy(surviving)
+    changed["request"]["selected_inputs"]["curie"] = "eco:context-without-A"
+    real_update = source_inputs.update
+
+    def update(db, artifact_id, **arguments):
+        # Stand in for a surviving binding whose selected input depended on the retired record.
+        return real_update(db, artifact_id, **{**arguments,
+            "before": {**arguments["before"], surviving["target_id"]: surviving},
+            "after": {**arguments["after"], changed["target_id"]: changed}})
+
+    monkeypatch.setattr(record_retirement, "source_inputs", SimpleNamespace(update=update))
+    bound = _bound(item)
+    packet = reads.review_packet(item.scope, item.ep)
+    record = next(record for record in packet["records"] if record["target_id"] == retired)
+    result = await _save(bound, packet["packet_id"],
+                         [_decision(handle, "retire", "Not asked for.") for handle in _handles(record)],
+                         operation_id="retire-with-dependent")
+    assert [binding["target_id"] for binding in result["affected_bindings"]] == [surviving["target_id"]]
+    assert result["selection_id"] == result["applied"][0]["retirement_id"]
+    outcome = await item.adapter.assess_source(bound.context, operation_id="assess-after-retire",
+        selection_id=result["selection_id"], target_ids=[surviving["target_id"]],
+        instructions="Re-check this field now that the other record is retired.")
+    assert outcome["state"] == "completed", outcome
+
+
+@pytest.mark.asyncio
+async def test_a_validation_that_stopped_without_an_answer_can_carry_its_record_retirement(planned):
+    from src.lib.validation_history import runtime
+    from src.lib.validation_review import scheduling
+    from tests.integration.persistence.test_review_packet import _handles
+
+    item = planned
+    frozen = runtime.frozen_job_requests(item.plan.history_binding, item.plan.initial_jobs)
+    [wid] = scheduling.initial(item.scope, item.ep, [{"operation_id": "crashed-before-retire", "requests": frozen,
+                                                      "receipt": {"revision": "fixture"}}])
+    claim = work.claim(item.scope, wid)
+    work.mark_submitted(item.scope, wid, claim["lease_token"])
+    work.mark_uncertain(item.scope, wid, claim["lease_token"], reason="worker_disconnected")
+    packet = reads.review_packet(item.scope, item.ep)
+    record, = packet["records"]
+    assert {entry["review"] for entry in record["review"]} == {"uncertain_outcome"}
+    result = await _save(_bound(item), packet["packet_id"],
+                         [_decision(_handles(record)[0], "retire", "A wild-type control, not a transgenic fly.")],
+                         operation_id="retire-uncertain")
+    assert result["ready"] is True, result
+    with store.SessionLocal() as db:
+        assert store._current(db, item.aid, record["target_id"])["active"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("planned", [{"count": 2}], indirect=True)
+async def test_retiring_a_record_stops_its_queued_validation(planned, monkeypatch):
+    from src.lib.validation_history import runtime
+    from src.lib.validation_review import scheduling
+    from tests.integration.persistence.test_review_packet import _handles, _second_attempt
+
+    item = planned
+    record_jobs = [job for job in item.plan.initial_jobs if job.match.object_envelope.pending_ref_id == "record-0"]
+    queued, answered = record_jobs[0], record_jobs[1]
+    requests = runtime.frozen_job_requests(item.plan.history_binding, [queued])
+    [wid] = scheduling.initial(item.scope, item.ep, [{"operation_id": "queued-before-retire", "requests": requests,
+        "receipt": item.adapter.receipt([item.adapter.job(requests[0])], batch_key=None)}])
+    _second_attempt(item, answered, complete=True)
+    packet = reads.review_packet(item.scope, item.ep)
+    root = _root_of(item, "record-0")
+    record = next(record for record in packet["records"] if record["target_id"] == root)
+    assert [entry["review"] for entry in record["review"]].count("waiting") == 1, "the queued field waits"
+    result = await _save(_bound(item), packet["packet_id"],
+                         [_decision(handle, "retire", "Not asked for.") for handle in _handles(record)],
+                         operation_id="retire-while-queued")
+    assert result["ready"] is False and result["applied"][0]["action"] == "retire", result
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
+                        lambda: pytest.fail("work for a retired record must not reach the provider"))
+    with pytest.raises(admission.ReviewStopped, match="source_input_changed"):
+        await item.adapter.execute(wid)
+    with store.SessionLocal() as db:
+        row = db.get(ValidationReviewWork, wid)
+        assert (row.state, row.outcome["state"], row.outcome["reason"]) == (
+            "completed", "not_admitted", "source_input_changed")
