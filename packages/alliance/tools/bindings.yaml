@@ -1066,6 +1066,9 @@ tools:
     metadata:
       name: List Generic Object Classes
       category: Runtime Metadata
+      # Lists the record types this builder can stage; a fan-out planner calls it
+      # before planning (tool_roles.builder_catalog_tool_names).
+      builder_catalog: true
       audit:
         display_name: List Generic Object Classes
       documentation:

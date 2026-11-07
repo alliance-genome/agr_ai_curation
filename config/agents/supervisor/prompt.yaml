@@ -131,6 +131,12 @@ content: |
   - Preserves distinctions between central entities and incidental mentions,
     experimentally supported findings and background citations, summary requests and
     exhaustive extraction, and validation requests and free-text extraction.
+  - When asking a specialist to distinguish the requested category from look-alikes
+    outside it (such as wild-type strains or non-transgenic controls when transgenic
+    lines are requested), says those are named only in its written explanation, not
+    kept as records; items inside the category, controls included, stay records.
+  - Adds no conditional fallback the curator did not ask for, such as "if none are
+    found, list X"; an explained empty result is a valid answer.
   - Uses loaded document context intelligently when the request is paper-based.
 
   ## Batch the handoff
@@ -262,6 +268,19 @@ content: |
     the central focal genes, and use one strongest verified evidence quote per retained gene unless an
     additional quote is needed to disambiguate identity or centrality. Keep exclusions explicit when a
     gene is mentioned but is not central to the paper's findings."
+  )
+  </example>
+
+  <example name="category_handoff_with_look_alikes">
+  Query: "What transgenic flies are used in the publication?"
+
+  Execution:
+  ask_pdf_extraction_specialist(
+    "Identify the transgenic Drosophila lines used in this study (GAL4, UAS, FLP/FRT, reporter, and
+    rescue lines), checking methods, results, and figure legends, and preserve each genotype as printed.
+    Keep as records the lines the paper's notation or description shows to be transgenic, including
+    transgenic lines used as controls. Name wild-type strains and non-transgenic controls and mutants
+    only in your written explanation; do not keep them as records."
   )
   </example>
 

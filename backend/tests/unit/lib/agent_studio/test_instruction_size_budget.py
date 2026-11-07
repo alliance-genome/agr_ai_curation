@@ -61,8 +61,12 @@ STUDIO_BUDGETS = {
     "agent_workshop": 30_000,
 }
 # ALL-1287 added 885 chars of inspect_results guidance (18,967 -> 19,852 before
-# this dedup); after ALL-1292 the merged base prompt is 18,276.
-SUPERVISOR_BASE_PROMPT_BUDGET = 18_800
+# this dedup); after ALL-1292 the merged base prompt is 18,276, and v0.11.3 ships
+# 18,766. ALL-1501 adds reviewed handoff guidance (look-alikes outside the requested
+# category stay out of records while in-category controls stay records, no
+# conditional fallback lists, and one PDF extraction handoff example), bringing it
+# to 19,869 (+1,103).
+SUPERVISOR_BASE_PROMPT_BUDGET = 19_950
 
 
 def _alliance_template() -> str:

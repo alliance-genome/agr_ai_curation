@@ -32,6 +32,7 @@ STAGE = "stage_test_object"
 FINALIZE = "finalize_test_extraction"
 DISCARD = "discard_test_object"
 PATCH = "patch_test_object"
+CATALOG = "list_test_record_types"
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,53 @@ def test_stage_role_comes_from_package_binding_metadata():
         tool_roles.reset_cache()
     assert {"stage_generic_object", "stage_gene_expression_observation"} <= stage_tools
     assert not {name for name in stage_tools if not name.startswith("stage_")}
+
+
+def test_catalog_role_comes_from_package_binding_metadata():
+    tool_roles.reset_cache()
+    try:
+        catalog_tools = tool_roles.builder_catalog_tool_names()
+        stage_tools = tool_roles.builder_stage_tool_names()
+    finally:
+        tool_roles.reset_cache()
+    assert "list_generic_object_classes" in catalog_tools
+    # A catalog only lists record types; it never stages one.
+    assert not catalog_tools & stage_tools
+
+
+def test_planning_message_plans_only_records_that_answer_the_request():
+    message = fanout.planning_message(())
+
+    assert message.startswith(
+        "[Planning phase] Read what you need from the paper first, using the reading and search tools."
+    )
+    # Flow-step and custom-agent scope rules live in the instructions, not the request.
+    assert (
+        "Plan only records that answer the request under your instructions, include every one "
+        "of them, and nothing else."
+    ) in message
+    assert (
+        "Anything you will name only as a contrast or an exclusion, such as a control or other "
+        "item outside the requested category, goes in your final explanation, not in items, "
+        "even when you are asked to distinguish it."
+    ) in message
+    # Controls are not outside the category by default.
+    assert "An item inside the requested category is planned even when the paper uses it as a control." in message
+    assert "Include every record your instructions require" not in message
+    assert "record types" not in message
+
+
+def test_planning_message_has_a_planner_with_a_catalog_read_it_first():
+    message = fanout.planning_message(("list_generic_object_classes",))
+
+    assert message.startswith(
+        "[Planning phase] First call list_generic_object_classes to see the record types you can "
+        "stage, so you plan each item as one record of the type that fits. Then read what you need "
+        "from the paper, using the reading and search tools."
+    )
+    assert "Read what you need from the paper first" not in message
+    # The rest of the message is the same for every planner.
+    assert message.endswith(fanout.PLANNING_INSTRUCTIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +400,13 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
         message = next(_text(item) for item in reversed(items) if isinstance(item, dict) and item.get("role") == "user")
         turn = self._turn(items)
         plan = self.scenario.get("plan")
-        if message.startswith("[Planning phase] Read"):
+        if message.startswith("[Planning phase]") and "call submit_extraction_plan once" in message:
+            if self.scenario.get("catalog_first"):
+                answered = {item.get("call_id") for item in items
+                            if isinstance(item, dict) and item.get("type") == "function_call_output"}
+                if "plan-catalog" not in answered:
+                    return _calls("plan-c", (CATALOG, "plan-catalog", {}))
+                turn -= 1
             if turn == 0:
                 return _calls("plan-0",
                               ("read_chunk", "plan-read", {"chunk_index": 1}),
@@ -433,6 +487,7 @@ def harness(monkeypatch):
     monkeypatch.setenv("EXTRACTION_FANOUT_MAX_WRITERS", "8")
     monkeypatch.setattr(tool_roles, "builder_finalization_tool_names", lambda: frozenset({FINALIZE}))
     monkeypatch.setattr(tool_roles, "builder_stage_tool_names", lambda: frozenset({STAGE}))
+    monkeypatch.setattr(tool_roles, "builder_catalog_tool_names", lambda: frozenset({CATALOG}))
     monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent: None)
     monkeypatch.setattr(streaming_tools, "capture_source_document", lambda *_: None)
 
@@ -461,7 +516,10 @@ def harness(monkeypatch):
             self.workspaces = []
             self.chunk_checks, self.existing_chunks = chunk_checks, existing_chunks
 
-        def agent(self, model):
+        def agent(self, model, *, catalog=False):
+            async def list_record_types(_ctx, _arguments):
+                return {"classes": [{"class_key": "test:reagent"}, {"class_key": "test:claim"}]}
+
             agent = Agent(
                 name="Test Builder",
                 instructions="Extract every reagent the paper uses.",
@@ -469,13 +527,14 @@ def harness(monkeypatch):
                 # Saved agents may leave parallel tool calls unset; fan-out turns them on.
                 model_settings=ModelSettings(),
                 tools=[*_source_tools(self.reads), _stage_test_object, _patch_test_object, _discard_test_object,
-                       _finalize_tool(self.finalize_calls)],
+                       _finalize_tool(self.finalize_calls),
+                       *([_tool(CATALOG, list_record_types)] if catalog else [])],
             )
             # The scope catalog_service records for the agent's document tools.
             agent.cost_boundary = {"document_id": "doc-1", "user_id": "curator-1"}
             return agent
 
-        async def run(self, model):
+        async def run(self, model, *, catalog=False):
             original = builder.ExtractionBuilderWorkspace.__init__
             workspaces = self.workspaces
 
@@ -485,7 +544,7 @@ def harness(monkeypatch):
 
             monkeypatch.setattr(builder.ExtractionBuilderWorkspace, "__init__", capture)
             return await streaming_tools.run_specialist_with_events(
-                agent=self.agent(model),
+                agent=self.agent(model, catalog=catalog),
                 input_text="Extract the reagents from this paper.",
                 specialist_name="Test Builder",
                 run_config=RunConfig(tracing_disabled=True),
@@ -645,6 +704,10 @@ async def test_small_plan_is_staged_by_the_planner_thread(harness):
     await harness.run(model)
 
     assert all(request["writer"] is None for request in model.requests)
+    # An agent without a record-type catalog gets the read-first planning message.
+    first_request = model.requests[0]["input"]
+    assert _text(first_request[-1]) == fanout.planning_message(())
+    assert CATALOG not in model.requests[0]["tools"]
     stage_prompt = next(
         _text(item) for request in model.requests for item in request["input"]
         if isinstance(item, dict) and _text(item).startswith("[Writing phase]")
@@ -662,6 +725,30 @@ async def test_small_plan_is_staged_by_the_planner_thread(harness):
     assert harness.progress() == ["Reading the paper and planning the records", "Writing 2 records"]
     plan_event = next(event["output_summary"] for event in harness.trace if event["event_type"] == "extraction_fanout.plan_submitted")
     assert plan_event["path"] == "planner_stages"
+
+
+@pytest.mark.asyncio
+async def test_planner_with_a_catalog_is_told_to_read_it_before_planning(harness):
+    labels = [f"reagent {n}" for n in range(1, 8)]
+    model = ScriptedFanoutModel({"plan": _plan(*labels), "catalog_first": True})
+
+    await harness.run(model, catalog=True)
+
+    planner_requests = [request for request in model.requests if request["writer"] is None]
+    # The planning message names the agent's own catalog tool, chosen by its binding role.
+    assert _text(planner_requests[0]["input"][-1]) == fanout.planning_message((CATALOG,))
+    assert _text(planner_requests[0]["input"][-1]).startswith(f"[Planning phase] First call {CATALOG} ")
+    assert CATALOG in planner_requests[0]["tools"]
+    # The planner looked at the catalog before it read the paper or submitted the plan.
+    call_order = [
+        item.get("call_id") for item in planner_requests[-1]["input"]
+        if isinstance(item, dict) and item.get("type") == "function_call"
+    ]
+    assert call_order.index("plan-catalog") < call_order.index("plan-read") < call_order.index("plan-submit")
+    # Writers keep their four tools; the catalog stays with the planner.
+    writer_tools = {tuple(request["tools"]) for request in model.requests if request["writer"] is not None}
+    assert writer_tools == {("read_chunk", "record_evidence", "search_document", STAGE)}
+    assert sorted(_finalized_labels(harness)) == sorted(labels)
 
 
 @pytest.mark.asyncio
