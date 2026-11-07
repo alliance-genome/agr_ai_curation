@@ -157,3 +157,19 @@ def test_extraction_guidance_keeps_contrasts_in_the_written_answer():
     ):
         assert phrase in guide
     assert "Controls, wild-type strains, look-alikes" not in guide
+
+
+def test_review_guidance_explains_retiring_and_restoring_out_of_scope_records():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "a record must be shown in the paper to answer the curator's question",
+        "each record ends accepted, retired or left pending",
+        "A reviewer retirement can remove a validated record too",
+        "the reviewer cannot retire the records the curator asked to re-review, either itself or by approving",
+        "Retirement is not deletion",
+        "has no extractor recommendation",
+        "Restore for review, with the curator's reason",
+    ):
+        assert phrase in guide
+    assert "finding no support is still not evidence against them" not in guide
+    assert guide.count("a reject only records an opinion and leaves the record pending") == 1
