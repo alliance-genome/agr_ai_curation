@@ -1,4 +1,4 @@
-"""Shadow Decisions quick check: W5 input, threshold routes, and an observer with no effect on review."""
+"""Shadow Decisions quick check: trial input, two-order averaging, three rules, and no effect on review."""
 import asyncio
 import copy
 import json
@@ -18,32 +18,61 @@ from src.lib.validation_review.decisions import ReviewContext
 FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "validation_review"
 QUESTION = "What transgenic flies are used in the publication?"
 SCOPE = HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session")
+RULES = {rule.name: rule for rule in quick_check.DEFINITION.rules}
 
 
-def _packet():
-    return json.loads((FIXTURES / "quick_check_packet_t58.json").read_text())
+def _packet(validators=True):
+    """Tonight's T58 packet; R1 also carries a failed and a resolved validator answer."""
+    packet = json.loads((FIXTURES / "quick_check_packet_t58.json").read_text())
+    if validators:
+        packet["records"][0]["review"] += [
+            {"review": "validator_answer", "handle": "D7", "validator": "gene_validator", "field": "gene",
+             "outcome": "failed"},
+            {"review": "validator_answer", "handle": "D8", "validator": "gene_validator", "field": "gene",
+             "status": "resolved", "values": {"curie": "FB:FBgn0259685"}, "explanation": "Exact symbol match."},
+        ]
+    return packet
 
 
-def _answer_all(questions, probability=1.0, overrides=None):
+def _golden():
+    return json.loads((FIXTURES / "quick_check_t58_v6_golden.json").read_text())
+
+
+def _answers(questions, overrides=None, default=None):
+    """Answer every question: scope and validator yes, negated questions no, choice accept."""
     overrides = overrides or {}
-    return [{"type": "predicate", "name": question["name"], "probability": overrides.get(question["name"], probability)}
-            for question in questions]
+    answers = []
+    for question in questions:
+        name = question["name"]
+        if question["type"] == "choice":
+            accept = overrides.get(name, 0.9)
+            answers.append({"type": "choice", "name": name, "choice": "accept", "confidence": accept,
+                            "probabilities": [{"value": "accept", "probability": accept},
+                                              {"value": "remove_out_of_scope", "probability": 0.0},
+                                              {"value": "needs_review", "probability": round(1 - accept, 6)}]})
+            continue
+        negated = name.startswith(("sup_neg", "own_neg"))
+        probability = overrides.get(name, default if default is not None else (0.0 if negated else 1.0))
+        answers.append({"type": "predicate", "name": name, "probability": probability})
+    return answers
 
 
 class FakeDecisions:
     """The Decisions endpoint behind a mocked HTTP transport; records every request body."""
 
-    def __init__(self, respond=None):
+    def __init__(self):
         self.requests = []
-        self.respond = respond or (lambda body: {
-            "model": body["model"], "answers": _answer_all(body["questions"]),
-            "usage": {"input_tokens": 3458, "input_tokens_details": {"cached_tokens": 1000, "cache_write_tokens": 1267},
-                      "output_tokens": 0, "total_tokens": 3458}})
+        self.respond = lambda body: {"answers": _answers(body["questions"]),
+                                     "usage": {"input_tokens": 3000, "output_tokens": 0,
+                                               "input_tokens_details": {"cached_tokens": 1000,
+                                                                        "cache_write_tokens": 500}}}
 
-    def handler(self, request):
+    async def handler(self, request):
         body = json.loads(request.content)
         self.requests.append({"url": str(request.url), "body": body})
         response = self.respond(body)
+        if asyncio.iscoroutine(response):
+            response = await response
         if isinstance(response, httpx.Response):
             return response
         return httpx.Response(200, json=response)
@@ -51,6 +80,9 @@ class FakeDecisions:
     def client(self):
         return AsyncOpenAI(api_key="test-placeholder", base_url="https://decisions.test/v1", max_retries=0,
                            http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handler)))
+
+    def order(self, order):
+        return [sent for sent in self.requests if sent["body"]["prompt_cache_key"].endswith(":" + order)]
 
 
 @pytest.fixture
@@ -75,41 +107,40 @@ async def _drain():
         await asyncio.gather(*list(quick_check._RUNNING))
 
 
-def _record(rid, *, role=None, validators=(), **probabilities):
-    record = {"record": rid, "target_id": "target-" + rid, "type": "generic_object", "role": role,
-              "top_level": role in quick_check.TOP_LEVEL_ROLES, "source_available": True,
-              "values": {}, "evidence": [],
-              "validators": [{"validator": "gene", "field": "gene", "status": status, "values": None,
-                              "explanation": None} for status in validators]}
-    names = {f"{name}__{rid}": value for name, value in probabilities.items() if not name.startswith("V")}
-    names.update({f"validator__{rid}{name}": value for name, value in probabilities.items() if name.startswith("V")})
-    return record, names
+def _context():
+    return ReviewContext(SCOPE, "episode-1", "reviewer")
 
 
-def test_input_and_questions_match_the_measured_w5_wording():
+def _source(metadata=None):
+    """The saved extraction record under review; only its metadata is read."""
+    return SimpleNamespace(metadata=metadata or {})
+
+
+def test_both_orders_render_exactly_as_the_trial_did():
     records = quick_check.asked_records(quick_check.packet_records(_packet()))
-    assert [record["record"] for record in records] == ["R1", "R2", "R3", "R4", "R5", "R6"]
-    assert quick_check.build_input(QUESTION, records) == (FIXTURES / "quick_check_t58_w5_input.txt").read_text()
-    questions = [question for record in records for question in quick_check.record_questions(record)]
-    assert questions == json.loads((FIXTURES / "quick_check_t58_w5_questions.json").read_text())
+    golden = _golden()
+    for order in (quick_check.FORWARD, quick_check.REVERSED):
+        labelled = quick_check.ordered(records, order)
+        assert {rid: record["record"] for rid, record in labelled} == golden[order]["labels"]
+        assert quick_check.build_input(QUESTION, labelled) == golden[order]["input"]
+        questions = [question for rid, record in labelled
+                     for question, *_ in quick_check.record_questions(rid, record)]
+        assert questions == golden[order]["questions"]
 
 
-def test_validator_answers_with_a_resolved_answer_get_one_question_each():
-    packet = _packet()
-    packet["records"][0]["review"] += [
-        {"review": "validator_answer", "handle": "D7", "validator": "gene_validator", "field": "gene",
-         "outcome": "failed"},
-        {"review": "validator_answer", "handle": "D8", "validator": "gene_validator", "field": "gene",
-         "status": "resolved", "values": {"curie": "FB:FBgn0259685"}, "explanation": "Exact symbol match."},
-        {"review": "waiting", "codes": ["attempt_running"], "target_id": "t"},
-    ]
-    record = quick_check.packet_records(packet)[0]
-    text = quick_check.build_input(QUESTION, [record])
-    assert "validator answer R1V1 (gene_validator, field gene): status failed" in text
-    assert ('validator answer R1V2 (gene_validator, field gene): status resolved; resolved values '
-            '{"curie": "FB:FBgn0259685"}; explanation "Exact symbol match."') in text
-    names = [question["name"] for question in quick_check.record_questions(record)]
-    assert names == ["in_scope__R1", "supported__R1", "own_study__R1", "validator__R1V2"]
+def test_definition_is_one_versioned_set():
+    definition = quick_check.DEFINITION
+    assert definition.wording_id == "v6-shadow"
+    assert [question.key for question in definition.questions] == [
+        "scope_lenient", "sup_neg", "own_neg", "val_entity", "choice3"]
+    assert [question.key for question in definition.questions if question.negated] == ["sup_neg", "own_neg"]
+    assert definition.orders == ("forward", "reversed")
+    assert {rule.name: (rule.remove_scope_below, rule.skip_at_least) for rule in definition.rules} == {
+        "removal_only": (0.5, None),
+        "balanced": (0.3, (("scope_lenient", 0.8), ("sup_neg", 0.8), ("own_neg", 0.9), ("val_entity", 0.8))),
+        "strict": (0.3, (("scope_lenient", 0.8), ("sup_neg", 0.8), ("own_neg", 0.9), ("val_entity", 0.8),
+                         ("choice3:accept", 0.5))),
+    }
 
 
 @pytest.mark.parametrize("curator,context,expected", [
@@ -131,117 +162,202 @@ def test_long_request_text_is_cut_like_the_calibration_input():
     assert '"(no request text recorded)"' in quick_check.build_input(None, [])
 
 
-@pytest.mark.parametrize("probabilities,expected", [
-    ({"in_scope": 0.02, "supported": 1.0, "own_study": 1.0}, ("remove", None)),
-    ({"in_scope": 0.021, "supported": 1.0, "own_study": 1.0}, ("sol", None)),
-    ({"in_scope": 0.8, "supported": 0.8, "own_study": 0.5}, ("skip", None)),
-    ({"in_scope": 0.79, "supported": 1.0, "own_study": 1.0}, ("sol", None)),
-    ({"in_scope": 1.0, "supported": 0.79, "own_study": 1.0}, ("sol", None)),
-    ({"in_scope": 1.0, "supported": 1.0, "own_study": 0.49}, ("sol", None)),
-    ({"in_scope": 1.0, "supported": 1.0}, ("sol", "unanswered")),
-    ({"in_scope": 0.0}, ("remove", None)),
+def _record(*, kind="object", validators=()):
+    role = {"object": None, "claim": None, "sub_record": "validated_reference"}[kind]
+    record_type = "generic_claim" if kind == "claim" else "generic_object"
+    record = {"record": "R1", "target_id": "t1", "type": record_type, "role": role, "source_available": True,
+              "values": {}, "evidence": [],
+              "validators": [{"validator": "v", "field": "f", "status": status, "values": None, "explanation": None}
+                             for status in validators]}
+    record["kind"] = quick_check.record_kind(record)
+    return record
+
+
+def _orders(forward, reversed_=None):
+    """Per-order answers in the shape check_packet collects them."""
+    return {"forward": forward, "reversed": forward if reversed_ is None else reversed_}
+
+
+GOOD = {"scope_lenient": 1.0, "sup_neg": 0.0, "own_neg": 0.0, "choice3": {"accept": 0.9, "remove_out_of_scope": 0.0,
+                                                                          "needs_review": 0.1}}
+
+
+def _routes(record, answers):
+    scores = quick_check.oriented_scores(answers, record)
+    return {name: quick_check.route(record, scores, rule) for name, rule in RULES.items()}
+
+
+def test_orders_are_averaged_and_negated_questions_turned_around():
+    record = _record(validators=("resolved", "failed", "ambiguous"))
+    forward = {**GOOD, "scope_lenient": 0.95, "sup_neg": 0.1, "own_neg": 0.04, "val_entity": {1: 0.9, 3: 0.7}}
+    reverse = {**GOOD, "scope_lenient": 0.12, "sup_neg": 0.3, "own_neg": 0.0, "val_entity": {1: 0.8, 3: 0.95},
+               "choice3": {"accept": 0.4, "remove_out_of_scope": 0.2, "needs_review": 0.4}}
+    scores = quick_check.oriented_scores(_orders(forward, reverse), record)
+    assert scores == pytest.approx({"scope_lenient": 0.535, "sup_neg": 0.8, "own_neg": 0.98, "val_entity": 0.825,
+                                    "choice3:accept": 0.65, "choice3:remove_out_of_scope": 0.1,
+                                    "choice3:needs_review": 0.25})
+    assert _routes(record, _orders(forward, reverse)) == {
+        "removal_only": ("sol", None), "balanced": ("sol", None), "strict": ("sol", None)}
+
+
+@pytest.mark.parametrize("change,expected", [
+    ({}, {"removal_only": "sol", "balanced": "skip", "strict": "skip"}),
+    ({"scope_lenient": 0.49}, {"removal_only": "remove", "balanced": "sol", "strict": "sol"}),
+    ({"scope_lenient": 0.5}, {"removal_only": "sol", "balanced": "sol", "strict": "sol"}),
+    ({"scope_lenient": 0.29}, {"removal_only": "remove", "balanced": "remove", "strict": "remove"}),
+    ({"scope_lenient": 0.3}, {"removal_only": "remove", "balanced": "sol", "strict": "sol"}),
+    ({"scope_lenient": 0.8, "sup_neg": 0.2, "own_neg": 0.1, "val_entity": {1: 0.8}},
+     {"removal_only": "sol", "balanced": "skip", "strict": "skip"}),
+    ({"scope_lenient": 0.79}, {"removal_only": "sol", "balanced": "sol", "strict": "sol"}),
+    ({"sup_neg": 0.21}, {"removal_only": "sol", "balanced": "sol", "strict": "sol"}),
+    ({"own_neg": 0.11}, {"removal_only": "sol", "balanced": "sol", "strict": "sol"}),
+    ({"val_entity": {1: 0.79}}, {"removal_only": "sol", "balanced": "sol", "strict": "sol"}),
+    ({"choice3": {"accept": 0.49, "remove_out_of_scope": 0.0, "needs_review": 0.51}},
+     {"removal_only": "sol", "balanced": "skip", "strict": "sol"}),
+    ({"choice3": {"accept": 0.5, "remove_out_of_scope": 0.0, "needs_review": 0.5}},
+     {"removal_only": "sol", "balanced": "skip", "strict": "skip"}),
 ])
-def test_routes_apply_the_thresholds(probabilities, expected):
-    record, answers = _record("R1", **probabilities)
-    assert quick_check.route(record, answers) == expected
+def test_three_rules_at_their_thresholds(change, expected):
+    record = _record(validators=("resolved",))
+    answers = {**GOOD, "val_entity": {1: 1.0}, **change}
+    assert {name: route for name, (route, _) in _routes(record, _orders(answers)).items()} == expected
 
 
-def test_every_resolved_validator_answer_must_clear_its_threshold_to_skip():
-    record, answers = _record("R1", validators=("resolved", "failed", "ambiguous"),
-                              in_scope=1.0, supported=1.0, own_study=1.0, V1=0.8, V3=0.79)
-    assert quick_check.route(record, answers) == ("sol", None)
-    answers["validator__R1V3"] = 0.8
-    assert quick_check.route(record, answers) == ("skip", None)
-    del answers["validator__R1V3"]
-    assert quick_check.route(record, answers) == ("sol", "unanswered")
+def test_a_record_without_validator_answers_needs_none_to_skip():
+    record = _record(validators=("failed",))
+    assert {name: route for name, (route, _) in _routes(record, _orders(GOOD)).items()} == {
+        "removal_only": "sol", "balanced": "skip", "strict": "skip"}
 
 
-@pytest.mark.parametrize("role", ["validated_reference", "metadata_only", "evidence_quote", "generic_proxy_object"])
-def test_sub_records_always_stay_with_the_supervisor(role):
-    for probabilities in ({"in_scope": 1.0, "supported": 1.0, "own_study": 1.0}, {"in_scope": 0.0}):
-        record, answers = _record("R1", role=role, **probabilities)
-        assert record["top_level"] is False
-        assert quick_check.route(record, answers) == ("sol", "sub_record")
+def test_claims_are_never_removed_and_sub_records_never_leave_the_supervisor():
+    claim = _record(kind="claim")
+    assert _routes(claim, _orders({**GOOD, "scope_lenient": 0.0}))["removal_only"] == ("sol", None)
+    assert _routes(claim, _orders(GOOD))["balanced"] == ("skip", None)
+    sub_record = _record(kind="sub_record")
+    for answers in ({**GOOD, "scope_lenient": 0.0}, GOOD):
+        assert set(_routes(sub_record, _orders(answers)).values()) == {("sol", "sub_record")}
+
+
+def test_an_answer_missing_in_either_order_never_removes_or_skips():
+    record = _record(validators=("resolved",))
+    forward = {**GOOD, "scope_lenient": 0.0, "val_entity": {1: 1.0}}
+    reverse = {key: value for key, value in forward.items() if key != "scope_lenient"}
+    assert _routes(record, _orders(forward, reverse)) == {
+        "removal_only": ("sol", None), "balanced": ("sol", "unanswered"), "strict": ("sol", "unanswered")}
+    reverse = {**GOOD, "val_entity": {}}
+    assert _routes(record, _orders({**GOOD, "val_entity": {1: 1.0}}, reverse))["balanced"] == ("sol", "unanswered")
 
 
 def test_curatable_units_and_records_without_a_declared_role_are_top_level():
-    packet = _packet()
+    packet = _packet(validators=False)
     packet["records"][0]["role"] = "curatable_unit"
     packet["records"][1]["role"] = "validated_reference"
+    packet["records"][2]["type"] = "generic_claim"
     packet["records"].append({"record": None, "review": [{"review": "waiting", "codes": ["global"]}]})
     records = quick_check.packet_records(packet)
-    assert [(record["record"], record["top_level"]) for record in records][:3] == [
-        ("R1", True), ("R2", False), ("R3", True)]
-    assert len(records) == 6
-
-
-def test_record_without_its_saved_source_is_not_asked_and_stays_with_the_supervisor():
-    packet = _packet()
-    packet["records"][2] = {"record": "R3", "target_id": "t3", "source_unavailable": "History conflict",
-                            "review": [{"review": "record", "handle": "D3"}]}
-    records = quick_check.packet_records(packet)
-    assert [record["record"] for record in quick_check.asked_records(records)] == ["R1", "R2", "R4", "R5", "R6"]
-    assert quick_check.route(records[2], {}) == ("sol", "source_unavailable")
+    assert [(record["record"], record["kind"]) for record in records] == [
+        ("R1", "object"), ("R2", "sub_record"), ("R3", "claim"), ("R4", "object"), ("R5", "object"),
+        ("R6", "object")]
 
 
 @pytest.mark.asyncio
-async def test_check_sends_w5_with_the_packet_cache_key_and_logs_routes(decisions):
-    overrides = {"in_scope__R4": 0.0, "own_study__R5": 0.3}
-    decisions.respond = lambda body: {
-        "answers": _answer_all(body["questions"], overrides=overrides),
-        "usage": {"input_tokens": 3458, "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 1267},
-                  "output_tokens": 0}}
+async def test_check_asks_both_orders_at_once_and_logs_every_rule(decisions):
+    both_sent = asyncio.Event()
+    golden = _golden()
+
+    async def respond(body):
+        if len(decisions.requests) == 2:
+            both_sent.set()
+        await asyncio.wait_for(both_sent.wait(), timeout=5)
+        overrides = {}
+        if body["prompt_cache_key"].endswith(":forward"):
+            overrides = {"scope_lenient__R4": 0.0, "scope_lenient__R6": 0.03, "own_neg__R5": 0.5}
+        else:  # R6 is R1 here, and R4 is R3
+            overrides = {"scope_lenient__R3": 0.01, "scope_lenient__R1": 0.0, "own_neg__R2": 0.5}
+        return {"answers": _answers(body["questions"], overrides),
+                "usage": {"input_tokens": 3000, "output_tokens": 0}}
+
+    decisions.respond = respond
     packet = _packet()
     result = await quick_check.check_packet(packet, request=QUESTION, cache_key=packet["packet_id"])
 
-    [sent] = decisions.requests
-    assert sent["url"] == "https://decisions.test/v1/decisions"
-    assert sent["body"]["model"] == "gpt-6-luna"
-    assert sent["body"]["prompt_cache_key"] == packet["packet_id"]
-    assert sent["body"]["input"] == (FIXTURES / "quick_check_t58_w5_input.txt").read_text()
-    assert len(sent["body"]["questions"]) == 18
+    for order in ("forward", "reversed"):
+        [sent] = decisions.order(order)
+        assert sent["url"] == "https://decisions.test/v1/decisions"
+        assert sent["body"]["model"] == "gpt-6-luna"
+        assert sent["body"]["prompt_cache_key"] == packet["packet_id"] + ":" + order
+        assert sent["body"]["input"] == golden[order]["input"]
+        assert sent["body"]["questions"] == golden[order]["questions"]
     assert result["status"] == "completed"
-    assert result["routes"] == {"skip": 4, "remove": 1, "sol": 1}
-    assert [(row["record"], row["route"]) for row in result["records"]] == [
-        ("R1", "skip"), ("R2", "skip"), ("R3", "skip"), ("R4", "remove"), ("R5", "sol"), ("R6", "skip")]
-    assert result["records"][4] == {
-        "record": "R5", "target_id": "21910a7e-6dd4-435d-90cf-f5029516d901", "type": "generic_reagent_candidate",
-        "role": None, "top_level": True, "route": "sol", "in_scope": 1.0, "supported": 1.0, "own_study": 0.3}
-    assert result["usage"] == {"input": 3458, "cached_input": 0, "cache_write_input": 1267, "output": 0}
-    assert result["thresholds"]["remove_in_scope_at_most"] == 0.02
+    assert [call["order"] for call in result["calls"]] == ["forward", "reversed"]
+    assert all(call["usage"] == {"input": 3000, "cached_input": 0, "cache_write_input": 0, "output": 0}
+               for call in result["calls"])
+    assert result["usage"]["input"] == 6000
+    assert result["routes"] == {"removal_only": {"skip": 0, "remove": 2, "sol": 4},
+                                "balanced": {"skip": 3, "remove": 2, "sol": 1},
+                                "strict": {"skip": 3, "remove": 2, "sol": 1}}
+    rows = {row["record"]: row for row in result["records"]}
+    assert rows["R4"]["routes"] == {"removal_only": "remove", "balanced": "remove", "strict": "remove"}
+    assert rows["R5"]["routes"]["balanced"] == "sol" and rows["R5"]["average"]["own_neg"] == 0.5
+    r1 = rows["R1"]
+    assert r1["forward"]["val_entity"] == {"R1V2": 1.0} and r1["reversed"]["val_entity"] == {"R1V2": 1.0}
+    assert r1["forward"]["choice3"] == {"accept": 0.9, "remove_out_of_scope": 0.0, "needs_review": 0.1}
+    assert r1["average"] == {"scope_lenient": 1.0, "sup_neg": 1.0, "own_neg": 1.0, "val_entity": 1.0,
+                             "choice3:accept": 0.9, "choice3:remove_out_of_scope": 0.0, "choice3:needs_review": 0.1}
+    assert r1["routes"] == {"removal_only": "sol", "balanced": "skip", "strict": "skip"}
+    assert rows["R6"]["forward"]["scope_lenient"] == 0.03 and rows["R6"]["reversed"]["scope_lenient"] == 0.0
+    assert result["rules"]["strict"]["skip_at_least"]["choice3:accept"] == 0.5
 
 
 @pytest.mark.asyncio
-async def test_more_than_400_questions_are_split_into_requests_that_share_one_input(decisions):
-    packet = _packet()
+async def test_more_than_400_questions_are_split_within_each_order(decisions):
+    packet = _packet(validators=False)
     template = packet["records"][0]
     packet["records"] = [{**copy.deepcopy(template), "record": f"R{index}", "target_id": f"t{index}"}
-                         for index in range(1, 135)]
+                         for index in range(1, 102)]
     result = await quick_check.check_packet(packet, request=QUESTION, cache_key="packet-big")
 
-    sizes = [len(sent["body"]["questions"]) for sent in decisions.requests]
-    assert sizes == [400, 2]
-    assert len({sent["body"]["input"] for sent in decisions.requests}) == 1
-    assert {sent["body"]["prompt_cache_key"] for sent in decisions.requests} == {"packet-big"}
-    names = [question["name"] for sent in decisions.requests for question in sent["body"]["questions"]]
-    assert len(names) == len(set(names)) == 402
-    assert result["request_count"] == 2 and result["routes"] == {"skip": 134, "remove": 0, "sol": 0}
-    assert result["usage"]["input"] == 2 * 3458
+    for order in ("forward", "reversed"):
+        sent = decisions.order(order)
+        assert [len(item["body"]["questions"]) for item in sent] == [400, 4]
+        assert len({item["body"]["input"] for item in sent}) == 1
+        names = [question["name"] for item in sent for question in item["body"]["questions"]]
+        assert len(names) == len(set(names)) == 404
+    assert len(result["calls"][0]["requests"]) == 2
+    assert result["routes"]["balanced"] == {"skip": 101, "remove": 0, "sol": 0}
 
 
 @pytest.mark.asyncio
 async def test_refused_questions_leave_the_record_with_the_supervisor(decisions):
     def respond(body):
-        answers = _answer_all(body["questions"])
-        answers[1] = {"type": "refusal", "name": answers[1]["name"]}
+        answers = _answers(body["questions"])
+        if body["prompt_cache_key"].endswith(":reversed"):
+            answers = [{"type": "refusal", "name": answer["name"]} if answer["name"] == "sup_neg__R6" else answer
+                       for answer in answers]
         return {"answers": answers, "usage": {"input_tokens": 10}}
 
     decisions.respond = respond
     result = await quick_check.check_packet(_packet(), request=QUESTION, cache_key="p")
     assert result["status"] == "partial"
-    assert result["refused"] == ["supported__R1"] and result["missing"] == []
-    assert result["records"][0]["route"] == "sol" and result["records"][0]["route_reason"] == "unanswered"
-    assert result["usage"] == {"input": 10, "cached_input": 0, "cache_write_input": 0, "output": 0}
+    assert result["refused"] == ["reversed:sup_neg__R6"] and result["missing"] == []
+    r1 = next(row for row in result["records"] if row["record"] == "R1")
+    assert r1["routes"] == {"removal_only": "sol", "balanced": "sol", "strict": "sol"}
+    assert r1["route_reasons"] == {"balanced": "unanswered", "strict": "unanswered"}
+    assert "sup_neg" not in r1["reversed"] and "sup_neg" not in r1["average"]
+
+
+@pytest.mark.asyncio
+async def test_one_failed_order_fails_the_check(decisions):
+    def respond(body):
+        if body["prompt_cache_key"].endswith(":reversed"):
+            return httpx.Response(429, json={"error": {"message": "slow down", "code": "rate_limit_exceeded"}})
+        return {"answers": _answers(body["questions"]), "usage": {"input_tokens": 10}}
+
+    decisions.respond = respond
+    with pytest.raises(Exception) as raised:
+        await quick_check.check_packet(_packet(), request=QUESTION, cache_key="p")
+    assert type(raised.value).__name__ == "RateLimitError"
+    assert len(decisions.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -251,13 +367,15 @@ async def test_packet_without_records_makes_no_call(decisions):
     assert result["status"] == "no_questions" and decisions.requests == []
 
 
-def _context():
-    return ReviewContext(SCOPE, "episode-1", "reviewer")
-
-
-def _source(metadata=None):
-    """The saved extraction record under review; only its metadata is read."""
-    return SimpleNamespace(metadata=metadata or {})
+def test_record_without_its_saved_source_is_not_asked_and_stays_with_the_supervisor():
+    packet = _packet(validators=False)
+    packet["records"][2] = {"record": "R3", "target_id": "t3", "source_unavailable": "History conflict",
+                            "review": [{"review": "record", "handle": "D3"}]}
+    records = quick_check.packet_records(packet)
+    asked = quick_check.asked_records(records)
+    assert [record["record"] for record in asked] == ["R1", "R2", "R4", "R5", "R6"]
+    assert [rid for rid, _ in quick_check.ordered(asked, "forward")] == ["R1", "R2", "R3", "R4", "R5"]
+    assert quick_check.route(records[2], {}, RULES["balanced"]) == ("sol", "source_unavailable")
 
 
 @pytest.mark.asyncio
@@ -273,20 +391,21 @@ async def test_shadow_check_logs_one_trace_event_per_fresh_packet(decisions, cap
         quick_check.packet_pinned(_context(), "packet-1")
         await _drain()
     assert loads == [(SCOPE, "episode-1", "packet-1")]
+    assert len(decisions.requests) == 2
     [event] = captured.events
     assert event["event_type"] == "review_quick_check.shadow"
     payload = event["output_summary"]
-    assert {key: payload[key] for key in ("packet_id", "episode_id", "wording_version", "model", "mode", "status",
+    assert {key: payload[key] for key in ("packet_id", "episode_id", "wording_id", "model", "mode", "status",
                                           "request_source")} == {
-        "packet_id": "packet-1", "episode_id": "episode-1", "wording_version": "W5", "model": "gpt-6-luna",
+        "packet_id": "packet-1", "episode_id": "episode-1", "wording_id": "v6-shadow", "model": "gpt-6-luna",
         "mode": "shadow", "status": "completed", "request_source": "curator_request"}
+    assert all(call["latency_ms"] >= 0 and call["usage"]["input"] == 3000 for call in payload["calls"])
     assert decisions.requests[0]["body"]["input"].startswith(
         'A curator asked an AI curation assistant this request about one publication:\n"' + QUESTION + '"')
     assert captured.reports == []
     [line] = [record for record in caplog.records if getattr(record, "event", None) == "review_quick_check"]
     assert line.levelname == "INFO" and line.quick_check["routes"] == payload["routes"]
-    assert line.quick_check["records"][0] == {"record": "R1", "route": "skip", "in_scope": 1.0,
-                                              "supported": 1.0, "own_study": 1.0}
+    assert set(line.quick_check["records"][0]) == {"record", "kind", "routes", "average"}
     assert payload["records"][0]["target_id"] == "cafa5538-3de0-48ba-a2c2-bdf1d8912198"
 
 
@@ -398,8 +517,7 @@ async def test_reviewer_packet_read_is_unchanged_by_the_shadow_check(outcome, de
         decisions.respond = lambda body: httpx.Response(500, json={"error": {"message": "boom"}})
     elif outcome == "observer_defect":
         monkeypatch.setattr(quick_check, "check_packet", Mock(side_effect=TypeError("defect")))
-    context = _context()
-    tool = _read_tool(context)
+    tool = _read_tool(_context())
     with quick_check.review_scope(QUESTION, _source()):
         first = await _invoke(tool, {})
         second = await _invoke(tool, {"packet_id": "packet-1", "page": 1})
@@ -409,7 +527,7 @@ async def test_reviewer_packet_read_is_unchanged_by_the_shadow_check(outcome, de
                      ((SCOPE, "episode-1"), {"packet_id": "packet-1", "page": 1})]
     [event] = captured.events
     assert event["output_summary"]["status"] == ("completed" if outcome == "completed" else "failed")
-    assert len(decisions.requests) == (0 if outcome == "observer_defect" else 1)
+    assert len(decisions.requests) == (0 if outcome == "observer_defect" else 2)
 
 
 @pytest.mark.asyncio

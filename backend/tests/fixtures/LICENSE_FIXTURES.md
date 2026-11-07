@@ -30,13 +30,13 @@
 - **Retrieved**: 2026-02-12
 - **Usage**: End-to-end pipeline integration testing (PDFX parsing, chunking, Weaviate storage)
 
-## validation_review/quick_check_packet_t58.json, quick_check_t58_w5_input.txt and quick_check_t58_w5_questions.json
+## validation_review/quick_check_packet_t58.json and quick_check_t58_v6_golden.json
 
 - **Source**: A review packet built from `sample_fly_publication.pdf` (below); the quoted sentences come from that paper
 - **License**: Creative Commons Attribution 4.0 International (CC BY 4.0), as for the source paper
 - **License URL**: https://creativecommons.org/licenses/by/4.0/
 - **Created**: 2026-11-07
-- **Usage**: Decisions quick-check input and question wording tests; the input and question files are the measured W5 calibration output for this packet
+- **Usage**: Decisions quick-check input and question wording tests; the golden file is the calibration trial's own rendering of this packet in forward and reversed order
 
 ## sample_fly_publication.pdf
 

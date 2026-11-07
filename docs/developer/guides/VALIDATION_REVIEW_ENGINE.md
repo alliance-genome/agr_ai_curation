@@ -288,22 +288,36 @@ With `VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow`, each fresh review packet that 
 chat or flow review pins is also sent to the OpenAI Decisions API (`gpt-6-luna`,
 `src/lib/validation_review/quick_check.py`). The check starts when
 `read_review_packet` pins the packet and runs alongside the supervisor's turn; the
-tool returns the same result without waiting. The model answers fixed predicate
-questions for every record (wording `W5`): within the request, evidence supports
-what the record identifies, from this study's own work, and one question per
-resolved validator answer. Code compares the probabilities with fixed thresholds
-to name a route per record: remove (within-request at most 0.02), skip review (all
-answers at or above their thresholds), or supervisor review. Records with a
-declared role other than `curatable_unit` (validated references, metadata and
-similar sub-records) always route to the supervisor.
+tool returns the same result without waiting. The packet is asked twice at the
+same time, with records in forward and in reversed order, because order shifts
+the answers; the two orders are averaged. Each record gets the questions of the
+definition `v6-shadow`: within the request (lenient wording), an identity value
+missing from or contradicted by its quotes, not part of this study's own work,
+what should happen to it (accept, remove as out of scope, needs review), and for
+each resolved validator answer, same entity and species. Code turns the negated
+questions around (1 - p) and applies three rules to name a would-be route per
+record:
 
-Nothing is applied. The answers, routes, latency and token counts are written as
-a `review_quick_check.shadow` trace event (TraceReview shows it under
-`review_quick_check`) and one log line, for later calibration against supervisor
-decisions. The supervisor still reviews every record. A failed or refused check
-is logged and nothing else happens. The wording, input caps and thresholds are
-constants tied to `WORDING_VERSION`. Changing any of them needs a new
-calibration. The default mode is `off`, which makes no call.
+- removal only: remove a top-level object record whose averaged scope is below 0.5;
+- balanced: remove below 0.3; skip the supervisor when scope is at least 0.8,
+  1 - missing-identity at least 0.8, 1 - not-own-study at least 0.9 and every
+  validator answer at least 0.8;
+- strict: balanced, and the accept choice at least 0.5 to skip.
+
+Claim records are never removed. Records with a declared role other than
+`curatable_unit` (validated references, metadata and similar sub-records) always
+route to the supervisor, and so does any record with an answer missing or refused
+in either order.
+
+Nothing is applied. Both orders' answers, the averages, the route under each rule,
+and each call's latency and token counts are written as a
+`review_quick_check.shadow` trace event (TraceReview shows it under
+`review_quick_check`), and one log line carries the routes and averages, for later
+calibration against supervisor decisions. The supervisor still reviews every
+record. A failed or refused check is logged and nothing else happens. Question
+texts, input caps, orders and thresholds form one versioned `Definition` in
+`quick_check.py`; changing any of them needs a new wording id and calibration.
+The default mode is `off`, which makes no call.
 
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when

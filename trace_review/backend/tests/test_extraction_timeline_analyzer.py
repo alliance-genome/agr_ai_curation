@@ -695,13 +695,15 @@ def test_fanout_plan_writers_and_finalize_are_visible(tmp_path, monkeypatch):
 def test_review_quick_check_shadow_answers_are_visible_in_timeline_and_diagnostics(tmp_path, monkeypatch):
     monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
     summary = {
-        'packet_id': 'packet-1', 'wording_version': 'W5', 'model': 'gpt-6-luna', 'mode': 'shadow',
-        'status': 'completed', 'latency_ms': 412, 'usage': {'input': 3458, 'cached_input': 0},
-        'routes': {'skip': 1, 'remove': 1, 'sol': 1},
+        'packet_id': 'packet-1', 'wording_id': 'v6-shadow', 'model': 'gpt-6-luna', 'mode': 'shadow',
+        'status': 'completed', 'latency_ms': 412, 'usage': {'input': 6916, 'cached_input': 0},
+        'calls': [{'order': 'forward', 'latency_ms': 401}, {'order': 'reversed', 'latency_ms': 412}],
+        'routes': {'balanced': {'skip': 1, 'remove': 1, 'sol': 1}},
         'records': [
-            {'record': 'R1', 'route': 'skip', 'in_scope': 1.0, 'supported': 0.98, 'own_study': 0.97},
-            {'record': 'R2', 'route': 'remove', 'in_scope': 0.01, 'supported': 1.0, 'own_study': 0.94},
-            {'record': 'R3', 'route': 'sol', 'route_reason': 'sub_record', 'in_scope': 0.9},
+            {'record': 'R1', 'kind': 'object', 'routes': {'balanced': 'skip'}, 'average': {'scope_lenient': 1.0}},
+            {'record': 'R2', 'kind': 'object', 'routes': {'balanced': 'remove'}, 'average': {'scope_lenient': 0.01}},
+            {'record': 'R3', 'kind': 'sub_record', 'routes': {'balanced': 'sol'},
+             'route_reasons': {'balanced': 'sub_record'}},
         ],
     }
     _write_event(tmp_path, 'shadow', _event('shadow', 1, 'review_quick_check.shadow', output_summary=summary))
@@ -714,7 +716,7 @@ def test_review_quick_check_shadow_answers_are_visible_in_timeline_and_diagnosti
     assert events[0]['output'] == summary
     assert 'calibration only' in result['review_quick_check']['note']
     report = ExtractionTimelineAnalyzer.diagnostic_report(result)
-    assert report['review_quick_check']['events'][0]['output']['routes'] == {'skip': 1, 'remove': 1, 'sol': 1}
+    assert report['review_quick_check']['events'][0]['output']['routes'] == {'balanced': {'skip': 1, 'remove': 1, 'sol': 1}}
 
 
 def test_review_quick_check_section_is_absent_when_no_check_ran(tmp_path, monkeypatch):
