@@ -392,6 +392,51 @@ def test_every_unknown_uncertain_field_is_named_with_its_handle_and_the_valid_fi
         assert {store._current(db, artifact, target)["version"] for target in targets} == {0}
 
 
+def _identity_record(index):
+    """A standalone extracted identity: its whole value carries a resolution state, as for a ZFIN term."""
+    obj = _object(index, ["e1"])
+    return obj.model_copy(update={"payload": {
+        "curie": None, "label": None, "mention": "bifurcation", "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated", "validator_explanation": "Not validated yet."}})
+
+
+def test_an_identity_record_is_marked_and_accepting_it_keeps_its_own_resolution_state(scope):
+    """S06/S07: the reviewer listed an identity record's curie as uncertain; the packet now says up front."""
+    from src.lib.validation_history.projection import read_published_projection
+
+    objects = [_identity_record(0), _object(1, ["e1"])]
+    _, _, episode, _, checkpoint = _build(scope, objects, [_evidence("e1")])
+    page = reads.review_packet(scope, episode)
+    identity, plain = page["records"]
+    first, second = _handles(identity)[0], _handles(plain)[0]
+    assert identity["review"] == [{"handle": first, "review": "record", "identity_record": (
+        "Accepting keeps this record's own resolution_state; send it without unresolved_fields.")}]
+    assert plain["review"] == [{"handle": second, "review": "record"}], "a plain record is not marked"
+    context = ReviewContext(scope, episode, "fixture-reviewer")
+    decided = [
+        {"handle": first, "action": "accept", "reason": "E1 names bifurcation; no ontology mapping ran.",
+         "unresolved_fields": [{"field_path": "curie", "explanation": "Ontology identity is unresolved."}]},
+        {"handle": second, "action": "accept", "reason": "E1 supports the reagent."},
+    ]
+    with pytest.raises(ValueError) as caught:
+        decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="identity-uncertain",
+            packet_id=page["packet_id"], packet_decisions=decided)
+    message = str(caught.value)
+    assert message.startswith(
+        f'Nothing in this call was saved. {first}: unresolved field "curie" is part of an identity that keeps '
+        "its own resolution_state, which accepting does not resolve, so leave it out of unresolved_fields.")
+    assert message.endswith(f"Fields that can be assessed for {first}: none, so send {first} without unresolved_fields.")
+    assert f"{second}:" not in message
+    result = decisions.record_packet_decisions(context, checkpoint_request=checkpoint(),
+        operation_id="identity-accepted", packet_id=page["packet_id"],
+        packet_decisions=[{key: value for key, value in decided[0].items() if key != "unresolved_fields"}, decided[1]])
+    assert result["ready"]
+    projected, _ = read_published_projection(scope, result["publication"], finalized=True)
+    assert projected.extracted_objects[0].payload == objects[0].payload, "the identity stays unresolved"
+    assert not any(finding.code == "validation_review.assessment_unresolved"
+                   for finding in projected.validation_findings)
+
+
 def _list_row(index, *, source=True):
     attributes = {"reagent_names": f"UAS-gene{index}-RNAi", "detail_reagent_type": "Transgene or insertion",
                   "detail_associated_gene": f"gene{index}"}

@@ -512,8 +512,12 @@ def _packet_applicability(body, evidence):
     return item
 
 
+IDENTITY_RECORD = "Accepting keeps this record's own resolution_state; send it without unresolved_fields."
+
+
 def _build_packet(db, scope, ep, episode_id):
     from collections import Counter
+    from src.lib.domain_packs.resolvable_values import has_resolution_state
     from . import source_inputs
     from .record_scope import review_ready
     from .record_source import _source_fact, packet_record
@@ -608,6 +612,9 @@ def _build_packet(db, scope, ep, episode_id):
             numbered += 1
             label = "R" + str(numbered)
         item = {"record": label}
+        # A record whose whole value carries a resolution state is an identity:
+        # binding refuses every field of it as review uncertainty.
+        identity_record = False
         if record_target is not None:
             item["target_id"] = record_target
             item["follow_up_available"] = followups[record_target]
@@ -617,6 +624,7 @@ def _build_packet(db, scope, ep, episode_id):
                 item["source_unavailable"] = str(error)
             else:
                 source = store._content(db, fact)
+                identity_record = has_resolution_state(source["record"]["payload"])
                 item.update(packet_record(source["record"]))
                 item["values"] = evidence.inline(item["values"])
                 for identity in (source["record"].get("object_id"), source["record"].get("pending_ref_id")):
@@ -674,6 +682,8 @@ def _build_packet(db, scope, ep, episode_id):
                         ref = {"applicability_ref": row["applicability_ref"]}
                     else:
                         entry = {"review": "record"}
+                        if identity_record:
+                            entry["identity_record"] = IDENTITY_RECORD
                         ref = {"extraction_ref": subject}
                     slots[key] = {"entry": entry, "units": [], "ref": ref}
                 slots[key]["units"].append((unit_id, row))
