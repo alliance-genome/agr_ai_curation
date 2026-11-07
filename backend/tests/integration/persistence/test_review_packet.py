@@ -393,7 +393,7 @@ def test_every_unknown_uncertain_field_is_named_with_its_handle_and_the_valid_fi
 
 
 def _identity_record(index):
-    """A standalone extracted identity: its whole value carries a resolution state, as for a ZFIN term."""
+    """A standalone extracted identity: its whole value carries a resolution state, as for an ontology term."""
     obj = _object(index, ["e1"])
     return obj.model_copy(update={"payload": {
         "curie": None, "label": None, "mention": "bifurcation", "resolution_state": "unresolved",
