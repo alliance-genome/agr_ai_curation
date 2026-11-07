@@ -3513,22 +3513,42 @@ def _validator_lookup_status_summary(status_counts: dict[str, int]) -> str:
     return "mixed"
 
 
+# Validator statuses that leave a value for curator review; "incomplete" marks a
+# result with output issues.
+_VALIDATOR_REVIEW_STATUSES = frozenset({"unresolved", "incomplete"})
+
+
+def _validator_lookup_verdict(outcome: str, status_counts: dict[str, int]) -> str:
+    """Headline for a finished lookup: the validators' final status, never the search's.
+
+    A search that returns several candidates is ``ambiguous`` even when the
+    validator then resolves one, so the search step's outcome and candidate count
+    stay in the event's ``outcome`` and ``resultCount`` details. Only a lookup
+    that failed technically reads ``error``; its event is also marked unsuccessful.
+    """
+    if outcome == "error":
+        return outcome
+    if _VALIDATOR_REVIEW_STATUSES.intersection(status_counts):
+        return "review required"
+    return _validator_lookup_status_summary(status_counts)
+
+
 def _validator_lookup_complete_label(
     specialist_name: str,
-    outcome: str,
+    verdict: str,
     *,
     target_count: int,
     status_summary: str,
 ) -> str:
     if target_count <= 1:
-        return f"{specialist_name}: Validator Lookup {outcome}"
+        return f"{specialist_name}: Validator Lookup {verdict}"
     status_text = (
         "mixed validation"
         if status_summary == "mixed"
         else f"{status_summary} validation"
     )
     return (
-        f"{specialist_name}: Validator Lookup {outcome} "
+        f"{specialist_name}: Validator Lookup {verdict} "
         f"({target_count} targets, {status_text})"
     )
 
@@ -3614,7 +3634,7 @@ def _emit_validator_lookup_audit_events(
                 "toolName": "domain_validator_lookup",
                 "friendlyName": _validator_lookup_complete_label(
                     specialist_name,
-                    "review required" if outcome != "error" and (outcome == "conflict" or "unresolved" in status_counts or "incomplete" in status_counts) else outcome,
+                    _validator_lookup_verdict(outcome, status_counts),
                     target_count=duplicate_count,
                     status_summary=status_summary,
                 ) + f" ({binding_id})",
