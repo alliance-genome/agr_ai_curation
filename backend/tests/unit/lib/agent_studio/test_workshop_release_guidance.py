@@ -132,3 +132,77 @@ def test_review_history_is_available_on_demand_for_each_package(package):
             template=template, render_diagnostic_tools=str, query="revalidation",
         )["topics"]
     }
+
+
+def _alliance_guide(topic):
+    template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
+    result = read_studio_guide(template=template, render_diagnostic_tools=str, topic=topic)
+    assert result["success"] and result["complete"]
+    always_sent, _ = prepare_studio_prompt_template(template)
+    assert result["content"] not in always_sent
+    return result["content"]
+
+
+def test_extraction_guidance_keeps_contrasts_in_the_written_answer():
+    guide = _alliance_guide("domain_envelopes")
+    for phrase in (
+        "Records answer the curator's question.",
+        "even when the paper uses it as a control",
+        "items whose membership in the category the paper does not establish go in its written answer (its final explanation, with any uncertainty), not as records",
+        "unless the curator asks for those items themselves",
+        "and so does the fan-out planning step, under the agent's own instructions (guide topic extraction_fanout)",
+        "read the extractor's final explanation in the trace before calling it an extraction miss",
+        "keeps the prompt it was saved with",
+        "only their fan-out planning step does",
+    ):
+        assert phrase in guide
+    assert "Controls, wild-type strains, look-alikes" not in guide
+
+
+def test_review_guidance_explains_retiring_and_restoring_out_of_scope_records():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "a record must be shown in the paper to answer the curator's question",
+        "each record ends accepted, retired or left pending",
+        "A reviewer retirement can remove a validated record too",
+        "the reviewer cannot retire the records the curator asked to re-review, either itself or by approving",
+        "Retirement is not deletion",
+        "has no extractor recommendation",
+        "Restore for review, with the curator's reason",
+    ):
+        assert phrase in guide
+    assert "finding no support is still not evidence against them" not in guide
+    assert guide.count("a reject only records an opinion and leaves the record pending") == 1
+
+
+def test_review_guidance_explains_rechecks_and_how_review_ends():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "one targeted re-check per review round",
+        "a round the curator requests (Revalidate record or all records) gives each record a fresh one",
+        "whether one is left (follow_up_available)",
+        "Saved results and history are retained.",
+        "it needs a curator's decision, it could not be checked, the reviewer did not accept it, or the reviewer did not decide it",
+        '"no re-check left for N records"',
+        "removing 2 records that don't answer the question",
+        "Review stops starting new runs once no review action could change the remaining records",
+        'A "Review paused" notice means an operational stop',
+    ):
+        assert phrase in guide
+
+
+def test_review_guidance_says_the_quick_check_only_logs():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "Quick check beside review: when the server setting is shadow",
+        "with the records in forward and in reversed order",
+        "question set v6-shadow",
+        "under three candidate rules as the trace event review_quick_check.shadow",
+        "TraceReview groups under review_quick_check",
+        "It is logging only: the supervisor still reviews every record",
+        "Never present its probabilities or would-be routes as review decisions",
+        "With the setting off there is no such event",
+    ):
+        assert phrase in guide
+    workflow = _alliance_guide("trace_investigation")
+    assert "A `review_quick_check.shadow` event is logging only; read studio guide topic `review_history`" in workflow
