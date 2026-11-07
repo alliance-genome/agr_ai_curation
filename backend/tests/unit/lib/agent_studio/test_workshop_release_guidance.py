@@ -132,3 +132,28 @@ def test_review_history_is_available_on_demand_for_each_package(package):
             template=template, render_diagnostic_tools=str, query="revalidation",
         )["topics"]
     }
+
+
+def _alliance_guide(topic):
+    template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
+    result = read_studio_guide(template=template, render_diagnostic_tools=str, topic=topic)
+    assert result["success"] and result["complete"]
+    always_sent, _ = prepare_studio_prompt_template(template)
+    assert result["content"] not in always_sent
+    return result["content"]
+
+
+def test_extraction_guidance_keeps_contrasts_in_the_written_answer():
+    guide = _alliance_guide("domain_envelopes")
+    for phrase in (
+        "Records answer the curator's question.",
+        "even when the paper uses it as a control",
+        "items whose membership in the category the paper does not establish go in its written answer (its final explanation, with any uncertainty), not as records",
+        "unless the curator asks for those items themselves",
+        "and so does the fan-out planning step, under the agent's own instructions (guide topic extraction_fanout)",
+        "read the extractor's final explanation in the trace before calling it an extraction miss",
+        "keeps the prompt it was saved with",
+        "only their fan-out planning step does",
+    ):
+        assert phrase in guide
+    assert "Controls, wild-type strains, look-alikes" not in guide
