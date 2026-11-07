@@ -42,15 +42,18 @@ def _reviewable(codes, unit):
 
 
 def decidable(codes, unit):
-    """Whether the reviewer can decide this unit by a packet handle now.
+    """Whether the reviewer can decide this unit now, without a repair.
 
-    The one structural test continuation and the review packet share. A new
-    answer is decidable. An existing subject is decidable unless the reviewer's
-    own reject, defer or acknowledge-failure in this episode left it pending and
-    nothing arrived since. A curator's record or pending decision, and a blocked
-    unit, are never the reviewer's to decide. The packet offers a validator
-    answer the reviewer already decided again, with a handle, exactly when this
-    holds (``reads._outstanding_rows``).
+    Continuation counts a unit when this holds or a re-check or reconsideration
+    is still left (``classify``). The review packet uses the same test to offer
+    an unreviewed validator answer again, with a handle
+    (``reads._outstanding_rows``). The packet's other handles (extraction_ref,
+    applicability_ref, a selected answer, an uncertain outcome) follow their own
+    rules and may offer more than this test counts. A new answer is decidable.
+    An existing subject is decidable unless the reviewer's own reject, defer or
+    acknowledge-failure in this episode left it pending and nothing arrived
+    since. A curator's record or pending decision, and a blocked unit, are never
+    the reviewer's to decide.
     """
     if unit["mode"] == "curator" or unit["curator_decided"] or codes & BLOCKED_CODES:
         return False

@@ -3525,11 +3525,15 @@ def _validator_lookup_verdict(outcome: str, status_counts: dict[str, int]) -> st
     validator then resolves one, so the search step's outcome and candidate count
     stay in the event's ``outcome`` and ``resultCount`` details. Only a lookup
     that failed technically reads ``error``; its event is also marked unsuccessful.
+    A result with no status (recorded as ``unknown``, possible for a flow
+    validation group) reads ``complete``.
     """
     if outcome == "error":
         return outcome
     if _VALIDATOR_REVIEW_STATUSES.intersection(status_counts):
         return "review required"
+    if set(status_counts) <= {"unknown"}:
+        return "complete"
     return _validator_lookup_status_summary(status_counts)
 
 
@@ -3538,19 +3542,10 @@ def _validator_lookup_complete_label(
     verdict: str,
     *,
     target_count: int,
-    status_summary: str,
 ) -> str:
     if target_count <= 1:
         return f"{specialist_name}: Validator Lookup {verdict}"
-    status_text = (
-        "mixed validation"
-        if status_summary == "mixed"
-        else f"{status_summary} validation"
-    )
-    return (
-        f"{specialist_name}: Validator Lookup {verdict} "
-        f"({target_count} targets, {status_text})"
-    )
+    return f"{specialist_name}: Validator Lookup {verdict} ({target_count} targets)"
 
 
 def _emit_validator_lookup_audit_events(
@@ -3636,7 +3631,6 @@ def _emit_validator_lookup_audit_events(
                     specialist_name,
                     _validator_lookup_verdict(outcome, status_counts),
                     target_count=duplicate_count,
-                    status_summary=status_summary,
                 ) + f" ({binding_id})",
                 "success": outcome != "error",
                 "validatorTargets": record["targets"],

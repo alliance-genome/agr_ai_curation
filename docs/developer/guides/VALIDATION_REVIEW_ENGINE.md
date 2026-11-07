@@ -529,10 +529,11 @@ Expected budget/deadline stops are pending outcomes; operational failures use th
 existing sanitized reporting owner.
 
 After each reviewer run, continuation starts another run only for a unit some
-review action can still change (`continuation.classify`): one the packet offers by
-handle (`continuation.decidable`, the same test the packet applies, computed from the
-same `continuation.review_subjects` facts) or one a re-check or reconsideration that is
-still left can change. A validation unit has a subject to decide only while it has a
+review action can still change (`continuation.classify`): one the reviewer can decide
+now (`continuation.decidable`, computed from `continuation.review_subjects`; the packet
+uses the same test to offer an unreviewed validator answer again, while its other
+handles may offer more) or one a re-check or reconsideration that is still left can
+change. A validation unit has a subject to decide only while it has a
 completed answer whose inputs are still current. A unit whose latest
 decision in this episode is the reviewer's reject, defer or acknowledge-failure,
 with no newer saved answer, follow-up request, contribution or source input for its

@@ -8236,6 +8236,8 @@ def test_output_role_lookup_reports_unavailable_before_category(monkeypatch, una
     ("unresolved", "ambiguous", "review required", True),
     ("incomplete", "success", "review required", True),
     ("unresolved", "error", "error", False),
+    # A flow validation group can arrive without a status; its details keep "unknown".
+    (None, "ambiguous", "complete", True),
 ])
 def test_flow_validator_lookup_line_reports_the_validator_status_not_the_search_outcome(
         status, outcome, headline, success):
@@ -8250,6 +8252,7 @@ def test_flow_validator_lookup_line_reports_the_validator_status_not_the_search_
     assert details["friendlyName"] == f"Allele Validation: Validator Lookup {headline} (alliance_allele_lookup)"
     # The search step's own outcome and candidate count stay as event detail only.
     assert (details["outcome"], details["resultCount"], details["success"]) == (outcome, 20, success)
+    assert details["validatorResultStatus"] == (status or "unknown")
 
 
 @pytest.mark.asyncio

@@ -186,7 +186,8 @@ def _outstanding_rows(db, scope, ep, episode_id):
     A validator answer the reviewer already decided is offered again, with its
     exact references, when continuation's own test (``continuation.decidable``)
     says it can be decided now: something new arrived since, or a later round
-    began. Continuation then never starts a run for an answer shown as waiting.
+    began. While it waits, continuation runs for it only to use a re-check or
+    reconsideration that is still left.
     """
     from . import continuation, source_inputs
     from .record_scope import allowed_units, review_blockers
@@ -229,10 +230,10 @@ def _outstanding_rows(db, scope, ep, episode_id):
             target = targets[unit_id]
             body = store._content(db, target)
             parent = target.parent_id if body.get("decision_unit") is not None else target.id
-            decidable = row["code"] != "historical_review_unknown"
+            history_known = row["code"] != "historical_review_unknown"
             row.update(target_id=parent, decision_unit_id=unit_id,
                 expected_version=unit["version"], mode=obligations[unit_id]["mode"],
-                agent_may_decide=obligations[unit_id]["mode"] != "curator" and decidable,
+                agent_may_decide=obligations[unit_id]["mode"] != "curator" and history_known,
                 record_target_id=source_record(unit_id),
                 unit_ref={"fact_id": target.id, "sha256": target.body_sha})
             record_target = row["record_target_id"]
@@ -243,7 +244,7 @@ def _outstanding_rows(db, scope, ep, episode_id):
             source = source_inputs.latest(db, ep.artifact_id, parent)
             if source is not None and source_inputs.is_applicability(store._content(db, source)):
                 row["applicability_ref"] = source_inputs.reference(source)
-            if obligations[unit_id]["mode"] == "extraction_only" and decidable:
+            if obligations[unit_id]["mode"] == "extraction_only" and history_known:
                 row["extraction_ref"] = artifact.baseline_sha
             answer = subjects[unit_id]["answer"]
             if (row["code"] == "unreviewed" and answer is not None
