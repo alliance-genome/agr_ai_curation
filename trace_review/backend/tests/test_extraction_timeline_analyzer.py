@@ -692,6 +692,41 @@ def test_fanout_plan_writers_and_finalize_are_visible(tmp_path, monkeypatch):
     assert events[1]['output'] == {'writer': 2, 'assigned_count': 2, 'staged_count': 1}
 
 
+def test_review_quick_check_shadow_answers_are_visible_in_timeline_and_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    summary = {
+        'packet_id': 'packet-1', 'wording_version': 'W5', 'model': 'gpt-6-luna', 'mode': 'shadow',
+        'status': 'completed', 'latency_ms': 412, 'usage': {'input': 3458, 'cached_input': 0},
+        'routes': {'skip': 1, 'remove': 1, 'sol': 1},
+        'records': [
+            {'record': 'R1', 'route': 'skip', 'in_scope': 1.0, 'supported': 0.98, 'own_study': 0.97},
+            {'record': 'R2', 'route': 'remove', 'in_scope': 0.01, 'supported': 1.0, 'own_study': 0.94},
+            {'record': 'R3', 'route': 'sol', 'route_reason': 'sub_record', 'in_scope': 0.9},
+        ],
+    }
+    _write_event(tmp_path, 'shadow', _event('shadow', 1, 'review_quick_check.shadow', output_summary=summary))
+    _write_event(tmp_path, 'shadow', _event('shadow', 2, 'extraction_builder.candidate_mutation'))
+
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='shadow', raw_trace={}, observations=[], include_raw_outputs=True)
+
+    events = result['review_quick_check']['events']
+    assert [item['event_type'] for item in events] == ['review_quick_check.shadow']
+    assert events[0]['output'] == summary
+    assert 'calibration only' in result['review_quick_check']['note']
+    report = ExtractionTimelineAnalyzer.diagnostic_report(result)
+    assert report['review_quick_check']['events'][0]['output']['routes'] == {'skip': 1, 'remove': 1, 'sol': 1}
+
+
+def test_review_quick_check_section_is_absent_when_no_check_ran(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    _write_event(tmp_path, 'plain', _event('plain', 1, 'extraction_builder.candidate_mutation'))
+
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='plain', raw_trace={}, observations=[], include_raw_outputs=True)
+
+    assert 'review_quick_check' not in result
+    assert 'review_quick_check' not in ExtractionTimelineAnalyzer.diagnostic_report(result)
+
+
 def test_fanout_section_is_absent_when_fanout_did_not_run(tmp_path, monkeypatch):
     monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
     _write_event(tmp_path, 'single', _event('single', 1, 'extraction_builder.candidate_mutation'))

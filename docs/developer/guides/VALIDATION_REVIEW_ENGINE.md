@@ -282,6 +282,29 @@ Supervisor review runs on `VALIDATION_REVIEW_MODEL` with
 requests. An empty model keeps the supervisor's own model, and benchmark runs keep
 their pinned route.
 
+### Decisions quick check (shadow mode)
+
+With `VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow`, each fresh review packet that a
+chat or flow review pins is also sent to the OpenAI Decisions API (`gpt-6-luna`,
+`src/lib/validation_review/quick_check.py`). The check starts when
+`read_review_packet` pins the packet and runs alongside the supervisor's turn; the
+tool returns the same result without waiting. The model answers fixed predicate
+questions for every record (wording `W5`): within the request, evidence supports
+what the record identifies, from this study's own work, and one question per
+resolved validator answer. Code compares the probabilities with fixed thresholds
+to name a route per record: remove (within-request at most 0.02), skip review (all
+answers at or above their thresholds), or supervisor review. Records with a
+declared role other than `curatable_unit` (validated references, metadata and
+similar sub-records) always route to the supervisor.
+
+Nothing is applied. The answers, routes, latency and token counts are written as
+a `review_quick_check.shadow` trace event (TraceReview shows it under
+`review_quick_check`) and one log line, for later calibration against supervisor
+decisions. The supervisor still reviews every record. A failed or refused check
+is logged and nothing else happens. The wording, input caps and thresholds are
+constants tied to `WORDING_VERSION`. Changing any of them needs a new
+calibration. The default mode is `off`, which makes no call.
+
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when
 needed. Per-record access does not remove old validation findings, summarize away

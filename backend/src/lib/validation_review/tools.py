@@ -5,7 +5,7 @@ from time import perf_counter
 
 from agents import function_tool
 
-from . import decisions, reads, scheduling
+from . import decisions, quick_check, reads, scheduling
 from .admission import ReviewStopped
 from .progress import ReviewLines
 from src.lib.validation_history import store
@@ -120,10 +120,14 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         names records to read with the exact-history tools instead. Handles
         belong to this packet only.
         """
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             reads.review_packet, context.history_scope, context.episode_id,
             packet_id=packet_id, page=page,
         )
+        if packet_id is None:
+            # Shadow observer only: it never raises, waits or changes this result.
+            quick_check.packet_pinned(context, result["packet_id"])
+        return result
 
     @function_tool(failure_error_function=None)
     @recoverable

@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from src.lib.validation_history import store, runtime
 from src.schemas.domain_envelope import DomainEnvelope
-from . import admission, reviewer
+from . import admission, quick_check, reviewer
 from .decisions import ReviewContext
 from .validator_adapter import ValidatorAdapter, save_plan
 
@@ -469,19 +469,20 @@ class ChatReview:
                         "tools": [tool.name for tool in agent.tools],
                     },
                 )
-                progress["outcome"] = await reviewer.run(
-                    context,
-                    agent,
-                    input=json.dumps(
-                        {
-                            "user_request": self.user_request,
-                            "instruction": "Review this saved extraction. Read all outstanding work once with read_review_packet, decide every record, and save the decisions together. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
-                            "result_ref": (
-                                "extraction-result:" + record.extraction_result_id
-                            ),
-                        }
-                    ),
-                )
+                with quick_check.review_scope(self.user_request, record):
+                    progress["outcome"] = await reviewer.run(
+                        context,
+                        agent,
+                        input=json.dumps(
+                            {
+                                "user_request": self.user_request,
+                                "instruction": "Review this saved extraction. Read all outstanding work once with read_review_packet, decide every record, and save the decisions together. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
+                                "result_ref": (
+                                    "extraction-result:" + record.extraction_result_id
+                                ),
+                            }
+                        ),
+                    )
                 return progress["outcome"]
             except Exception as error:
                 from .stops import review_stop
