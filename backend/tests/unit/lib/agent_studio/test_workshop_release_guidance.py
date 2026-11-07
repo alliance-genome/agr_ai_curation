@@ -241,3 +241,18 @@ def test_prompt_playbook_leads_with_the_saved_prompt_of_a_copied_agent():
     guide = _alliance_guide("prompt_playbook")
     assert "say first that it keeps the prompt it was saved with" in guide
     assert "a later release's change to the packaged prompt does not reach it" in guide
+
+
+def test_review_guidance_explains_refused_retires_restores_and_the_system_error_pause():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "the refusal names the referring record by its label and target ID",
+        "the reviewer must retire the records that refer to it in the same save, or keep it",
+        "to approve an extraction agent's recommendation, it first retires the referring records itself",
+        'which is still removed from the results; restore that record first',
+        "Nothing is retired or restored automatically to resolve it.",
+        '"Review paused: a system error stopped a save before it changed anything, and it was reported. Saved results and history are retained."',
+        "that save changed nothing, the error was reported to the maintainers automatically",
+        "does not offer Continue existing round for it",
+    ):
+        assert phrase in guide
