@@ -1016,6 +1016,8 @@ class ExtractionTimelineAnalyzer:
             counts[key] = counts.get(key, 0) + 1
 
         fanout_events = [item for item in timeline if str(item.get("event_type", "")).startswith("extraction_fanout.")]
+        quick_check_events = [item for item in timeline
+                              if str(item.get("event_type", "")).startswith("review_quick_check.")]
         return {
             "schema_version": ANALYZER_SCHEMA_VERSION,
             "trace_id": trace_id,
@@ -1043,6 +1045,13 @@ class ExtractionTimelineAnalyzer:
                         "and code finalize attempts. Writers run as separate agent runs in this trace; counts are "
                         "what code observed, not judgments about the records.",
             }} if fanout_events else {}),
+            **({"review_quick_check": {
+                "events": quick_check_events,
+                "note": "Shadow Decisions check of each fresh review packet: the model's probabilities per record "
+                        "and the route the calibrated thresholds would give (skip, remove or supervisor review). "
+                        "Logged for calibration only; the supervisor still reviewed every record and nothing "
+                        "here changed review results.",
+            }} if quick_check_events else {}),
             "workspace_validation_review": {
                 "events": [item for item in timeline if str(item.get("event_type", "")) in {
                     "validation_review.workspace_operation", "validation_review.workspace_revalidation_request",
@@ -1095,6 +1104,8 @@ class ExtractionTimelineAnalyzer:
             "size_summary": timeline.get("size_summary", {}),
             "reasoning_summary": timeline.get("reasoning_summary", {}),
             "validation_failures": validation_failures,
+            **({"review_quick_check": timeline["review_quick_check"]}
+               if "review_quick_check" in timeline else {}),
             "timeline": timeline.get("timeline", []),
         }
 

@@ -61,8 +61,9 @@ def revise_coverage_in_transaction(db, scope, artifact_id, *, episode_id, source
     selection = store._fact(db, artifact_id, source_selection_id)
     if selection.kind not in {"extraction_source_selection", "record_retirement_decision", "record_restoration"}:
         raise store.HistoryConflict("Coverage requires an authorized source decision")
+    from .record_lifecycle import RETIRING_DECISIONS
     if (selection.kind == "record_retirement_decision"
-            and store._content(db, selection)["identity"]["decision"] != "approve"):
+            and store._content(db, selection)["identity"]["decision"] not in RETIRING_DECISIONS):
         raise store.HistoryConflict("Declining retirement cannot revise coverage")
     effective = effective_episode(db, episode)
     current = effective["obligations"]

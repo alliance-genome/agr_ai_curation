@@ -41,11 +41,23 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
 
 - **Planner (the agent itself).** Reads the paper and calls `submit_extraction_plan`, a
   strict-schema tool: a short label and the evidence `chunk_index` values per record, plus
-  up to 5 paper-wide notes. No field values. Code checks the plan's structure and that
-  every cited chunk exists in the document (one tenant-scoped query); a plan citing a
-  missing chunk is rejected with the missing numbers so the planner corrects it in the
-  same thread, and a failed query fails the step. Staging is refused while it plans
-  (`ExtractionBuilderWorkspace.planning`).
+  up to 5 paper-wide notes. No field values. When the agent carries a tool whose binding
+  metadata declares `builder_catalog: true` (a tool that lists the record types it can
+  stage, such as `list_generic_object_classes`), the planning message names that tool and
+  tells the planner to call it before reading, so each planned item is one record of the
+  type that fits. Agents without one get the same message without that step. Code checks
+  the plan's structure and that every cited chunk exists in the document (one
+  tenant-scoped query); a plan citing a missing chunk is rejected with the missing numbers
+  so the planner corrects it in the same thread, and a failed query fails the step.
+  Staging is refused while it plans (`ExtractionBuilderWorkspace.planning`).
+- **What the plan holds.** The planning message tells the planner to plan only records
+  that answer the request under its instructions. Anything it will name only as a
+  contrast or an exclusion (a control or other item outside the requested category)
+  goes in its final explanation, not in items, even when the request or the
+  supervisor's handoff asks it to distinguish them. An item inside the requested category
+  is planned even when the paper uses it as a control, such as a transgenic line used as
+  a control when transgenic lines are requested. This is guidance to the model; code never
+  reads labels or notes to decide what belongs in the plan.
 - **Code.** Counts the plan, slices it in order into balanced contiguous batches, reads each
   cited chunk once through the agent's own `read_chunk` tool and renders it exactly as the
   model sees a `read_chunk` result, starts the writers, and counts what each writer staged.
@@ -114,4 +126,5 @@ audit when the writers finish, with their recorded start and end times.
 
 Saved agents and flows are unchanged and curators re-save nothing: the plan tool and the
 writers exist only at run time. Package authors who add a builder data type mark its stage
-tool with `builder_stage: true` next to `builder_run_state: true`.
+tool with `builder_stage: true` next to `builder_run_state: true`, and mark a tool that
+lists the record types the agent can stage with `builder_catalog: true`.

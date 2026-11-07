@@ -30,9 +30,25 @@
 - **Retrieved**: 2026-02-12
 - **Usage**: End-to-end pipeline integration testing (PDFX parsing, chunking, Weaviate storage)
 
+## validation_review/quick_check_packet_t58.json and quick_check_t58_v6_golden.json
+
+- **Source**: A review packet built from `sample_fly_publication.pdf` (below); the quoted sentences come from that paper
+- **License**: Creative Commons Attribution 4.0 International (CC BY 4.0), as for the source paper
+- **License URL**: https://creativecommons.org/licenses/by/4.0/
+- **Created**: 2026-11-07
+- **Usage**: Decisions quick-check input and question wording tests; the golden file is the calibration trial's own rendering of this packet in forward and reversed order
+
+## validation_review/quick_check_phenotype_packet.json and quick_check_phenotype_golden.json
+
+- **Source**: The structure of one development-replay phenotype review packet (record types, roles, handles, numbering and value shapes); every quote, value and validator text is a placeholder, so no publication text is included
+- **License**: Project-authored test data
+- **Created**: 2026-11-07
+- **Usage**: Decisions quick-check rendering tests; the golden file is the calibration trial's own rendering of this packet in forward and reversed order
+
 ## sample_fly_publication.pdf
 
-- **Title**: Unknown (pre-existing fixture)
+- **Title**: Absolute Quantification of Proteins in the Eye of Drosophila melanogaster
+- **Journal**: Proteomics 2020, 20:1900049
 - **License**: Creative Commons Attribution 4.0 International (CC BY 4.0)
 - **License URL**: https://creativecommons.org/licenses/by/4.0/
 - **Verified**: 2026-02-12

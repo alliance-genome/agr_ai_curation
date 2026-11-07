@@ -374,12 +374,12 @@ async def test_source_prerequisite_retry_is_recoverable_at_bound_tool_boundary()
     assert assessment.await_count == 2
 
 
-def test_protocol_v5_reads_the_packet_once_and_keeps_record_specific_reasons():
+def test_protocol_v6_reads_the_packet_once_and_keeps_record_specific_reasons():
     from src.lib.validation_review.protocol import REVIEW_PROTOCOL
     from src.lib.validation_review.tools import runtime_tool_contract
 
     tools = {tool["name"]: tool for tool in runtime_tool_contract()}
-    assert 'version="5"' in REVIEW_PROTOCOL
+    assert 'version="6"' in REVIEW_PROTOCOL
     assert tools["read_review_packet"]["parameters"]["required"] == ["packet_id", "page"]
     protocol = " ".join(REVIEW_PROTOCOL.split())
     for text in ("Call read_review_packet with no packet_id", "read every page of that packet before deciding",
@@ -406,7 +406,8 @@ def test_protocol_v5_reads_the_packet_once_and_keeps_record_specific_reasons():
     assert "packet_id" in save["description"] and "packet_decisions" in save["description"]
     assert set(save["parameters"]["required"]) == {"operation_id", "packet_id", "packet_decisions", "entries"}
     decision = save["parameters"]["$defs"]["PacketDecision"]
-    assert set(decision["properties"]) == {"handle", "action", "reason", "absence_assessment", "unresolved_fields"}
+    assert set(decision["properties"]) == {"handle", "action", "reason", "evidence", "absence_assessment",
+                                           "unresolved_fields"}
     assert decision["additionalProperties"] is False
     assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
 
@@ -463,3 +464,183 @@ def test_source_group_limit_reaches_every_deployed_service_that_sets_review_limi
     for path in composes:
         text = path.read_text()
         assert text.count("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS") == text.count("VALIDATION_REVIEW_DECISION_ENTRIES") > 0
+
+
+# v0.11.1 to v0.11.3 targeted follow-up protocol text, pinned in saved extractor contracts.
+TARGETED_PROTOCOL_V2_SHA256 = "0308d8113148d065863b5c67f5bc6f0f0a82876d458ea1f4aac558bfd647ce0e"
+
+
+def test_targeted_follow_up_protocol_keeps_the_saved_extractor_contract_text():
+    """Saved extractor contracts pin this text; changing it would end older sessions' follow-ups."""
+    import hashlib
+    from src.lib.validation_review.protocol import TARGETED_EXTRACTION_PROTOCOL
+
+    assert 'version="2"' in TARGETED_EXTRACTION_PROTOCOL
+    assert hashlib.sha256(TARGETED_EXTRACTION_PROTOCOL.encode()).hexdigest() == TARGETED_PROTOCOL_V2_SHA256
+
+
+def test_review_and_followup_text_state_reject_retire_and_follow_up_rules():
+    from src.lib.validation_review.protocol import REVIEW_PROTOCOL
+    from src.lib.validation_review.tools import runtime_tool_contract
+
+    protocol = " ".join(REVIEW_PROTOCOL.split())
+    for text in ("Each record ends accepted, retired or left pending",
+                 "A record must be shown in the paper to answer the question",
+                 "Reject records an opinion and does not remove an original record; it stays pending",
+                 "retire it with a reason", "a curator can restore it",
+                 "Each record gets one targeted follow-up per review round; a curator-requested round grants a fresh one",
+                 "retire on any of its handles retires the whole record",
+                 "Each packet record shows follow_up_available; check it before deferring for a follow-up",
+                 "If nothing in the paper, including the record's original evidence and any follow-up, "
+                 "shows that it answers the question, retire it",
+                 "A follow-up that finds nothing new about a field is not a finding about the record's scope",
+                 "In a curator-requested round, do not retire the records the curator asked to re-review",
+                 "lists what is open and what clears it under blocking"):
+        assert text in protocol, text
+    assert "If a follow-up finds nothing showing" not in protocol
+    tools = {tool["name"]: tool for tool in runtime_tool_contract()}
+    save = " ".join(tools["record_validation_review"]["description"].split())
+    for text in ("Each record ends accepted, retired or left pending",
+                 "it does not remove an original record, which stays pending",
+                 "use action retire on any of its handles with a reason", "a curator can restore it", "blocking",
+                 "assess them with validate_selected_extraction_source and the returned selection_id",
+                 "Send all retirements from a packet in one save; a retirement changes the packet's source",
+                 "Retire a record before deciding validator answers whose inputs include it; "
+                 "read a fresh packet after the retirement"):
+        assert text in save, text
+    status = " ".join(tools["get_validation_review_status"]["description"].split())
+    assert "blocking lists what still blocks readiness" in status
+    decision = tools["record_validation_review"]["parameters"]["$defs"]["PacketDecision"]["properties"]
+    assert "retire" in decision["action"]["enum"]
+    assert "does not remove an original record" in decision["action"]["description"]
+    assert "Only with retire" in decision["evidence"]["description"]
+    assert "classification_notes[1]" in decision["unresolved_fields"]["description"]
+    assessment = tools["record_validation_review"]["parameters"]["$defs"]["UnresolvedFieldAssessment"]
+    assert "classification_notes[1]" in assessment["properties"]["field_path"]["description"]
+    assert "record_validation_review" in tools["decide_record_retirement"]["description"]
+    followup_tool = " ".join(tools["request_targeted_extraction"]["description"].split())
+    assert "Each record gets one follow-up per review round; a curator-requested round grants a fresh one" in followup_tool
+    assert "exhausted" in followup_tool
+
+
+@pytest.mark.asyncio
+async def test_a_save_with_retire_goes_through_the_bound_source_boundary():
+    import json
+    from unittest.mock import AsyncMock
+    from agents.tool_context import ToolContext
+
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    selection = AsyncMock(return_value={"ready": True, "applied": []})
+    checkpoint = Mock(side_effect=AssertionError("the source boundary loads its own checkpoint"))
+    tool = next(t for t in create_tools(context, checkpoint_provider=checkpoint, request_extraction=AsyncMock(),
+                                        select_source=selection, assess_source=AsyncMock())
+                if t.name == "record_validation_review")
+    decisions = [{"handle": "D1", "action": "retire", "reason": "A control, not asked for.", "evidence": ["E2"],
+                  "absence_assessment": None, "unresolved_fields": None},
+                 {"handle": "D2", "action": "accept", "reason": "Shown in Methods.", "evidence": None,
+                  "absence_assessment": None, "unresolved_fields": None}]
+    encoded = json.dumps({"operation_id": "op", "packet_id": "p", "packet_decisions": decisions, "entries": None})
+    result = await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name, tool_call_id="c",
+                                                   tool_arguments=encoded), encoded)
+    assert result == {"ready": True, "applied": []}
+    selection.assert_awaited_once_with(operation_id="op", packet_id="p", packet_decisions=decisions)
+
+
+def test_packet_retire_names_the_whole_record_and_keeps_cited_quotes():
+    from src.lib.validation_review.decisions import PacketDecision, _expand
+
+    packet = {"handles": {
+        "D1": {"record": "R1", "target_id": "r1", "decision_unit_id": "r1", "expected_version": 2,
+               "extraction_ref": "baseline-sha"},
+        "D2": {"record": "R2", "target_id": "b2", "decision_unit_id": "b2", "expected_version": 0,
+               "logical_attempt_id": "attempt"},
+        "D3": {"record": "R2", "target_id": "b3", "decision_unit_id": "b3-identity", "expected_version": 1,
+               "logical_attempt_id": "other-attempt"},
+        "D4": {"record": None, "target_id": "envelope", "decision_unit_id": "envelope", "expected_version": 0,
+               "logical_attempt_id": "envelope-attempt"}},
+        "records": [{"record": "R1", "target_id": "r1"}, {"record": "R2", "target_id": "r2"},
+                    {"record": None}],
+        "evidence": {"E1": {"verified_quote": "The genetic control were white-eyed flies.", "page": 8},
+                     "E2": {"same_quote_as": "E1", "entity": "white control"}}}
+    retire = PacketDecision(handle="D1", action="retire", reason="A control, not a transgenic fly.", evidence=["E2"])
+    handles, entries, retirements = _expand(packet, [retire])
+    assert handles == ["D1"] and entries == [{"target_id": "r1", "decision_unit_id": "r1", "action": "retire"}]
+    assert retirements == [{"target_id": "r1", "expected_version": 2, "reason": "A control, not a transgenic fly.",
+                            "evidence": {"E2": packet["evidence"]["E2"], "E1": packet["evidence"]["E1"]}}]
+    validated = [PacketDecision(handle="D2", action="retire", reason="A mutant, not transgenic."),
+                 PacketDecision(handle="D3", action="retire", reason="A mutant, not transgenic.")]
+    _, entries, retirements = _expand(packet, validated)
+    assert [entry["target_id"] for entry in entries] == ["r2", "r2"], "every handle names the record root"
+    assert retirements == [{"target_id": "r2", "expected_version": None, "reason": "A mutant, not transgenic.",
+                            "evidence": {}}], "one retirement per record; the source digest pins its lifecycle"
+    with pytest.raises(ValueError, match="D3: retire removes the whole record R2"):
+        _expand(packet, [validated[0], PacketDecision(handle="D3", action="accept", reason="Shown.")])
+    with pytest.raises(ValueError, match="D4: this item belongs to no record"):
+        _expand(packet, [PacketDecision(handle="D4", action="retire", reason="Outside the question.")])
+
+
+@pytest.mark.asyncio
+async def test_follow_up_results_name_records_with_no_follow_up_left():
+    import json
+    from unittest.mock import AsyncMock
+    from agents.tool_context import ToolContext
+    from src.lib.validation_review.admission import ReviewStopped
+
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    assert ReviewStopped("extraction_attempts_exhausted").exhausted == [], "the list is always present"
+    spent = ReviewStopped("extraction_attempts_exhausted", resource="a", exhausted=["a", "b", "c"])
+    partial = {"state": "completed", "work_id": "w", "contributions": [{"fact_id": "f", "sha256": "s"}],
+               "exhausted": ["a"], "exhausted_note": "decide them now"}
+    extraction = AsyncMock(side_effect=[spent, partial])
+    tool = next(t for t in create_tools(context, checkpoint_provider=Mock(), request_extraction=extraction,
+                                        select_source=AsyncMock(), assess_source=AsyncMock())
+                if t.name == "request_targeted_extraction")
+    arguments = {"operation_id": "op", "parent_decision_id": "decision", "entry_ids": ["a", "b", "c"],
+                 "instructions": "Check Methods."}
+    encoded = json.dumps(arguments)
+
+    async def invoke():
+        return await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name, tool_call_id="c",
+                                                     tool_arguments=encoded), encoded)
+
+    assert await invoke() == {"state": "not_applied", "code": "extraction_attempts_exhausted", "resource": "a",
+                              "applied": [], "targets": [], "exhausted": ["a", "b", "c"]}
+    assert await invoke() == partial
+
+
+def test_every_manifest_blocker_code_says_what_clears_it():
+    """Read the codes the manifest can emit from its source, so a new code fails here."""
+    import ast
+    import inspect
+    from typing import get_args
+    from src.lib.validation_history import selections
+    from src.lib.validation_review.decisions import _CLEARED_BY
+    from src.schemas.validation_history import ReviewObligation
+
+    tree = ast.parse(inspect.getsource(selections))
+    codes, reasons = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
+                    if key.value == "code":
+                        codes.add(value.value)
+                    elif key.value == "reason" and isinstance(value.value, str):
+                        reasons.add(value.value)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+                        and target.slice.value == "reason" and isinstance(node.value.value, str)):
+                    reasons.add(node.value.value)
+    reasons.discard("Explicit review of this validation run")  # An episode reason, not a unit reason.
+    assert {"unreviewed", "stale", "incomplete", "retired", "historical_review_unknown"} <= reasons
+    assert {"episode_review_pending", "execution_pending", "answer_review_pending",
+            "configured_validator_unavailable", "required_validator_unavailable", "document_retired"} <= codes
+    modes = get_args(ReviewObligation.model_fields["mode"].annotation)
+    for code in codes | reasons:
+        for mode in modes:
+            assert (code, mode) in _CLEARED_BY or code in _CLEARED_BY, (code, mode)
+    assert all("nothing" not in text for key, text in _CLEARED_BY.items() if key != "document_retired")
+    assert "acknowledge_failure" in _CLEARED_BY["execution_pending"]

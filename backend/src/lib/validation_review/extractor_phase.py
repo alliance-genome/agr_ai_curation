@@ -66,24 +66,31 @@ def create_phase(agent, *, scope, artifact_id, packet, packet_bytes, evidence_re
                    and not metadata.get(tool.name, {}).get("builder_finalization")]
     from src.lib.openai_agents.evidence_summary import build_record_evidence_summary_record
     from src.lib.openai_agents.streaming_tools import _append_live_evidence_record
+    from .progress import RecheckLines
 
-    def capture_evidence(tool):
-        # The nonstreaming SDK runner does not perform streaming_tools' output
-        # collection. Retain the same verified tool result here, before return.
+    # The nonstreaming SDK runner emits no tool events, so the live review shows
+    # this re-check's paper work through its own progress lines.
+    lines = RecheckLines()
+
+    def observed(tool, *, capture_evidence):
         wrapped = copy(tool)
         async def invoke(context, arguments):
-            result = await tool.on_invoke_tool(context, arguments)
-            record = build_record_evidence_summary_record(tool_name=tool.name,
-                tool_input=arguments, tool_output=result)
-            if record is not None:
-                _append_live_evidence_record(evidence_records, record)
+            with lines.tool(tool.name, arguments):
+                result = await tool.on_invoke_tool(context, arguments)
+            if capture_evidence:
+                # The nonstreaming SDK runner does not perform streaming_tools' output
+                # collection. Retain the same verified tool result here, before return.
+                record = build_record_evidence_summary_record(tool_name=tool.name,
+                    tool_input=arguments, tool_output=result)
+                if record is not None:
+                    _append_live_evidence_record(evidence_records, record)
             return result
         wrapped.on_invoke_tool = invoke
         return wrapped
 
-    paper_tools = [capture_evidence(tool) for tool in paper_tools]
-    history_reader = create_history_reader(scope, artifact_id,
-        records=packet["history"]["records"], packet_bytes=packet_bytes)
+    paper_tools = [observed(tool, capture_evidence=True) for tool in paper_tools]
+    history_reader = observed(create_history_reader(scope, artifact_id,
+        records=packet["history"]["records"], packet_bytes=packet_bytes), capture_evidence=False)
     instructions = (agent.instructions + "\n\n"
         "This invocation uses the application-owned targeted follow-up phase below. "
         "Its scoped task and result contract replace initial full-extraction staging/finalization "

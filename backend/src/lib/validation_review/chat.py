@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from src.lib.validation_history import store, runtime
 from src.schemas.domain_envelope import DomainEnvelope
-from . import admission, reviewer
+from . import admission, quick_check, reviewer
 from .decisions import ReviewContext
 from .validator_adapter import ValidatorAdapter, save_plan
 
@@ -400,16 +400,18 @@ class ChatReview:
             authenticated_groups=self.authenticated_groups, checkpoint_provider=checkpoint,
             source_agent=self.source_agents.get(artifact_id))
 
+    def history_scope(self, record):
+        """The owner's history scope for a saved result; needs no reviewer identity."""
+        return store.HistoryScope(
+            self.owner_id, self.document_id, self.reference(record)["history_scope_id"]
+        )
+
     def context(self, record):
         from src.lib.observability.cost_context import get_agent_cost_identity
 
-        ref = self.reference(record)
-        scope = store.HistoryScope(
-            self.owner_id, self.document_id, ref["history_scope_id"]
-        )
         return ReviewContext(
-            scope,
-            ref["episode_id"],
+            self.history_scope(record),
+            self.reference(record)["episode_id"],
             get_agent_cost_identity(self.supervisor)["agent_id"] + ".validation_review",
         )
 
@@ -469,19 +471,20 @@ class ChatReview:
                         "tools": [tool.name for tool in agent.tools],
                     },
                 )
-                progress["outcome"] = await reviewer.run(
-                    context,
-                    agent,
-                    input=json.dumps(
-                        {
-                            "user_request": self.user_request,
-                            "instruction": "Review this saved extraction. Read all outstanding work once with read_review_packet, decide every record, and save the decisions together. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
-                            "result_ref": (
-                                "extraction-result:" + record.extraction_result_id
-                            ),
-                        }
-                    ),
-                )
+                with quick_check.review_scope(self.user_request, record):
+                    progress["outcome"] = await reviewer.run(
+                        context,
+                        agent,
+                        input=json.dumps(
+                            {
+                                "user_request": self.user_request,
+                                "instruction": "Review this saved extraction. Read all outstanding work once with read_review_packet, decide every record, and save the decisions together. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
+                                "result_ref": (
+                                    "extraction-result:" + record.extraction_result_id
+                                ),
+                            }
+                        ),
+                    )
                 return progress["outcome"]
             except Exception as error:
                 from .stops import review_stop
@@ -562,9 +565,20 @@ class ChatReview:
             return store._content(db, fact)["outcome"] if fact is not None else None
 
     def retain_review_outcome(self, record, outcome):
-        """Keep model explanations and expected stop reasons as immutable history."""
+        """Keep model explanations and expected stop reasons as immutable history.
+
+        Each record still pending is saved with the label it had when review
+        stopped, so later notes never read the live source.
+        """
         from .audit import append_fact
 
+        # A reconnect re-retains the saved outcome, whose records are already labelled.
+        unlabelled = {item["record_target_id"] for item in outcome.get("pending", ()) if "label" not in item}
+        if unlabelled:
+            labels = self.record_labels(record, unlabelled)
+            outcome = {**outcome, "pending": [{**item, "label": labels[item["record_target_id"]]}
+                                              if "label" not in item else item
+                                              for item in outcome["pending"]]}
         context = self.context(record)
         ref = self.reference(record)
         with store.SessionLocal.begin() as db:
@@ -619,6 +633,8 @@ class ChatReview:
         return {"status": self.status(), "review_outcomes": self.review_notes()}
 
     def render_review_notes(self, *, result_refs=None, current_turn_only=False):
+        from .continuation import pending_message
+
         notes = []
         for entry in self.review_notes(
             result_refs=result_refs, current_turn_only=current_turn_only
@@ -628,13 +644,41 @@ class ChatReview:
             if output:
                 notes.append(str(output))
             reason = outcome.get("reason")
-            if reason and reason != "complete":
+            # A finished review names the records still waiting and why; an
+            # operational stop (budget, deadline, configuration) has no such list.
+            if outcome.get("pending"):
+                notes.append(pending_message(outcome["pending"]))
+            elif reason and reason != "complete":
                 notes.append(
                     "Review paused: "
                     + reason.replace("_", " ")
                     + ". Saved results and history are retained."
                 )
         return "\n\nReviewer's notes:\n" + "\n\n".join(notes) if notes else ""
+
+    def record_labels(self, record, target_ids):
+        """Curator-facing names for saved records: the label each workspace row shows.
+
+        A unit bound to the envelope itself has no record (None), as in the review
+        packet; it concerns the extraction as a whole.
+        """
+        from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+        from src.lib.domain_packs.materialization import object_display_label
+
+        labels = {None: "the extraction as a whole"} if None in target_ids else {}
+        if set(target_ids) - {None}:
+            envelope = self.checkpoint(record).envelope
+            pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+            if pack is None:
+                raise store.HistoryConflict("Saved domain pack is unavailable")
+            labels.update({obj.metadata["validation_history"]["target_id"]:
+                           object_display_label(pack.metadata, obj)
+                           for obj in envelope.extracted_objects
+                           if obj.metadata["validation_history"]["target_id"] in target_ids})
+        missing = set(target_ids) - set(labels)
+        if missing:
+            raise store.HistoryConflict("A pending review record is not in the current saved result")
+        return labels
 
     def status(self):
         items = []
@@ -741,7 +785,7 @@ class ChatReview:
             store._artifact(
                 db,
                 original.metadata["validation_history"]["artifact_id"],
-                self.context(record).history_scope,
+                self.history_scope(record),
             )
             row = db.get(EnvelopeRow, original.envelope_id)
             envelope = (

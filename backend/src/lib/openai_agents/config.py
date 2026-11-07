@@ -2108,7 +2108,7 @@ def get_extraction_fanout_min_items() -> int:
     0 (default) turns fan-out off: every builder extraction runs as one writer.
     A positive value makes builder agents plan first; plans with at least this
     many records are written by parallel writers, and smaller plans are staged
-    by the planner itself. Production sets 6.
+    by the planner itself. Production sets 15.
     """
     return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MIN_ITEMS", 0))
 
@@ -3920,6 +3920,45 @@ def get_validation_review_model() -> str:
 def get_validation_review_reasoning() -> str:
     """Reasoning effort used with VALIDATION_REVIEW_MODEL."""
     return _get_env("VALIDATION_REVIEW_REASONING", "medium").strip()
+
+
+def get_validation_review_quick_check_mode() -> str:
+    """Decisions quick check beside supervisor review: off, or shadow (log answers only)."""
+    name = "VALIDATION_REVIEW_QUICK_CHECK_MODE"
+    value = _get_env(name, "off").strip()
+    if value not in {"off", "shadow"}:
+        raise ValueError(f"{name} must be off or shadow")
+    return value
+
+
+def get_validation_review_quick_check_timeout_seconds() -> float:
+    """Seconds one shadow quick-check request may take before it is logged as failed."""
+    import math
+
+    name = "VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS"
+    value = float(_get_env(name, "30"))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return value
+
+
+def get_validation_review_quick_check_max_retries() -> int:
+    """Provider retries for one shadow quick-check request after a retryable failure."""
+    name = "VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES"
+    value = int(_get_env(name, "2"))
+    if value < 0:
+        raise ValueError(f"{name} must be nonnegative")
+    return value
+
+
+def validate_validation_review_quick_check_settings() -> None:
+    """Startup check: an invalid quick-check mode, timeout or retry count fails the deploy."""
+    try:
+        get_validation_review_quick_check_mode()
+        get_validation_review_quick_check_timeout_seconds()
+        get_validation_review_quick_check_max_retries()
+    except ValueError as error:
+        raise RuntimeError(f"Invalid validation review quick-check setting: {error}") from error
 
 
 def get_validation_review_initial_corrective_continuations() -> int:

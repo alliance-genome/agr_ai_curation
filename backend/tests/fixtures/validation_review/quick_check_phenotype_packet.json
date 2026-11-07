@@ -1,0 +1,2249 @@
+{
+ "packet_id": "77ce5554-69ea-4f22-aff3-abb5c122da44",
+ "evidence": {
+  "E1": {
+   "page": 3,
+   "section": "Figure Legends",
+   "verified_quote": "Quoted sentence 1"
+  },
+  "E2": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E1"
+  },
+  "E3": {
+   "page": 2,
+   "section": "Results",
+   "verified_quote": "Quoted sentence 2"
+  },
+  "E4": {
+   "page": 2,
+   "section": "Results",
+   "same_quote_as": "E3"
+  },
+  "E5": {
+   "page": 14,
+   "section": "Methods",
+   "verified_quote": "Quoted sentence 3"
+  },
+  "E6": {
+   "page": 14,
+   "section": "Methods",
+   "same_quote_as": "E5"
+  },
+  "E7": {
+   "page": 14,
+   "section": "Methods",
+   "verified_quote": "Quoted sentence 4"
+  },
+  "E8": {
+   "page": 14,
+   "section": "Methods",
+   "same_quote_as": "E7"
+  },
+  "E9": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E1"
+  },
+  "E10": {
+   "page": 2,
+   "section": "Results",
+   "same_quote_as": "E3"
+  },
+  "E11": {
+   "page": 14,
+   "section": "Methods",
+   "same_quote_as": "E5"
+  },
+  "E12": {
+   "page": 14,
+   "section": "Methods",
+   "same_quote_as": "E7"
+  },
+  "E13": {
+   "page": 3,
+   "section": "Figure Legends",
+   "verified_quote": "Quoted sentence 5"
+  },
+  "E14": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E13"
+  },
+  "E15": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E13"
+  },
+  "E16": {
+   "page": 3,
+   "section": "Figure Legends",
+   "verified_quote": "Quoted sentence 6"
+  },
+  "E17": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E16"
+  },
+  "E18": {
+   "page": 2,
+   "section": "Results",
+   "verified_quote": "Quoted sentence 7"
+  },
+  "E19": {
+   "page": 2,
+   "section": "Results",
+   "same_quote_as": "E18"
+  },
+  "E20": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E16"
+  },
+  "E21": {
+   "page": 2,
+   "section": "Results",
+   "same_quote_as": "E18"
+  },
+  "E22": {
+   "page": 3,
+   "section": "Figure Legends",
+   "verified_quote": "Quoted sentence 8"
+  },
+  "E23": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E22"
+  },
+  "E24": {
+   "page": 3,
+   "section": "Figure Legends",
+   "same_quote_as": "E22"
+  }
+ },
+ "records": [
+  {
+   "record": "R1",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "5bcf775b-a05b-4240-b9c4-14288fcf7ce4",
+   "values": {
+    "resolution_note": "value text 9"
+   },
+   "review": [
+    {
+     "handle": "D1",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R2",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "bd306013-12d0-471a-b69f-dcf4b26d98fe",
+   "evidence": [
+    "E1"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 10",
+    "lookup_outcome": "value text 11",
+    "source_mentions": [
+     "value text 12",
+     "value text 13",
+     "value text 14"
+    ],
+    "resolution_state": "value text 15",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 16",
+     "data_provider": "value text 17",
+     "evidence_record_id": "value text 18"
+    },
+    "validator_explanation": "value text 19"
+   },
+   "review": [
+    {
+     "handle": "D2",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R3",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "98fe591c-b7ce-4ff3-b6b7-ea5ed1b32df6",
+   "values": {},
+   "review": [
+    {
+     "handle": "D3",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R4",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "a86c92c7-619e-4c00-8a47-25e9274e0906",
+   "evidence": [
+    "E1"
+   ],
+   "values": "E2",
+   "review": [
+    {
+     "handle": "D4",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R5",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "d4fcf8e6-ae76-4244-8f36-0c7bbc3c3057",
+   "evidence": [
+    "E4"
+   ],
+   "values": "E3",
+   "review": [
+    {
+     "handle": "D5",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R6",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "eb5e01df-9b23-49ec-8d83-ddddf51b9d99",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D6",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R7",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "bc9a839e-92b0-46f8-a5e8-94343478b1e7",
+   "evidence": [
+    "E8"
+   ],
+   "values": "E7",
+   "review": [
+    {
+     "handle": "D7",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R8",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "be2f9c83-10b1-45fd-b407-f516b74ac8ee",
+   "evidence": [
+    "E1",
+    "E4",
+    "E6",
+    "E8"
+   ],
+   "values": {
+    "negated": true,
+    "rationale": "value text 20",
+    "data_provider": {
+     "mention": "value text 21",
+     "abbreviation": null,
+     "lookup_outcome": "value text 22",
+     "resolution_state": "value text 23",
+     "validator_explanation": "value text 24"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 25"
+    },
+    "annotation_kind": "value text 26",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 27",
+      "lookup_outcome": "value text 28",
+      "source_mentions": [
+       "value text 29",
+       "value text 30",
+       "value text 31"
+      ],
+      "resolution_state": "value text 32",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 33",
+       "data_provider": "value text 34",
+       "evidence_record_id": "value text 35"
+      },
+      "validator_explanation": "value text 36"
+     }
+    ],
+    "source_mentions": [
+     "value text 37",
+     "value text 38",
+     "value text 39"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 40",
+         "lookup_outcome": "value text 41",
+         "resolution_state": "value text 42",
+         "validator_explanation": "value text 43"
+        },
+        "condition_summary": "value text 44",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 45",
+         "lookup_outcome": "value text 46",
+         "resolution_state": "value text 47",
+         "validator_explanation": "value text 48"
+        },
+        "condition_free_text": "value text 49"
+       },
+       {
+        "condition_summary": "value text 50",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 51",
+         "lookup_outcome": "value text 52",
+         "resolution_state": "value text 53",
+         "validator_explanation": "value text 54"
+        },
+        "condition_free_text": "value text 55"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 56",
+       "lookup_outcome": "value text 57",
+       "resolution_state": "value text 58",
+       "validator_explanation": "value text 59"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 60",
+     "value text 61",
+     "value text 62",
+     "value text 63"
+    ],
+    "phenotype_annotation_object": "value text 64"
+   },
+   "review": [
+    {
+     "handle": "D8",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 65",
+      "condition_class_curie": "validator text 66",
+      "condition_chemical_name": "validator text 67",
+      "condition_chemical_curie": "validator text 68"
+     },
+     "explanation": "validator text 69"
+    },
+    {
+     "handle": "D9",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[1]",
+     "status": "resolved",
+     "values": {
+      "condition_chemical_name": "validator text 70",
+      "condition_chemical_curie": "validator text 71"
+     },
+     "explanation": "validator text 72"
+    },
+    {
+     "handle": "D10",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 73",
+      "vocabulary": "validator text 74",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 75"
+    },
+    {
+     "handle": "D11",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 76"
+    }
+   ]
+  },
+  {
+   "record": "R9",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "3d38dc81-beb0-4912-a620-91c8734ce6a0",
+   "values": {
+    "resolution_note": "value text 77"
+   },
+   "review": [
+    {
+     "handle": "D12",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R10",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "5132b671-10b3-4c13-9c89-8d3d1a0d8749",
+   "evidence": [
+    "E13"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 78",
+    "lookup_outcome": "value text 79",
+    "source_mentions": [
+     "value text 80",
+     "value text 81",
+     "value text 82",
+     "value text 83"
+    ],
+    "resolution_state": "value text 84",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 85",
+     "data_provider": "value text 86",
+     "evidence_record_id": "value text 87"
+    },
+    "validator_explanation": "value text 88"
+   },
+   "review": [
+    {
+     "handle": "D13",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R11",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "a74de924-64b8-4978-b228-40b5dc2eca7c",
+   "values": {},
+   "review": [
+    {
+     "handle": "D14",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R12",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "9e48be67-6948-4972-b76d-3afe1121a75c",
+   "evidence": [
+    "E13"
+   ],
+   "values": "E14",
+   "review": [
+    {
+     "handle": "D15",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R13",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "09cbc828-4cdd-45ed-8502-b7877ed7c50c",
+   "evidence": [
+    "E4"
+   ],
+   "values": "E3",
+   "review": [
+    {
+     "handle": "D16",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R14",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "0992336b-660c-4a28-83a8-86ab759fef78",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D17",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R15",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "07a32e72-9dd3-46cd-b67e-cb029c04e539",
+   "evidence": [
+    "E8"
+   ],
+   "values": "E7",
+   "review": [
+    {
+     "handle": "D18",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R16",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "9a493963-c464-4959-ac05-f797354e4834",
+   "evidence": [
+    "E13",
+    "E4",
+    "E6",
+    "E8"
+   ],
+   "values": {
+    "negated": false,
+    "rationale": "value text 89",
+    "data_provider": {
+     "mention": "value text 90",
+     "abbreviation": null,
+     "lookup_outcome": "value text 91",
+     "resolution_state": "value text 92",
+     "validator_explanation": "value text 93"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 94"
+    },
+    "annotation_kind": "value text 95",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 96",
+      "lookup_outcome": "value text 97",
+      "source_mentions": [
+       "value text 98",
+       "value text 99",
+       "value text 100",
+       "value text 101"
+      ],
+      "resolution_state": "value text 102",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 103",
+       "data_provider": "value text 104",
+       "evidence_record_id": "value text 105"
+      },
+      "validator_explanation": "value text 106"
+     }
+    ],
+    "source_mentions": [
+     "value text 107",
+     "value text 108",
+     "value text 109",
+     "value text 110"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 111",
+         "lookup_outcome": "value text 112",
+         "resolution_state": "value text 113",
+         "validator_explanation": "value text 114"
+        },
+        "condition_summary": "value text 115",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 116",
+         "lookup_outcome": "value text 117",
+         "resolution_state": "value text 118",
+         "validator_explanation": "value text 119"
+        },
+        "condition_free_text": "value text 120"
+       },
+       {
+        "condition_summary": "value text 121",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 122",
+         "lookup_outcome": "value text 123",
+         "resolution_state": "value text 124",
+         "validator_explanation": "value text 125"
+        },
+        "condition_free_text": "value text 126"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 127",
+       "lookup_outcome": "value text 128",
+       "resolution_state": "value text 129",
+       "validator_explanation": "value text 130"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 131",
+     "value text 132",
+     "value text 133",
+     "value text 134"
+    ],
+    "phenotype_annotation_object": "value text 135"
+   },
+   "review": [
+    {
+     "handle": "D19",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 136",
+      "condition_class_curie": "validator text 137",
+      "condition_chemical_name": "validator text 138",
+      "condition_chemical_curie": "validator text 139"
+     },
+     "explanation": "validator text 140"
+    },
+    {
+     "handle": "D20",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[1]",
+     "status": "resolved",
+     "values": {
+      "condition_chemical_name": "validator text 141",
+      "condition_chemical_curie": "validator text 142"
+     },
+     "explanation": "validator text 143"
+    },
+    {
+     "handle": "D21",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 144",
+      "vocabulary": "validator text 145",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 146"
+    },
+    {
+     "handle": "D22",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 147"
+    }
+   ]
+  },
+  {
+   "record": "R17",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "0bfa52a3-95ea-4e93-96ab-fb0c70b1a7de",
+   "values": {
+    "resolution_note": "value text 148"
+   },
+   "review": [
+    {
+     "handle": "D23",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R18",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "9c4ec6e0-c0c3-4763-b444-542c77dbd85f",
+   "evidence": [
+    "E13"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 149",
+    "lookup_outcome": "value text 150",
+    "source_mentions": [
+     "value text 151",
+     "value text 152",
+     "value text 153",
+     "value text 154"
+    ],
+    "resolution_state": "value text 155",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 156",
+     "data_provider": "value text 157",
+     "evidence_record_id": "value text 158"
+    },
+    "validator_explanation": "value text 159"
+   },
+   "review": [
+    {
+     "handle": "D24",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R19",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "1a5f7ca9-e65a-4658-acdd-da79dae676b4",
+   "values": {},
+   "review": [
+    {
+     "handle": "D25",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R20",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "4858602f-7172-428d-9e60-235c564b0779",
+   "evidence": [
+    "E13"
+   ],
+   "values": "E14",
+   "review": [
+    {
+     "handle": "D26",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R21",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "36237c0a-9e83-4c9b-9e05-65bcfe8bf01a",
+   "evidence": [
+    "E4"
+   ],
+   "values": "E3",
+   "review": [
+    {
+     "handle": "D27",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R22",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "ac7eca2a-6766-4bee-8b19-e698416e1e97",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D28",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R23",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "36f78eb9-22f4-4cc9-8044-92c5251e5b43",
+   "evidence": [
+    "E8"
+   ],
+   "values": "E7",
+   "review": [
+    {
+     "handle": "D29",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R24",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "bf98ba7a-fdfb-4af7-a7b2-3bb6d1958e99",
+   "evidence": [
+    "E13",
+    "E4",
+    "E6",
+    "E8"
+   ],
+   "values": {
+    "negated": false,
+    "rationale": "value text 160",
+    "data_provider": {
+     "mention": "value text 161",
+     "abbreviation": null,
+     "lookup_outcome": "value text 162",
+     "resolution_state": "value text 163",
+     "validator_explanation": "value text 164"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 165"
+    },
+    "annotation_kind": "value text 166",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 167",
+      "lookup_outcome": "value text 168",
+      "source_mentions": [
+       "value text 169",
+       "value text 170",
+       "value text 171",
+       "value text 172"
+      ],
+      "resolution_state": "value text 173",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 174",
+       "data_provider": "value text 175",
+       "evidence_record_id": "value text 176"
+      },
+      "validator_explanation": "value text 177"
+     }
+    ],
+    "source_mentions": [
+     "value text 178",
+     "value text 179",
+     "value text 180",
+     "value text 181"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 182",
+         "lookup_outcome": "value text 183",
+         "resolution_state": "value text 184",
+         "validator_explanation": "value text 185"
+        },
+        "condition_summary": "value text 186",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 187",
+         "lookup_outcome": "value text 188",
+         "resolution_state": "value text 189",
+         "validator_explanation": "value text 190"
+        },
+        "condition_free_text": "value text 191"
+       },
+       {
+        "condition_summary": "value text 192",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 193",
+         "lookup_outcome": "value text 194",
+         "resolution_state": "value text 195",
+         "validator_explanation": "value text 196"
+        },
+        "condition_free_text": "value text 197"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 198",
+       "lookup_outcome": "value text 199",
+       "resolution_state": "value text 200",
+       "validator_explanation": "value text 201"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 202",
+     "value text 203",
+     "value text 204",
+     "value text 205"
+    ],
+    "phenotype_annotation_object": "value text 206"
+   },
+   "review": [
+    {
+     "handle": "D30",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 207",
+      "condition_class_curie": "validator text 208",
+      "condition_chemical_name": "validator text 209",
+      "condition_chemical_curie": "validator text 210"
+     },
+     "explanation": "validator text 211"
+    },
+    {
+     "handle": "D31",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[1]",
+     "status": "resolved",
+     "values": {
+      "condition_chemical_name": "validator text 212",
+      "condition_chemical_curie": "validator text 213"
+     },
+     "explanation": "validator text 214"
+    },
+    {
+     "handle": "D32",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 215",
+      "vocabulary": "validator text 216",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 217"
+    },
+    {
+     "handle": "D33",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 218"
+    }
+   ]
+  },
+  {
+   "record": "R25",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "52a98b77-8f07-4206-ab8f-f3ba23a4b507",
+   "values": {
+    "resolution_note": "value text 219"
+   },
+   "review": [
+    {
+     "handle": "D34",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R26",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "7169e8fe-abcd-436b-b670-04c928d533cc",
+   "evidence": [
+    "E1"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 220",
+    "lookup_outcome": "value text 221",
+    "source_mentions": [
+     "value text 222",
+     "value text 223",
+     "value text 224"
+    ],
+    "resolution_state": "value text 225",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 226",
+     "data_provider": "value text 227",
+     "evidence_record_id": "value text 228"
+    },
+    "validator_explanation": "value text 229"
+   },
+   "review": [
+    {
+     "handle": "D35",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R27",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "3b14d355-fbc4-47b6-bf76-3602444cdecb",
+   "values": {},
+   "review": [
+    {
+     "handle": "D36",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R28",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "d7066527-1840-4671-8ab6-f9c02c76be23",
+   "evidence": [
+    "E1"
+   ],
+   "values": "E2",
+   "review": [
+    {
+     "handle": "D37",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R29",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "34fc3a2d-9dc8-40e2-ab5e-718a0ee97452",
+   "evidence": [
+    "E4"
+   ],
+   "values": "E3",
+   "review": [
+    {
+     "handle": "D38",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R30",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "e8b6980b-70f5-4f1e-b3b4-120e37817b87",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D39",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R31",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "8652be44-0d82-41ca-a036-ef96819ad9b8",
+   "evidence": [
+    "E8"
+   ],
+   "values": "E7",
+   "review": [
+    {
+     "handle": "D40",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R32",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "0d67f9a7-a404-4f70-b125-e76f0a078272",
+   "evidence": [
+    "E1",
+    "E4",
+    "E6",
+    "E8"
+   ],
+   "values": {
+    "negated": true,
+    "rationale": "value text 230",
+    "data_provider": {
+     "mention": "value text 231",
+     "abbreviation": null,
+     "lookup_outcome": "value text 232",
+     "resolution_state": "value text 233",
+     "validator_explanation": "value text 234"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 235"
+    },
+    "annotation_kind": "value text 236",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 237",
+      "lookup_outcome": "value text 238",
+      "source_mentions": [
+       "value text 239",
+       "value text 240",
+       "value text 241"
+      ],
+      "resolution_state": "value text 242",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 243",
+       "data_provider": "value text 244",
+       "evidence_record_id": "value text 245"
+      },
+      "validator_explanation": "value text 246"
+     }
+    ],
+    "source_mentions": [
+     "value text 247",
+     "value text 248",
+     "value text 249"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 250",
+         "lookup_outcome": "value text 251",
+         "resolution_state": "value text 252",
+         "validator_explanation": "value text 253"
+        },
+        "condition_summary": "value text 254",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 255",
+         "lookup_outcome": "value text 256",
+         "resolution_state": "value text 257",
+         "validator_explanation": "value text 258"
+        },
+        "condition_free_text": "value text 259"
+       },
+       {
+        "condition_summary": "value text 260",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 261",
+         "lookup_outcome": "value text 262",
+         "resolution_state": "value text 263",
+         "validator_explanation": "value text 264"
+        },
+        "condition_free_text": "value text 265"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 266",
+       "lookup_outcome": "value text 267",
+       "resolution_state": "value text 268",
+       "validator_explanation": "value text 269"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 270",
+     "value text 271",
+     "value text 272",
+     "value text 273"
+    ],
+    "phenotype_annotation_object": "value text 274"
+   },
+   "review": [
+    {
+     "handle": "D41",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 275",
+      "condition_class_curie": "validator text 276",
+      "condition_chemical_name": "validator text 277",
+      "condition_chemical_curie": "validator text 278"
+     },
+     "explanation": "validator text 279"
+    },
+    {
+     "handle": "D42",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[1]",
+     "status": "resolved",
+     "values": {
+      "condition_chemical_name": "validator text 280",
+      "condition_chemical_curie": "validator text 281"
+     },
+     "explanation": "validator text 282"
+    },
+    {
+     "handle": "D43",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 283",
+      "vocabulary": "validator text 284",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 285"
+    },
+    {
+     "handle": "D44",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 286"
+    }
+   ]
+  },
+  {
+   "record": "R33",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "65446d33-cfad-41d4-8db1-ec7fba83d173",
+   "values": {
+    "taxon": null,
+    "mention": "value text 287",
+    "subject_type": "value text 288",
+    "subject_label": null,
+    "lookup_outcome": "value text 289",
+    "proposed_taxon": "value text 290",
+    "resolution_state": "value text 291",
+    "subject_identifier": null,
+    "validator_explanation": "value text 292"
+   },
+   "review": [
+    {
+     "handle": "D45",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R34",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "4a199109-ecc1-42ad-8558-52169f245a0b",
+   "evidence": [
+    "E16"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 293",
+    "lookup_outcome": "value text 294",
+    "source_mentions": [
+     "value text 295",
+     "value text 296",
+     "value text 297"
+    ],
+    "resolution_state": "value text 298",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 299",
+     "data_provider": "value text 300",
+     "evidence_record_id": "value text 301"
+    },
+    "validator_explanation": "value text 302"
+   },
+   "review": [
+    {
+     "handle": "D46",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R35",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "08ead722-4c1c-4921-bcce-59d226646dec",
+   "values": {},
+   "review": [
+    {
+     "handle": "D47",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R36",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "27a3a38d-5ea8-4f29-aa88-48055077a0e5",
+   "evidence": [
+    "E16"
+   ],
+   "values": "E17",
+   "review": [
+    {
+     "handle": "D48",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R37",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "339534d4-1ef8-4dd1-9c2c-f658c04c7109",
+   "evidence": [
+    "E19"
+   ],
+   "values": "E18",
+   "review": [
+    {
+     "handle": "D49",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R38",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "d7ad857f-8865-4773-939b-83d3a7aea19f",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D50",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R39",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "2e116a1e-4cdd-41db-b0f8-24e7b0a597f0",
+   "evidence": [
+    "E16",
+    "E19",
+    "E6"
+   ],
+   "values": {
+    "negated": true,
+    "rationale": "value text 303",
+    "data_provider": {
+     "mention": "value text 304",
+     "abbreviation": null,
+     "lookup_outcome": "value text 305",
+     "resolution_state": "value text 306",
+     "validator_explanation": "value text 307"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 308"
+    },
+    "annotation_kind": "value text 309",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 310",
+      "lookup_outcome": "value text 311",
+      "source_mentions": [
+       "value text 312",
+       "value text 313",
+       "value text 314"
+      ],
+      "resolution_state": "value text 315",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 316",
+       "data_provider": "value text 317",
+       "evidence_record_id": "value text 318"
+      },
+      "validator_explanation": "value text 319"
+     }
+    ],
+    "source_mentions": [
+     "value text 320",
+     "value text 321",
+     "value text 322"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 323",
+         "lookup_outcome": "value text 324",
+         "resolution_state": "value text 325",
+         "validator_explanation": "value text 326"
+        },
+        "condition_summary": "value text 327",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 328",
+         "lookup_outcome": "value text 329",
+         "resolution_state": "value text 330",
+         "validator_explanation": "value text 331"
+        },
+        "condition_free_text": "value text 332"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 333",
+       "lookup_outcome": "value text 334",
+       "resolution_state": "value text 335",
+       "validator_explanation": "value text 336"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 337",
+     "value text 338",
+     "value text 339"
+    ],
+    "phenotype_annotation_object": "value text 340",
+    "phenotype_annotation_subject": {
+     "taxon": null,
+     "mention": "value text 341",
+     "subject_type": "value text 342",
+     "subject_label": null,
+     "lookup_outcome": "value text 343",
+     "proposed_taxon": "value text 344",
+     "resolution_state": "value text 345",
+     "subject_identifier": null,
+     "validator_explanation": "value text 346"
+    }
+   },
+   "review": [
+    {
+     "handle": "D51",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 347",
+      "condition_class_curie": "validator text 348",
+      "condition_chemical_name": "validator text 349",
+      "condition_chemical_curie": "validator text 350"
+     },
+     "explanation": "validator text 351"
+    },
+    {
+     "handle": "D52",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 352",
+      "vocabulary": "validator text 353",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 354"
+    },
+    {
+     "handle": "D53",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 355"
+    }
+   ]
+  },
+  {
+   "record": "R40",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "1017de83-e35b-4c04-90dd-0a67f6ffb996",
+   "values": {
+    "taxon": null,
+    "mention": "value text 356",
+    "subject_type": "value text 357",
+    "subject_label": null,
+    "lookup_outcome": "value text 358",
+    "proposed_taxon": "value text 359",
+    "resolution_state": "value text 360",
+    "subject_identifier": null,
+    "validator_explanation": "value text 361"
+   },
+   "review": [
+    {
+     "handle": "D54",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R41",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "072f2c3b-2a6f-4cb4-9281-2d021b5bbbfb",
+   "evidence": [
+    "E22"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 362",
+    "lookup_outcome": "value text 363",
+    "source_mentions": [
+     "value text 364",
+     "value text 365",
+     "value text 366"
+    ],
+    "resolution_state": "value text 367",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 368",
+     "data_provider": "value text 369",
+     "evidence_record_id": "value text 370"
+    },
+    "validator_explanation": "value text 371"
+   },
+   "review": [
+    {
+     "handle": "D55",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R42",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "662dd561-4629-4473-b995-8bf4bac81e2e",
+   "values": {},
+   "review": [
+    {
+     "handle": "D56",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R43",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "5f0eb10a-7d7c-492a-84f9-ea5db523eff4",
+   "evidence": [
+    "E22"
+   ],
+   "values": "E23",
+   "review": [
+    {
+     "handle": "D57",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R44",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "95a6c0f9-602b-4b81-8998-7dc61ca30703",
+   "evidence": [
+    "E19"
+   ],
+   "values": "E18",
+   "review": [
+    {
+     "handle": "D58",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R45",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "24a409aa-1708-4253-ab2b-1936f6ec06a8",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D59",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R46",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "04469b67-c915-470d-baa9-eaeee5a69f50",
+   "evidence": [
+    "E22",
+    "E19",
+    "E6"
+   ],
+   "values": {
+    "negated": true,
+    "rationale": "value text 372",
+    "data_provider": {
+     "mention": "value text 373",
+     "abbreviation": null,
+     "lookup_outcome": "value text 374",
+     "resolution_state": "value text 375",
+     "validator_explanation": "value text 376"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 377"
+    },
+    "annotation_kind": "value text 378",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 379",
+      "lookup_outcome": "value text 380",
+      "source_mentions": [
+       "value text 381",
+       "value text 382",
+       "value text 383"
+      ],
+      "resolution_state": "value text 384",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 385",
+       "data_provider": "value text 386",
+       "evidence_record_id": "value text 387"
+      },
+      "validator_explanation": "value text 388"
+     }
+    ],
+    "source_mentions": [
+     "value text 389",
+     "value text 390",
+     "value text 391"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 392",
+         "lookup_outcome": "value text 393",
+         "resolution_state": "value text 394",
+         "validator_explanation": "value text 395"
+        },
+        "condition_summary": "value text 396",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 397",
+         "lookup_outcome": "value text 398",
+         "resolution_state": "value text 399",
+         "validator_explanation": "value text 400"
+        },
+        "condition_free_text": "value text 401"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 402",
+       "lookup_outcome": "value text 403",
+       "resolution_state": "value text 404",
+       "validator_explanation": "value text 405"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 406",
+     "value text 407",
+     "value text 408"
+    ],
+    "phenotype_annotation_object": "value text 409",
+    "phenotype_annotation_subject": {
+     "taxon": null,
+     "mention": "value text 410",
+     "subject_type": "value text 411",
+     "subject_label": null,
+     "lookup_outcome": "value text 412",
+     "proposed_taxon": "value text 413",
+     "resolution_state": "value text 414",
+     "subject_identifier": null,
+     "validator_explanation": "value text 415"
+    }
+   },
+   "review": [
+    {
+     "handle": "D60",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 416",
+      "condition_class_curie": "validator text 417",
+      "condition_chemical_name": "validator text 418",
+      "condition_chemical_curie": "validator text 419"
+     },
+     "explanation": "validator text 420"
+    },
+    {
+     "handle": "D61",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 421",
+      "vocabulary": "validator text 422",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 423"
+    },
+    {
+     "handle": "D62",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 424"
+    }
+   ]
+  },
+  {
+   "record": "R47",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "62a9e600-d6ff-4602-971a-2b575e8d623d",
+   "values": {
+    "taxon": null,
+    "mention": "value text 425",
+    "subject_type": "value text 426",
+    "subject_label": null,
+    "lookup_outcome": "value text 427",
+    "proposed_taxon": "value text 428",
+    "resolution_state": "value text 429",
+    "subject_identifier": null,
+    "validator_explanation": "value text 430"
+   },
+   "review": [
+    {
+     "handle": "D63",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R48",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "017aea2e-e507-4b9a-8881-3a0f5f4cd987",
+   "evidence": [
+    "E16"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 431",
+    "lookup_outcome": "value text 432",
+    "source_mentions": [
+     "value text 433",
+     "value text 434",
+     "value text 435"
+    ],
+    "resolution_state": "value text 436",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 437",
+     "data_provider": "value text 438",
+     "evidence_record_id": "value text 439"
+    },
+    "validator_explanation": "value text 440"
+   },
+   "review": [
+    {
+     "handle": "D64",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R49",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "64fe5e48-94de-423f-b540-cba94d56c513",
+   "values": {},
+   "review": [
+    {
+     "handle": "D65",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R50",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "82aaf28a-a31d-4eba-bd06-bf55704f7af1",
+   "evidence": [
+    "E16"
+   ],
+   "values": "E17",
+   "review": [
+    {
+     "handle": "D66",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R51",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "dc5e5453-9977-4858-a22c-75f6e46a1b49",
+   "evidence": [
+    "E19"
+   ],
+   "values": "E18",
+   "review": [
+    {
+     "handle": "D67",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R52",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "4cd05510-1112-438c-8fa5-46609b2cd5f3",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D68",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R53",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "8ec3006b-8bde-4af6-ba7d-0d4216c91b37",
+   "evidence": [
+    "E16",
+    "E19",
+    "E6"
+   ],
+   "values": {
+    "negated": true,
+    "rationale": "value text 441",
+    "data_provider": {
+     "mention": "value text 442",
+     "abbreviation": null,
+     "lookup_outcome": "value text 443",
+     "resolution_state": "value text 444",
+     "validator_explanation": "value text 445"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 446"
+    },
+    "annotation_kind": "value text 447",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 448",
+      "lookup_outcome": "value text 449",
+      "source_mentions": [
+       "value text 450",
+       "value text 451",
+       "value text 452"
+      ],
+      "resolution_state": "value text 453",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 454",
+       "data_provider": "value text 455",
+       "evidence_record_id": "value text 456"
+      },
+      "validator_explanation": "value text 457"
+     }
+    ],
+    "source_mentions": [
+     "value text 458",
+     "value text 459",
+     "value text 460"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 461",
+         "lookup_outcome": "value text 462",
+         "resolution_state": "value text 463",
+         "validator_explanation": "value text 464"
+        },
+        "condition_summary": "value text 465",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 466",
+         "lookup_outcome": "value text 467",
+         "resolution_state": "value text 468",
+         "validator_explanation": "value text 469"
+        },
+        "condition_free_text": "value text 470"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 471",
+       "lookup_outcome": "value text 472",
+       "resolution_state": "value text 473",
+       "validator_explanation": "value text 474"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 475",
+     "value text 476",
+     "value text 477"
+    ],
+    "phenotype_annotation_object": "value text 478",
+    "phenotype_annotation_subject": {
+     "taxon": null,
+     "mention": "value text 479",
+     "subject_type": "value text 480",
+     "subject_label": null,
+     "lookup_outcome": "value text 481",
+     "proposed_taxon": "value text 482",
+     "resolution_state": "value text 483",
+     "subject_identifier": null,
+     "validator_explanation": "value text 484"
+    }
+   },
+   "review": [
+    {
+     "handle": "D69",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 485",
+      "condition_class_curie": "validator text 486",
+      "condition_chemical_name": "validator text 487",
+      "condition_chemical_curie": "validator text 488"
+     },
+     "explanation": "validator text 489"
+    },
+    {
+     "handle": "D70",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 490",
+      "vocabulary": "validator text 491",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 492"
+    },
+    {
+     "handle": "D71",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 493"
+    }
+   ]
+  },
+  {
+   "record": "R54",
+   "type": "PhenotypeSubject",
+   "role": "validated_reference",
+   "target_id": "0670d719-f1c7-4f58-9f2a-567fd8de89ae",
+   "values": {
+    "taxon": null,
+    "mention": "value text 494",
+    "subject_type": "value text 495",
+    "subject_label": null,
+    "lookup_outcome": "value text 496",
+    "proposed_taxon": "value text 497",
+    "resolution_state": "value text 498",
+    "subject_identifier": null,
+    "validator_explanation": "value text 499"
+   },
+   "review": [
+    {
+     "handle": "D72",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R55",
+   "type": "PhenotypeTerm",
+   "role": "validated_reference",
+   "target_id": "d1410741-6ffe-4ac6-82ef-778df6820f34",
+   "evidence": [
+    "E22"
+   ],
+   "values": {
+    "curie": null,
+    "label": null,
+    "mention": "value text 500",
+    "lookup_outcome": "value text 501",
+    "source_mentions": [
+     "value text 502",
+     "value text 503",
+     "value text 504"
+    ],
+    "resolution_state": "value text 505",
+    "ontology_lookup_hint": {
+     "taxon_id": "value text 506",
+     "data_provider": "value text 507",
+     "evidence_record_id": "value text 508"
+    },
+    "validator_explanation": "value text 509"
+   },
+   "review": [
+    {
+     "handle": "D73",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R56",
+   "type": "Reference",
+   "role": "validated_reference",
+   "target_id": "fe77988e-7116-44c1-a510-2452eeb44162",
+   "values": {},
+   "review": [
+    {
+     "handle": "D74",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R57",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "1d15e58e-1b1d-425c-8fd2-490a9cdc01d7",
+   "evidence": [
+    "E22"
+   ],
+   "values": "E23",
+   "review": [
+    {
+     "handle": "D75",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R58",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "6798c7a9-2bd8-448a-b2e2-382454ce4bc3",
+   "evidence": [
+    "E19"
+   ],
+   "values": "E18",
+   "review": [
+    {
+     "handle": "D76",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R59",
+   "type": "EvidenceQuote",
+   "role": "metadata_only",
+   "target_id": "04c05515-273c-4c1a-96aa-d161d00aa74f",
+   "evidence": [
+    "E6"
+   ],
+   "values": "E5",
+   "review": [
+    {
+     "handle": "D77",
+     "review": "record"
+    }
+   ]
+  },
+  {
+   "record": "R60",
+   "type": "PhenotypeAnnotation",
+   "role": "curatable_unit",
+   "target_id": "07dda99f-fd2c-43fb-8cd8-d288cf43f8f2",
+   "evidence": [
+    "E22",
+    "E19",
+    "E6"
+   ],
+   "values": {
+    "negated": true,
+    "rationale": "value text 510",
+    "data_provider": {
+     "mention": "value text 511",
+     "abbreviation": null,
+     "lookup_outcome": "value text 512",
+     "resolution_state": "value text 513",
+     "validator_explanation": "value text 514"
+    },
+    "evidence_quote": {
+     "evidence_record_id": "value text 515"
+    },
+    "annotation_kind": "value text 516",
+    "phenotype_terms": [
+     {
+      "curie": null,
+      "label": null,
+      "mention": "value text 517",
+      "lookup_outcome": "value text 518",
+      "source_mentions": [
+       "value text 519",
+       "value text 520",
+       "value text 521"
+      ],
+      "resolution_state": "value text 522",
+      "ontology_lookup_hint": {
+       "taxon_id": "value text 523",
+       "data_provider": "value text 524",
+       "evidence_record_id": "value text 525"
+      },
+      "validator_explanation": "value text 526"
+     }
+    ],
+    "source_mentions": [
+     "value text 527",
+     "value text 528",
+     "value text 529"
+    ],
+    "condition_relations": [
+     {
+      "conditions": [
+       {
+        "condition_class": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 530",
+         "lookup_outcome": "value text 531",
+         "resolution_state": "value text 532",
+         "validator_explanation": "value text 533"
+        },
+        "condition_summary": "value text 534",
+        "condition_chemical": {
+         "name": null,
+         "curie": null,
+         "mention": "value text 535",
+         "lookup_outcome": "value text 536",
+         "resolution_state": "value text 537",
+         "validator_explanation": "value text 538"
+        },
+        "condition_free_text": "value text 539"
+       }
+      ],
+      "condition_relation_type": {
+       "name": null,
+       "mention": "value text 540",
+       "lookup_outcome": "value text 541",
+       "resolution_state": "value text 542",
+       "validator_explanation": "value text 543"
+      }
+     }
+    ],
+    "evidence_record_ids": [
+     "value text 544",
+     "value text 545",
+     "value text 546"
+    ],
+    "phenotype_annotation_object": "value text 547",
+    "phenotype_annotation_subject": {
+     "taxon": null,
+     "mention": "value text 548",
+     "subject_type": "value text 549",
+     "subject_label": null,
+     "lookup_outcome": "value text 550",
+     "proposed_taxon": "value text 551",
+     "resolution_state": "value text 552",
+     "subject_identifier": null,
+     "validator_explanation": "value text 553"
+    }
+   },
+   "review": [
+    {
+     "handle": "D78",
+     "review": "validator_answer",
+     "validator": "experimental_condition_validation",
+     "field": "condition_relations[0].conditions[0]",
+     "status": "resolved",
+     "values": {
+      "condition_class_name": "validator text 554",
+      "condition_class_curie": "validator text 555",
+      "condition_chemical_name": "validator text 556",
+      "condition_chemical_curie": "validator text 557"
+     },
+     "explanation": "validator text 558"
+    },
+    {
+     "handle": "D79",
+     "review": "validator_answer",
+     "validator": "phenotype_condition_relation_lookup",
+     "field": "condition_relations[0].condition_relation_type.name",
+     "status": "resolved",
+     "values": {
+      "term_name": "validator text 559",
+      "vocabulary": "validator text 560",
+      "internal_id": 7662730
+     },
+     "explanation": "validator text 561"
+    },
+    {
+     "handle": "D80",
+     "review": "lookup_not_supported",
+     "validator": "phenotype_term_ontology_validator",
+     "explanation": "validator text 562"
+    }
+   ]
+  }
+ ]
+}

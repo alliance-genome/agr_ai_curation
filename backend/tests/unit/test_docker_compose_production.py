@@ -1133,6 +1133,53 @@ def test_workspace_review_concurrency_deployment_parity(monkeypatch):
     assert get_workspace_review_concurrency() == 3
 
 
+QUICK_CHECK_CONTRACT = [
+    ("VALIDATION_REVIEW_QUICK_CHECK_MODE", "get_validation_review_quick_check_mode", "off", "shadow", "shadow"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS", "get_validation_review_quick_check_timeout_seconds",
+     "30", "12.5", 12.5),
+    ("VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES", "get_validation_review_quick_check_max_retries", "2", "0", 0),
+]
+
+
+@pytest.mark.parametrize("key,getter,default,override,parsed", QUICK_CHECK_CONTRACT)
+def test_review_quick_check_settings_reach_every_review_runtime(key, getter, default, override, parsed, monkeypatch):
+    from src.lib.openai_agents import config
+
+    monkeypatch.delenv(key, raising=False)
+    assert str(getattr(config, getter)()) in {default, default + ".0"}
+    for path in (DEV_COMPOSE_PATH, COMPOSE_PATH):
+        services = yaml.safe_load(path.read_text())["services"]
+        for name in ("backend", "benchmark_worker"):
+            env = services[name]["environment"]
+            if isinstance(env, list):
+                env = _list_environment(env)
+            assert env[key] == "${" + key + ":-" + default + "}"
+    # Test stacks never inherit a host shadow setting, so no test can reach the provider.
+    test_services = yaml.safe_load(TEST_COMPOSE_PATH.read_text())["services"]
+    assert all(key not in str(service.get("environment") or {}) for service in test_services.values())
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
+    monkeypatch.setenv(key, override)
+    assert getattr(config, getter)() == parsed
+
+
+@pytest.mark.parametrize("key,value", [
+    ("VALIDATION_REVIEW_QUICK_CHECK_MODE", "on"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_MODE", ""),
+    ("VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS", "0"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS", "inf"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS", "soon"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES", "-1"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES", "1.5"),
+])
+def test_review_quick_check_settings_reject_invalid_values(key, value, monkeypatch):
+    from src.lib.openai_agents import config
+
+    getter = next(name for setting, name, *_ in QUICK_CHECK_CONTRACT if setting == key)
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        getattr(config, getter)()
+
+
 @pytest.mark.parametrize("configured,expected", [(None, 8), ("3", 3)])
 def test_validator_worker_capacity_reaches_all_consumers(monkeypatch, configured, expected):
     key = "MAX_PARALLEL_VALIDATORS"

@@ -514,6 +514,12 @@ def _build_packet(db, scope, ep, episode_id):
         else:
             grouped.setdefault(row["record_target_id"], {}).setdefault(row["decision_unit_id"], []).append(row)
 
+    from .extraction_scheduling import followup_available
+
+    # Whether a targeted re-check is still open for each record in this round.
+    followups = followup_available(db, ep, artifact.provenance,
+                                   [target for target in grouped if target is not None])
+
     def record_key(target_id):
         if target_id is None:
             return (2, 0, "")
@@ -584,6 +590,7 @@ def _build_packet(db, scope, ep, episode_id):
         item = {"record": label}
         if record_target is not None:
             item["target_id"] = record_target
+            item["follow_up_available"] = followups[record_target]
             try:
                 fact = _source_fact(db, artifact, record_target)
             except store.HistoryConflict as error:
@@ -751,6 +758,8 @@ def _packet_pages(body, packet_id, limit):
             current = trial
             continue
         stub = {"record": record["record"], "target_id": record.get("target_id"),
+                **({"follow_up_available": record["follow_up_available"]}
+                   if "follow_up_available" in record else {}),
                 "handles": [handle for handle, pinned in body["handles"].items()
                             if pinned["record"] == record["record"]]}
         trial = {**current, "too_large": [*current["too_large"], stub]}

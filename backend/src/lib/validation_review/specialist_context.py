@@ -8,6 +8,7 @@ from copy import deepcopy
 from sqlalchemy import select
 
 from src.lib.validation_history import store
+from src.lib.validation_history.record_lifecycle import RETIRING_DECISIONS
 from src.models.sql.validation_history import ValidationFact, ValidationBody
 from .audit import append_fact
 from .reads import exact_page
@@ -65,7 +66,8 @@ def assemble_in_transaction(
             "entries": [{"target_id": parent.target_id, "action": "select_extraction_contribution",
                          "reason": parent_body["identity"]["reason"]}]}
     elif parent.kind in {"record_retirement_decision", "record_restoration"}:
-        if parent.kind == "record_retirement_decision" and parent_body["identity"]["decision"] != "approve":
+        if (parent.kind == "record_retirement_decision"
+                and parent_body["identity"]["decision"] not in RETIRING_DECISIONS):
             raise store.HistoryConflict("Declined retirement cannot change source inputs")
         affected = list(db.scalars(select(ValidationFact).where(
             ValidationFact.artifact_id == artifact.id, ValidationFact.parent_id == parent.id,

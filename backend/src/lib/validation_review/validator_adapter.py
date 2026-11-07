@@ -271,7 +271,9 @@ class ValidatorAdapter:
         from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
         from . import source_selection
 
-        checkpoint = checkpoint_provider()
+        # A combined review save publishes retirements and then decisions in one
+        # transaction; each publication advances this request to its own revision.
+        current = [checkpoint_provider()]
         registry = REGISTRY.validate_python(self.plan["registry"])
         from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
         domain_pack = resolve_curation_domain_pack_by_id(registry.domain_pack.pack_id)
@@ -383,8 +385,9 @@ class ValidatorAdapter:
                 envelope=envelope, manifest=manifest, domain_pack=domain_pack, profile_context=profile)
             projected = projection.pin_publication_in_transaction(db, self.scope, self.artifact_id,
                 operation_id="source:" + selection_id, manifest=manifest, envelope=projected,
-                envelope_revision=checkpoint.expected_revision + 1)
-            written = write_domain_envelope_checkpoint(db, replace(checkpoint, envelope=projected))
+                envelope_revision=current[0].expected_revision + 1)
+            written = write_domain_envelope_checkpoint(db, replace(current[0], envelope=projected))
+            current[0] = replace(current[0], envelope=projected, expected_revision=written.revision)
             if source_fact.kind == "record_restoration":
                 from src.lib.curation_workspace.record_retirement_service import materialize_restored_candidate
                 materialize_restored_candidate(db, projected, written.revision, source_fact.target_id,
@@ -393,9 +396,21 @@ class ValidatorAdapter:
             return {"revision": written.revision, "ready": manifest["ready"], "blockers": manifest["blockers"]}
 
         with store.SessionLocal.begin() as db:
+            # A restore runs in a closed round; a packet save checks its own exact
+            # retry before requiring an open round.
             admission.lock_episode(db, self.scope, self.episode_id,
-                                   require_open="restore_target_id" not in arguments)
-            source = projection.source_envelope_in_transaction(db, self.scope, self.artifact_id, checkpoint.envelope)
+                                   require_open=not {"restore_target_id", "packet_decisions"} & set(arguments))
+            source = projection.source_envelope_in_transaction(db, self.scope, self.artifact_id, current[0].envelope)
+            if "packet_decisions" in arguments:
+                from . import decisions
+                from .record_retirement import retire_in_transaction
+
+                def retire(records, *, operation_id, expected_source_sha):
+                    return retire_in_transaction(db, context, operation_id=operation_id, records=records,
+                        expected_source_sha=expected_source_sha, source_envelope=source,
+                        rebuild_inputs=rebuild, publish=publish)
+                return decisions.record_packet_review_in_transaction(db, context,
+                    checkpoint=lambda: current[0], retire=retire, **arguments)
             if "restore_target_id" in arguments:
                 from .record_retirement import restore_in_transaction
                 return restore_in_transaction(db, context, source_envelope=source,

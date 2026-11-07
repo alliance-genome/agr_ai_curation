@@ -22,7 +22,9 @@ class StableValueAnchor(HistoryContract):
 class UnresolvedFieldAssessment(HistoryContract):
     """The reviewer's explicit scientific uncertainty, not an execution failure."""
 
-    field_path: StrictStr = Field(min_length=1)
+    field_path: StrictStr = Field(min_length=1, description=(
+        "Exact plain payload field path. Name list elements by index, e.g. classification_notes[1]."
+    ))
     explanation: StrictStr = Field(min_length=1)
 
 

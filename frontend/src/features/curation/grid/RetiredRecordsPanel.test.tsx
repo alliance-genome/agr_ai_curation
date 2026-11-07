@@ -25,4 +25,19 @@ describe('RetiredRecordsPanel', () => {
     expect(beforeChange).toHaveBeenCalledOnce()
     expect(restoreRecord).toHaveBeenCalledWith('env', 'target', 3, 'Review this again', expect.any(String))
   })
+
+  it('shows a record the reviewer retired itself, with no extractor recommendation, and restores it', async () => {
+    vi.mocked(restoreRecord).mockResolvedValue({ publication: { ready: false } })
+    const onChanged = vi.fn().mockResolvedValue(undefined)
+    const reviewerRetired = { ...record, reason: 'A genetic control, not a transgenic fly', proposal: null }
+    render(<RetiredRecordsPanel records={[reviewerRetired]} beforeChange={vi.fn().mockResolvedValue(undefined)} onChanged={onChanged} />)
+    fireEvent.click(screen.getByText('Retired records (1)'))
+    expect(screen.getByText('A genetic control, not a transgenic fly')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Extractor recommendation and evidence' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Supervisor decision' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Reason for restoring'), { target: { value: 'Keep it' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Restore for review' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledOnce())
+    expect(restoreRecord).toHaveBeenLastCalledWith('env', 'target', 3, 'Keep it', expect.any(String))
+  })
 })
