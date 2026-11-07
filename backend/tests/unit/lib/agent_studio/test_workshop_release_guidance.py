@@ -173,3 +173,19 @@ def test_review_guidance_explains_retiring_and_restoring_out_of_scope_records():
         assert phrase in guide
     assert "finding no support is still not evidence against them" not in guide
     assert guide.count("a reject only records an opinion and leaves the record pending") == 1
+
+
+def test_review_guidance_explains_rechecks_and_how_review_ends():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "one targeted re-check per review round",
+        "a round the curator requests (Revalidate record or all records) gives each record a fresh one",
+        "whether one is left (follow_up_available)",
+        "Saved results and history are retained.",
+        "it needs a curator's decision, it could not be checked, the reviewer did not accept it, or the reviewer did not decide it",
+        '"no re-check left for N records"',
+        "removing 2 records that don't answer the question",
+        "Review stops starting new runs once no review action could change the remaining records",
+        'A "Review paused" notice means an operational stop',
+    ):
+        assert phrase in guide
