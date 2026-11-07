@@ -3542,10 +3542,13 @@ def _validator_lookup_complete_label(
     verdict: str,
     *,
     target_count: int,
+    status_summary: str,
 ) -> str:
+    """A shared lookup names its target count, and says when their statuses differ."""
     if target_count <= 1:
         return f"{specialist_name}: Validator Lookup {verdict}"
-    return f"{specialist_name}: Validator Lookup {verdict} ({target_count} targets)"
+    mixed = ", mixed validation" if status_summary == "mixed" else ""
+    return f"{specialist_name}: Validator Lookup {verdict} ({target_count} targets{mixed})"
 
 
 def _emit_validator_lookup_audit_events(
@@ -3631,6 +3634,7 @@ def _emit_validator_lookup_audit_events(
                     specialist_name,
                     _validator_lookup_verdict(outcome, status_counts),
                     target_count=duplicate_count,
+                    status_summary=status_summary,
                 ) + f" ({binding_id})",
                 "success": outcome != "error",
                 "validatorTargets": record["targets"],
