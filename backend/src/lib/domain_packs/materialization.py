@@ -3476,6 +3476,33 @@ def _registered_materializer_for(domain_pack_id: str) -> DomainEnvelopeReviewRow
     return materializer
 
 
+def object_display_label(
+    metadata: DomainPackMetadata,
+    domain_object: CuratableObjectEnvelope,
+) -> str:
+    """The label a curator sees on this record's ordinary workspace row.
+
+    The primary_label_field of the object's workspace_display (object metadata,
+    else the pack's object definition), else the stable object id, as review
+    rows materialize it without a closed profile.
+    """
+
+    object_definition = next(
+        (item for item in metadata.object_definitions if item.object_type == domain_object.object_type),
+        None,
+    )
+    resolvable_fields = declared_resolvable_fields(metadata, domain_object.object_type)
+    if resolvable_fields:
+        domain_object = domain_object.model_copy(update={"payload": dict(effective_payload(
+            domain_object.payload, resolvable_fields, object_metadata=domain_object.metadata,
+        ))})
+    return _display_label(
+        domain_object,
+        display_config=_workspace_display_config(domain_object, object_definition),
+        resolvable_fields=resolvable_fields,
+    )
+
+
 def _workspace_display_config(
     domain_object: CuratableObjectEnvelope,
     object_definition: DomainPackObjectDefinition | None,

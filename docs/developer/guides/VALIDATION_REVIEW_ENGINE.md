@@ -518,6 +518,32 @@ plans, coverage grants, executable validator configuration and supervisor phases
 Expected budget/deadline stops are pending outcomes; operational failures use the
 existing sanitized reporting owner.
 
+After each reviewer run, continuation starts another run only for a unit some
+review action can still change (`continuation.classify`). A unit whose latest
+decision in this episode is the reviewer's reject, defer or acknowledge-failure,
+with no newer saved answer, follow-up request, contribution or source input for its
+lineage and no follow-up or reconsideration left, stops with the typed cause
+`reviewer_left_pending` (flow status `review_pending`). A curator's reject, defer or
+acknowledge-failure in this episode stops reviewer runs for that unit with
+`curator_authority_required`, since the reviewer cannot override it. The check uses decision history, actors, sequences and
+counts only, never the decision's reason. A targeted follow-up counts as left only
+when `extraction_scheduling.followup_available` says so: the same three conditions
+the request enforces (saved extractor support, a baseline record, this round's
+count under the ceiling). The stall guard
+(`VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS`) still bounds runs that make
+no progress, and every stall is reported. The stop reason is the current state's
+first cause; refusals seen during the run stay in `causes`. The outcome's `pending`
+list names each pending record once with a plain structural reason
+(`curator_decision`, `cannot_check`, `not_accepted`, `not_decided`) and whether a
+re-check is left. A curator's pending decision reads as `curator_decision` and an
+acknowledged failure as `cannot_check`. A unit bound to the envelope itself has no
+record and is named "the extraction as a whole". Chat saves each record's workspace label
+with the outcome when review stops and renders the saved text only, for example
+"Review finished with 1 record still pending: crb p13A (the reviewer did not
+accept it, and no re-check is left)." Operational stops (cancelled, expired,
+superseded, uncertain execution, retired document, unsupported state) carry no
+`pending` list and keep the "Review paused" notice.
+
 Direct extractor follow-ups first use the resolved supervisor to interpret the
 curator's intent. Continuing saved review does not invoke extraction. Only an
 explicit fresh-extraction request permits the already chosen extractor; the
@@ -586,13 +612,19 @@ The supervisor owns scientific decisions and the large-scale review. It cannot
 read/search the paper itself. It can ask the original configured extractor to
 investigate existing entries with specialized instructions. The default
 `VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY=2` means the original extraction
-plus one targeted follow-up, not two retries. Multi-entry calls charge each named
-entry that runs. Entries with no follow-up left are not investigated: the request
+plus one targeted follow-up per review round, not two retries. Multi-entry calls
+charge each named entry that runs. Entries with no follow-up left are not investigated: the request
 runs the rest and the tool result lists the skipped ones under `exhausted`; only a
 request whose every entry is spent stops with `extraction_attempts_exhausted`
-and lists every spent entry under `exhausted` as well. Within a review round,
-reconnects, reviewer runs, machine renewals and provider recovery do not replenish
-the follow-up; a curator-requested round grants a fresh one. The targeted follow-up
+and lists every spent entry under `exhausted` as well. A round opens at an episode
+admitted with `curator_round` (the curator's explicit request for another round,
+`extraction_scheduling.review_round`), so each such round gives every record one fresh
+re-check. The original review, machine renewals and independently admitted episodes
+without a curator-round ancestor share one round. Within a round, new operation IDs,
+turns, reconnects, reviewer runs, machine renewals and provider recovery do not
+replenish the follow-up. Each review packet record carries `follow_up_available`
+from `extraction_scheduling.followup_available`, the same structural conditions the
+request enforces. The targeted follow-up
 protocol stays at version 2, the text pinned in saved extractor contracts, so older
 extractions keep their follow-ups. The scope rule (a record must be shown in the
 paper to answer the question) lives in the review protocol instead.

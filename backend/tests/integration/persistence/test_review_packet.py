@@ -693,7 +693,9 @@ def test_a_record_too_large_for_any_page_is_named_with_its_handles(scope, monkey
     envelope, _, episode, _, _ = _build(scope, objects, [_evidence("big", "b" * 6000), _evidence("small")])
     targets = _targets(envelope)
     page = reads.review_packet(scope, episode)
-    assert page["too_large"] == [{"record": "R1", "target_id": targets[0], "handles": ["D1"]}]
+    # The stub keeps the record's follow-up flag; this fixture's saved extractor has none.
+    assert page["too_large"] == [{"record": "R1", "target_id": targets[0], "follow_up_available": False,
+                                  "handles": ["D1"]}]
     assert [record["target_id"] for record in page["records"]] == [targets[1]]
 
 

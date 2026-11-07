@@ -10,8 +10,9 @@ from src.lib.validation_review.provider import ACTIVE_BUDGET
 
 
 def unit(**changes):
-    return {"mode": "validation", "has_subject": True, "has_current_absence": False, "can_repair": False,
-            "repair_blocker": "required_inputs_unavailable", "work_states": [], **changes}
+    return {"mode": "validation", "record": "record-a", "has_subject": True, "has_current_absence": False,
+            "settled_by": None, "curator_decided": False, "can_repair": False, "repair_blocker": "required_inputs_unavailable",
+            "work_states": [], **changes}
 
 
 @pytest.mark.parametrize("code", ["unreviewed", "episode_review_pending", "answer_review_pending"])
@@ -48,9 +49,108 @@ def test_curator_unknown_and_document_lifecycle_do_not_trigger_nudges():
         assert causes[0]["code"] in {"document_retired", "unsupported_review_state"}
 
 
-def view(signature="same", ready=False, eligible=True, causes=()):
+@pytest.mark.parametrize("decision", ["reject", "defer", "acknowledge_failure"])
+@pytest.mark.parametrize("code", ["unreviewed", "episode_review_pending"])
+def test_a_decision_left_pending_with_nothing_new_and_no_recheck_does_not_rerun(code, decision):
+    # Production trace 58b3683e: crb p13A was rejected after its one follow-up;
+    # two more reviewer runs could not change it.
+    eligible, causes = continuation.classify(
+        [{"target_id": "a", "code": code}, {"target_id": "b", "code": "unreviewed"}],
+        {"a": unit(mode="extraction_only", settled_by=decision), "b": unit(mode="extraction_only")})
+    assert eligible == {"b"}
+    assert causes == [{"target_id": "a", "code": "reviewer_left_pending", "decision": decision}]
+
+
+def test_a_rejected_record_with_a_recheck_left_stays_eligible():
+    blockers = [{"target_id": "a", "code": "unreviewed"}]
+    units = {"a": unit(mode="extraction_only", settled_by="reject", can_repair=True)}
+    assert continuation.classify(blockers, units) == ({"a"}, [])
+
+
+def test_new_input_after_a_decision_or_an_unread_answer_keeps_the_record_eligible():
+    # settled_by is None once a newer answer, request or contribution exists.
+    blockers = [{"target_id": "a", "code": "unreviewed"}]
+    assert continuation.classify(blockers, {"a": unit(mode="extraction_only")}) == ({"a"}, [])
+    # An answer this episode has not reviewed is always new input.
+    answered = [{"target_id": "a", "code": "answer_review_pending"}, {"target_id": "a", "code": "unreviewed"}]
+    assert continuation.classify(answered, {"a": unit(settled_by="reject")}) == ({"a"}, [])
+
+
+@pytest.mark.parametrize("changes", [{"mode": "curator"}, {"curator_decided": True, "can_repair": True},
+                                     {"curator_decided": True}])
+def test_curator_authority_stops_reviewer_runs(changes):
+    blockers = [{"target_id": "a", "code": "unreviewed"}, {"target_id": "a", "code": "answer_review_pending"}]
+    eligible, causes = continuation.classify(blockers, {"a": unit(**changes)})
+    assert not eligible and causes == [{"target_id": "a", "code": "curator_authority_required"}]
+
+
+def test_pending_records_name_each_record_once_with_its_plain_reason():
+    blockers = [{"target_id": "a", "code": "unreviewed"}, {"target_id": "a2", "code": "unreviewed"},
+                {"target_id": "b", "code": "unreviewed"}, {"target_id": "c", "code": "unreviewed"},
+                {"target_id": "d", "code": "configured_validator_unavailable"},
+                {"target_id": "e", "code": "unreviewed"}, {"target_id": "f", "code": "unreviewed"},
+                {"target_id": None, "code": "execution_uncertain"}]
+    units = {"a": unit(record="ra", settled_by="reject"), "a2": unit(record="ra"),
+             "b": unit(record="rb", settled_by="reject", can_repair=True),
+             "c": unit(record="rc", mode="curator"), "d": unit(record="rd"),
+             "e": unit(record="re", settled_by="acknowledge_failure"),
+             # A curator's pending decision holds the record; the reviewer cannot change it.
+             "f": unit(record="rf", curator_decided=True, can_repair=True)}
+    eligible, causes = continuation.classify(blockers[:-1], units)
+    assert not {"e", "f"} & eligible
+    assert {"target_id": "f", "code": "curator_authority_required"} in causes
+    assert continuation.pending_records(blockers, units, eligible, causes) == [
+        {"record_target_id": "ra", "why": "not_accepted", "recheck_left": False},
+        {"record_target_id": "rb", "why": "not_accepted", "recheck_left": True},
+        {"record_target_id": "rc", "why": "curator_decision", "recheck_left": False},
+        {"record_target_id": "rd", "why": "cannot_check", "recheck_left": False},
+        {"record_target_id": "re", "why": "cannot_check", "recheck_left": False},
+        {"record_target_id": "rf", "why": "curator_decision", "recheck_left": False},
+    ]
+
+
+def test_curator_message_says_how_many_records_which_and_why():
+    pending = [{"record_target_id": "ra", "why": "not_accepted", "recheck_left": False, "label": "crb p13A"}]
+    assert continuation.pending_message(pending) == (
+        "Review finished with 1 record still pending: crb p13A (the reviewer did not accept it, "
+        "and no re-check is left). Saved results and history are retained.")
+    pending += [{"record_target_id": "rc", "why": "curator_decision", "recheck_left": False, "label": "white"},
+                {"record_target_id": "rb", "why": "not_decided", "recheck_left": True, "label": "Oregon R"}]
+    message = continuation.pending_message(pending)
+    assert message.startswith("Review finished with 3 records still pending: crb p13A (")
+    assert "white (it needs a curator's decision)" in message
+    assert "Oregon R (the reviewer did not decide it)" in message
+    assert "_" not in message and "exhausted" not in message
+
+
+def test_terminal_reason_is_the_current_state_not_an_earlier_refusal():
+    settled = view(eligible=False, causes=[{"target_id": "a", "code": "reviewer_left_pending", "decision": "reject"}],
+                   pending=[{"record_target_id": "ra", "why": "not_accepted", "recheck_left": False}])
+    refusal = {"tool": "request_targeted_extraction", "target_id": "ra",
+               "code": "extraction_attempts_exhausted", "resource": "ra"}
+    outcome = continuation.terminal(settled, [refusal], "notes")
+    assert outcome["reason"] == "reviewer_left_pending"
+    assert outcome["causes"] == [*settled["causes"], refusal]
+    assert outcome["pending"] == settled["pending"] and outcome["output"] == "notes"
+    from src.lib.validation_review.flow_outcome import status_for_reason
+    assert status_for_reason(outcome["reason"]) == "review_pending"
+
+
+def test_a_stall_is_reported_even_when_another_unit_names_the_reason(monkeypatch):
+    reports = []
+    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure", reports.append)
+    blocked = view(causes=[{"target_id": "b", "code": "configured_validator_unavailable"}])
+    outcome = continuation.terminal(blocked, [], None, stalled=True)
+    assert outcome["reason"] == "configured_validator_unavailable"
+    assert len(reports) == 1 and isinstance(reports[0], continuation.ReviewerStalled)
+    continuation.terminal(blocked, [], None)
+    assert len(reports) == 1
+
+
+def view(signature="same", ready=False, eligible=True, causes=(), pending=()):
     return {"signature": signature, "review": {"ready": ready, "state": "complete" if ready else "pending"},
-            "eligible": {"private-target"} if eligible else set(), "causes": list(causes)}
+            "eligible": {"private-target"} if eligible else set(), "causes": list(causes),
+            "pending": list(pending)}
 
 
 @pytest.fixture
@@ -172,7 +272,9 @@ async def test_persistent_typed_tool_refusal_survives_ordinary_final(runtime, mo
     result = await reviewer.run(r.context, r.agent, input="review")
     assert result["reason"] == "saved_extractor_contract_unavailable"
     assert not result["review"]["ready"] and result["causes"][0]["target_id"] == "source-entry"
-    r.reports.assert_not_called()
+    # The refusal names the reason, but the run still stalled and is reported once.
+    r.reports.assert_called_once()
+    assert isinstance(r.reports.call_args.args[0], continuation.ReviewerStalled)
 
 
 def test_verified_current_absence_can_replace_stale_selection_without_a_new_attempt():

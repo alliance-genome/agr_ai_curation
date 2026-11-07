@@ -1,6 +1,6 @@
 from tests.cancellation_test_support import install_cancel_reader
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agents import Agent, ModelSettings, function_tool
@@ -556,3 +556,52 @@ def test_compose_lets_an_empty_review_model_keep_the_supervisor_model():
         pytest.skip("Compose files are not mounted in this test image")
     for path in composes:
         assert "${VALIDATION_REVIEW_MODEL-gpt-6.1-sol}" in path.read_text()
+
+
+def test_finished_review_names_pending_records_instead_of_a_bare_stop_code():
+    from src.lib.validation_review.chat import ChatReview
+
+    # Rendering reads only the saved outcome: no records, checkpoint or labels
+    # are looked up, so a record that later leaves the result keeps its name.
+    pending = [{"record_target_id": "crb-entry", "why": "not_accepted", "recheck_left": False,
+                "label": "crb p13A"}]
+    context = SimpleNamespace(review_notes=lambda **kwargs: [
+        {"result_ref": "extraction-result:result-1", "outcome": {
+            "output": "The crb p13A record is out of scope.", "reason": "reviewer_left_pending",
+            "causes": [{"target_id": "crb-unit", "code": "reviewer_left_pending", "decision": "reject"},
+                       {"target_id": "crb-entry", "code": "extraction_attempts_exhausted"}],
+            "pending": pending}},
+        {"result_ref": "extraction-result:result-1", "outcome": {"reason": "cancelled", "pending": []}},
+    ])
+    notes = ChatReview.render_review_notes(context)
+    assert notes == (
+        "\n\nReviewer's notes:\nThe crb p13A record is out of scope.\n\n"
+        "Review finished with 1 record still pending: crb p13A (the reviewer did not accept it, "
+        "and no re-check is left). Saved results and history are retained.\n\n"
+        "Review paused: cancelled. Saved results and history are retained.")
+    assert "extraction attempts exhausted" not in notes
+
+
+def test_retained_outcome_saves_each_pending_label_once(monkeypatch):
+    from src.lib.validation_review.chat import ChatReview
+
+    saved, lookups = [], []
+    monkeypatch.setattr("src.lib.validation_review.audit.append_fact",
+                        lambda db, aid, **kwargs: saved.append(kwargs["body"]["outcome"]))
+    monkeypatch.setattr("src.lib.validation_history.store.SessionLocal", MagicMock())
+    monkeypatch.setattr("src.lib.validation_history.store._artifact", lambda *args: None)
+    context = SimpleNamespace(
+        context=lambda record: ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                                             "episode", "supervisor"),
+        reference=lambda record: {"artifact_id": "artifact"},
+        review_summary_operation=lambda context: "summary-op", turn_id="turn",
+        record_labels=lambda record, ids: lookups.append(ids) or {"crb-entry": "crb p13A"},
+    )
+    record = SimpleNamespace(extraction_result_id="result-1")
+    outcome = {"reason": "reviewer_left_pending",
+               "pending": [{"record_target_id": "crb-entry", "why": "not_accepted", "recheck_left": False}]}
+    ChatReview.retain_review_outcome(context, record, outcome)
+    assert saved[-1]["pending"][0]["label"] == "crb p13A" and lookups == [{"crb-entry"}]
+    # A reconnect re-retains the saved outcome unchanged, never relabelling it.
+    ChatReview.retain_review_outcome(context, record, saved[-1])
+    assert saved[-1] == saved[0] and lookups == [{"crb-entry"}]
