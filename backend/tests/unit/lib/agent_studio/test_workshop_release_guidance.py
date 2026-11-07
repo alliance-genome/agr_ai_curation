@@ -143,6 +143,11 @@ def _alliance_guide(topic):
     return result["content"]
 
 
+def test_fanout_guide_says_in_category_controls_are_planned():
+    guide = _alliance_guide("extraction_fanout")
+    assert "an item inside the requested category is planned even when the paper uses it as a control" in guide
+
+
 def test_extraction_guidance_keeps_contrasts_in_the_written_answer():
     guide = _alliance_guide("domain_envelopes")
     for phrase in (
@@ -182,13 +187,18 @@ def test_review_guidance_explains_rechecks_and_how_review_ends():
         "a round the curator requests (Revalidate record or all records) gives each record a fresh one",
         "whether one is left (follow_up_available)",
         "Saved results and history are retained.",
-        "it needs a curator's decision, it could not be checked, the reviewer did not accept it, or the reviewer did not decide it",
+        "it needs a curator's decision (including a curator's pending decision), it could not be checked (an acknowledged validation failure), the reviewer did not accept it, or the reviewer did not decide it",
         '"no re-check left for N records"',
         "removing 2 records that don't answer the question",
         "Review stops starting new runs once no review action could change the remaining records",
-        'A "Review paused" notice means an operational stop',
+        'A "Review paused: ..." notice means an operational stop with no pending list',
+        "a cancelled, expired or superseded run, an uncertain execution, a retired document or an unsupported state",
+        "a curator's own reject, defer or acknowledged failure in the round stops reviewer runs for that record",
+        'named "the extraction as a whole"',
+        "a re-check also needs a saved extraction agent that supports re-checks and the record's original extraction",
     ):
         assert phrase in guide
+    assert "a time or spending limit" not in guide
 
 
 def test_review_guidance_says_the_quick_check_only_logs():
