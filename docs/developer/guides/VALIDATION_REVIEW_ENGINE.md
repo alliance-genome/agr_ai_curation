@@ -247,7 +247,7 @@ target IDs for units outside the packet) and a plain `clears_with` step derived 
 the code and the unit's review mode. Curator saves do not get this list;
 `get_validation_review_status` returns the same list, by target ID, when not ready.
 In a curator-requested round the reviewer cannot retire the records the curator asked
-to re-review (`review_target_ids`); it accepts them or leaves them pending with a
+to re-review (`review_target_ids`), directly or through `decide_record_retirement`; it accepts them or leaves them pending with a
 reason, and the curator decides. A save can retire records from one packet only once,
 since a retirement changes the packet's source digest.
 

@@ -13,6 +13,12 @@ from .record_scope import allowed_units
 from .specialist_context import entry_coverage
 
 
+# A curator-requested round names the records the curator asked to re-review; the
+# curator, not the review actor, decides whether those leave the results.
+CURATOR_ROUND_REFUSAL = ("The curator asked to re-review this record in this round, so it cannot be retired here; "
+                         "accept it or leave it pending with a reason, and the curator decides")
+
+
 def _require_no_curator_authority(db, artifact_id, root, descendants, source_envelope):
     """A curator decision, row decision, edit or authored record outranks any review actor."""
     if store._has_curator_subject(db, artifact_id, root.id):
@@ -77,6 +83,8 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
     _, descendants = entry_coverage(db, artifact_id, [root.id])
     if not descendants.intersection(allowed_units(episode)):
         raise store.HistoryAccessError("Retirement is outside the requested record scope")
+    if retirement_decision == "approve" and descendants.intersection(episode["review_target_ids"] or ()):
+        raise store.HistoryConflict(CURATOR_ROUND_REFUSAL)
     body = store._content(db, contribution)
     if body.get("selectable") is False:
         raise store.HistoryConflict("Contribution has an unresolved structural failure")
@@ -171,8 +179,6 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
         raise store.HistoryConflict("Records changed after this packet was read; read a fresh packet")
     episode = selections.effective_episode(db, store._fact(db, artifact_id, ep.id))
     permitted = allowed_units(episode)
-    # A curator-requested round names the records the curator asked to re-review;
-    # the curator, not the review actor, decides whether those leave the results.
     requested = set(episode["review_target_ids"] or ())
     before = rebuild_inputs(db, source_envelope)
     updated = source_envelope.model_copy(deep=True)
@@ -196,9 +202,7 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
             if not descendants.intersection(permitted):
                 raise store.HistoryAccessError("Retirement is outside the requested record scope")
             if descendants.intersection(requested):
-                raise store.HistoryConflict(
-                    "The curator asked to re-review this record in this round, so it cannot be retired here; "
-                    "accept it or leave it pending with a reason, and the curator decides")
+                raise store.HistoryConflict(CURATOR_ROUND_REFUSAL)
             matches = [obj for obj in source_envelope.extracted_objects
                        if obj.metadata["validation_history"]["target_id"] == root.id]
             if len(matches) != 1:

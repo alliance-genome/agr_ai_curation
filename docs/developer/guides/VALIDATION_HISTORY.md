@@ -317,7 +317,8 @@ retirement, and another decision for the same record in that call is refused.
 Code does not judge scope. It checks authority (a review actor, `actor.type ==
 "agent"`, in its own open round; curator decisions, curator row decisions, curator
 edits and curator-authored records block retirement, and in a curator-requested round
-the records the curator asked to re-review cannot be retired by the reviewer), the round's record scope,
+the records the curator asked to re-review cannot be retired by the reviewer, either
+directly or by approving an extractor recommendation), the round's record scope,
 structure (an active whole record present in the current source; a record item's
 pinned version), and the packet's `source_state_sha256`, which pins every record's
 lifecycle. The record's validator bindings leave coverage through the same
