@@ -124,18 +124,23 @@ def test_curator_message_says_how_many_records_which_and_why():
 
 
 def test_removal_message_names_each_removed_record_with_its_saved_reason():
-    crb = {"record_target_id": "r41", "label": "Crb-GFP", "retired_by": "review",
-           "reason": "Named only in the Discussion imaging legend."}
-    assert continuation.removal_message([crb], {"accepted": 41, "pending": 0, "retired": 1}) == (
+    crb = {"record_target_id": "r41", "label": "Crb-GFP", "retired_by": "review", "new_this_turn": True,
+           "reason": "Named only in the Discussion imaging legend (Fig. 7). Use here is not established.  "}
+    assert continuation.removal_message([crb], {"accepted": 41, "pending": 0, "retired_in_this_review": 1}) == (
         "Review removed 1 record that doesn't answer the question: Crb-GFP (Named only in the "
-        "Discussion imaging legend.). 41 records are current.")
+        "Discussion imaging legend (Fig. 7). Use here is not established). 41 records are current.")
     white = {"record_target_id": "r3", "label": "white", "retired_by": "extractor_recommendation",
-             "reason": "A marker, not a transgenic stock."}
-    message = continuation.removal_message([crb, white], {"accepted": 0, "pending": 1, "retired": 2})
+             "new_this_turn": True, "reason": "A marker, not a transgenic stock"}
+    message = continuation.removal_message([crb, white], {"accepted": 0, "pending": 1, "retired_in_this_review": 2})
     assert message == (
         "Review removed 2 records that don't answer the question: Crb-GFP (Named only in the "
-        "Discussion imaging legend.); white (A marker, not a transgenic stock.). 1 record is current.")
+        "Discussion imaging legend (Fig. 7). Use here is not established); white (A marker, not a "
+        "transgenic stock). 1 record is current.")
     assert "extractor_recommendation" not in message and "_" not in message
+    # Only one final period is formatting; the rest of a long reason is quoted whole.
+    long = {**white, "reason": "Step one. " * 80 + "Excluded."}
+    assert ("(" + "Step one. " * 80 + "Excluded). 3 records") in continuation.removal_message(
+        [long], {"accepted": 3, "pending": 0, "retired_in_this_review": 1})
 
 
 def test_terminal_reason_is_the_current_state_not_an_earlier_refusal():

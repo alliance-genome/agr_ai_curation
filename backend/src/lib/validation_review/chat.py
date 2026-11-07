@@ -569,10 +569,12 @@ class ChatReview:
 
         Each record still pending is saved with the label it had when review
         stopped, so later notes never read the live source. The summary also
-        saves the review's final record counts and each record this review
-        retired, with its label, saved reason and the path that retired it, so
-        the supervisor's answer and the end-of-review notes can name them. A
-        reconnect reuses the saved summary of its turn unchanged.
+        saves the review's final counts (review_counts) and each record this
+        review retired, with its label, saved reason and the path that retired it,
+        so the supervisor's answer and the end-of-review notes can name them. A
+        retirement the review's previous summary did not list is new_this_turn;
+        only those are announced in chat. A reconnect reuses the saved summary of
+        its turn unchanged.
         """
         from src.lib.validation_history import selections
         from src.lib.validation_history.record_lifecycle import counts
@@ -590,17 +592,21 @@ class ChatReview:
                                                           episode_id=context.episode_id)
             final = counts(db, ref["artifact_id"], review_blockers(manifest))
             retired = retired_in_review(db, ref["artifact_id"], context.episode_id)
+            listed = listed_removals(db, ref["artifact_id"], context.episode_id)
         pending = outcome.get("pending", ())
         labels = self.record_labels(record, {item["record_target_id"] for item in pending},
                                     retired_entries=[item["entry"] for item in retired])
-        outcome = {**outcome, "record_counts": {"accepted": final["active"] - final["pending"],
-                                                "pending": final["pending"], "retired": len(retired)}}
+        outcome = {**outcome, "review_counts": {"accepted": final["active"] - final["pending"],
+                                                "pending": final["pending"],
+                                                "retired_in_this_review": len(retired)}}
         if pending:
             outcome["pending"] = [{**item, "label": labels[item["record_target_id"]]} for item in pending]
         if retired:
             outcome["retired"] = [{"record_target_id": item["record_target_id"],
                                    "label": labels[item["record_target_id"]], "reason": item["reason"],
-                                   "retired_by": item["retired_by"]} for item in retired]
+                                   "retired_by": item["retired_by"],
+                                   "new_this_turn": item["record_target_id"] not in listed}
+                                  for item in retired]
         with store.SessionLocal.begin() as db:
             store._artifact(db, ref["artifact_id"], context.history_scope)
             append_fact(
@@ -664,9 +670,11 @@ class ChatReview:
             if output:
                 notes.append(str(output))
             # Records review removed are named from the saved outcome, whatever
-            # the model's prose says, on every kind of finish.
-            if outcome.get("retired"):
-                notes.append(removal_message(outcome["retired"], outcome["record_counts"]))
+            # the model's prose says, on every kind of finish, and only on the
+            # turn their removal is first saved.
+            removed = [item for item in outcome.get("retired", ()) if item["new_this_turn"]]
+            if removed:
+                notes.append(removal_message(removed, outcome["review_counts"]))
             reason = outcome.get("reason")
             # A finished review names the records still waiting and why; an
             # operational stop (budget, deadline, configuration) has no such list.
@@ -841,6 +849,28 @@ class ChatReview:
             ),
             authenticated_groups=self.authenticated_groups,
         )
+
+
+def listed_removals(db, artifact_id, episode_id):
+    """Records the review's latest saved summary already listed as retired.
+
+    A summary from before the retired list was saved lists none.
+    """
+    from src.models.sql.validation_history import ValidationFact
+
+    previous = db.scalar(
+        select(ValidationFact)
+        .where(
+            ValidationFact.artifact_id == artifact_id,
+            ValidationFact.kind == "review_supervisor_summary",
+            ValidationFact.parent_id == episode_id,
+        )
+        .order_by(ValidationFact.sequence.desc())
+        .limit(1)
+    )
+    if previous is None:
+        return set()
+    return {item["record_target_id"] for item in store._content(db, previous)["outcome"].get("retired", ())}
 
 
 def refresh_saved_status(*, owner_id, session_id, saved_status):

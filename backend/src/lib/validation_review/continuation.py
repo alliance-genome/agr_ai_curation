@@ -370,9 +370,14 @@ def removal_message(retired, counts):
     how many records are current.
 
     Built only from the labels, reasons and counts saved with the outcome; the
-    reviewer's reason is quoted as saved, never read or rewritten.
+    reviewer's reason is quoted whole, never read or rewritten. Only trailing
+    whitespace and one final period are dropped, so the text never reads ".).".
     """
-    parts = [f"{item['label']} ({item['reason']})" for item in retired]
+    def quoted(reason):
+        reason = reason.rstrip()
+        return reason[:-1] if reason.endswith(".") else reason
+
+    parts = [f"{item['label']} ({quoted(item['reason'])})" for item in retired]
     noun = "record that doesn't" if len(retired) == 1 else "records that don't"
     current = counts["accepted"] + counts["pending"]
     remaining = "1 record is current" if current == 1 else f"{current} records are current"
