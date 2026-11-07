@@ -139,6 +139,7 @@ from src.lib.openai_agents.extraction_manifest import (
 )
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
+from src.lib.openai_agents.streaming_tools import _validator_lookup_verdict
 from src.lib.document_context import DocumentContext
 from src.schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
@@ -1734,9 +1735,10 @@ def _build_flow_validator_lookup_audit_events(
                     "timestamp": _now_iso(),
                     "details": {
                         "error": attempt.get("message") if outcome == "error" else None,
+                        # The validator's final status, never the search step's outcome.
                         "friendlyName": (
                             f"{agent_name}: Validator Lookup "
-                            f"{'review required' if outcome != 'error' and (outcome == 'conflict' or status in {'unresolved', 'incomplete'}) else outcome or 'complete'} ({binding_id})"
+                            f"{_validator_lookup_verdict(outcome, {status: 1})} ({binding_id})"
                         ),
                         "isSpecialistInternal": True,
                         "lookupIndex": index,
