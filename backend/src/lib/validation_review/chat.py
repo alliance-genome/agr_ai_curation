@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from src.lib.validation_history import store, runtime
-from src.schemas.domain_envelope import DomainEnvelope
+from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from . import admission, quick_check, reviewer
 from .decisions import ReviewContext
 from .validator_adapter import ValidatorAdapter, save_plan
@@ -568,19 +568,45 @@ class ChatReview:
         """Keep model explanations and expected stop reasons as immutable history.
 
         Each record still pending is saved with the label it had when review
-        stopped, so later notes never read the live source.
+        stopped, so later notes never read the live source. The summary also
+        saves the review's final counts (review_counts) and each record this
+        review retired, with its label, saved reason and the path that retired it,
+        so the supervisor's answer and the end-of-review notes can name them. A
+        retirement the review's previous summary did not list is new_this_turn;
+        only those are announced in chat. A reconnect reuses the saved summary of
+        its turn unchanged.
         """
+        from src.lib.validation_history import selections
+        from src.lib.validation_history.record_lifecycle import counts
         from .audit import append_fact
+        from .record_retirement import retired_in_review
+        from .record_scope import review_blockers
 
-        # A reconnect re-retains the saved outcome, whose records are already labelled.
-        unlabelled = {item["record_target_id"] for item in outcome.get("pending", ()) if "label" not in item}
-        if unlabelled:
-            labels = self.record_labels(record, unlabelled)
-            outcome = {**outcome, "pending": [{**item, "label": labels[item["record_target_id"]]}
-                                              if "label" not in item else item
-                                              for item in outcome["pending"]]}
+        if self.saved_review_outcome(record) is not None:
+            return
         context = self.context(record)
         ref = self.reference(record)
+        with store.SessionLocal() as db:
+            store._artifact(db, ref["artifact_id"], context.history_scope)
+            manifest = selections.manifest_in_transaction(db, context.history_scope, ref["artifact_id"],
+                                                          episode_id=context.episode_id)
+            final = counts(db, ref["artifact_id"], review_blockers(manifest))
+            retired = retired_in_review(db, ref["artifact_id"], context.episode_id)
+            listed = listed_removals(db, ref["artifact_id"], context.episode_id)
+        pending = outcome.get("pending", ())
+        labels = self.record_labels(record, {item["record_target_id"] for item in pending},
+                                    retired_entries=[item["entry"] for item in retired])
+        outcome = {**outcome, "review_counts": {"accepted": final["active"] - final["pending"],
+                                                "pending": final["pending"],
+                                                "retired_in_this_review": len(retired)}}
+        if pending:
+            outcome["pending"] = [{**item, "label": labels[item["record_target_id"]]} for item in pending]
+        if retired:
+            outcome["retired"] = [{"record_target_id": item["record_target_id"],
+                                   "label": labels[item["record_target_id"]], "reason": item["reason"],
+                                   "retired_by": item["retired_by"],
+                                   "new_this_turn": item["record_target_id"] not in listed}
+                                  for item in retired]
         with store.SessionLocal.begin() as db:
             store._artifact(db, ref["artifact_id"], context.history_scope)
             append_fact(
@@ -633,7 +659,7 @@ class ChatReview:
         return {"status": self.status(), "review_outcomes": self.review_notes()}
 
     def render_review_notes(self, *, result_refs=None, current_turn_only=False):
-        from .continuation import pending_message
+        from .continuation import pending_message, removal_message
 
         notes = []
         for entry in self.review_notes(
@@ -643,6 +669,12 @@ class ChatReview:
             output = outcome.get("output")
             if output:
                 notes.append(str(output))
+            # Records review removed are named from the saved outcome, whatever
+            # the model's prose says, on every kind of finish, and only on the
+            # turn their removal is first saved.
+            removed = [item for item in outcome.get("retired", ()) if item["new_this_turn"]]
+            if removed:
+                notes.append(removal_message(removed, outcome["review_counts"]))
             reason = outcome.get("reason")
             # A finished review names the records still waiting and why; an
             # operational stop (budget, deadline, configuration) has no such list.
@@ -656,17 +688,19 @@ class ChatReview:
                 )
         return "\n\nReviewer's notes:\n" + "\n\n".join(notes) if notes else ""
 
-    def record_labels(self, record, target_ids):
+    def record_labels(self, record, target_ids, *, retired_entries=()):
         """Curator-facing names for saved records: the label each workspace row shows.
 
         A unit bound to the envelope itself has no record (None), as in the review
-        packet; it concerns the extraction as a whole.
+        packet; it concerns the extraction as a whole. A retired record has left
+        the current result, so it is named from the entry saved with its retirement.
         """
         from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
         from src.lib.domain_packs.materialization import object_display_label
 
         labels = {None: "the extraction as a whole"} if None in target_ids else {}
-        if set(target_ids) - {None}:
+        retired = [CuratableObjectEnvelope.model_validate(entry) for entry in retired_entries]
+        if set(target_ids) - {None} or retired:
             envelope = self.checkpoint(record).envelope
             pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
             if pack is None:
@@ -675,6 +709,8 @@ class ChatReview:
                            object_display_label(pack.metadata, obj)
                            for obj in envelope.extracted_objects
                            if obj.metadata["validation_history"]["target_id"] in target_ids})
+            labels.update({obj.metadata["validation_history"]["target_id"]:
+                           object_display_label(pack.metadata, obj) for obj in retired})
         missing = set(target_ids) - set(labels)
         if missing:
             raise store.HistoryConflict("A pending review record is not in the current saved result")
@@ -813,6 +849,28 @@ class ChatReview:
             ),
             authenticated_groups=self.authenticated_groups,
         )
+
+
+def listed_removals(db, artifact_id, episode_id):
+    """Records the review's latest saved summary already listed as retired.
+
+    A summary from before the retired list was saved lists none.
+    """
+    from src.models.sql.validation_history import ValidationFact
+
+    previous = db.scalar(
+        select(ValidationFact)
+        .where(
+            ValidationFact.artifact_id == artifact_id,
+            ValidationFact.kind == "review_supervisor_summary",
+            ValidationFact.parent_id == episode_id,
+        )
+        .order_by(ValidationFact.sequence.desc())
+        .limit(1)
+    )
+    if previous is None:
+        return set()
+    return {item["record_target_id"] for item in store._content(db, previous)["outcome"].get("retired", ())}
 
 
 def refresh_saved_status(*, owner_id, session_id, saved_status):

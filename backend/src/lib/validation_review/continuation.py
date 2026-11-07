@@ -363,3 +363,23 @@ def pending_message(pending):
     noun = "record" if len(pending) == 1 else "records"
     return (f"Review finished with {len(pending)} {noun} still pending: " + "; ".join(parts)
             + ". Saved results and history are retained.")
+
+
+def removal_message(retired, counts):
+    """Curator text: which records review removed, each with its saved reason, and
+    how many records are current.
+
+    Built only from the labels, reasons and counts saved with the outcome; the
+    reviewer's reason is quoted whole, never read or rewritten. Only trailing
+    whitespace and one final period are dropped, so the text never reads ".).".
+    """
+    def quoted(reason):
+        reason = reason.rstrip()
+        return reason[:-1] if reason.endswith(".") else reason
+
+    parts = [f"{item['label']} ({quoted(item['reason'])})" for item in retired]
+    noun = "record that doesn't" if len(retired) == 1 else "records that don't"
+    current = counts["accepted"] + counts["pending"]
+    remaining = "1 record is current" if current == 1 else f"{current} records are current"
+    return (f"Review removed {len(retired)} {noun} answer the question: " + "; ".join(parts)
+            + f". {remaining}.")
