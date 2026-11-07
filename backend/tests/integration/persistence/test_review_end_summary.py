@@ -22,6 +22,7 @@ from src.lib.validation_review.decisions import ReviewContext
 from src.lib.validation_review.record_retirement import retire_in_transaction
 from src.schemas.domain_envelope import DomainEnvelope
 from tests.cancellation_test_support import install_cancel_reader
+from tests.integration.persistence.chat_turn_support import record_user_turn
 from tests.integration.persistence.test_chat_review_adapter import (
     checkpoint_provider, migrated as migrated, planned as planned, scope as scope,
 )
@@ -64,7 +65,9 @@ async def _chat_review(scope, monkeypatch, count):
                                           typed=envelope.model_dump(mode="json"), provenance={})
     supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
-    chat = ChatReview(scope.owner_id, scope.document_id, scope.session_id, uuid4().hex, supervisor, (), QUESTION)
+    turn_id = uuid4().hex
+    record_user_turn(owner_id=scope.owner_id, session_id=scope.session_id, turn_id=turn_id, question=QUESTION)
+    chat = ChatReview(scope.owner_id, scope.document_id, scope.session_id, turn_id, supervisor, (), QUESTION)
     await chat.receive(envelope, pack, agent_key="fixture", adapter_key="fixture", tool_name="ask_fixture",
         execution_receipt=None, context=ValidatorRuntimeContext(
             user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=()))
@@ -75,7 +78,9 @@ def _next_turn(chat):
     """The curator's next chat turn in the same session resumes the same saved review."""
     from src.lib.validation_review.chat import ChatReview
 
-    return ChatReview(chat.owner_id, chat.document_id, chat.session_id, uuid4().hex, chat.supervisor, (), QUESTION)
+    turn_id = uuid4().hex
+    record_user_turn(owner_id=chat.owner_id, session_id=chat.session_id, turn_id=turn_id, question=QUESTION)
+    return ChatReview(chat.owner_id, chat.document_id, chat.session_id, turn_id, chat.supervisor, (), QUESTION)
 
 
 async def _invoke(tool, arguments):
