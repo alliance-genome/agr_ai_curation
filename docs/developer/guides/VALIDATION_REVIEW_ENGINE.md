@@ -317,7 +317,17 @@ calibration against supervisor decisions. The supervisor still reviews every
 record. A failed or refused check is logged and nothing else happens. Question
 texts, input caps, orders and thresholds form one versioned `Definition` in
 `quick_check.py`; changing any of them needs a new wording id and calibration.
-The default mode is `off`, which makes no call.
+They are code constants rather than environment settings on purpose: every logged
+run must stay comparable with the calibration it is measured against, and a
+per-deployment change would make the shadow data unusable for that. The mode,
+request timeout and retries are environment settings. The default mode is `off`,
+which makes no call.
+
+Calibration status of `v6-shadow`: the trial measured the lenient scope question
+in both record orders, so the averaged scope and the removal thresholds are
+calibrated. The negated support, negated own-study and choice questions were
+measured in forward order only, so their two-order averages, and the skip
+thresholds applied to them, are first measured by this shadow data.
 
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when
