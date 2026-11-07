@@ -181,8 +181,14 @@ def read(scope, episode_id, *, fact_id, sha256, offset=0):
 
 
 def _outstanding_rows(db, scope, ep, episode_id):
-    """Every live outstanding row of the bound episode, in stable keyset order."""
-    from . import source_inputs
+    """Every live outstanding row of the bound episode, in stable keyset order.
+
+    A validator answer the reviewer already decided is offered again, with its
+    exact references, when continuation's own test (``continuation.decidable``)
+    says it can be decided now: something new arrived since, or a later round
+    began. Continuation then never starts a run for an answer shown as waiting.
+    """
+    from . import continuation, source_inputs
     from .record_scope import allowed_units, review_blockers
     from .record_source import evidence_groups
     from src.lib.validation_history.selections import effective_episode
@@ -198,6 +204,12 @@ def _outstanding_rows(db, scope, ep, episode_id):
     targets = {fact.id: fact for fact in db.scalars(select(ValidationFact).where(
         ValidationFact.artifact_id == ep.artifact_id, ValidationFact.kind == "target"))}
     groups = evidence_groups(db, artifact)
+    codes = {}
+    for blocker in blockers:
+        if blocker["target_id"] is not None:
+            codes.setdefault(blocker["target_id"], set()).add(blocker["code"])
+    subjects = continuation.review_subjects(
+        db, scope, ep, allowed_units(coverage), {tid: obligations[tid]["mode"] for tid in units}).units
 
     def source_record(target_id):
         while target_id is not None:
@@ -233,6 +245,13 @@ def _outstanding_rows(db, scope, ep, episode_id):
                 row["applicability_ref"] = source_inputs.reference(source)
             if obligations[unit_id]["mode"] == "extraction_only" and decidable:
                 row["extraction_ref"] = artifact.baseline_sha
+            answer = subjects[unit_id]["answer"]
+            if (row["code"] == "unreviewed" and answer is not None
+                    and "answer_review_pending" not in codes[unit_id]
+                    and continuation.decidable(codes[unit_id], subjects[unit_id])):
+                attempt, completion = answer
+                row.update(attempt_ref={"fact_id": attempt.id, "sha256": attempt.body_sha},
+                           completion_ref={"fact_id": completion.id, "sha256": completion.body_sha})
         # Each answer remains independently reachable, even for one unit.
         # Baseline evidence is immutable, so this keeps a stable keyset order.
         key = json.dumps([group, unit_id or "", blocker["code"],
