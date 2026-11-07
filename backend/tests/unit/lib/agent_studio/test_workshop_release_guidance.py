@@ -189,3 +189,20 @@ def test_review_guidance_explains_rechecks_and_how_review_ends():
         'A "Review paused" notice means an operational stop',
     ):
         assert phrase in guide
+
+
+def test_review_guidance_says_the_quick_check_only_logs():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "Quick check beside review: when the server setting is shadow",
+        "with the records in forward and in reversed order",
+        "question set v6-shadow",
+        "under three candidate rules as the trace event review_quick_check.shadow",
+        "TraceReview groups under review_quick_check",
+        "It is logging only: the supervisor still reviews every record",
+        "Never present its probabilities or would-be routes as review decisions",
+        "With the setting off there is no such event",
+    ):
+        assert phrase in guide
+    workflow = _alliance_guide("trace_investigation")
+    assert "A `review_quick_check.shadow` event is logging only; read studio guide topic `review_history`" in workflow
