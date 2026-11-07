@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import pytest
 from agents.tool_context import ToolContext
-from sqlalchemy import select
 
 from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, load_domain_envelope
 from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext, prepare_validator_dispatch
@@ -21,7 +20,6 @@ from src.lib.validation_review import admission, decisions, extraction_schedulin
 from src.lib.validation_review.decisions import ReviewContext
 from src.lib.validation_review.tools import create_tools
 from src.lib.validation_review.validator_adapter import ValidatorAdapter, save_plan
-from src.models.sql.validation_history import ValidationFact
 from src.models.sql.validation_review import ValidationReviewWork
 from src.schemas.domain_envelope import DomainEnvelope
 from tests.integration.persistence.test_chat_review_adapter import (
