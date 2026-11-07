@@ -55,31 +55,38 @@ def _start_line(tool, arguments):
     return None
 
 
-def _recheck_finished(result):
-    return (isinstance(result, dict) and result.get("state") == "completed"
-            and isinstance(result.get("contributions"), list))
+# A re-check that did not run for some records is a warning, never a failure.
+_WARNING = {"severity": "warning"}
 
 
-def _recheck_finish_line(result):
+def _recheck_finish_lines(result):
     """How a targeted re-check request ended, read from its result's structure only.
 
-    A stopped call (no result) has no line; review_progress reports the stop.
+    Records with no re-check left are listed under exhausted, both when the rest
+    ran and when none could. A stopped call (no result) has no line;
+    review_progress reports the stop.
     """
     if not isinstance(result, dict):
-        return None
-    if _recheck_finished(result):
-        return "re-check finished for " + _count(len(result["contributions"]), "record", "records")
-    if result.get("code") == "extraction_attempts_exhausted":
-        return "no re-check left for 1 record"
-    return "re-check did not run"
+        return []
+    lines = []
+    if result.get("state") == "completed" and isinstance(result.get("contributions"), list):
+        lines.append(("re-check finished for " + _count(len(result["contributions"]), "record", "records"), {}))
+    exhausted = result.get("exhausted")
+    if isinstance(exhausted, list) and exhausted:
+        lines.append(("no re-check left for " + _count(len(exhausted), "record", "records"), _WARNING))
+    return lines or [("re-check did not run", _WARNING)]
 
 
-def _finish_line(tool, result):
+def _finish_lines(tool, result):
     """Packet reads are described by what they returned; re-checks by how they ended."""
     if tool == "request_targeted_extraction":
-        return _recheck_finish_line(result)
-    if tool != "read_review_packet" or not isinstance(result, dict) or "records" not in result:
-        return None
+        return _recheck_finish_lines(result)
+    if tool == "read_review_packet" and isinstance(result, dict) and "records" in result:
+        return [(_packet_line(result), {})]
+    return []
+
+
+def _packet_line(result):
     if result["page"] > 1:
         return f"reviewing more records (part {result['page']} of {result['pages']})"
     if not result["record_count"]:
@@ -90,13 +97,6 @@ def _finish_line(tool, result):
     if result["pages"] > 1:
         line += f" (part 1 of {result['pages']})"
     return line
-
-
-def _finish_details(tool, result):
-    """A re-check that did not finish is marked as a warning, never as a failure."""
-    if tool == "request_targeted_extraction" and not _recheck_finished(result):
-        return {"severity": "warning"}
-    return {}
 
 
 def _named(*values):
@@ -175,10 +175,10 @@ class ReviewLines:
             _emit("TOOL_START", tool, line, self.episode_id)
 
     def finish(self, tool, result):
-        line = _finish_line(tool, result)
-        if line is not None and (tool, line) not in self._finished:
-            self._finished.add((tool, line))
-            _emit("TOOL_COMPLETE", tool, line, self.episode_id, **_finish_details(tool, result))
+        for line, details in _finish_lines(tool, result):
+            if (tool, line) not in self._finished:
+                self._finished.add((tool, line))
+                _emit("TOOL_COMPLETE", tool, line, self.episode_id, **details)
         self._running[tool] -= 1
         if not self._running[tool]:
             self._started.discard(tool)

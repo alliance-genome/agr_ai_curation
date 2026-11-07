@@ -313,23 +313,34 @@ _ENTRY_IDS = ["cafa5538-3de0-48ba-a2c2-bdf1d8912198", "df85e2e1-0cb1-4d38-be3f-a
               "21910a7e-6dd4-435d-90cf-f5029516d901"]
 
 
+_FINISHED = "Supervisor review: re-check finished for "
+_NONE_LEFT = "Supervisor review: no re-check left for "
+_NOT_RUN = "Supervisor review: re-check did not run"
+
+
 @pytest.mark.parametrize("result,finish", [
     ({"state": "completed", "work_id": "work", "contributions": [{"fact_id": "a", "sha256": "1"},
                                                                 {"fact_id": "b", "sha256": "2"},
                                                                 {"fact_id": "c", "sha256": "3"}]},
-     "Supervisor review: re-check finished for 3 records"),
+     [(_FINISHED + "3 records", None)]),
     ({"state": "completed", "work_id": "work", "contributions": [{"fact_id": "a", "sha256": "1"}]},
-     "Supervisor review: re-check finished for 1 record"),
-    ({"state": "not_applied", "code": "extraction_attempts_exhausted", "resource": _ENTRY_IDS[2],
-      "applied": [], "targets": []},
-     "Supervisor review: no re-check left for 1 record"),
+     [(_FINISHED + "1 record", None)]),
+    # Partly refused: the rest ran, and the spent record is named under exhausted.
+    ({"state": "completed", "work_id": "work", "contributions": [{"fact_id": "a", "sha256": "1"},
+                                                                {"fact_id": "b", "sha256": "2"}],
+      "exhausted": [_ENTRY_IDS[2]], "exhausted_note": "These records had no follow-up left."},
+     [(_FINISHED + "2 records", None), (_NONE_LEFT + "1 record", "warning")]),
+    # Fully refused: every requested record is spent, so none ran.
+    ({"state": "not_applied", "code": "extraction_attempts_exhausted", "resource": _ENTRY_IDS[0],
+      "applied": [], "targets": [], "exhausted": _ENTRY_IDS},
+     [(_NONE_LEFT + "3 records", "warning")]),
     ({"state": "not_applied", "code": "fresh_extraction_required", "resource": None,
       "applied": [], "targets": []},
-     "Supervisor review: re-check did not run"),
+     [(_NOT_RUN, "warning")]),
     ({"state": "conflict", "code": "HistoryConflict", "applied": [],
       "message": "Parent decision must concern every requested entry"},
-     "Supervisor review: re-check did not run"),
-    ({"state": "not_claimed", "work_id": "work"}, "Supervisor review: re-check did not run"),
+     [(_NOT_RUN, "warning")]),
+    ({"state": "not_claimed", "work_id": "work"}, [(_NOT_RUN, "warning")]),
 ])
 def test_recheck_says_how_it_ended(events, result, finish):
     from src.lib.validation_review.progress import ReviewLines
@@ -341,12 +352,13 @@ def test_recheck_says_how_it_ended(events, result, finish):
         lines.finish("request_targeted_extraction", result)
     finally:
         streaming_tools.set_live_event_list(None)
-    assert _lines(events) == ["Supervisor review: asking the extraction agent to re-check 3 records", finish]
-    assert [event["type"] for event in events] == ["TOOL_START", "TOOL_COMPLETE"]
+    assert _lines(events) == ["Supervisor review: asking the extraction agent to re-check 3 records",
+                              *(line for line, _ in finish)]
+    assert [event["type"] for event in events] == ["TOOL_START"] + ["TOOL_COMPLETE"] * len(finish)
     assert not any(entry_id in line for entry_id in _ENTRY_IDS for line in _lines(events))
-    assert events[1]["details"]["reviewPhase"] == "supervisor_review"
-    assert events[1]["details"].get("severity") == (None if result["state"] == "completed" else "warning")
-    assert "success" not in events[1]["details"]
+    assert [event["details"].get("severity") for event in events[1:]] == [severity for _, severity in finish]
+    assert all(event["details"]["reviewPhase"] == "supervisor_review" and "success" not in event["details"]
+               for event in events[1:])
 
 
 def test_a_stopped_recheck_shows_no_finish_line(events):
@@ -372,7 +384,7 @@ def test_each_of_two_overlapping_rechecks_reports_its_own_end(events):
         lines.start("request_targeted_extraction", {"entry_ids": _ENTRY_IDS[2:]})
         lines.finish("request_targeted_extraction", {"state": "not_applied", "applied": [], "targets": [],
                                                      "code": "extraction_attempts_exhausted",
-                                                     "resource": _ENTRY_IDS[2]})
+                                                     "resource": _ENTRY_IDS[2], "exhausted": _ENTRY_IDS[2:]})
         lines.finish("request_targeted_extraction", {"state": "completed", "work_id": "work",
                                                      "contributions": [{}, {}]})
         lines.start("request_targeted_extraction", {"entry_ids": _ENTRY_IDS[:1]})
@@ -390,13 +402,13 @@ def test_each_of_two_overlapping_rechecks_reports_its_own_end(events):
 
 
 def test_every_review_tool_has_a_plain_language_line():
-    from src.lib.validation_review.progress import _finish_line, _start_line
+    from src.lib.validation_review.progress import _finish_lines, _start_line
     from src.lib.validation_review.tools import runtime_tool_contract
 
     packet = {"records": [{}], "page": 1, "pages": 1, "record_count": 1, "answer_count": 1}
     for tool in runtime_tool_contract():
         name = tool["name"]
-        line = _start_line(name, {}) or _finish_line(name, packet)
+        line = _start_line(name, {}) or _finish_lines(name, packet)[0][0]
         assert line, name
         assert "_" not in line and name not in line
 
