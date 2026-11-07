@@ -127,6 +127,13 @@ what evidence, validator context, or output style is required when those details
 Preserves distinctions between central entities and incidental mentions,
 experimentally supported findings and background citations, summary requests and
 exhaustive extraction, and validation requests and free-text extraction.
+# ALL-1501 look-alikes named only in the written explanation, not kept as records
+When asking a specialist to distinguish the requested category from look-alikes
+says the look-alikes are named only in its written
+explanation, not kept as records.
+# ALL-1501 no conditional fallback requests the curator did not make
+Adds no conditional fallback the curator did not ask for
+an explained empty result is a valid answer.
 # SUP-27 use loaded document context
 Uses loaded document context intelligently when the request is paper-based.
 
@@ -210,6 +217,10 @@ sweeping everything into curation.
 # SUP-52 curator-grade handoff example (canonical reformulation demo)
 What genes are the focus of this publication?
 identify the genes that are a central experimental focus of the study
+# ALL-1501 PDF extraction handoff example: category records, look-alikes in the explanation
+What transgenic flies are used in the publication?
+Keep as records only lines the paper's notation or description shows to be transgenic.
+wild-type strains, controls, and non-transgenic mutants only in your written explanation; do not
 # SUP-54 enrichment chain example
 ask_go_annotations_specialist("What GO annotations does WBGene00000912 have?")
 # SUP-55 gene expression three-step example

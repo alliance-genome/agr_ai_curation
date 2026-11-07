@@ -45,5 +45,21 @@
     "reason": "PDF (search block). The pre-rewrite (HEAD b7e3a415) pdf prompt has NO <search_context>/<search_infrastructure> block: it was already removed in Phase B (commit 24144d52, 'drop duplicated search-infrastructure block from pdf base prompt (now in tool descriptions)'), and the 'Multiple span_ids -> one evidence record' sentence was relocated into <evidence_rules> then. Recorded as a deleted no-op entry for parity with the worked examples so the deletion ledger is explicit; nothing was present to remove in this Phase-C task.",
     "old_source": "packages/alliance/agents/pdf/prompt.yaml (already removed in Phase B)",
     "new_home": ""
+  },
+  {
+    "phrase": "Do not create curation output from prose tables, artifact previews, legacy lists, or your final chat text.",
+    "category": "deleted",
+    "reason": "ALL-1501 rewording. The clause 'or your final chat text' read as forbidding the written answer from carrying exclusions, which pushed the model to back every reported item, contrasts included, with a staged object. The rule that curation output comes only from finalized staged objects stays; the final chat response is now named as the written answer that carries what was extracted, the exclusions, contrasts and uncertainty.",
+    "old_source": "packages/alliance/agents/pdf/prompt.yaml:<generic_builder_contract>",
+    "new_home": "",
+    "synonyms": []
+  },
+  {
+    "phrase": "You retrieved from the document before staging objects, and the staged objects match the curator's requested scope.",
+    "category": "deleted",
+    "reason": "ALL-1501 rewording. 'Requested scope' let a supervisor handoff that asked to distinguish or list look-alikes count as scope for extra records. The success criterion now says every staged object is an item the paper's evidence shows answers the curator's question.",
+    "old_source": "packages/alliance/agents/pdf/prompt.yaml:<success_criteria>",
+    "new_home": "",
+    "synonyms": []
   }
 ]

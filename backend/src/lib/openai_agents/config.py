@@ -2108,7 +2108,7 @@ def get_extraction_fanout_min_items() -> int:
     0 (default) turns fan-out off: every builder extraction runs as one writer.
     A positive value makes builder agents plan first; plans with at least this
     many records are written by parallel writers, and smaller plans are staged
-    by the planner itself. Production sets 6.
+    by the planner itself. Production sets 15.
     """
     return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MIN_ITEMS", 0))
 

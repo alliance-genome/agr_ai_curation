@@ -4,9 +4,11 @@
 keeps today's single writer). Mechanics stay in code and meaning stays with the
 model (AGENTS.md section 8):
 
-- The planner is the agent itself. It reads the paper and submits a plan through a
-  strict-schema tool: a label and the evidence chunks for each record, plus a few
-  paper-wide notes. Staging is refused while it plans.
+- The planner is the agent itself. It looks at its record-type catalog first when it
+  has one, reads the paper and submits a plan through a strict-schema tool: a label
+  and the evidence chunks for each record, plus a few paper-wide notes. Staging is
+  refused while it plans. What the plan holds is the model's call: only records that
+  answer the request, with contrasts and exclusions left to its final explanation.
 - Code counts the plan. No records: the planner explains the empty result. Fewer
   records than the fan-out threshold: the planner's own thread stages them. Otherwise
   code slices the plan in order and starts writers: agent clones with four tools,
@@ -73,11 +75,19 @@ PREFETCH_TOOL_NAME = "read_chunk"
 # Source tools a writer keeps besides the agent's stage tools.
 WRITER_SOURCE_TOOL_NAMES = frozenset({"read_chunk", "search_document", "record_evidence"})
 
-PLANNING_MESSAGE = (
+PLANNING_READ_FIRST = (
     "[Planning phase] Read what you need from the paper first, using the reading and "
-    "search tools. In this phase staging and finalizing are disabled, and you do not "
-    "need to record evidence. When you have read enough, call submit_extraction_plan "
-    "once, with:\n"
+    "search tools."
+)
+PLANNING_CATALOG_FIRST = (
+    "[Planning phase] First call {tools} to see the record types you can stage, so "
+    "you plan each item as one record of the type that fits. Then read what you need "
+    "from the paper, using the reading and search tools."
+)
+PLANNING_INSTRUCTIONS = (
+    " In this phase staging and finalizing are disabled, and you do not need to "
+    "record evidence. When you have read enough, call submit_extraction_plan once, "
+    "with:\n"
     "- notes: up to 5 short lines of paper-wide facts that writers need to fill fields "
     "correctly under your instructions (for example which items the study itself "
     "generated, where items came from, or naming conventions). No per-record field "
@@ -85,10 +95,28 @@ PLANNING_MESSAGE = (
     "- items: one entry per record you would stage, in order, each with a short label "
     "that identifies the record and the chunk_index values of the passages that hold "
     "its evidence.\n"
-    "Include every record your instructions require, and nothing else. Parallel "
+    "Plan only records that answer the request, include every one of them, and "
+    "nothing else. Anything you will name only as a contrast or an exclusion, such as "
+    "a control or a look-alike outside the requested category, goes in your final "
+    "explanation, not in items, even when you are asked to distinguish it. Parallel "
     "writers will read the cited chunks and fill in every field. If your instructions "
     "call for no records from this paper, submit an empty items list."
 )
+
+
+def planning_message(catalog_tool_names: Sequence[str]) -> str:
+    """The planning-phase message; a planner with a record-type catalog reads it first.
+
+    Which tools are catalogs comes from package binding metadata
+    (``builder_catalog: true``), never from the tool's name.
+    """
+
+    if not catalog_tool_names:
+        return PLANNING_READ_FIRST + PLANNING_INSTRUCTIONS
+    tools = " and ".join(catalog_tool_names)
+    return PLANNING_CATALOG_FIRST.format(tools=tools) + PLANNING_INSTRUCTIONS
+
+
 PLAN_REMINDER_MESSAGE = (
     "[Planning phase] You have not submitted a plan. Call submit_extraction_plan now "
     "with your notes and one item per record (an empty items list if there are none)."
@@ -325,6 +353,7 @@ def prepare_fanout_extraction(
     names = [_tool_name(tool) for tool in tools]
     finalize_names = tool_roles.builder_finalization_tool_names()
     stage_names = tool_roles.builder_stage_tool_names()
+    catalog_names = tool_roles.builder_catalog_tool_names()
     finalize_tools = [tool for tool in tools if _tool_name(tool) in finalize_names]
     stage_tools = [tool for tool in tools if _tool_name(tool) in stage_names]
     if len(finalize_tools) != 1 or not stage_tools:
@@ -348,6 +377,7 @@ def prepare_fanout_extraction(
         plain_tools=tools,
         finalize_tool=finalize_tools[0],
         stage_tools=stage_tools,
+        catalog_tool_names=[name for name in names if name in catalog_names],
         document_id=str(document_id),
         user_id=str(user_id),
         min_items=min_items,
@@ -403,6 +433,7 @@ class FanoutExtraction:
         plain_tools: Sequence[Any],
         finalize_tool: Any,
         stage_tools: Sequence[Any],
+        catalog_tool_names: Sequence[str],
         document_id: str,
         user_id: str,
         min_items: int,
@@ -419,6 +450,7 @@ class FanoutExtraction:
         self.plain_tools = list(plain_tools)
         self.finalize_tool = finalize_tool
         self.stage_tools = list(stage_tools)
+        self.catalog_tool_names = tuple(catalog_tool_names)
         self.min_items = min_items
         self.items_per_writer = items_per_writer
         self.max_writers = max_writers
@@ -558,7 +590,7 @@ class FanoutExtraction:
         self._progress("Reading the paper and planning the records")
         self.workspace.planning = True
         try:
-            async for event in self._run_planner_thread(PLANNING_MESSAGE):
+            async for event in self._run_planner_thread(planning_message(self.catalog_tool_names)):
                 yield event
             if self.plan is None:
                 async for event in self._run_planner_thread(PLAN_REMINDER_MESSAGE):
@@ -1008,6 +1040,7 @@ __all__ = [
     "SUBMIT_PLAN_TOOL_NAME",
     "WriterOutcome",
     "parse_plan_arguments",
+    "planning_message",
     "prepare_fanout_extraction",
     "submit_plan_parameters_schema",
     "writer_slices",
