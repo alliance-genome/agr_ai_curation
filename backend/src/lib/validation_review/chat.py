@@ -654,6 +654,11 @@ class ChatReview:
 
     def review_notes(self, *, result_refs=None, current_turn_only=False):
         """Latest phase explanation per result; older explanations remain auditable."""
+        return [entry for _, entry in self.noted_records(
+            result_refs=result_refs, current_turn_only=current_turn_only)]
+
+    def noted_records(self, *, result_refs=None, current_turn_only=False):
+        """Each saved result with its latest phase explanation, as (record, entry) pairs."""
         from src.models.sql.validation_history import ValidationFact
 
         notes = []
@@ -680,15 +685,16 @@ class ChatReview:
                 if fact is not None:
                     entry = store._content(db, fact)
                     if not current_turn_only or entry["turn_id"] == self.turn_id:
-                        notes.append(entry)
+                        notes.append((record, entry))
         return notes
 
     def supervisor_handoff(self):
-        """Saved review outcomes, each with the question its result was extracted and reviewed for."""
-        questions = {"extraction-result:" + record.extraction_result_id: self.review_request(record)
-                     for record in self.records()}
+        """Saved review outcomes, each with the question its result was extracted and reviewed for.
+
+        Only results with a saved outcome are named, each from the record it belongs to.
+        """
         return {"status": self.status(), "review_outcomes": [
-            {**entry, "question": questions[entry["result_ref"]]} for entry in self.review_notes()]}
+            {**entry, "question": self.review_request(record)} for record, entry in self.noted_records()]}
 
     def render_review_notes(self, *, result_refs=None, current_turn_only=False):
         from .continuation import pending_message, removal_message

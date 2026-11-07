@@ -754,13 +754,13 @@ async def test_final_answer_gets_the_review_facts_and_is_followed_by_the_removal
                "review_counts": {"accepted": 41, "pending": 0, "retired_in_this_review": 1},
                "retired": [CRB_RETIRED]}
     result = SimpleNamespace(extraction_result_id="result-1")
+    note = {"result_ref": "extraction-result:result-1", "turn_id": "current-turn", "outcome": outcome}
     context = SimpleNamespace(
         turn_id="current-turn", resume=AsyncMock(),
         status=lambda: {"pending_count": 0, "results": []},
-        records=lambda: [result],
         review_request=lambda record: "What transgenic flies are used?" if record is result else None,
-        review_notes=lambda **kwargs: [{"result_ref": "extraction-result:result-1", "turn_id": "current-turn",
-                                        "outcome": outcome}],
+        noted_records=lambda **kwargs: [(result, note)],
+        review_notes=lambda **kwargs: [note],
     )
     context.supervisor_handoff = lambda: ChatReview.supervisor_handoff(context)
     context.render_review_notes = lambda **kwargs: ChatReview.render_review_notes(context, **kwargs)

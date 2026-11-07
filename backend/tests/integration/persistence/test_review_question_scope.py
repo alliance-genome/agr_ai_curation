@@ -25,30 +25,36 @@ TRANSGENIC = "What transgenic flies are used in the publication?"
 ALLELES = "What alleles were examined in the paper?"
 
 
-async def _extracting_turn(scope, monkeypatch, *, recorded=True):
-    """Turn 1 extracts generic records and saves them for review; its review does not run yet."""
+async def _receive(chat, scope):
+    """The turn's extraction of generic records, saved for review; review does not run yet."""
     from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
-    from src.lib.observability.cost_context import attach_agent_cost_identity
-    from src.lib.validation_review.chat import ChatReview
 
-    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
-    monkeypatch.setattr("src.lib.agent_studio.catalog_service.resolve_tools", lambda *args: [])
-    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
     pack = resolve_curation_domain_pack_by_id("generic")
     envelope = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id="generic",
         extracted_objects=[_object(index, [f"e{index}"]) for index in range(2)],
         metadata={"evidence_records": [_evidence(f"e{index}", f"{QUOTE} {index}") for index in range(2)]})
     envelope = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex, envelope=envelope,
                                           typed=envelope.model_dump(mode="json"), provenance={})
+    await chat.receive(envelope, pack, agent_key="fixture", adapter_key="fixture", tool_name="ask_fixture",
+        execution_receipt=None, context=ValidatorRuntimeContext(
+            user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=()))
+
+
+async def _extracting_turn(scope, monkeypatch, *, recorded=True):
+    """Turn 1 extracts generic records and saves them for review; its review does not run yet."""
+    from src.lib.observability.cost_context import attach_agent_cost_identity
+    from src.lib.validation_review.chat import ChatReview
+
+    install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
+    monkeypatch.setattr("src.lib.agent_studio.catalog_service.resolve_tools", lambda *args: [])
+    monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
     supervisor = Agent(name="Supervisor", model="gpt-6-astra", instructions="Policy")
     attach_agent_cost_identity(supervisor, {"agent_id": "supervisor", "agent_role": "supervisor"})
     turn_id = uuid4().hex
     if recorded:
         record_user_turn(owner_id=scope.owner_id, session_id=scope.session_id, turn_id=turn_id, question=TRANSGENIC)
     chat = ChatReview(scope.owner_id, scope.document_id, scope.session_id, turn_id, supervisor, (), TRANSGENIC)
-    await chat.receive(envelope, pack, agent_key="fixture", adapter_key="fixture", tool_name="ask_fixture",
-        execution_receipt=None, context=ValidatorRuntimeContext(
-            user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=()))
+    await _receive(chat, scope)
     return chat
 
 
@@ -112,6 +118,32 @@ async def test_a_result_whose_question_is_not_stored_is_refused_not_guessed(scop
     with pytest.raises(store.HistoryConflict, match=expected):
         await later.resume()
     assert inputs == [], "the reviewer is never asked a different turn's question"
+
+
+@pytest.mark.asyncio
+async def test_the_handoff_asks_only_for_the_questions_of_results_it_names(scope, monkeypatch):
+    """A finished earlier result with no saved outcome is not named, so its question is never needed."""
+    from src.lib.validation_review import decisions, reads
+    from tests.integration.persistence.test_review_packet import _decide, _handles
+
+    earlier = await _extracting_turn(scope, monkeypatch, recorded=False)
+    record, = earlier.records()
+    context = earlier.context(record)
+    packet = reads.review_packet(context.history_scope, context.episode_id)
+    # Decided outside chat review (as a curator's workspace decisions are): ready, no saved outcome.
+    decided = decisions.record_packet_decisions(context, checkpoint_request=earlier.checkpoint(record),
+        operation_id="decided-outside-chat", packet_id=packet["packet_id"],
+        packet_decisions=_decide([handle for entry in packet["records"] for handle in _handles(entry)]))
+    assert decided["ready"]
+    later = _later_turn(earlier, ALLELES)
+    await _receive(later, scope)
+    inputs = _reviewer_inputs(monkeypatch)
+    await later.resume()
+    assert [item["user_request"] for item in inputs] == [ALLELES], "only the unfinished later result is reviewed"
+    outcome, = later.supervisor_handoff()["review_outcomes"]
+    assert outcome["question"] == ALLELES
+    with pytest.raises(store.HistoryConflict, match="question that produced this saved result"):
+        later.review_request(record)
 
 
 def test_a_flow_step_reviews_its_record_against_its_own_step_query():
