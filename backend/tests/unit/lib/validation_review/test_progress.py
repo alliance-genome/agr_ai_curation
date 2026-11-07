@@ -283,6 +283,86 @@ def test_packet_line_describes_what_the_packet_returned(events, result, line):
     assert events[0]["type"] == "TOOL_COMPLETE"
 
 
+_ENTRY_IDS = ["cafa5538-3de0-48ba-a2c2-bdf1d8912198", "df85e2e1-0cb1-4d38-be3f-a8a4c494eee6",
+              "21910a7e-6dd4-435d-90cf-f5029516d901"]
+
+
+@pytest.mark.parametrize("result,finish", [
+    ({"state": "completed", "work_id": "work", "contributions": [{"fact_id": "a", "sha256": "1"},
+                                                                {"fact_id": "b", "sha256": "2"},
+                                                                {"fact_id": "c", "sha256": "3"}]},
+     "Supervisor review: re-check finished for 3 records"),
+    ({"state": "completed", "work_id": "work", "contributions": [{"fact_id": "a", "sha256": "1"}]},
+     "Supervisor review: re-check finished for 1 record"),
+    ({"state": "not_applied", "code": "extraction_attempts_exhausted", "resource": _ENTRY_IDS[2],
+      "applied": [], "targets": []},
+     "Supervisor review: no re-check left for 1 record"),
+    ({"state": "not_applied", "code": "fresh_extraction_required", "resource": None,
+      "applied": [], "targets": []},
+     "Supervisor review: re-check did not run"),
+    ({"state": "conflict", "code": "HistoryConflict", "applied": [],
+      "message": "Parent decision must concern every requested entry"},
+     "Supervisor review: re-check did not run"),
+    ({"state": "not_claimed", "work_id": "work"}, "Supervisor review: re-check did not run"),
+])
+def test_recheck_says_how_it_ended(events, result, finish):
+    from src.lib.validation_review.progress import ReviewLines
+
+    streaming_tools.set_live_event_list([])
+    try:
+        lines = ReviewLines("episode")
+        lines.start("request_targeted_extraction", {"entry_ids": _ENTRY_IDS})
+        lines.finish("request_targeted_extraction", result)
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == ["Supervisor review: asking the extraction agent to re-check 3 records", finish]
+    assert [event["type"] for event in events] == ["TOOL_START", "TOOL_COMPLETE"]
+    assert not any(entry_id in line for entry_id in _ENTRY_IDS for line in _lines(events))
+    assert events[1]["details"]["reviewPhase"] == "supervisor_review"
+    assert events[1]["details"].get("severity") == (None if result["state"] == "completed" else "warning")
+    assert "success" not in events[1]["details"]
+
+
+def test_a_stopped_recheck_shows_no_finish_line(events):
+    from src.lib.validation_review.progress import ReviewLines
+
+    streaming_tools.set_live_event_list([])
+    try:
+        lines = ReviewLines("episode")
+        lines.start("request_targeted_extraction", {"entry_ids": _ENTRY_IDS[:1]})
+        lines.finish("request_targeted_extraction", None)
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == ["Supervisor review: asking the extraction agent to re-check 1 record"]
+
+
+def test_each_of_two_overlapping_rechecks_reports_its_own_end(events):
+    from src.lib.validation_review.progress import ReviewLines
+
+    streaming_tools.set_live_event_list([])
+    try:
+        lines = ReviewLines("episode")
+        lines.start("request_targeted_extraction", {"entry_ids": _ENTRY_IDS[:2]})
+        lines.start("request_targeted_extraction", {"entry_ids": _ENTRY_IDS[2:]})
+        lines.finish("request_targeted_extraction", {"state": "not_applied", "applied": [], "targets": [],
+                                                     "code": "extraction_attempts_exhausted",
+                                                     "resource": _ENTRY_IDS[2]})
+        lines.finish("request_targeted_extraction", {"state": "completed", "work_id": "work",
+                                                     "contributions": [{}, {}]})
+        lines.start("request_targeted_extraction", {"entry_ids": _ENTRY_IDS[:1]})
+        lines.finish("request_targeted_extraction", {"state": "completed", "work_id": "next",
+                                                     "contributions": [{}]})
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == [
+        "Supervisor review: asking the extraction agent to re-check 2 records",
+        "Supervisor review: no re-check left for 1 record",
+        "Supervisor review: re-check finished for 2 records",
+        "Supervisor review: asking the extraction agent to re-check 1 record",
+        "Supervisor review: re-check finished for 1 record",
+    ]
+
+
 def test_every_review_tool_has_a_plain_language_line():
     from src.lib.validation_review.progress import _finish_line, _start_line
     from src.lib.validation_review.tools import runtime_tool_contract

@@ -84,6 +84,168 @@ async def test_followup_actual_runner_input_and_tools(phase_trace, monkeypatch):
     assert agent.instructions == "Domain extraction policy"
 
 
+def _recheck_phase(monkeypatch, evidence_records):
+    """A follow-up phase whose paper tools pause together, like one model turn."""
+    import asyncio
+
+    hold = SimpleNamespace(barrier=None)
+
+    async def turn():
+        await hold.barrier.wait()
+
+    @function_tool
+    async def read_section(section_name: str) -> str:
+        await turn()
+        return "section text"
+
+    @function_tool
+    async def read_subsection(parent_section: str, subsection: str) -> str:
+        await turn()
+        return "subsection text"
+
+    @function_tool
+    async def read_chunk(chunk_index: int) -> str:
+        await turn()
+        return "passage text"
+
+    @function_tool
+    async def search_document(query: str) -> str:
+        await turn()
+        return "matches"
+
+    @function_tool
+    async def record_evidence(entity: str) -> str:
+        await turn()
+        return "recorded"
+
+    @function_tool
+    async def list_recorded_evidence(limit: int = 100) -> str:
+        await turn()
+        return "listed"
+
+    @function_tool
+    async def get_recorded_evidence(evidence_record_id: str) -> str:
+        await turn()
+        return "detail"
+
+    @function_tool
+    async def read_supplied_history(fact_id: str, sha256: str, offset: int = 0) -> str:
+        await turn()
+        return "supplied context"
+
+    paper = [read_section, read_subsection, read_chunk, search_document, record_evidence,
+             list_recorded_evidence, get_recorded_evidence]
+    agent = Agent(name="Saved extractor", model="gpt-test", instructions="Domain extraction policy",
+                  model_settings=ModelSettings(), tools=paper)
+    monkeypatch.setattr("src.lib.packages.tool_roles.tool_metadata_by_name",
+                        lambda: {tool.name: {"paper_source": True} for tool in paper})
+    monkeypatch.setattr(extractor_phase, "create_history_reader", lambda *a, **kw: read_supplied_history)
+    monkeypatch.setattr("src.lib.openai_agents.evidence_summary.build_record_evidence_summary_record",
+                        lambda *, tool_name, tool_input, tool_output: (
+                            {"evidence_record_id": "evidence-1", "entity": json.loads(tool_input)["entity"]}
+                            if tool_name == "record_evidence" else None))
+    packet = {"history": {"records": [{"fact_id": "context", "sha256": "exact"}]}}
+    phase = extractor_phase.create_phase(agent, scope=HistoryScope("owner", "00000000-0000-0000-0000-000000000001",
+        "session"), artifact_id="artifact", packet=packet, packet_bytes=2048, evidence_records=evidence_records)
+    tools = {tool.name: tool for tool in phase.tools}
+
+    async def burst(*calls):
+        from agents.tool_context import ToolContext
+        hold.barrier = asyncio.Barrier(len(calls))
+        await asyncio.gather(*(
+            tools[name].on_invoke_tool(ToolContext(context=None, tool_name=name, tool_call_id=f"call-{index}",
+                                                   tool_arguments=json.dumps(arguments)), json.dumps(arguments))
+            for index, (name, arguments) in enumerate(calls)))
+    return burst
+
+
+@pytest.mark.asyncio
+async def test_recheck_paper_work_shows_progress_lines_in_the_live_review(phase_trace, monkeypatch):
+    """Tonight's first re-check (trace 58b3683e), one burst per model turn."""
+    from src.lib.openai_agents import streaming_tools
+    from src.lib.validation_review.progress import review_progress
+
+    events, evidence = [], []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
+    streaming_tools.set_live_event_list([])
+    try:
+        with review_progress("episode"):
+            burst = _recheck_phase(monkeypatch, evidence)
+            await burst(("read_supplied_history", {"fact_id": "context", "sha256": "exact"}))
+            await burst(("read_section", {"section_name": "Supporting Information"}),
+                        ("read_section", {"section_name": "Methods"}),
+                        ("search_document", {"query": "p13A p13A9 FRT82B transgenic mutation"}))
+            await burst(("read_subsection", {"parent_section": "Results and Discussion",
+                                             "subsection": "2.5. Linking Phenotype to Genotype"}),
+                        ("read_chunk", {"chunk_index": 23}), ("read_chunk", {"chunk_index": 33}),
+                        ("search_document", {"query": "transgenic transgene FRT FLP"}))
+            await burst(("search_document", {"query": "FRT"}), ("search_document", {"query": "transgenic"}),
+                        ("search_document", {"query": "p13A"}))
+            await burst(("record_evidence", {"entity": "crb p13A9 isoform-mutant characterization"}))
+            await burst(("list_recorded_evidence", {}))
+            await burst(("get_recorded_evidence", {"evidence_record_id": "evidence-749adde5a3969f5a"}))
+    finally:
+        streaming_tools.set_live_event_list(None)
+    lines = [event["details"] for event in events if event["type"] == "TOOL_START"]
+    assert [line["friendlyName"] for line in lines] == [
+        "Supervisor review: extraction agent reading the re-check request",
+        "Supervisor review: extraction agent reading Supporting Information",
+        "Supervisor review: extraction agent reading Methods",
+        "Supervisor review: extraction agent searching the paper",
+        "Supervisor review: extraction agent reading Results and Discussion: 2.5. Linking Phenotype to Genotype",
+        "Supervisor review: extraction agent reading a passage",
+        "Supervisor review: extraction agent searching the paper",
+        "Supervisor review: extraction agent searching the paper",
+        "Supervisor review: extraction agent saving evidence",
+        "Supervisor review: extraction agent checking saved evidence",
+        "Supervisor review: extraction agent checking saved evidence",
+    ]
+    assert {(line["reviewPhase"], line["episodeId"], line["agentDisplayName"]) for line in lines} == {
+        ("supervisor_review", "episode", "Supervisor review")}
+    assert all(line["isSpecialistInternal"] is True for line in lines)
+    assert not any("evidence-749adde5a3969f5a" in line["friendlyName"] or "toolArgs" in line for line in lines)
+    assert evidence == [{"evidence_record_id": "evidence-1", "entity": "crb p13A9 isoform-mutant characterization"}]
+
+
+@pytest.mark.asyncio
+async def test_recheck_lines_need_a_live_review(phase_trace, monkeypatch):
+    from src.lib.openai_agents import streaming_tools
+
+    events, evidence = [], []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
+    streaming_tools.set_live_event_list([])
+    try:
+        burst = _recheck_phase(monkeypatch, evidence)
+        await burst(("read_section", {"section_name": "Methods"}))
+        await burst(("record_evidence", {"entity": "crb p13A9"}))
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert events == []
+    assert evidence == [{"evidence_record_id": "evidence-1", "entity": "crb p13A9"}]
+
+
+def test_every_paper_tool_line_is_plain_language():
+    from src.lib.validation_review.progress import recheck_line
+
+    for tool, arguments in [("read_section", {}), ("read_section", {"section_name": " "}),
+                            ("read_subsection", {"parent_section": "Results"}), ("read_chunk", {"chunk_index": 4}),
+                            ("search_document", {"query": "crb"}), ("record_evidence", {}),
+                            ("attach_evidence_to_object", {}), ("detach_evidence_from_object", {}),
+                            ("discard_recorded_evidence", {}), ("update_recorded_evidence_metadata", {}),
+                            ("list_recorded_evidence", {}), ("get_recorded_evidence", {}),
+                            ("read_supplied_history", {}), ("read_figure_panel", {"panel": "2B"})]:
+        line = recheck_line(tool, json.dumps(arguments))
+        assert line.startswith("extraction agent "), tool
+        assert "_" not in line and tool not in line
+    assert recheck_line("read_section", "{not json") == "extraction agent reading a section"
+    assert recheck_line("read_subsection", json.dumps({"parent_section": "Results", "subsection": ""})) == (
+        "extraction agent reading Results")
+    assert recheck_line("read_subsection", json.dumps({"subsection": "Fly stocks"})) == (
+        "extraction agent reading Fly stocks")
+    assert recheck_line("read_section", json.dumps({"section_name": 4})) == "extraction agent reading a section"
+    assert recheck_line("read_figure_panel", "{}") == "extraction agent working with the paper"
+
+
 def test_resumed_extractor_reconstructs_original_context_and_reauthorizes(monkeypatch):
     from src.lib.validation_review.extractor_adapter import ExtractorAdapter
     from src.lib.validation_review.decisions import ReviewContext
