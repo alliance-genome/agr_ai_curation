@@ -35,7 +35,7 @@ def test_quick_check_reads_the_pinned_packet_without_writing_history(scope):
     records = quick_check.packet_records(body)
     assert [(record["record"], record["target_id"], record["kind"]) for record in records] == [
         (f"R{index + 1}", target, "object") for index, target in enumerate(_targets(envelope))]
-    text = quick_check.build_input("List the reagents.", quick_check.ordered(quick_check.asked_records(records), "forward"))
+    text = quick_check.build_input("List the reagents.", quick_check.ordered(quick_check.rendered_records(records), "forward"))
     assert text.count(f'evidence E1 (page 1, Appendix 1): "{QUOTE}"') == 3
     assert text.count(f'evidence E2 (page 1, Appendix 1): "{QUOTE} second"') == 1
     assert '  label: "VT0"' in text and "class_key" not in text

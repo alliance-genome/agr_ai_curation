@@ -312,10 +312,11 @@ record:
 
 Records with one of the platform's reference roles (`metadata_only`,
 `supporting_reference`, `validated_reference`) are sub-records and always route
-to the supervisor. They are never asked, so their values (an evidence-quote
-record's values can be a bare evidence handle) are not read or put in the input.
-Every other role is top-level; a top-level record whose values are an evidence
-handle is rendered as one `value` line, as the trial did. A record with an answer missing
+to the supervisor. As in the trial, they are rendered in the input and numbered
+with the other records, but they are never asked about. Every other role is
+top-level. A record whose values are an evidence handle (an evidence-quote record,
+whose whole payload is one saved evidence record) is rendered as one `value` line,
+as the trial did. A record with an answer missing
 or refused in either order is never skipped, and an object record without a scope
 answer is never removed; both are logged with the reason `unanswered`. If either
 order's call fails, the check is logged as failed with the surviving order's call
@@ -323,8 +324,8 @@ and answers, and no record gets an average, a skip or a removal.
 
 Deliberate differences from the trial's rules (`final_rules.py`):
 
-- sub-records are neither asked nor rendered in the input, and never skip (the trial
-  rendered and asked about every record in a group and let any role skip);
+- sub-records are rendered but never asked about, and never skip (the trial asked
+  about every record in a group and let any role skip);
 - claim records are never removed (the trial could remove them);
 - every resolved validator answer must be answered to skip (the trial ignored an
   absent validator score);

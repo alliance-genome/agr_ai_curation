@@ -253,10 +253,11 @@ def _record_values(values):
 
 
 def packet_records(body, definition=DEFINITION):
-    """Each numbered packet record; asked records also carry their quotes and decidable validator items.
+    """Each numbered packet record, with its values, quotes and validator items when its source is available.
 
-    Sub-records and records without their saved source are never asked, so
-    their values, evidence and validator items are not read.
+    As in the calibration trial, every record with its saved source is rendered
+    in the input and numbered with the others. Only top-level records are asked
+    about; sub-records get no questions.
     """
     evidence = body["evidence"]
     records = []
@@ -272,7 +273,7 @@ def packet_records(body, definition=DEFINITION):
         }
         record["kind"] = record_kind(record)
         record["asked"] = record["source_available"] and record["kind"] != "sub_record"
-        if record["asked"]:
+        if record["source_available"]:
             record.update(
                 values=_record_values(item["values"]),
                 evidence=[
@@ -293,9 +294,9 @@ def packet_records(body, definition=DEFINITION):
     return records
 
 
-def asked_records(records):
-    """Records the model is asked about: top-level records whose saved source is available."""
-    return [record for record in records if record["asked"]]
+def rendered_records(records):
+    """Records in the input: every record whose saved source is available, sub-records included."""
+    return [record for record in records if record["source_available"]]
 
 
 def ordered(records, order):
@@ -491,16 +492,20 @@ class PreparedCheck:
 
 
 def prepare_check(body, *, request, definition=DEFINITION):
-    """Records, inputs and questions for every order; no calls when no record can be asked."""
+    """Inputs and questions for every order; no calls when no record can be asked.
+
+    Every rendered record is numbered in the input; only top-level records get questions.
+    """
     records = packet_records(body, definition)
-    asked = asked_records(records)
+    rendered = rendered_records(records)
     calls = []
-    if asked:
+    if any(record["asked"] for record in rendered):
         for order in definition.orders:
-            labelled = ordered(asked, order)
+            labelled = ordered(rendered, order)
             calls.append(OrderCall(order, build_input(request, labelled, definition), tuple(
                 (question, record["record"], key, index)
-                for rid, record in labelled for question, key, index in record_questions(rid, record, definition))))
+                for rid, record in labelled if record["asked"]
+                for question, key, index in record_questions(rid, record, definition))))
     return PreparedCheck(tuple(records), tuple(calls))
 
 

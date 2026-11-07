@@ -128,7 +128,7 @@ def _source(metadata=None):
 
 
 def test_both_orders_render_exactly_as_the_trial_did():
-    records = quick_check.asked_records(quick_check.packet_records(_packet()))
+    records = quick_check.rendered_records(quick_check.packet_records(_packet()))
     golden = _golden()
     for order in (quick_check.FORWARD, quick_check.REVERSED):
         labelled = quick_check.ordered(records, order)
@@ -446,7 +446,7 @@ def test_record_without_its_saved_source_is_not_asked_and_stays_with_the_supervi
     packet["records"][2] = {"record": "R3", "target_id": "t3", "source_unavailable": "History conflict",
                             "review": [{"review": "record", "handle": "D3"}]}
     records = quick_check.packet_records(packet)
-    asked = quick_check.asked_records(records)
+    asked = quick_check.rendered_records(records)
     assert [record["record"] for record in asked] == ["R1", "R2", "R4", "R5", "R6"]
     assert [rid for rid, _ in quick_check.ordered(asked, "forward")] == ["R1", "R2", "R3", "R4", "R5"]
     assert quick_check.route(records[2], {}, RULES["balanced"]) == ("sol", "source_unavailable")
@@ -826,19 +826,39 @@ def _phenotype_packet():
     }
 
 
-def test_sub_records_are_never_read_or_rendered():
+def test_sub_records_are_rendered_and_numbered_but_never_asked():
     records = quick_check.packet_records(_phenotype_packet())
     assert [(record["record"], record["kind"], record["asked"]) for record in records] == [
         ("R1", "sub_record", False), ("R2", "sub_record", False), ("R3", "sub_record", False),
         ("R4", "sub_record", False), ("R5", "sub_record", False), ("R6", "object", True)]
-    assert all("values" not in record for record in records[:5])
+    assert records[3]["values"] == {"value": "E2"} and records[4]["values"] == {"value": "E3"}
     prepared = quick_check.prepare_check(_phenotype_packet(), request=QUESTION)
-    for call in prepared.calls:
-        assert "Record R1 (PhenotypeAnnotation, role curatable_unit):" in call.input
-        assert "EvidenceQuote" not in call.input and "PhenotypeSubject" not in call.input
-        assert "Record R2" not in call.input
-        assert [question["name"] for question, *_ in call.asked] == [
-            "scope_lenient__R1", "sup_neg__R1", "own_neg__R1", "val_entity__R1V1", "choice3__R1"]
+    forward, reverse = prepared.calls
+    assert forward.input.index("Record R1 (PhenotypeSubject, role validated_reference):") < forward.input.index(
+        'Record R4 (EvidenceQuote, role metadata_only):\n  value: "E2"') < forward.input.index(
+        "Record R6 (PhenotypeAnnotation, role curatable_unit):")
+    assert reverse.input.index("Record R1 (PhenotypeAnnotation, role curatable_unit):") < reverse.input.index(
+        "Record R6 (PhenotypeSubject, role validated_reference):")
+    assert [question["name"] for question, *_ in forward.asked] == [
+        "scope_lenient__R6", "sup_neg__R6", "own_neg__R6", "val_entity__R6V1", "choice3__R6"]
+    assert [question["name"] for question, *_ in reverse.asked] == [
+        "scope_lenient__R1", "sup_neg__R1", "own_neg__R1", "val_entity__R1V1", "choice3__R1"]
+    assert {label for _, label, *_ in forward.asked + reverse.asked} == {"R6"}
+
+
+def test_a_real_phenotype_group_renders_exactly_as_the_trial_did():
+    """Trial group dev_replay:C_doug_min15:77ce5554 (placeholder text), rendered by the trial's run_v2."""
+    packet = json.loads((FIXTURES / "quick_check_phenotype_packet.json").read_text())
+    golden = json.loads((FIXTURES / "quick_check_phenotype_golden.json").read_text())
+    records = quick_check.rendered_records(quick_check.packet_records(packet))
+    assert {record["kind"] for record in records} == {"object", "sub_record"}
+    for order in (quick_check.FORWARD, quick_check.REVERSED):
+        labelled = quick_check.ordered(records, order)
+        assert {rid: record["record"] for rid, record in labelled} == golden[order]["labels"]
+        assert quick_check.build_input(golden["request"], labelled) == golden[order]["input"]
+    prepared = quick_check.prepare_check(packet, request=golden["request"])
+    asked = {label for call in prepared.calls for _, label, *_ in call.asked}
+    assert asked == {record["record"] for record in records if record["type"] == "PhenotypeAnnotation"}
 
 
 def test_a_top_level_record_whose_values_are_an_evidence_handle_renders_like_the_trial():
