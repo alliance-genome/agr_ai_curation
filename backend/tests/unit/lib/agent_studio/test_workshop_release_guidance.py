@@ -196,6 +196,9 @@ def test_review_guidance_explains_rechecks_and_how_review_ends():
         "a curator's own reject, defer or acknowledged failure in the round stops reviewer runs for that record",
         'named "the extraction as a whole"',
         "a re-check also needs a saved extraction agent that supports re-checks and the record's original extraction",
+        "Records the review retired are named too, with the saved reason and the current record count",
+        "\"Review removed 1 record that doesn't answer the question: Crb-GFP (",
+        "the supervisor receives the same accepted, pending and retired counts before it answers",
     ):
         assert phrase in guide
     assert "a time or spending limit" not in guide
