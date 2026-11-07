@@ -51,10 +51,11 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
   so the planner corrects it in the same thread, and a failed query fails the step.
   Staging is refused while it plans (`ExtractionBuilderWorkspace.planning`).
 - **What the plan holds.** The planning message tells the planner to plan only records
-  that answer the request. Anything it will name only as a contrast or an exclusion (a
-  control, or a look-alike outside the requested category) goes in its final
-  explanation, not in items, even when the request or the supervisor's handoff asks it to
-  distinguish them. This is guidance to the model; code never reads labels or notes to
+  that answer the request under its instructions. Anything it will name only as a
+  contrast or an exclusion (a control or other item outside the requested category)
+  goes in its final explanation, not in items, even when the request or the
+  supervisor's handoff asks it to distinguish them. An item inside the category, such as
+  a transgenic line used as a control when transgenic lines are requested, is a record. This is guidance to the model; code never reads labels or notes to
   decide what belongs in the plan.
 - **Code.** Counts the plan, slices it in order into balanced contiguous batches, reads each
   cited chunk once through the agent's own `read_chunk` tool and renders it exactly as the

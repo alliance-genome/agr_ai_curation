@@ -95,12 +95,12 @@ PLANNING_INSTRUCTIONS = (
     "- items: one entry per record you would stage, in order, each with a short label "
     "that identifies the record and the chunk_index values of the passages that hold "
     "its evidence.\n"
-    "Plan only records that answer the request, include every one of them, and "
-    "nothing else. Anything you will name only as a contrast or an exclusion, such as "
-    "a control or a look-alike outside the requested category, goes in your final "
-    "explanation, not in items, even when you are asked to distinguish it. Parallel "
-    "writers will read the cited chunks and fill in every field. If your instructions "
-    "call for no records from this paper, submit an empty items list."
+    "Plan only records that answer the request under your instructions, include every "
+    "one of them, and nothing else. Anything you will name only as a contrast or an "
+    "exclusion, such as a control or other item outside the requested category, goes in "
+    "your final explanation, not in items, even when you are asked to distinguish it. "
+    "Parallel writers will read the cited chunks and fill in every field. If your "
+    "instructions call for no records from this paper, submit an empty items list."
 )
 
 

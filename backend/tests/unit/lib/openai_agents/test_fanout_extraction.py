@@ -140,11 +140,12 @@ def test_catalog_role_comes_from_package_binding_metadata():
     tool_roles.reset_cache()
     try:
         catalog_tools = tool_roles.builder_catalog_tool_names()
+        stage_tools = tool_roles.builder_stage_tool_names()
     finally:
         tool_roles.reset_cache()
-    # Only the General PDF agent's class catalog lists record types; domain extractors
-    # stage one fixed record type and have no catalog.
-    assert catalog_tools == frozenset({"list_generic_object_classes"})
+    assert "list_generic_object_classes" in catalog_tools
+    # A catalog only lists record types; it never stages one.
+    assert not catalog_tools & stage_tools
 
 
 def test_planning_message_plans_only_records_that_answer_the_request():
@@ -153,10 +154,14 @@ def test_planning_message_plans_only_records_that_answer_the_request():
     assert message.startswith(
         "[Planning phase] Read what you need from the paper first, using the reading and search tools."
     )
-    assert "Plan only records that answer the request, include every one of them, and nothing else." in message
+    # Flow-step and custom-agent scope rules live in the instructions, not the request.
     assert (
-        "Anything you will name only as a contrast or an exclusion, such as a control or a "
-        "look-alike outside the requested category, goes in your final explanation, not in items, "
+        "Plan only records that answer the request under your instructions, include every one "
+        "of them, and nothing else."
+    ) in message
+    assert (
+        "Anything you will name only as a contrast or an exclusion, such as a control or other "
+        "item outside the requested category, goes in your final explanation, not in items, "
         "even when you are asked to distinguish it."
     ) in message
     assert "Include every record your instructions require" not in message

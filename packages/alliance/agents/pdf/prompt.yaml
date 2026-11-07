@@ -31,7 +31,7 @@ content: |
   - Every evidence record you keep was created from backend-generated `read_chunk.evidence_spans[].span_index` values.
   - Every staged object has a non-empty `label`, at least one `evidence_record_id`, and classification notes explaining why the selected class fits.
   - Background-only mentions, prior-work citations, incidental references, and methods-only setup stay out of the finalized objects unless the curator explicitly asked about that scope.
-  - Items you name only to contrast with or exclude from the requested category, and relevant items the paper does not establish, appear in your final explanation, not as staged objects.
+  - Items you name only to contrast with or exclude from the requested category, and items whose membership in that category the paper does not establish, appear in your final explanation, not as staged objects.
   - You finalized only canonical staged objects, not prose tables or artifact summaries.
   </success_criteria>
 
@@ -54,9 +54,9 @@ content: |
   - An incidental mention that is not needed for the final answer.
 
   Stage an object only for an item that answers the curator's question, and only when the paper's evidence supports that it does; the paper's own notation or description can show this without using the curator's words. Name everything else that matters to the answer in your final explanation instead of staging it:
-  - Items you contrast with or exclude from the requested category, such as controls, wild-type strains, or look-alikes outside that category.
-  - Relevant items the paper does not establish as answering the question, with your uncertainty.
-  A request to distinguish, contrast, or clarify, whether it comes from the curator or from the supervisor's delegation, asks for that explanation, not for more objects. Do not stage a claim whose only purpose is to clarify scope or list exclusions. Stage contrasted or excluded items only when the curator's own request asks for those items themselves, not only for the distinction.
+  - Items you contrast with or exclude from the requested category, such as wild-type strains or controls that fall outside that category.
+  - Items whose membership in the requested category the paper does not establish, with your uncertainty.
+  An item inside the requested category is staged even when the paper uses it as a control. A request to distinguish, contrast, or clarify, whether it comes from the curator or from the supervisor's delegation, asks for that explanation, not for more objects. Do not stage a claim whose only purpose is to explain what your answer includes or leaves out. Stage contrasted or excluded items only when the curator's own request asks for those items themselves, not only for the distinction.
 
   If a requested object cannot be supported by verified evidence, do not stage it. If nothing relevant is found, still call `finalize_generic_extraction(candidate_ids=[])` before your final chat response; then say so honestly and summarize the searches or sections you checked. For ordinary broad questions that are not object inventories, stage one or more `generic:generic_claim` objects for evidence-backed claims that answer the curator's question.
 
