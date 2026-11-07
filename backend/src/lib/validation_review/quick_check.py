@@ -383,7 +383,7 @@ def route(record, scores, rule, definition=DEFINITION):
     if record["kind"] == "object" and scope is not None and scope < rule.remove_scope_below:
         return "remove", None
     if rule.skip_at_least is None:
-        return "sol", None
+        return "sol", "unanswered" if record["kind"] == "object" and scope is None else None
     needed = [(key, floor) for key, floor in rule.skip_at_least
               if not (key == definition.validator_key and not validator_indexes(record))]
     if any(key not in scores for key, _ in needed):
@@ -500,11 +500,11 @@ async def _ask_order(client, call, cache_key):
 
 
 async def run_check(prepared, client, *, cache_key):
-    """Send every order's call at the same time; one failed call fails the check."""
+    """Send every order's call at the same time; each outcome is its result or its failure."""
     outcomes = await asyncio.gather(*(_ask_order(client, call, cache_key) for call in prepared.calls),
                                     return_exceptions=True)
     for outcome in outcomes:
-        if isinstance(outcome, BaseException):
+        if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
             raise outcome
     return outcomes
 
@@ -519,11 +519,12 @@ def _parse_answers(call, payloads):
     answers, refused, missing = {}, [], []
     for question, label, key, index in call.asked:
         answer = returned.get(question["name"])
+        unanswered = {"order": call.order, "record": label, "question": key, "validator": index}
         if answer is None:
-            missing.append(f"{call.order}:{question['name']}")
+            missing.append(unanswered)
             continue
         if answer.get("type") == "refusal":
-            refused.append(f"{call.order}:{question['name']}")
+            refused.append(unanswered)
             continue
         slot = answers.setdefault(label, {})
         if question["type"] == "choice":
@@ -563,10 +564,25 @@ def _rules(definition):
 
 
 def summarize(prepared, outcomes, definition=DEFINITION):
-    """Average the orders, apply every rule and shape the logged result."""
-    calls, by_order, refused, missing = [], {}, [], []
-    for call, (summary, payloads) in zip(prepared.calls, outcomes):
-        answers, order_refused, order_missing = _parse_answers(call, payloads)
+    """Average the orders, apply every rule and shape the logged result.
+
+    A failed order keeps the other order's call and answers in the result, but
+    the check is failed and no record gets an averaged score or a skip or
+    removal.
+    """
+    calls, by_order, refused, missing, failures = [], {}, [], [], []
+    for call, outcome in zip(prepared.calls, outcomes):
+        if isinstance(outcome, Exception):
+            failures.append(outcome)
+            calls.append({"order": call.order, "questions": len(call.asked), "error": _error_summary(outcome)})
+            continue
+        summary, payloads = outcome
+        try:
+            answers, order_refused, order_missing = _parse_answers(call, payloads)
+        except QuickCheckResponseError as error:
+            failures.append(error)
+            calls.append({**summary, "error": _error_summary(error)})
+            continue
         calls.append(summary)
         by_order[call.order] = answers
         refused += order_refused
@@ -576,7 +592,8 @@ def summarize(prepared, outcomes, definition=DEFINITION):
     for record in prepared.records:
         label = record["record"]
         answers = {order: by_order[order].get(label, {}) for order in by_order}
-        scores = oriented_scores(answers, record, definition) if record["source_available"] else {}
+        scores = (oriented_scores(answers, record, definition)
+                  if record["source_available"] and not failures else {})
         row = {"record": label, "target_id": record["target_id"], "type": record["type"], "role": record["role"],
                "kind": record["kind"], "routes": {}}
         reasons = {}
@@ -591,20 +608,24 @@ def summarize(prepared, outcomes, definition=DEFINITION):
         if record["source_available"]:
             for order in by_order:
                 row[order] = _logged(answers[order], record)
-            row["average"] = _rounded(scores)
+            if not failures:
+                row["average"] = _rounded(scores)
         rows.append(row)
-    return {
-        "status": "partial" if refused or missing else "completed",
+    result = {
+        "status": "failed" if failures else "partial" if refused or missing else "completed",
         "record_count": len(prepared.records),
         "asked_record_count": sum(1 for record in prepared.records if record["source_available"]),
         "rules": _rules(definition),
         "calls": calls,
-        "usage": _sum_usage([call["usage"] for call in calls]),
+        "usage": _sum_usage([call["usage"] for call in calls if "usage" in call]),
         "routes": routes,
         "records": rows,
         "refused": refused,
         "missing": missing,
     }
+    if failures:
+        result["error"] = _error_summary(failures[0])
+    return result
 
 
 def _load_packet(history_scope, episode_id, packet_id):
@@ -723,6 +744,9 @@ async def _observe(context, packet_id, scope):
                 async with client:
                     outcomes = await run_check(prepared, client, cache_key=packet_id)
                 payload.update(await asyncio.to_thread(summarize, prepared, outcomes))
+                for outcome in outcomes:
+                    if isinstance(outcome, Exception) and not _is_provider_failure(outcome):
+                        _report_unexpected(outcome)
         except Exception as error:
             payload.update(status="failed", error=_error_summary(error))
             if not _is_provider_failure(error):

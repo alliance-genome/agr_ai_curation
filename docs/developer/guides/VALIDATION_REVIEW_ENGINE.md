@@ -302,16 +302,30 @@ each resolved validator answer, same entity and species. Code turns the negated
 questions around (1 - p) and applies three rules to name a would-be route per
 record:
 
-- removal only: remove a top-level object record whose averaged scope is below 0.5;
+- removal only: remove a top-level object record whose averaged scope is below 0.5.
+  The 0.5 comes from the trial's averaged-scope analysis (`order_avg_test`,
+  "avg remove<0.5"), not from its forward-only `A_remove_only` rule, which used 0.3;
 - balanced: remove below 0.3; skip the supervisor when scope is at least 0.8,
   1 - missing-identity at least 0.8, 1 - not-own-study at least 0.9 and every
   validator answer at least 0.8;
 - strict: balanced, and the accept choice at least 0.5 to skip.
 
-Claim records are never removed. Records with one of the platform's reference
-roles (`metadata_only`, `supporting_reference`, `validated_reference`) are
-sub-records and always route to the supervisor, and so does any record with an
-answer missing or refused in either order. Every other role is top-level.
+Records with one of the platform's reference roles (`metadata_only`,
+`supporting_reference`, `validated_reference`) are sub-records and always route
+to the supervisor. Every other role is top-level. A record with an answer missing
+or refused in either order is never skipped, and an object record without a scope
+answer is never removed; both are logged with the reason `unanswered`. If either
+order's call fails, the check is logged as failed with the surviving order's call
+and answers, and no record gets an average, a skip or a removal.
+
+Deliberate differences from the trial's rules (`final_rules.py`):
+
+- sub-records never skip (the trial let any role skip);
+- claim records are never removed (the trial could remove them);
+- every resolved validator answer must be answered to skip (the trial ignored an
+  absent validator score);
+- every score is the average of the two record orders (the trial's skip rules used
+  forward-order scores).
 
 Nothing is applied. Both orders' answers, the averages, the route under each rule,
 and each call's latency and token counts are written as a
@@ -327,11 +341,13 @@ per-deployment change would make the shadow data unusable for that. The mode,
 request timeout and retries are environment settings, validated at backend
 startup. The default mode is `off`, which makes no call.
 
-Calibration status of `v6-shadow`: the trial measured the lenient scope question
-in both record orders, so the averaged scope and the removal thresholds are
-calibrated. The negated support, negated own-study and choice questions were
-measured in forward order only, so their two-order averages, and the skip
-thresholds applied to them, are first measured by this shadow data.
+Calibration status of `v6-shadow`: only the averaged lenient scope was analysed
+across both record orders, so the averaged scope and the removal thresholds are
+calibrated. The choice and validator (same entity and species) questions were
+asked in reversed order, but their averages were never evaluated. The negated
+support and negated own-study questions were never asked in reversed order. The
+skip thresholds come from forward-only scores. Their two-order averages are first
+measured by this shadow data.
 
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when

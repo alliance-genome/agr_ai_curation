@@ -254,7 +254,7 @@ def test_an_answer_missing_in_either_order_never_removes_or_skips():
     forward = {**GOOD, "scope_lenient": 0.0, "val_entity": {1: 1.0}}
     reverse = {key: value for key, value in forward.items() if key != "scope_lenient"}
     assert _routes(record, _orders(forward, reverse)) == {
-        "removal_only": ("sol", None), "balanced": ("sol", "unanswered"), "strict": ("sol", "unanswered")}
+        "removal_only": ("sol", "unanswered"), "balanced": ("sol", "unanswered"), "strict": ("sol", "unanswered")}
     reverse = {**GOOD, "val_entity": {}}
     assert _routes(record, _orders({**GOOD, "val_entity": {1: 1.0}}, reverse))["balanced"] == ("sol", "unanswered")
 
@@ -354,7 +354,8 @@ async def test_refused_questions_leave_the_record_with_the_supervisor(decisions)
     decisions.respond = respond
     result = await _check(decisions, _packet())
     assert result["status"] == "partial"
-    assert result["refused"] == ["reversed:sup_neg__R6"] and result["missing"] == []
+    assert result["refused"] == [{"order": "reversed", "record": "R1", "question": "sup_neg", "validator": None}]
+    assert result["missing"] == []
     r1 = next(row for row in result["records"] if row["record"] == "R1")
     assert r1["routes"] == {"removal_only": "sol", "balanced": "sol", "strict": "sol"}
     assert r1["route_reasons"] == {"balanced": "unanswered", "strict": "unanswered"}
@@ -362,17 +363,68 @@ async def test_refused_questions_leave_the_record_with_the_supervisor(decisions)
 
 
 @pytest.mark.asyncio
-async def test_one_failed_order_fails_the_check(decisions):
+async def test_one_failed_order_fails_the_check_and_keeps_the_other_order(decisions):
     def respond(body):
         if body["prompt_cache_key"].endswith(":reversed"):
             return httpx.Response(429, json={"error": {"message": "slow down", "code": "rate_limit_exceeded"}})
         return {"answers": _answers(body["questions"]), "usage": {"input_tokens": 10}}
 
     decisions.respond = respond
-    with pytest.raises(Exception) as raised:
-        await _check(decisions, _packet())
-    assert type(raised.value).__name__ == "RateLimitError"
+    result = await _check(decisions, _packet())
     assert len(decisions.requests) == 2
+    assert result["status"] == "failed"
+    error = {"type": "RateLimitError", "status_code": 429, "code": "rate_limit_exceeded"}
+    assert result["error"] == error
+    forward, reverse = result["calls"]
+    assert forward["order"] == "forward" and forward["usage"]["input"] == 10 and "error" not in forward
+    assert reverse == {"order": "reversed", "questions": 25, "error": error}
+    assert result["usage"]["input"] == 10
+    r1 = result["records"][0]
+    assert r1["forward"]["scope_lenient"] == 1.0 and r1["forward"]["val_entity"] == {"R1V2": 1.0}
+    assert "reversed" not in r1 and "average" not in r1
+    assert r1["routes"] == {"removal_only": "sol", "balanced": "sol", "strict": "sol"}
+    assert r1["route_reasons"] == {"removal_only": "unanswered", "balanced": "unanswered", "strict": "unanswered"}
+    assert result["routes"]["balanced"] == {"skip": 0, "remove": 0, "sol": 6}
+
+
+@pytest.mark.asyncio
+async def test_missing_answers_name_the_packet_record_and_question(decisions):
+    def respond(body):
+        answers = _answers(body["questions"])
+        if body["prompt_cache_key"].endswith(":reversed"):  # packet R1 is R6 in this order
+            answers = [answer for answer in answers if answer["name"] != "val_entity__R6V2"]
+        return {"answers": answers, "usage": {"input_tokens": 10}}
+
+    decisions.respond = respond
+    result = await _check(decisions, _packet())
+    assert result["status"] == "partial"
+    assert result["missing"] == [{"order": "reversed", "record": "R1", "question": "val_entity", "validator": 2}]
+    r1 = result["records"][0]
+    assert r1["routes"] == {"removal_only": "sol", "balanced": "sol", "strict": "sol"}
+    assert r1["route_reasons"] == {"balanced": "unanswered", "strict": "unanswered"}
+
+
+@pytest.mark.asyncio
+async def test_a_defect_in_one_order_is_reported_and_the_other_kept(decisions, captured, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    ask_order = quick_check._ask_order
+
+    async def broken_reverse(client, call, cache_key):
+        if call.order == "reversed":
+            raise TypeError("defect")
+        return await ask_order(client, call, cache_key)
+
+    monkeypatch.setattr(quick_check, "_ask_order", broken_reverse)
+    with quick_check.review_scope(QUESTION, _source()):
+        quick_check.packet_pinned(_context(), PAGE)
+        await _drain()
+    [event] = captured.events
+    payload = event["output_summary"]
+    assert payload["status"] == "failed" and payload["error"] == {"type": "TypeError"}
+    assert [call.get("error") for call in payload["calls"]] == [None, {"type": "TypeError"}]
+    [(exc, _)] = captured.reports
+    assert str(exc) == "Validation review quick check failed (TypeError)"
 
 
 @pytest.mark.asyncio
@@ -472,8 +524,12 @@ async def test_provider_failure_is_logged_without_effect(decisions, captured, mo
     [event] = captured.events
     payload = event["output_summary"]
     assert payload["status"] == "failed"
-    assert payload["error"] == {"type": "InternalServerError", "status_code": 503, "code": "server_overloaded"}
-    assert "records" not in payload and "routes" not in payload
+    error = {"type": "InternalServerError", "status_code": 503, "code": "server_overloaded"}
+    assert payload["error"] == error
+    assert [call["error"] for call in payload["calls"]] == [error, error]
+    assert payload["usage"] is None
+    assert all(set(row) & {"forward", "reversed", "average"} == set() for row in payload["records"])
+    assert payload["routes"]["balanced"] == {"skip": 0, "remove": 0, "sol": 6}
     assert captured.reports == []
     assert any(record.message == "Validation review quick check failed" for record in caplog.records)
 
