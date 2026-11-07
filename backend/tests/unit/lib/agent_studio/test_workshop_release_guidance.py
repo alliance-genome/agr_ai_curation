@@ -143,6 +143,11 @@ def _alliance_guide(topic):
     return result["content"]
 
 
+def test_fanout_guide_says_in_category_controls_are_planned():
+    guide = _alliance_guide("extraction_fanout")
+    assert "an item inside the requested category is planned even when the paper uses it as a control" in guide
+
+
 def test_extraction_guidance_keeps_contrasts_in_the_written_answer():
     guide = _alliance_guide("domain_envelopes")
     for phrase in (
