@@ -14,8 +14,50 @@ from src.schemas.domain_envelope import DomainEnvelope
 from . import selections, store
 
 
+def rebuilt_finding(finding):
+    """A finding the selected rebuild derives again from immutable history.
+
+    Validator answers (selected or pending review) and review assessments are
+    projected onto the source by ``rebuild_selected_envelope``, including the
+    findings anchored on validated reference objects that answers contribute.
+    Read from structural markers only: the saved answer reference, the pending
+    review marker and the assessment code.
+    """
+    from .assessments import FINDING_CODE
+
+    return (bool(finding.details.get("validation_result_ref"))
+            or finding.details.get("machine_review") == "pending"
+            or finding.code == FINDING_CODE)
+
+
+def without_records(envelope, target_ids):
+    """Remove whole records and the findings that belong to them.
+
+    A finding belongs to the record its object or field reference names, by the
+    envelope's own reference keys, so it leaves with that record.
+    """
+    removed = {key for obj in envelope.extracted_objects
+               if obj.metadata["validation_history"]["target_id"] in target_ids
+               for key in obj.ref_keys()}
+
+    def owned(finding):
+        refs = (finding.object_ref, finding.field_ref.object_ref if finding.field_ref is not None else None)
+        return any(ref is not None and ref.ref_key() in removed for ref in refs)
+
+    return envelope.model_copy(update={
+        "extracted_objects": [obj for obj in envelope.extracted_objects
+                              if obj.metadata["validation_history"]["target_id"] not in target_ids],
+        "validation_findings": [finding for finding in envelope.validation_findings if not owned(finding)],
+    })
+
+
 def source_envelope_in_transaction(db, scope, artifact_id, envelope):
-    """Recover source/curator values by stable IDs, including reordered lists."""
+    """Recover source/curator values by stable IDs, including reordered lists.
+
+    The source holds source values and the findings it owns. Validator-contributed
+    objects and every rebuilt finding (see ``rebuilt_finding``) are left out; the
+    selected rebuild projects them again from history.
+    """
     artifact = store._artifact(db, artifact_id, scope)
     store.prime_artifact(db, artifact_id)
     ref = envelope.metadata.get("validation_history")
@@ -144,7 +186,9 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
                     raise store.HistoryConflict("Selected extractor evidence has conflicting provenance")
                 if not any(item.get("evidence_record_id") == record["evidence_record_id"] for item in records):
                     records.append(resolved)
-    return envelope.model_copy(update={"extracted_objects": objects, "metadata": metadata})
+    findings = [finding for finding in envelope.validation_findings if not rebuilt_finding(finding)]
+    return envelope.model_copy(update={"extracted_objects": objects, "validation_findings": findings,
+                                       "metadata": metadata})
 
 
 def read_dispatch_source(binding, envelope):
@@ -253,13 +297,9 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
     from src.schemas.domain_validator import DomainValidationRequest
     from .result_schema import restore_result_schema
 
+    # The source already leaves out every finding this rebuild projects again.
     working = source_envelope_in_transaction(db, scope, artifact_id, envelope)
-    working = working.model_copy(update={"validation_findings": [
-        finding for finding in working.validation_findings
-        if not finding.details.get("validation_result_ref")
-        and finding.details.get("machine_review") != "pending"
-    ]})
-    registry = profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)
+    registry =profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)
     matches = registry.match_bindings(working)
     grouped = {}
     for unit in manifest["units"]:

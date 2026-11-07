@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from src.lib.validation_history import selections, store
 from src.lib.validation_history.curator_authority import active_overlays
+from src.lib.validation_history.projection import without_records
 from src.lib.validation_history.record_lifecycle import RETIRING_DECISIONS, retired_records
 from src.models.sql.validation_history import ValidationFact
 from src.schemas.validation_followup import FollowupEntryResult
@@ -150,9 +151,7 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
             operation_id="record-retire:" + operation_id, actor=identity["actor"], entries=[{
                 "target_id": root.id, "expected_version": state["version"],
                 "action": "retire", "reason": reason}])
-        updated = source_envelope.model_copy(deep=True)
-        updated.extracted_objects = [obj for obj in updated.extracted_objects
-            if obj.metadata["validation_history"]["target_id"] != root.id]
+        updated = without_records(source_envelope.model_copy(deep=True), {root.id})
         after = rebuild_inputs(db, updated)
         changed = source_inputs.update(db, artifact_id, operation_id=operation_id,
             before=before, after=after, selection_id=fact.id)
@@ -252,8 +251,7 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
         entries.append({"target_id": root.id, "action": "retire", "reason": record["reason"],
                         "expected_version": store._current(db, artifact_id, root.id)["version"]
                         if pinned is None else pinned})
-        updated.extracted_objects = [obj for obj in updated.extracted_objects
-                                     if obj.metadata["validation_history"]["target_id"] != root.id]
+    updated = without_records(updated, {fact.target_id for fact in facts})
     store.apply_decisions_in_transaction(db, context.history_scope, artifact_id,
         operation_id="record-retire:" + operation_id, actor=actor, entries=entries)
     after = rebuild_inputs(db, updated)
