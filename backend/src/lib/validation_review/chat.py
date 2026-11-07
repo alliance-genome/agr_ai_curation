@@ -27,6 +27,13 @@ ACTIVE_CHAT_REVIEW: ContextVar[ChatReview | None] = ContextVar(
     "chat_validation_review", default=None
 )
 
+# Plain curator wording for stop reasons whose code name would read as internals.
+# Every other stop reason reads as its own words.
+PAUSE_WORDING = {
+    admission.SOURCE_PROJECTION_INVALID:
+        "a system error stopped a save before it changed anything, and it was reported",
+}
+
 
 class DirectChatAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -683,7 +690,7 @@ class ChatReview:
             elif reason and reason != "complete":
                 notes.append(
                     "Review paused: "
-                    + reason.replace("_", " ")
+                    + PAUSE_WORDING.get(reason, reason.replace("_", " "))
                     + ". Saved results and history are retained."
                 )
         return "\n\nReviewer's notes:\n" + "\n\n".join(notes) if notes else ""

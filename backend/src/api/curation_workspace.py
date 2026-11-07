@@ -1136,10 +1136,19 @@ async def get_candidate_validation_history_detail(
 
 
 
+REVIEW_SYSTEM_ERROR_DETAIL = ("A system error stopped this save before it changed anything, and it was reported. "
+                              "Your saved results are unchanged.")
+
+
 def _workspace_review_error(error):
     from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
+    from src.lib.validation_review.admission import SOURCE_PROJECTION_INVALID, ReviewStopped
     if isinstance(error, HistoryAccessError):
         raise HTTPException(403, 'Workspace review unavailable') from error
+    if isinstance(error, ReviewStopped) and error.reason == SOURCE_PROJECTION_INVALID:
+        # A system error, not a conflict to refresh; it was logged and reported where
+        # it was raised, and its code name is not curator text.
+        raise HTTPException(500, REVIEW_SYSTEM_ERROR_DETAIL) from error
     if isinstance(error, HistoryConflict):
         raise HTTPException(409, str(error)) from error
     if isinstance(error, ValueError):

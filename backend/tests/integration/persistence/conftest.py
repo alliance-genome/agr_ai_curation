@@ -78,6 +78,65 @@ def historical_migration_database(monkeypatch):
         admin.dispose()
 
 
+@pytest.fixture(autouse=True)
+def source_envelope_guard(monkeypatch):
+    """Every source a save builds, and every envelope it publishes, is a valid DomainEnvelope.
+
+    Production trace 1b937f7b failed because the selection source kept findings on
+    validated references it had dropped; no test ever validated that intermediate
+    envelope. This guard observes only: it wraps the source projection and the
+    publish callback of each source-changing save, records any envelope that fails
+    validation, and fails the test at teardown. Code under test sees the same
+    values and exceptions as without it. A test that deliberately builds an invalid
+    source asserts on ``violations`` and clears them.
+    """
+    from importlib import import_module
+    from pydantic import ValidationError
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    violations = []
+
+    def check(stage, envelope):
+        try:
+            DomainEnvelope.model_validate(envelope.model_dump(mode="json"))
+        except ValidationError as error:
+            violations.append((stage, str(error)))
+
+    projection = import_module("src.lib.validation_history.projection")
+    build_source = projection.source_envelope_in_transaction
+
+    def guarded_source(*args, **kwargs):
+        source = build_source(*args, **kwargs)
+        check("source_envelope_in_transaction output", source)
+        return source
+
+    monkeypatch.setattr(projection, "source_envelope_in_transaction", guarded_source)
+
+    def guarded_publish(publish):
+        def publish_checked(db, envelope, *args):
+            check("edited envelope before publish", envelope)
+            return publish(db, envelope, *args)
+        return publish_checked
+
+    for module_name, name in (
+        ("src.lib.validation_review.record_retirement", "retire_in_transaction"),
+        ("src.lib.validation_review.record_retirement", "decide_in_transaction"),
+        ("src.lib.validation_review.record_retirement", "restore_in_transaction"),
+        ("src.lib.validation_review.source_selection", "select_in_transaction"),
+    ):
+        module = import_module(module_name)
+        save = getattr(module, name)
+
+        def guarded_save(*args, _save=save, **kwargs):
+            return _save(*args, **{**kwargs, "publish": guarded_publish(kwargs["publish"])})
+
+        monkeypatch.setattr(module, name, guarded_save)
+    yield violations
+    if violations:
+        pytest.fail("Invalid envelope produced during the test:\n" + "\n".join(
+            f"- {stage}: {message}" for stage, message in violations), pytrace=False)
+
+
 @pytest.fixture(scope="session")
 def weaviate_url() -> str:
     """Build the Weaviate URL from environment."""

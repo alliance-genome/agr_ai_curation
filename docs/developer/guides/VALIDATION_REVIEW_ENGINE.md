@@ -62,6 +62,10 @@ activation requires representative calibration and cost-policy approval in ALL-1
 Tool input and compare-and-set conflicts return structured, atomically unapplied
 results for the reviewer to correct. Per-target retry limits do not stop unrelated
 review decisions. Episode-wide deadline, tool and turn stops still stop the run. The supervisor's final prose cannot override ledger readiness.
+A source a save builds or publishes that fails envelope validation is a system
+error, not a conflict: it stops the run with `source_projection_invalid` at the
+first failure, with an ERROR log and one operational-failure report (see Source
+envelope integrity in `VALIDATION_HISTORY.md`).
 
 ## Unknown completion and recovery
 
@@ -556,8 +560,10 @@ record and is named "the extraction as a whole". Chat saves each record's worksp
 with the outcome when review stops and renders the saved text only, for example
 "Review finished with 1 record still pending: crb p13A (the reviewer did not
 accept it, and no re-check is left)." Operational stops (cancelled, expired,
-superseded, uncertain execution, retired document, unsupported state) carry no
-`pending` list and keep the "Review paused" notice.
+superseded, uncertain execution, retired document, unsupported state, a system
+error that stopped a save) carry no `pending` list and keep the "Review paused"
+notice; a reason whose code name reads as internals has plain wording
+(`chat.PAUSE_WORDING`).
 
 Direct extractor follow-ups first use the resolved supervisor to interpret the
 curator's intent. Continuing saved review does not invoke extraction. Only an

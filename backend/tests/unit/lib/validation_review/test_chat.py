@@ -9,7 +9,7 @@ from src.lib.observability.cost_context import (
     get_agent_cost_identity,
 )
 from src.lib.validation_review.decisions import ReviewContext
-from src.lib.validation_history.store import HistoryScope
+from src.lib.validation_history.store import HistoryConflict, HistoryScope
 
 
 def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_tools(
@@ -580,6 +580,34 @@ def test_finished_review_names_pending_records_instead_of_a_bare_stop_code():
         "and no re-check is left). Saved results and history are retained.\n\n"
         "Review paused: cancelled. Saved results and history are retained.")
     assert "extraction attempts exhausted" not in notes
+
+
+def test_a_system_error_stop_reads_as_plain_words_not_its_code():
+    from src.lib.validation_review.chat import ChatReview
+
+    context = SimpleNamespace(review_notes=lambda **kwargs: [
+        {"outcome": {"state": "needs_curator_review", "reason": "source_projection_invalid", "resource": None}}])
+    notes = ChatReview.render_review_notes(context)
+    assert notes == ("\n\nReviewer's notes:\nReview paused: a system error stopped a save before it changed "
+                     "anything, and it was reported. Saved results and history are retained.")
+    assert "source projection" not in notes
+
+
+def test_a_stop_inside_a_packet_save_keeps_its_reason():
+    """A packet save names record conflicts by handle; a review stop is not a record conflict."""
+    from src.lib.validation_review.admission import ReviewStopped
+    from src.lib.validation_review.decisions import _named_errors
+
+    entries = [{"target_id": "record-target", "decision_unit_id": "record-target", "action": "retire"}]
+    with pytest.raises(ReviewStopped) as stopped:
+        with _named_errors(["D1"], entries):
+            raise ReviewStopped("source_projection_invalid")
+    assert stopped.value.reason == "source_projection_invalid"
+    with pytest.raises(HistoryConflict) as conflict:
+        with _named_errors(["D1"], entries):
+            raise HistoryConflict("record-target: Curator authority prevents supervisor retirement")
+    assert str(conflict.value) == "D1: Curator authority prevents supervisor retirement"
+    assert not isinstance(conflict.value, ReviewStopped)
 
 
 CRB_REASON = "Crb-GFP is named only in the Discussion imaging legend; its use in this study is not established."

@@ -1595,3 +1595,33 @@ async def test_workspace_round_is_committed_without_running_a_provider(monkeypat
     assert observed == [{'owner_id': 'user-1', 'session_id': str(sid), 'request_id': str(rid),
                          'candidate_ids': [str(cid)], 'guidance': 'Check B', 'groups': ['ZFIN']}]
     db.commit.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error,status,detail", [
+    ("source_projection_invalid", 500,
+     "A system error stopped this save before it changed anything, and it was reported. "
+     "Your saved results are unchanged."),
+    ("referenced", 409, 'This record refers to "B", which is still removed from the results; '
+                        "restore that record first"),
+])
+async def test_a_restore_stopped_by_a_system_error_reads_as_plain_words(monkeypatch, error, status, detail):
+    """v0.11.6: an invalid review source is a system error, never a curator conflict or a code name.
+
+    A restore the curator can act on (restore the referenced record first) stays a conflict with its words.
+    """
+    from src.lib.validation_history.store import HistoryConflict
+    from src.lib.validation_review.admission import ReviewStopped
+    from src.schemas.workspace_review import WorkspaceRecordRestoreRequest
+
+    monkeypatch.setattr(module, 'provision_user_async', AsyncMock(return_value=None))
+
+    def restore(*args, **kwargs):
+        raise HistoryConflict(detail) if error == "referenced" else ReviewStopped(error)
+
+    monkeypatch.setattr('src.lib.curation_workspace.record_retirement_service.restore', restore)
+    with pytest.raises(module.HTTPException) as caught:
+        await module.restore_workspace_record('envelope-1', WorkspaceRecordRestoreRequest(
+            request_id=uuid4(), target_id=uuid4(), expected_version=1, reason='Review it again'),
+            user={'sub': 'user-1'})
+    assert (caught.value.status_code, caught.value.detail) == (status, detail)
