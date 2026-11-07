@@ -815,7 +815,7 @@ def test_validator_lookup_audit_events_dedupe_identical_batch_attempts(monkeypat
     ]
     assert complete_details["friendlyName"] == (
         "Gene Extraction: Validator Lookup review required "
-        "(3 targets) (alliance_gene_reference_lookup)"
+        "(3 targets, mixed validation) (alliance_gene_reference_lookup)"
     )
 
 
@@ -902,6 +902,10 @@ def _allele_lookup_result(request_id, status, *, outcome="ambiguous"):
     (["resolved"], "ambiguous", "Allele Validation: Validator Lookup resolved (alliance_allele_lookup)"),
     (["resolved"] * 3, "ambiguous",
      "Allele Validation: Validator Lookup resolved (3 targets) (alliance_allele_lookup)"),
+    (["unresolved"] * 2, "ambiguous",
+     "Allele Validation: Validator Lookup review required (2 targets) (alliance_allele_lookup)"),
+    (["resolved", "unresolved"], "ambiguous",
+     "Allele Validation: Validator Lookup review required (2 targets, mixed validation) (alliance_allele_lookup)"),
     # A genuinely ambiguous validator answer is unresolved, whatever the search step reported.
     (["unresolved"], "ambiguous", "Allele Validation: Validator Lookup review required (alliance_allele_lookup)"),
     (["unresolved"], "success", "Allele Validation: Validator Lookup review required (alliance_allele_lookup)"),
