@@ -283,6 +283,32 @@ def test_packet_line_describes_what_the_packet_returned(events, result, line):
     assert events[0]["type"] == "TOOL_COMPLETE"
 
 
+@pytest.mark.parametrize("actions,line", [
+    (["accept", "reject", "defer"], "saving 3 decisions"),
+    (["accept", "retire", "accept", "retire", "accept"],
+     "saving 3 decisions and removing 2 records that don't answer the question"),
+    (["accept", "retire"], "saving 1 decision and removing 1 record that doesn't answer the question"),
+    (["retire", "retire"], "removing 2 records that don't answer the question"),
+    (["retire"], "removing 1 record that doesn't answer the question"),
+])
+def test_save_line_names_records_the_reviewer_removes(actions, line):
+    from src.lib.validation_review.progress import _start_line
+
+    # Bound tool arguments are model objects; the line reads only their action.
+    decisions = [SimpleNamespace(handle=f"D{index}", action=action) for index, action in enumerate(actions)]
+    assert _start_line("record_validation_review", {"packet_decisions": decisions}) == line
+
+
+def test_save_line_reads_real_packet_decisions():
+    from src.lib.validation_review.decisions import PacketDecision
+    from src.lib.validation_review.progress import _start_line
+
+    decisions = [PacketDecision(handle="D1", action="accept", reason="Shown in Methods"),
+                 PacketDecision(handle="D2", action="defer", reason="Organism unclear")]
+    assert _start_line("record_validation_review", {"packet_decisions": decisions, "entries": None}) == (
+        "saving 2 decisions")
+
+
 _ENTRY_IDS = ["cafa5538-3de0-48ba-a2c2-bdf1d8912198", "df85e2e1-0cb1-4d38-be3f-a8a4c494eee6",
               "21910a7e-6dd4-435d-90cf-f5029516d901"]
 
