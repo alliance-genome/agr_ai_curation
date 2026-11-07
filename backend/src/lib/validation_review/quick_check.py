@@ -237,8 +237,27 @@ def record_kind(record):
     return "object"
 
 
+def _record_values(values):
+    """A record's values in the two shapes the review packet gives them.
+
+    The packet carries a record's payload, except that a payload which is itself
+    one saved evidence record is replaced by that evidence's handle (see
+    reads._PacketEvidence.inline). The calibration trial rendered such a handle
+    as a single "value" entry.
+    """
+    if isinstance(values, dict):
+        return {key: value for key, value in values.items() if key != "class_key"}
+    if isinstance(values, str):
+        return {"value": values}
+    raise TypeError("Review packet record values must be a payload object or an evidence handle")
+
+
 def packet_records(body, definition=DEFINITION):
-    """Each numbered packet record with its quotes and decidable validator items."""
+    """Each numbered packet record; asked records also carry their quotes and decidable validator items.
+
+    Sub-records and records without their saved source are never asked, so
+    their values, evidence and validator items are not read.
+    """
     evidence = body["evidence"]
     records = []
     for item in body["records"]:
@@ -250,29 +269,33 @@ def packet_records(body, definition=DEFINITION):
             "type": item.get("type"),
             "role": item.get("role"),
             "source_available": "source_unavailable" not in item,
-            "values": {key: value for key, value in (item.get("values") or {}).items() if key != "class_key"},
-            "evidence": [
-                {"id": handle, "page": (evidence.get(handle) or {}).get("page"),
-                 "section": (evidence.get(handle) or {}).get("section"),
-                 "quote": (_quote(evidence, handle) or "")[:definition.quote_max_chars]}
-                for handle in item.get("evidence") or []
-            ],
-            "validators": [
-                {"validator": entry.get("validator"), "field": entry.get("field"),
-                 "status": entry.get("status") or entry.get("outcome"),
-                 "values": entry.get("values"), "explanation": entry.get("explanation")}
-                for entry in item.get("review") or []
-                if entry.get("review") != "record" and "handle" in entry
-            ],
         }
         record["kind"] = record_kind(record)
+        record["asked"] = record["source_available"] and record["kind"] != "sub_record"
+        if record["asked"]:
+            record.update(
+                values=_record_values(item["values"]),
+                evidence=[
+                    {"id": handle, "page": (evidence.get(handle) or {}).get("page"),
+                     "section": (evidence.get(handle) or {}).get("section"),
+                     "quote": (_quote(evidence, handle) or "")[:definition.quote_max_chars]}
+                    for handle in item.get("evidence") or []
+                ],
+                validators=[
+                    {"validator": entry.get("validator"), "field": entry.get("field"),
+                     "status": entry.get("status") or entry.get("outcome"),
+                     "values": entry.get("values"), "explanation": entry.get("explanation")}
+                    for entry in item.get("review") or []
+                    if entry.get("review") != "record" and "handle" in entry
+                ],
+            )
         records.append(record)
     return records
 
 
 def asked_records(records):
-    """Records the model is asked about; a record without its saved source is not."""
-    return [record for record in records if record["source_available"]]
+    """Records the model is asked about: top-level records whose saved source is available."""
+    return [record for record in records if record["asked"]]
 
 
 def ordered(records, order):
@@ -592,8 +615,7 @@ def summarize(prepared, outcomes, definition=DEFINITION):
     for record in prepared.records:
         label = record["record"]
         answers = {order: by_order[order].get(label, {}) for order in by_order}
-        scores = (oriented_scores(answers, record, definition)
-                  if record["source_available"] and not failures else {})
+        scores = oriented_scores(answers, record, definition) if record["asked"] and not failures else {}
         row = {"record": label, "target_id": record["target_id"], "type": record["type"], "role": record["role"],
                "kind": record["kind"], "routes": {}}
         reasons = {}
@@ -605,7 +627,7 @@ def summarize(prepared, outcomes, definition=DEFINITION):
                 reasons[rule.name] = reason
         if reasons:
             row["route_reasons"] = reasons
-        if record["source_available"]:
+        if record["asked"]:
             for order in by_order:
                 row[order] = _logged(answers[order], record)
             if not failures:
@@ -614,7 +636,7 @@ def summarize(prepared, outcomes, definition=DEFINITION):
     result = {
         "status": "failed" if failures else "partial" if refused or missing else "completed",
         "record_count": len(prepared.records),
-        "asked_record_count": sum(1 for record in prepared.records if record["source_available"]),
+        "asked_record_count": sum(1 for record in prepared.records if record["asked"]),
         "rules": _rules(definition),
         "calls": calls,
         "usage": _sum_usage([call["usage"] for call in calls if "usage" in call]),
