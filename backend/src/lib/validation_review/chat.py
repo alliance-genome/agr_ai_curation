@@ -565,9 +565,20 @@ class ChatReview:
             return store._content(db, fact)["outcome"] if fact is not None else None
 
     def retain_review_outcome(self, record, outcome):
-        """Keep model explanations and expected stop reasons as immutable history."""
+        """Keep model explanations and expected stop reasons as immutable history.
+
+        Each record still pending is saved with the label it had when review
+        stopped, so later notes never read the live source.
+        """
         from .audit import append_fact
 
+        # A reconnect re-retains the saved outcome, whose records are already labelled.
+        unlabelled = {item["record_target_id"] for item in outcome.get("pending", ()) if "label" not in item}
+        if unlabelled:
+            labels = self.record_labels(record, unlabelled)
+            outcome = {**outcome, "pending": [{**item, "label": labels[item["record_target_id"]]}
+                                              if "label" not in item else item
+                                              for item in outcome["pending"]]}
         context = self.context(record)
         ref = self.reference(record)
         with store.SessionLocal.begin() as db:
@@ -625,7 +636,6 @@ class ChatReview:
         from .continuation import pending_message
 
         notes = []
-        records = None
         for entry in self.review_notes(
             result_refs=result_refs, current_turn_only=current_turn_only
         ):
@@ -637,12 +647,7 @@ class ChatReview:
             # A finished review names the records still waiting and why; an
             # operational stop (budget, deadline, configuration) has no such list.
             if outcome.get("pending"):
-                if records is None:
-                    records = {"extraction-result:" + record.extraction_result_id: record
-                               for record in self.records()}
-                record = records[entry["result_ref"]]
-                notes.append(pending_message(outcome["pending"], self.record_labels(
-                    record, {item["record_target_id"] for item in outcome["pending"]})))
+                notes.append(pending_message(outcome["pending"]))
             elif reason and reason != "complete":
                 notes.append(
                     "Review paused: "
@@ -664,9 +669,6 @@ class ChatReview:
                   object_display_label(pack.metadata, obj)
                   for obj in envelope.extracted_objects
                   if obj.metadata["validation_history"]["target_id"] in target_ids}
-        # A pending item outside any record concerns the saved result itself.
-        if None in target_ids:
-            labels[None] = "the saved result"
         missing = set(target_ids) - set(labels)
         if missing:
             raise store.HistoryConflict("A pending review record is not in the current saved result")

@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 
 from src.lib.validation_history import selections, store
-from src.lib.validation_review import admission, continuation, extraction_scheduling, reads
+from src.lib.validation_review import admission, continuation, extraction_scheduling, reads, specialist_context
 from src.lib.validation_review.audit import append_fact
 from src.lib.validation_review.decisions import ReviewContext
 from src.lib.validation_review.extractor_phase import TARGETED_EXTRACTION_PROTOCOL, TargetedFollowupTransport
@@ -95,6 +95,76 @@ def test_a_decision_from_an_earlier_episode_does_not_settle_this_one(scope):
     view = continuation.inspect(ReviewContext(scope, later, "supervisor"), EXTRACTION_TOOLS)
     assert view["eligible"] == {record}
     assert view["pending"][0]["why"] == "not_decided"
+
+
+@pytest.mark.parametrize("baseline", [True, False])
+def test_followup_flag_and_eligibility_follow_what_the_request_allows(scope, baseline):
+    # A validator-contributed record has no extraction baseline; the request refuses it.
+    origin = None if baseline else {"kind": "validator_contribution", "completion_id": "x"}
+    aid, ep, record, _, binding, *_ = setup_record(scope, provenance=CONFIGURED, origin=origin)
+    assert packet_flag(scope, ep) is baseline
+    view = continuation.inspect(ReviewContext(scope, ep, "supervisor"), {"request_targeted_extraction"})
+    assert (binding in view["eligible"]) is baseline
+    with store.SessionLocal() as db:
+        if baseline:
+            specialist_context.entry_coverage(db, aid, [record])
+        else:
+            with pytest.raises(store.HistoryAccessError):
+                specialist_context.entry_coverage(db, aid, [record])
+
+
+def test_an_operational_stop_is_not_reported_as_records_the_reviewer_left(scope):
+    from types import SimpleNamespace
+    from src.lib.validation_review.chat import ChatReview
+
+    aid, ep, record = extraction_only_record(scope)
+    used_followup(aid, ep, record)
+    review(scope, aid, ep, record, "baseline", action="reject")
+    admission.cancel(scope, ep, actor_id=scope.owner_id, reason="curator stop")
+    view = continuation.inspect(ReviewContext(scope, ep, "supervisor"), EXTRACTION_TOOLS)
+    outcome = continuation.terminal(view, [], None)
+    assert outcome["reason"] == "cancelled" and outcome["pending"] == []
+    context = SimpleNamespace(review_notes=lambda **kwargs: [{"outcome": outcome}])
+    assert ChatReview.render_review_notes(context).endswith(
+        "Review paused: cancelled. Saved results and history are retained.")
+
+
+def test_a_curator_decision_never_settles_the_reviewers_view(scope):
+    aid, ep, record = extraction_only_record(scope)
+    used_followup(aid, ep, record)
+    with store.SessionLocal.begin() as db:
+        selections.decide_episode_in_transaction(
+            db, scope, aid, episode_id=ep, operation_id=uuid4().hex,
+            actor={"type": "curator", "id": scope.owner_id},
+            entries=[{"target_id": record, "expected_version": store._current(db, aid, record)["version"],
+                      "action": "reject", "subject": "baseline", "reason": "Curator judgment"}])
+    view = continuation.inspect(ReviewContext(scope, ep, "supervisor"), EXTRACTION_TOOLS)
+    assert view["eligible"] == {record} and view["causes"] == []
+    assert view["pending"] == [{"record_target_id": record, "why": "curator_decision", "recheck_left": False}]
+
+
+def curator_round(scope, aid, predecessor, record):
+    episode = selections.start_episode(scope, aid, episode={
+        "episode_id": uuid4().hex, "reason": "Curator requested another round",
+        "obligations": [{"target_id": record, "mode": "extraction_only"}]})
+    root = admission.create_scope(scope, operation_id=uuid4().hex, kind="workspace_operation", targets=1, episodes=1)
+    sid = admission.create_scope(scope, operation_id=uuid4().hex, kind="document_run", targets=1, episodes=1,
+                                 parent_id=root)
+    admission.attach_episode(scope, artifact_id=aid, episode_id=episode, scope_id=sid, predecessor_id=predecessor,
+                             renewal_actor_id=scope.owner_id, renewal_reason="Explicit curator round",
+                             curator_round=True)
+    return episode
+
+
+def test_packet_flag_reopens_in_a_curator_round_and_closes_after_its_recheck(scope):
+    aid, ep, record = extraction_only_record(scope)
+    used_followup(aid, ep, record)
+    assert packet_flag(scope, ep) is False
+    renewed = curator_round(scope, aid, ep, record)
+    assert packet_flag(scope, renewed) is True
+    used_followup(aid, renewed, record)
+    assert packet_flag(scope, renewed) is False
+    assert packet_flag(scope, ep) is False
 
 
 def later_episode(item, *, predecessor, curator_round):

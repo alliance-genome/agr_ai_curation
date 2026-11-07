@@ -60,6 +60,23 @@ def attempt_counts(db, episode, entry_ids):
     return counts
 
 
+def followup_available(db, episode, provenance, entry_ids):
+    """Whether request_targeted_extraction could still investigate each entry in this round.
+
+    Structural only, and the same three conditions the request enforces: the
+    saved extractor supports targeted follow-ups (the adapter's
+    followup_blocker), the entry refers to the extraction baseline
+    (specialist_context.entry_coverage), and this round's count is under the ceiling.
+    """
+    from .extractor_adapter import followup_blocker
+
+    supported = followup_blocker(provenance.get("agent_key"), provenance.get("extractor_contract")) is None
+    counts = attempt_counts(db, episode, entry_ids)
+    ceiling = episode.policy["extraction_attempts_per_entry"]
+    return {entry_id: supported and counts[entry_id] < ceiling
+            and store._has_baseline_subject(db, episode.artifact_id, entry_id)
+            for entry_id in entry_ids}
+
 def request(context, *, operation_id, parent_decision_id, entry_ids, instructions,
             receipt, current_entries, contributions=(), expected_source_sha=None):
     """Atomically freeze context, consume entitlement and enqueue one invocation.

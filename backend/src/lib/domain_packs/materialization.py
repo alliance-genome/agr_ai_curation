@@ -3480,10 +3480,11 @@ def object_display_label(
     metadata: DomainPackMetadata,
     domain_object: CuratableObjectEnvelope,
 ) -> str:
-    """The label a curator sees on this record's workspace row.
+    """The label a curator sees on this record's ordinary workspace row.
 
-    The pack's primary_label_field, else the stable object id, exactly as the
-    review rows materialize it.
+    The primary_label_field of the object's workspace_display (object metadata,
+    else the pack's object definition), else the stable object id, as review
+    rows materialize it without a closed profile.
     """
 
     object_definition = next(

@@ -511,28 +511,36 @@ A genuinely new curator extraction request has a new durable turn and preserves
 the earlier source/history.
 
 Terminal `validation_review` metadata comes from the ledger, independently of model
-prose. Pending results also get a visible chat notice.
-
-After each reviewer run, continuation starts another run only for a unit some
-review action can still change (`continuation.classify`). A unit whose latest
-decision in this episode is reject, defer or acknowledge-failure, with no newer
-saved answer, follow-up request, contribution or source input for its lineage and
-no follow-up or reconsideration left, stops with the typed cause
-`reviewer_left_pending` (flow status `review_pending`). The check uses decision
-history, sequences and counts only, never the decision's reason. The stall guard
-(`VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS`) still bounds runs that make
-no progress. The stop reason is the current state's first cause; refusals seen
-during the run stay in `causes`. The outcome's `pending` list names each pending
-record once with a plain structural reason (`curator_decision`, `cannot_check`,
-`not_accepted`, `not_decided`) and whether a re-check is left. Chat renders it with
-each record's workspace label, for example "Review finished with 1 record still
-pending: crb p13A (the reviewer did not accept it, and no re-check is left)."
-Operational stops without that list keep the "Review paused" notice. Source inspection remains
+prose. Pending results also get a visible chat notice. Source inspection remains
 available, but selected exports and curation preparation cannot claim pending
 results are complete. TraceReview's `validation_review.*` timeline includes saved
 plans, coverage grants, executable validator configuration and supervisor phases.
 Expected budget/deadline stops are pending outcomes; operational failures use the
 existing sanitized reporting owner.
+
+After each reviewer run, continuation starts another run only for a unit some
+review action can still change (`continuation.classify`). A unit whose latest
+decision in this episode is the reviewer's reject, defer or acknowledge-failure,
+with no newer saved answer, follow-up request, contribution or source input for its
+lineage and no follow-up or reconsideration left, stops with the typed cause
+`reviewer_left_pending` (flow status `review_pending`). A curator's decision never
+settles the reviewer's view. The check uses decision history, actors, sequences and
+counts only, never the decision's reason. A targeted follow-up counts as left only
+when `extraction_scheduling.followup_available` says so: the same three conditions
+the request enforces (saved extractor support, a baseline record, this round's
+count under the ceiling). The stall guard
+(`VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS`) still bounds runs that make
+no progress, and every stall is reported. The stop reason is the current state's
+first cause; refusals seen during the run stay in `causes`. The outcome's `pending`
+list names each pending record once with a plain structural reason
+(`curator_decision`, `cannot_check`, `not_accepted`, `not_decided`) and whether a
+re-check is left. A curator's pending decision reads as `curator_decision` and an
+acknowledged failure as `cannot_check`. Chat saves each record's workspace label
+with the outcome when review stops and renders the saved text only, for example
+"Review finished with 1 record still pending: crb p13A (the reviewer did not
+accept it, and no re-check is left)." Operational stops (cancelled, expired,
+superseded, uncertain execution, retired document, unsupported state) carry no
+`pending` list and keep the "Review paused" notice.
 
 Direct extractor follow-ups first use the resolved supervisor to interpret the
 curator's intent. Continuing saved review does not invoke extraction. Only an
@@ -613,7 +621,8 @@ re-check. The original review, machine renewals and independently admitted episo
 without a curator-round ancestor share one round. Within a round, new operation IDs,
 turns, reconnects, reviewer runs, machine renewals and provider recovery do not
 replenish the follow-up. Each review packet record carries `follow_up_available`
-from the same count and the saved extractor's follow-up support. The targeted follow-up
+from `extraction_scheduling.followup_available`, the same structural conditions the
+request enforces. The targeted follow-up
 protocol stays at version 2, the text pinned in saved extractor contracts, so older
 extractions keep their follow-ups. The scope rule (a record must be shown in the
 paper to answer the question) lives in the review protocol instead.

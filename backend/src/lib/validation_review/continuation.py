@@ -126,7 +126,7 @@ def inspect(context, tool_names):
                 sources[fact.target_id] = fact
         works = list(db.scalars(select(ValidationReviewWork).where(
             ValidationReviewWork.episode_id == ep.id)))
-        from .extraction_scheduling import attempt_counts
+        from .extraction_scheduling import followup_available
         from .extractor_adapter import followup_blocker
         provenance = store._artifact(db, ep.artifact_id, scope).provenance
         followup_ok = followup_blocker(
@@ -139,7 +139,8 @@ def inspect(context, tool_names):
             return None
 
         entry_roots = {tid: source_entry(tid) for tid in permitted}
-        extraction_counts = attempt_counts(db, ep, {entry for entry in entry_roots.values() if entry})
+        followups = followup_available(db, ep, provenance,
+                                       sorted({entry for entry in entry_roots.values() if entry}))
         decided_here = set()
         for fact in db.scalars(select(ValidationFact).where(
             ValidationFact.artifact_id == ep.artifact_id,
@@ -165,13 +166,21 @@ def inspect(context, tool_names):
                               and family.intersection(bodies[fact.id]["entry_ids"]))]
             return max(sequences, default=0)
 
-        def settled_by(tid):
-            """The latest decision of this episode that left the unit pending, if nothing arrived since."""
+        def pending_decision(tid):
+            """Who left the unit pending with this episode's latest decision, and how."""
             head = heads.get(tid)
             if head is None or head.id not in decided_here:
-                return None
-            action = store._content(db, head)["action"]
-            if action not in PENDING_DECISIONS or head.sequence < latest_input(tid):
+                return None, None
+            body = store._content(db, head)
+            if body["action"] not in PENDING_DECISIONS:
+                return None, None
+            return body["actor"]["type"], body["action"]
+
+        def settled_by(tid):
+            """The reviewer's latest decision of this episode that left the unit pending,
+            if nothing arrived since. A curator's decision never settles the reviewer's view."""
+            actor, action = pending_decision(tid)
+            if action is None or actor == "curator" or heads[tid].sequence < latest_input(tid):
                 return None
             return action
 
@@ -196,8 +205,8 @@ def inspect(context, tool_names):
                 (followup_ok and "validate_selected_extraction_source" in tool_names)
                 or (used > 0 and "request_validation_reconsideration" in tool_names))
             entry = entry_roots[tid]
-            can_investigate = (followup_ok and entry is not None and "request_targeted_extraction" in tool_names
-                               and extraction_counts[entry] < ep.policy["extraction_attempts_per_entry"])
+            can_investigate = (entry is not None and "request_targeted_extraction" in tool_names
+                               and followups[entry])
             units[tid] = {
                 "mode": mode,
                 "record": entry,
@@ -206,6 +215,7 @@ def inspect(context, tool_names):
                     tid in bodies[aid]["coverage"] and bodies[completion.id]["state"] == "completed"
                     for aid, completion in completions.items()),
                 "settled_by": settled_by(tid),
+                "curator_decided": pending_decision(tid)[0] == "curator",
                 # Validator reconsideration and source assessment repair only
                 # validation units; an extraction-only record changes through
                 # the extractor follow-up alone.
@@ -217,12 +227,18 @@ def inspect(context, tool_names):
         blockers = review_blockers(manifest)
         eligible, causes = classify(blockers, units)
         pending = pending_records(blockers, units, eligible, causes)
+        # An operational stop is not a reviewer outcome: it keeps the plain
+        # "paused" notice instead of naming records the reviewer left pending.
+        operational = any(item["code"] in {"document_retired", "unsupported_review_state"}
+                          for item in causes)
         if any(work.state == "uncertain" for work in works):
-            eligible = set()
+            eligible, operational = set(), True
             causes.append({"code": "execution_uncertain", "target_id": None})
         if status["state"] not in {"pending", "complete"}:
-            eligible = set()
+            eligible, operational = set(), True
             causes.append({"code": status["state"], "target_id": None})
+        if operational:
+            pending = []
         from .source_selection import selected_entries
         selected_sources = selected_entries(db, ep.artifact_id)
         assessments = {}
@@ -281,20 +297,20 @@ def pending_records(blockers, units, eligible, causes):
         tid = blocker["target_id"]
         if tid is None:
             continue
-        unit = units.get(tid)
-        if unit is not None and unit["mode"] == "curator":
+        unit = units[tid]
+        if unit["mode"] == "curator" or unit["curator_decided"]:
             why = "curator_decision"
-        elif unit is None or tid in blocked:
+        elif tid in blocked or unit["settled_by"] == "acknowledge_failure":
             why = "cannot_check"
         elif unit["settled_by"] is not None:
             why = "not_accepted"
         else:
             why = "not_decided"
-        record = unit["record"] if unit is not None else None
-        item = records.setdefault(record, {"record_target_id": record, "why": why, "recheck_left": False})
+        item = records.setdefault(unit["record"], {"record_target_id": unit["record"], "why": why,
+                                                   "recheck_left": False})
         if WHY_ORDER.index(why) < WHY_ORDER.index(item["why"]):
             item["why"] = why
-        item["recheck_left"] = item["recheck_left"] or (unit is not None and tid in eligible and unit["can_repair"])
+        item["recheck_left"] = item["recheck_left"] or (tid in eligible and unit["can_repair"])
     return list(records.values())
 
 
@@ -312,7 +328,7 @@ def terminal(view, refusals, output, *, stalled=False):
     current = sorted({item["code"] for item in view["causes"] if item["code"] not in ignored})
     observed = sorted({item["code"] for item in refusals if item["code"] not in ignored})
     reason = (current or observed or ["reviewer_stalled" if stalled else "review_pending"])[0]
-    if reason == "reviewer_stalled":
+    if stalled:
         from .audit import report_operational_failure
         report_operational_failure(ReviewerStalled())
     return {"state": "needs_curator_review", "reason": reason, "resource": None,
@@ -330,14 +346,18 @@ WHY_TEXT = {
 }
 
 
-def pending_message(pending, labels):
-    """Curator text: how many records still need a decision, which ones and why."""
+def pending_message(pending):
+    """Curator text: how many records still need a decision, which ones and why.
+
+    Each pending item carries the record label saved with the outcome, so the
+    text never depends on the live source.
+    """
     parts = []
     for item in pending:
         why = WHY_TEXT[item["why"]]
         if item["why"] in {"not_accepted", "not_decided"} and not item["recheck_left"]:
             why += ", and no re-check is left"
-        parts.append(f"{labels[item['record_target_id']]} ({why})")
+        parts.append(f"{item['label']} ({why})")
     noun = "record" if len(pending) == 1 else "records"
     return (f"Review finished with {len(pending)} {noun} still pending: " + "; ".join(parts)
             + ". Saved results and history are retained.")
