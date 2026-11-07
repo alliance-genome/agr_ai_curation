@@ -582,26 +582,134 @@ def test_finished_review_names_pending_records_instead_of_a_bare_stop_code():
     assert "extraction attempts exhausted" not in notes
 
 
-def test_retained_outcome_saves_each_pending_label_once(monkeypatch):
-    from src.lib.validation_review.chat import ChatReview
+CRB_REASON = "Crb-GFP is named only in the Discussion imaging legend; its use in this study is not established."
+CRB_RETIRED = {"record_target_id": "r41", "label": "Crb-GFP", "reason": CRB_REASON, "retired_by": "review"}
 
+
+def _retaining_review(monkeypatch, retired, blockers=()):
+    """A chat review whose history reads are stubbed; retain_review_outcome is real."""
     saved, lookups = [], []
     monkeypatch.setattr("src.lib.validation_review.audit.append_fact",
                         lambda db, aid, **kwargs: saved.append(kwargs["body"]["outcome"]))
     monkeypatch.setattr("src.lib.validation_history.store.SessionLocal", MagicMock())
     monkeypatch.setattr("src.lib.validation_history.store._artifact", lambda *args: None)
+    monkeypatch.setattr("src.lib.validation_review.record_retirement.retired_in_review",
+                        lambda db, aid, episode_id: retired)
+    monkeypatch.setattr("src.lib.validation_history.selections.manifest_in_transaction",
+                        lambda db, scope, aid, episode_id: {"blockers": list(blockers), "ready": not blockers})
+    # 42 records extracted; an active record is pending when a blocker names it.
+    monkeypatch.setattr("src.lib.validation_history.record_lifecycle.counts",
+                        lambda db, aid, blockers: {"active": 42 - len(retired), "retired": len(retired),
+                                                   "pending": len(blockers)})
     context = SimpleNamespace(
         context=lambda record: ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
                                              "episode", "supervisor"),
         reference=lambda record: {"artifact_id": "artifact"},
         review_summary_operation=lambda context: "summary-op", turn_id="turn",
-        record_labels=lambda record, ids: lookups.append(ids) or {"crb-entry": "crb p13A"},
+        saved_review_outcome=lambda record: saved[-1] if saved else None,
+        record_labels=lambda record, ids, retired_entries=(): lookups.append((ids, retired_entries)) or {
+            "crb-entry": "crb p13A", "r41": "Crb-GFP"},
     )
+    return context, saved, lookups
+
+
+def test_retained_outcome_saves_each_pending_label_once(monkeypatch):
+    from src.lib.validation_review.chat import ChatReview
+
+    context, saved, lookups = _retaining_review(monkeypatch, [], [{"target_id": "crb-unit", "code": "unreviewed"}])
     record = SimpleNamespace(extraction_result_id="result-1")
     outcome = {"reason": "reviewer_left_pending",
                "pending": [{"record_target_id": "crb-entry", "why": "not_accepted", "recheck_left": False}]}
     ChatReview.retain_review_outcome(context, record, outcome)
-    assert saved[-1]["pending"][0]["label"] == "crb p13A" and lookups == [{"crb-entry"}]
-    # A reconnect re-retains the saved outcome unchanged, never relabelling it.
+    assert saved[-1]["pending"][0]["label"] == "crb p13A" and lookups == [({"crb-entry"}, [])]
+    assert saved[-1]["record_counts"] == {"accepted": 41, "pending": 1, "retired": 0}
+    # A reconnect reuses the saved outcome of its turn, never relabelling or recounting it.
     ChatReview.retain_review_outcome(context, record, saved[-1])
-    assert saved[-1] == saved[0] and lookups == [{"crb-entry"}]
+    assert len(saved) == 1 and len(lookups) == 1
+
+
+def test_retained_outcome_saves_final_counts_and_each_record_review_removed(monkeypatch):
+    """Trace 57c57c62: 42 extracted, the reviewer retired Crb-GFP itself, 41 accepted."""
+    from src.lib.validation_review.chat import ChatReview
+
+    entry = {"object_type": "generic_object", "metadata": {"validation_history": {"target_id": "r41"}}}
+    context, saved, lookups = _retaining_review(monkeypatch, [
+        {"record_target_id": "r41", "reason": CRB_REASON, "retired_by": "review", "entry": entry}])
+    ChatReview.retain_review_outcome(context, SimpleNamespace(extraction_result_id="result-1"),
+                                     {"output": "Reviewed all records.", "review": {"ready": True, "uncovered": []}})
+    assert saved == [{"output": "Reviewed all records.", "review": {"ready": True, "uncovered": []},
+                      "record_counts": {"accepted": 41, "pending": 0, "retired": 1},
+                      "retired": [CRB_RETIRED]}]
+    assert lookups == [(set(), [entry])], "the removed record is named from the entry saved with its retirement"
+
+
+def test_retained_outcome_without_removals_adds_only_its_counts(monkeypatch):
+    from src.lib.validation_review.chat import ChatReview
+
+    context, saved, _ = _retaining_review(monkeypatch, [])
+    ChatReview.retain_review_outcome(context, SimpleNamespace(extraction_result_id="result-1"),
+                                     {"output": "Reviewed all records.", "review": {"ready": True, "uncovered": []}})
+    assert saved == [{"output": "Reviewed all records.", "review": {"ready": True, "uncovered": []},
+                      "record_counts": {"accepted": 42, "pending": 0, "retired": 0}}]
+
+
+def test_finished_review_names_removed_records_beside_pending_ones():
+    from src.lib.validation_review.chat import ChatReview
+
+    pending = [{"record_target_id": "crb-entry", "why": "not_accepted", "recheck_left": False, "label": "crb p13A"}]
+    white = {"record_target_id": "r3", "label": "white", "reason": "A marker, not a transgenic stock.",
+             "retired_by": "extractor_recommendation"}
+    context = SimpleNamespace(review_notes=lambda **kwargs: [
+        {"outcome": {"output": "Reviewed all records.", "review": {"ready": True},
+                     "record_counts": {"accepted": 41, "pending": 0, "retired": 1}, "retired": [CRB_RETIRED]}},
+        {"outcome": {"output": "One record is left for the curator.", "reason": "reviewer_left_pending",
+                     "pending": pending, "record_counts": {"accepted": 38, "pending": 1, "retired": 2},
+                     "retired": [CRB_RETIRED, white]}},
+        {"outcome": {"reason": "cancelled", "pending": [],
+                     "record_counts": {"accepted": 2, "pending": 39, "retired": 1}, "retired": [white]}},
+    ])
+    assert ChatReview.render_review_notes(context) == (
+        "\n\nReviewer's notes:\nReviewed all records.\n\n"
+        "Review removed 1 record that doesn't answer the question: Crb-GFP (" + CRB_REASON + "). "
+        "41 records are current.\n\n"
+        "One record is left for the curator.\n\n"
+        "Review removed 2 records that don't answer the question: Crb-GFP (" + CRB_REASON + "); "
+        "white (A marker, not a transgenic stock.). 39 records are current.\n\n"
+        "Review finished with 1 record still pending: crb p13A (the reviewer did not accept it, "
+        "and no re-check is left). Saved results and history are retained.\n\n"
+        "Review removed 1 record that doesn't answer the question: white (A marker, not a transgenic stock.). "
+        "41 records are current.\n\n"
+        "Review paused: cancelled. Saved results and history are retained.")
+
+
+@pytest.mark.asyncio
+async def test_final_answer_gets_the_review_facts_and_is_followed_by_the_removal_line(monkeypatch):
+    """The supervisor reads the counts and removals before answering; code prints the line after it."""
+    from src.lib.openai_agents import runner
+    from src.lib.validation_review.chat import ChatReview
+
+    outcome = {"output": "Reviewed all records.", "review": {"ready": True, "state": "complete"},
+               "record_counts": {"accepted": 41, "pending": 0, "retired": 1}, "retired": [CRB_RETIRED]}
+    context = SimpleNamespace(
+        turn_id="current-turn", resume=AsyncMock(),
+        status=lambda: {"pending_count": 0, "results": []},
+        review_notes=lambda **kwargs: [{"turn_id": "current-turn", "outcome": outcome}],
+    )
+    context.supervisor_handoff = lambda: ChatReview.supervisor_handoff(context)
+    context.render_review_notes = lambda **kwargs: ChatReview.render_review_notes(context, **kwargs)
+    seen = []
+
+    async def stream(**kwargs):
+        seen.append(kwargs["input_items"][-1]["content"])
+        yield {"type": "RUN_FINISHED", "data": {"response": "The publication uses 41 transgenic fly stocks."}}
+
+    monkeypatch.setattr(runner, "_run_agent_with_groq_retry", stream)
+    events = [event async for event in runner._run_agent_with_chat_review(review_context=context, input_items=[])]
+    assert '"record_counts": {"accepted": 41, "pending": 0, "retired": 1}' in seen[0]
+    assert '"label": "Crb-GFP"' in seen[0] and '"retired_by": "review"' in seen[0]
+    line = ("Review removed 1 record that doesn't answer the question: Crb-GFP (" + CRB_REASON
+            + "). 41 records are current.")
+    response = events[-1]["data"]["response"]
+    assert response.startswith("The publication uses 41 transgenic fly stocks.\n\nReviewer's notes:")
+    assert response.endswith(line)
+    assert any(line in event.get("data", {}).get("delta", "") for event in events)

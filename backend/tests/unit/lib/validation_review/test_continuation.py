@@ -123,6 +123,21 @@ def test_curator_message_says_how_many_records_which_and_why():
     assert "_" not in message and "exhausted" not in message
 
 
+def test_removal_message_names_each_removed_record_with_its_saved_reason():
+    crb = {"record_target_id": "r41", "label": "Crb-GFP", "retired_by": "review",
+           "reason": "Named only in the Discussion imaging legend."}
+    assert continuation.removal_message([crb], {"accepted": 41, "pending": 0, "retired": 1}) == (
+        "Review removed 1 record that doesn't answer the question: Crb-GFP (Named only in the "
+        "Discussion imaging legend.). 41 records are current.")
+    white = {"record_target_id": "r3", "label": "white", "retired_by": "extractor_recommendation",
+             "reason": "A marker, not a transgenic stock."}
+    message = continuation.removal_message([crb, white], {"accepted": 0, "pending": 1, "retired": 2})
+    assert message == (
+        "Review removed 2 records that don't answer the question: Crb-GFP (Named only in the "
+        "Discussion imaging legend.); white (A marker, not a transgenic stock.). 1 record is current.")
+    assert "extractor_recommendation" not in message and "_" not in message
+
+
 def test_terminal_reason_is_the_current_state_not_an_earlier_refusal():
     settled = view(eligible=False, causes=[{"target_id": "a", "code": "reviewer_left_pending", "decision": "reject"}],
                    pending=[{"record_target_id": "ra", "why": "not_accepted", "recheck_left": False}])
