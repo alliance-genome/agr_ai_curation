@@ -567,7 +567,7 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
     assert built.tools == ["csv-tool"]
@@ -610,7 +610,7 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
     canonical_schema = schema_discovery.get_agent_schema("GeneExtractionResultEnvelope")
@@ -659,7 +659,7 @@ def test_create_db_agent_attaches_structured_finalization_metadata(monkeypatch):
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
 
@@ -711,7 +711,7 @@ def test_create_db_agent_attaches_inherited_curation_metadata_for_custom_templat
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
     monkeypatch.setattr(
         catalog_service,
@@ -775,7 +775,7 @@ def test_create_db_agent_inherits_when_custom_definition_is_not_launchable(monke
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
     monkeypatch.setattr(
         catalog_service,
@@ -837,7 +837,7 @@ def test_create_db_agent_does_not_attach_curation_metadata_without_finalizer_too
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
     monkeypatch.setattr(
         catalog_service,
@@ -895,7 +895,7 @@ def test_create_db_agent_does_not_inherit_curation_without_parent_adapter_key(mo
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
     monkeypatch.setattr(
         catalog_service,
@@ -959,7 +959,7 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(
         fake_row,
@@ -1035,7 +1035,7 @@ def test_create_db_agent_stops_only_formatter_runs_at_completion(
         ),
     )
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row, db_user_id=17)
 

@@ -149,7 +149,7 @@ def _patch_agent_build(monkeypatch, catalog_service, captured):
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
     monkeypatch.setattr(catalog_service, "set_pending_prompts", lambda *_args, **_kwargs: "run")
     monkeypatch.setattr(catalog_service, "bind_prompt_run", lambda *_args: None)
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr("src.lib.openai_agents.langfuse_client.log_agent_config", lambda **_kwargs: None)
     from src.lib.openai_agents import config as agent_config
 

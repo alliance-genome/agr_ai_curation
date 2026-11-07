@@ -275,7 +275,7 @@ def _catalog_agent(monkeypatch, *, agent_key="allele_validation", base="Validate
 
     monkeypatch.setattr(agent_config, "get_model_for_agent", lambda model, **_kwargs: model)
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(
         catalog_service,
         "_build_runtime_instructions",

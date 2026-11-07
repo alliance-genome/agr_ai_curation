@@ -2058,6 +2058,21 @@ def validate_active_agent_output_schemas(db: Any) -> None:
         )
 
 
+@dataclass(eq=False)
+class CatalogAgent(Agent):
+    """SDK agent built from an agents-table row.
+
+    Tools read the running agent's identity through ``ToolContext.agent``,
+    which is a clone whenever the run's starting agent is cloned (Sentry's
+    runner wrappers clone it). ``Agent.clone()`` keeps only dataclass fields,
+    so that identity is declared here. ``eq=False`` keeps the SDK's equality.
+    """
+
+    agent_key: str | None = None
+    execution_receipt: dict[str, Any] | None = None
+    authenticated_groups: tuple[str, ...] = ()
+
+
 def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile=None,
                      _benchmark_slot: str | None = None, **kwargs: Any) -> Optional[Agent]:
     """Create an agent from a row in the unified agents table."""
@@ -2333,7 +2348,7 @@ def _create_db_agent(db_agent: Any, *, execution_snapshot=None, resolved_profile
         ),
     )
 
-    runtime_agent = Agent(
+    runtime_agent = CatalogAgent(
         name=db_agent.name,
         instructions=instructions,
         model=get_model_for_agent(effective_model_id, provider_override=model_provider),

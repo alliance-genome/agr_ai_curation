@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from agents import Agent, RunConfig, Runner
+from agents import RunConfig, Runner
 from agents.items import ModelResponse
 from agents.models.interface import Model
 from agents.usage import Usage
@@ -326,6 +326,7 @@ class ScriptedCustomExtractor(Model):
 async def test_running_custom_agent_reads_its_own_contract_through_the_tool(
     custom, monkeypatch, reported
 ):
+    from src.lib.agent_studio.catalog_service import CatalogAgent
     from src.lib.domain_packs.profile_validation import profile_mapping_binding_id
     from src.lib.openai_agents.tools.agent_contract import get_agent_contract as contract_tool
 
@@ -333,17 +334,24 @@ async def test_running_custom_agent_reads_its_own_contract_through_the_tool(
     monkeypatch.setattr(agent_contracts, "domain_pack_validation_registries", lambda: custom.registries)
     monkeypatch.setattr(agent_contracts, "_default_agent_registry", _registry)
     model = ScriptedCustomExtractor(receipt.agent_key)
-    agent = Agent(name="Curator record extractor", model=model, tools=[contract_tool])
-    # Attributes the catalog attaches to a pinned custom agent at build time.
+    agent = CatalogAgent(name="Curator record extractor", model=model, tools=[contract_tool])
+    # Identity the catalog attaches to a pinned custom agent at build time.
     agent.agent_key = receipt.agent_key
     agent.execution_receipt = receipt.model_dump(mode="json")
     agent.authenticated_groups = ("FB",)
 
-    result = await Runner.run(agent, "extract records", run_config=RunConfig(tracing_disabled=True))
+    # Sentry's runner wrappers run a clone of the starting agent, and the tool
+    # receives that clone as ToolContext.agent. No user is authenticated here,
+    # so only the running agent's own receipt can resolve the contract.
+    result = await Runner.run(
+        agent.clone(), "extract records", run_config=RunConfig(tracing_disabled=True)
+    )
 
     answer = json.loads(result.final_output)
     assert answer["error"] is None
     assert answer["success"] is True
+    contract = ast.literal_eval(model.tool_outputs[-1])
+    assert contract["custom_agent"]["revision_source"] == "running_agent"
     mapping = custom.profile.contract.validator_mappings[0]
     assert answer["bindings"] == [profile_mapping_binding_id(custom.profile, mapping)]
     # The saved profile overlay is the whole scope: no packaged pack leaks in.
