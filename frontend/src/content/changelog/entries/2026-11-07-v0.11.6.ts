@@ -13,7 +13,9 @@ const entry: ChangelogEntry = {
         "When the supervisor removes a record after accepting validated entries such as alleles or genes, the removal now saves. Before, that save could fail, and review kept trying again until it gave up with records still pending.",
         "If removing a record would leave another record pointing at it, such as an allele mention still used by its paper association, the supervisor is told which record that is and removes them together.",
         "A validator answer the supervisor set aside comes back for a decision once there is something new to go on, such as a re-check of the paper.",
-        "Flows that use a custom agent limited to one curator group, such as FlyBase genetic reagent agents, now give that agent its own output layout. Before, those agents could not read their own settings during a flow, and every flow run used the agent's latest saved settings instead of the version the flow was set up with."
+        "Flows that use a custom agent limited to one curator group, such as FlyBase genetic reagent agents, now give that agent its own output layout. Before, those agents could not read their own settings during a flow, and every flow run used the agent's latest saved settings instead of the version the flow was set up with.",
+        "When you ask a new question in a chat whose earlier review was interrupted, the supervisor now finishes that earlier review against the question that produced those records. Before, it could judge them against your new question and remove records that correctly answered the earlier one.",
+        "Reviews of papers whose terms cannot be matched to an ontology yet, such as some ZFIN phenotype terms, finish sooner. The supervisor no longer tries to mark those terms as unresolved, which they already are, and then has to save again."
       ]
     },
     {
