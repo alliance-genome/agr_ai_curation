@@ -11,6 +11,8 @@ from . import store
 from .curator_authority import anchor_for_path, anchored_path
 
 FINDING_CODE = "validation_review.assessment_unresolved"
+IDENTITY = ("is part of an identity that keeps its own resolution_state, which accepting does not resolve, "
+            "so leave it out of unresolved_fields")
 
 
 def _assessable_paths(obj, specs, profile_context):
@@ -53,7 +55,7 @@ def _bind_one(obj, path, specs, profile_context):
     value = obj.payload
     for length, part in enumerate(parts):
         if declared_spec_for(specs, parts[:length]) is not None or has_resolution_state(value):
-            return "is a structured identity that keeps its validator resolution contract", False
+            return IDENTITY, False
         if isinstance(part, int):
             if not isinstance(value, list):
                 return "uses an index on a value that is not a collection", True
@@ -66,7 +68,7 @@ def _bind_one(obj, path, specs, profile_context):
         value = value[part]
     if declared_spec_for(specs, parts) is not None or (
             profile_context is not None and profile_context.profile.resolvable_container(path) is not None):
-        return "is a structured identity that keeps its validator resolution contract", False
+        return IDENTITY, False
     if isinstance(value, (dict, list)):
         return "is not an individual plain field", False
     return None
@@ -92,7 +94,11 @@ def refusal(problems, usable, *, names=None):
         return f" ({count} more not listed; this message was cut to fit the review response size limit)"
 
     for indexes, paths in usable.values():
-        prefix = " Fields that can be assessed for " + " and ".join(label(index) for index in indexes) + ": "
+        named = " and ".join(label(index) for index in indexes)
+        prefix = " Fields that can be assessed for " + named + ": "
+        if not paths:
+            message += prefix + "none, so send " + named + " without unresolved_fields."
+            continue
         listed = []
         for path in paths:
             if len(message) + len(prefix) + len(", ".join([*listed, path])) + len(cut(len(paths))) + 1 > limit:
