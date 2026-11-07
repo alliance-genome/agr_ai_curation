@@ -239,7 +239,7 @@ async def test_the_selection_source_is_a_valid_envelope_after_an_accepted_valida
         source = projection.source_envelope_in_transaction(db, item.scope, item.aid, current)
     DomainEnvelope.model_validate(source.model_dump(mode="json"))
     assert not _validated_references(source), "validator contributions are rebuilt, never source"
-    assert not [finding for finding in source.validation_findings if projection.rebuilt_finding(finding)]
+    assert not [finding for finding in source.validation_findings if projection.derived_finding(finding)]
 
 
 @pytest.mark.asyncio
@@ -388,7 +388,7 @@ def test_a_retired_record_leaves_with_the_findings_that_name_it():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["the selection source", "the published source"])
+@pytest.mark.parametrize("stage", ["selection_source", "published_source"])
 async def test_an_invalid_source_stops_review_once_with_an_alert(scope, monkeypatch, caplog, stage,
                                                                    source_envelope_guard):
     """A source integrity failure is a system error: no conflict to retry, no second run, one report."""
@@ -396,12 +396,13 @@ async def test_an_invalid_source_stops_review_once_with_an_alert(scope, monkeypa
     from src.lib.validation_review import record_retirement
 
     reports = []
-    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure", reports.append)
+    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure",
+                        lambda error, **details: reports.append((error, details)))
     chat = await _chat_review(scope, monkeypatch, count=3)
     dangling = ValidationFinding(severity="info", message="Fixture finding on an object the source dropped.",
         code="fixture.dangling", field_ref=FieldRef(object_ref=ObjectRef(object_id="fixture-dropped-object"),
                                                     field_path="name"))
-    if stage == "the selection source":
+    if stage == "selection_source":
         build = projection.source_envelope_in_transaction
 
         def broken_source(*args, **kwargs):
@@ -423,7 +424,8 @@ async def test_an_invalid_source_stops_review_once_with_an_alert(scope, monkeypa
     outcome = _outcome(chat)
     assert outcome["reason"] == "source_projection_invalid", outcome
     assert len(calls) == 1, "the run stops at the first failure; no reminder starts another"
-    assert len(reports) == 1 and isinstance(reports[0], ValidationError), reports
+    (reported, details), = reports
+    assert isinstance(reported, ValidationError), reports
     record, = chat.records()
     with store.SessionLocal() as db:
         aid = chat.reference(record)["artifact_id"]
@@ -438,7 +440,10 @@ async def test_an_invalid_source_stops_review_once_with_an_alert(scope, monkeypa
     message = logged[0].getMessage()
     assert stage in message and aid in message and "fixture-dropped-object" in message
     assert QUOTE not in message and "VT1" not in message, "structural identifiers only, never record content"
-    if stage == "the published source":
+    assert details == {"operation": "source_projection_invalid", "tags": {"phase": stage},
+                       "context": {"stage": stage, "artifact_id": aid, "episode_id": chat.reference(record)["episode_id"]},
+                       "fingerprint": ["validation_review", "source_projection_invalid", stage]}
+    if stage == "published_source":
         assert [issue for issue, _ in source_envelope_guard] == ["edited envelope before publish"]
         source_envelope_guard.clear()
 

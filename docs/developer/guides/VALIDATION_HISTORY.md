@@ -344,11 +344,13 @@ Every save that changes the source (reviewer retire, an approved extractor
 retirement recommendation, a curator restore, `select_extraction_contribution`)
 starts from `projection.source_envelope_in_transaction`. The source holds source
 values and the findings it owns. It leaves out validator-contributed objects
-(`validated-reference:*`) and every finding the selected rebuild projects again
-(`projection.rebuilt_finding`: a saved answer reference, a pending answer, or a
-review assessment), including the findings anchored on those validated
-references. `rebuild_selected_envelope` uses the same source, so it no longer
-filters findings itself. A retired record leaves with the findings whose object or
+(`validated-reference:*`) and every finding derived from a validator answer or a
+review assessment (`projection.derived_finding`: a saved answer reference, a
+pending answer, or a review assessment), including the findings anchored on those
+validated references. `rebuild_selected_envelope` uses the same source, so it no
+longer filters findings itself; it derives findings again only for the selected
+answers and the current assessments, and a pending answer's findings stay out until
+it is selected. A retired record leaves with the findings whose object or
 field reference names it (`projection.without_records`). The adapter validates the
 source once where it builds it, and validates the source and validator matches it
 publishes.

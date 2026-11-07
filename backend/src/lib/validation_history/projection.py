@@ -14,14 +14,15 @@ from src.schemas.domain_envelope import DomainEnvelope
 from . import selections, store
 
 
-def rebuilt_finding(finding):
-    """A finding the selected rebuild derives again from immutable history.
+def derived_finding(finding):
+    """A finding derived from a validator answer or a review assessment, not owned by the source.
 
-    Validator answers (selected or pending review) and review assessments are
-    projected onto the source by ``rebuild_selected_envelope``, including the
-    findings anchored on validated reference objects that answers contribute.
-    Read from structural markers only: the saved answer reference, the pending
-    review marker and the assessment code.
+    ``rebuild_selected_envelope`` derives such findings again from immutable
+    history only for the selected answers and the current assessments, including
+    the findings anchored on validated reference objects a selected answer
+    contributes. The findings of an answer still pending review are dropped until
+    it is selected. Read from structural markers only: the saved answer
+    reference, the pending review marker and the assessment code.
     """
     from .assessments import FINDING_CODE
 
@@ -55,8 +56,8 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
     """Recover source/curator values by stable IDs, including reordered lists.
 
     The source holds source values and the findings it owns. Validator-contributed
-    objects and every rebuilt finding (see ``rebuilt_finding``) are left out; the
-    selected rebuild projects them again from history.
+    objects and every derived finding (see ``derived_finding``) are left out; the
+    selected rebuild derives the selected answers' objects and findings again.
     """
     artifact = store._artifact(db, artifact_id, scope)
     store.prime_artifact(db, artifact_id)
@@ -186,7 +187,7 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
                     raise store.HistoryConflict("Selected extractor evidence has conflicting provenance")
                 if not any(item.get("evidence_record_id") == record["evidence_record_id"] for item in records):
                     records.append(resolved)
-    findings = [finding for finding in envelope.validation_findings if not rebuilt_finding(finding)]
+    findings = [finding for finding in envelope.validation_findings if not derived_finding(finding)]
     return envelope.model_copy(update={"extracted_objects": objects, "validation_findings": findings,
                                        "metadata": metadata})
 
@@ -297,9 +298,10 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
     from src.schemas.domain_validator import DomainValidationRequest
     from .result_schema import restore_result_schema
 
-    # The source already leaves out every finding this rebuild projects again.
+    # The source already leaves out answer and assessment findings; this rebuild
+    # derives them again for the selected answers and current assessments only.
     working = source_envelope_in_transaction(db, scope, artifact_id, envelope)
-    registry =profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)
+    registry = profile_context.registry if profile_context is not None else DomainPackValidationRegistry.from_domain_pack(domain_pack)
     matches = registry.match_bindings(working)
     grouped = {}
     for unit in manifest["units"]:

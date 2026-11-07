@@ -59,9 +59,11 @@ def require_source_integrity(validate, *, artifact_id, episode_id, stage):
     """Run a server-side envelope validation; a failure stops review with an alert.
 
     A source the save built, or what it publishes, that breaks the envelope's own
-    contract is a system error no resend can fix, never a review conflict. The log
-    names structural identifiers and validation locations only, never record
-    content. The caller's transaction rolls back, so nothing applies.
+    contract is a system error no resend can fix, never a review conflict. stage
+    names the check (selection_source, published_source or published_match). The
+    log and the one Sentry event carry the stage and the artifact and episode IDs
+    (hashed in Sentry like every runtime identifier) and validation locations only,
+    never record content. The caller's transaction rolls back, so nothing applies.
     """
     try:
         return validate()
@@ -73,7 +75,10 @@ def require_source_integrity(validate, *, artifact_id, episode_id, stage):
             for item in error.errors(include_url=False, include_context=False, include_input=False))
         LOGGER.error("Review stopped: %s failed the envelope contract (artifact %s, episode %s): %s",
                      stage, artifact_id, episode_id, problems, extra={"sentry_skip_event": True})
-        report_operational_failure(error)
+        report_operational_failure(
+            error, operation=admission.SOURCE_PROJECTION_INVALID, tags={"phase": stage},
+            context={"stage": stage, "artifact_id": artifact_id, "episode_id": episode_id},
+            fingerprint=["validation_review", admission.SOURCE_PROJECTION_INVALID, stage])
         raise admission.ReviewStopped(admission.SOURCE_PROJECTION_INVALID) from error
 
 
@@ -376,7 +381,7 @@ class ValidatorAdapter:
         def publish(db, envelope, requests, changed, selection_id):
             require_source_integrity(lambda: DomainEnvelope.model_validate(envelope.model_dump(mode="json")),
                                      artifact_id=self.artifact_id, episode_id=self.episode_id,
-                                     stage="the published source")
+                                     stage="published_source")
             obligations = []
             for target, match in resolved_matches.items():
                 units = match.binding.decision_units
@@ -404,7 +409,7 @@ class ValidatorAdapter:
                 episode_id=self.episode_id, source_selection_id=selection_id, obligations=obligations)
             matches = require_source_integrity(
                 lambda: {target: serialize_match(match) for target, match in resolved_matches.items()},
-                artifact_id=self.artifact_id, episode_id=self.episode_id, stage="a published validator match")
+                artifact_id=self.artifact_id, episode_id=self.episode_id, stage="published_match")
             append_fact(db, self.artifact_id, operation_id="source-plan:" + selection_id,
                 kind="review_source_plan", parent_id=self.episode_id,
                 body={"plan_ref": self.plan_ref, "envelope": envelope.model_dump(mode="json"),
@@ -436,7 +441,7 @@ class ValidatorAdapter:
             # One check where the source is built: every save below starts from it.
             require_source_integrity(lambda: DomainEnvelope.model_validate(source.model_dump(mode="json")),
                                      artifact_id=self.artifact_id, episode_id=self.episode_id,
-                                     stage="the selection source")
+                                     stage="selection_source")
             if "packet_decisions" in arguments:
                 from . import decisions
                 from .record_retirement import retire_in_transaction
