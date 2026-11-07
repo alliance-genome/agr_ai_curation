@@ -52,6 +52,7 @@ Start here for new developers:
 | [VALIDATION_HISTORY.md](guides/VALIDATION_HISTORY.md) | Immutable validation baseline/attempt contracts, retirement, exact readers, and coordinated cutover |
 | [AGENT_HISTORY_AND_CONTEXT.md](guides/AGENT_HISTORY_AND_CONTEXT.md) | Exact retained history, versioned object reads, model context checkpoints and cost measurements |
 | [AGENT_CONTEXT_CONTINUATION.md](guides/AGENT_CONTEXT_CONTINUATION.md) | Native Responses compaction, durable working context, coverage and recovery limitations |
+| [EXTRACTION_FANOUT.md](guides/EXTRACTION_FANOUT.md) | Builder extraction that plans first and writes records with parallel writers: settings, phases, failures and observability |
 | [CHAT_OUTPUT_REPORTS.md](guides/CHAT_OUTPUT_REPORTS.md) | Program-rendered chat reports with independent source-backed tables, validation and delivery limits |
 | [COMPACT_VALIDATOR_DECISIONS.md](guides/COMPACT_VALIDATOR_DECISIONS.md) | Model-owned scientific decisions, runtime-owned source facts and canonical validator assembly |
 | [SAVED_FLOW_CATALOG_GATE.md](guides/SAVED_FLOW_CATALOG_GATE.md) | Historical saved-flow fixtures and catalog-change regression gate |

@@ -973,9 +973,8 @@ async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
     assert [source["chunk_id"] for source in result["source_chunks"]] == [str(objects[index].uuid) for index in selected]
     assert [source["chunk_index"] for source in result["source_chunks"]] == [30 + index for index in selected]
     view = _document_model_result("read_subsection", canonical)
-    import hashlib
     assert view["subsection"]["content"] == result["content"]
-    assert view["subsection"]["content_sha256"] == hashlib.sha256(result["content"].encode()).hexdigest()
+    assert "content_sha256" not in view["subsection"]
     assert all("chunk_id" not in source for source in view["subsection"]["source_chunks"])
     assert [source["chunk_index"] for source in view["subsection"]["source_chunks"]] == [30 + index for index in selected]
     assert "doc_items" not in view["subsection"]

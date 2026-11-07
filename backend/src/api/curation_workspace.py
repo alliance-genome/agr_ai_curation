@@ -8,6 +8,7 @@ from typing import Annotated, Any, Callable, NoReturn, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
@@ -656,9 +657,12 @@ async def get_review_session(
     db: Session = Depends(get_db),
 ) -> CurationReviewSession | CurationWorkspaceResponse:
     await provision_user_async(principal_from_claims(user))
+    # The database reads and model building run in the thread pool so the
+    # single worker's event loop keeps serving other users. Response encoding
+    # still happens on the loop after this returns.
     if include_workspace:
-        return get_session_workspace(db, session_id)
-    return get_session_detail(db, session_id)
+        return await run_in_threadpool(get_session_workspace, db, session_id)
+    return await run_in_threadpool(get_session_detail, db, session_id)
 
 
 def _require_document_source_import() -> None:

@@ -46,6 +46,27 @@ describe('chatProgress', () => {
   })
 })
 
+describe('extraction phase progress', () => {
+  it('shows plan, parallel writing and check phases in plain language', () => {
+    const writing: SSEEvent = {
+      type: 'AGENT_GENERATING',
+      details: {
+        agentDisplayName: 'Reagent Extractor',
+        message: 'Writing 38 records in 8 parallel batches',
+        extractionPhase: 'writing',
+      },
+    }
+
+    expect(shouldShowInChat(writing.type, writing.details)).toBe(true)
+    expect(getFriendlyProgressMessage(writing)).toBe('Writing 38 records in 8 parallel batches')
+  })
+
+  it('keeps token-level agent reasoning out of chat', () => {
+    expect(shouldShowInChat('AGENT_GENERATING', { message: 'Agent reasoning' })).toBe(false)
+    expect(shouldShowInChat('AGENT_COMPLETE', { extractionPhase: 'writing' })).toBe(false)
+  })
+})
+
 describe('supervisor review progress', () => {
   it('shows phase-level progress without exposing token-level events', () => {
     expect(shouldShowInChat('AGENT_GENERATING')).toBe(false)

@@ -977,6 +977,76 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
     assert captured["resolved_route"] == ("gpt-5.4-mini", "openrouter")
 
 
+@pytest.mark.parametrize(
+    ("agent_key", "visibility", "template_source", "definition_id", "stops_at_completion"),
+    [
+        ("tsv_formatter", "system", None, "tsv_formatter", True),
+        ("csv_formatter", "system", None, "csv_formatter", True),
+        ("json_formatter", "system", None, "json_formatter", True),
+        ("chat_output_formatter", "system", None, "chat_output_formatter", True),
+        # Custom agents built from a formatter template inherit its tools.
+        ("ca_curator_chat_output", "private", "chat_output_formatter", "chat_output_formatter", True),
+        ("ca_curator_tsv_export", "private", "tsv_formatter", "tsv_formatter", True),
+        ("gene_extractor", "system", None, "gene_extractor", False),
+        ("gene_validation", "system", None, "gene_validation", False),
+    ],
+)
+def test_create_db_agent_stops_only_formatter_runs_at_completion(
+    monkeypatch, agent_key, visibility, template_source, definition_id, stops_at_completion
+):
+    """ALL-1496: formatter agents end at their saved output; other agents do not."""
+
+    from src.lib.config.agent_loader import get_agent_definition
+    from src.lib.openai_agents import config as agent_config
+    from src.lib.openai_agents.tools.output_formatter_tools import (
+        formatter_completion_tool_use_behavior,
+    )
+
+    definition = get_agent_definition(definition_id)
+    assert definition is not None
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key=agent_key,
+        visibility=visibility,
+        instructions="BASE",
+        group_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source=template_source,
+        group_rules_component=template_source,
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="low",
+        output_schema_key=definition.output_schema,
+        tool_ids=list(definition.tools),
+        name=definition.name,
+    )
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            static_prefix=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {"agent_id": agent_key, "layers": [], "hash": "hash-1"},
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    built = catalog_service._create_db_agent(fake_row, db_user_id=17)
+
+    assert built is not None
+    if stops_at_completion:
+        assert built.tool_use_behavior is formatter_completion_tool_use_behavior
+    else:
+        # The SDK default (run the model again after tools) is left in place.
+        assert not hasattr(built, "tool_use_behavior")
+
+
 @pytest.mark.parametrize("failure_kind", ["operational", "pool_timeout", "integrity"])
 def test_runtime_lookup_failure_is_not_masked_as_unknown_agent(monkeypatch, failure_kind):
     from unittest.mock import Mock

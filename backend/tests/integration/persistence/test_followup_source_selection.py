@@ -218,8 +218,8 @@ async def test_queued_old_input_is_stopped_before_provider(planned, monkeypatch)
     item = planned
     requests = item.adapter.plan["initial_requests"][:1]
     jobs = [item.adapter.job(request) for request in requests]
-    wid = scheduling.initial(item.scope, item.ep, operation_id="queued-before-correction",
-        requests=requests, receipt=item.adapter.receipt(jobs, batch_key=None))
+    [wid] = scheduling.initial(item.scope, item.ep, [{"operation_id": "queued-before-correction",
+        "requests": requests, "receipt": item.adapter.receipt(jobs, batch_key=None)}])
     context, contribution = retained_proposal(item)
     with store.SessionLocal() as db:
         digest = selections.source_state_digest(db, item.aid)

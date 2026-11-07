@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -75,11 +74,10 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
         record.pop("next_chunk_id", None)
         for source in record.get("source_chunks") or []:
             source.pop("chunk_id", None)
+            _drop_none(source)
+        _drop_none(record)
         text = record.get("content")
-        if not isinstance(text, str):
-            continue
-        record["content_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        if "evidence_spans" not in record:
+        if not isinstance(text, str) or "evidence_spans" not in record:
             continue
         start = (record.get("content_range") or {}).get("start", 0)
         record["content_start"] = start
@@ -93,4 +91,38 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
                 raise ValueError("Evidence span does not match the exact returned document text")
             del span["text"]
             span.pop("span_id", None)
+        _state_shared_span_fields_once(record)
+    _drop_none(view)
     return view, events
+
+
+# Span-only metadata every span usually shares; stated once on the record.
+_SPAN_ONLY_SHARED_FIELDS = ("span_type", "spanizer_version")
+# Each span's own position, always kept on the span.
+_SPAN_POSITION_FIELDS = frozenset({"span_index", "char_start", "char_end"})
+
+
+def _drop_none(mapping: dict) -> None:
+    for key in [key for key, value in mapping.items() if value is None]:
+        del mapping[key]
+
+
+def _state_shared_span_fields_once(record: dict) -> None:
+    """Keep each span's own position; state values every span repeats once.
+
+    A span field that is absent takes the record's value (none when the record
+    has none). So a span drops a field only where its value equals the record's,
+    including null against an absent record value; a null against a record value
+    stays explicit. A span-only field every span shares moves to the record.
+    """
+    spans = record["evidence_spans"]
+    for field in _SPAN_ONLY_SHARED_FIELDS:
+        values = [span.get(field) for span in spans]
+        if field not in record and values and values[0] is not None and all(
+            field in span and value == values[0] for span, value in zip(spans, values)
+        ):
+            record[field] = values[0]
+    for span in spans:
+        for field in [field for field, value in span.items()
+                      if field not in _SPAN_POSITION_FIELDS and value == record.get(field)]:
+            del span[field]

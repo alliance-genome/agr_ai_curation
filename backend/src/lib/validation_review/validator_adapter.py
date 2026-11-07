@@ -8,6 +8,7 @@ its binding from that plan, including saved custom validator revision pins.
 from __future__ import annotations
 
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, copy_context
 from functools import partial
@@ -169,10 +170,11 @@ def save_plan(plan, *, context):
     from types import SimpleNamespace
     from src.lib.domain_packs.validation_registry import ValidationBindingState
     binding = plan.history_binding
-    matches = {}
-    for match in plan.matches:
-        tid = runtime.binding_target(binding, match)
-        matches[tid] = serialize_match(match)
+    # One transaction resolves every saved target identity, not one per match.
+    with store.SessionLocal.begin() as db:
+        targets = [runtime.binding_target(binding, match, db=db) for match in plan.matches]
+        initial_requests = runtime.frozen_job_requests(binding, plan.initial_jobs, db=db)
+    matches = {tid: serialize_match(match) for tid, match in zip(targets, plan.matches, strict=True)}
     registry = REGISTRY.dump_python(plan.registry, mode="json")
     registry["bindings"] = [_serialize_binding(binding_definition) for binding_definition in plan.registry.bindings]
     REGISTRY.validate_python(registry)
@@ -186,7 +188,7 @@ def save_plan(plan, *, context):
             if (definition.validator_agent is not None or definition.routes is not None)
             and definition.state == ValidationBindingState.ACTIVE
         },
-        "initial_requests": runtime.frozen_job_requests(binding, plan.initial_jobs),
+        "initial_requests": initial_requests,
         "authenticated_groups": list(context.authenticated_groups or ()),
     }
     with store.SessionLocal.begin() as db:
@@ -230,21 +232,31 @@ class ValidatorAdapter:
             authenticated_groups=tuple(authenticated_groups),
         )
         self.binding = runtime.CapturedArtifact(scope, artifact_id)
+        # Facts are immutable, so the latest source plan's fact id identifies its body.
+        self._source_plan_fact_id = None
+        self._source_plan_lock = threading.Lock()
 
     def refresh_source_plan(self):
+        """Adopt the latest selected-source plan, loading its body only when it changed.
+
+        The body can be many megabytes (every match carries the envelope), and
+        callers refresh once per target, so reloading it each time stalled saves.
+        """
         from sqlalchemy import select
         from src.models.sql.validation_history import ValidationFact
-        with store.SessionLocal() as db:
+        with self._source_plan_lock, store.SessionLocal() as db:
             store._artifact(db, self.artifact_id, self.scope)
             fact = db.scalar(select(ValidationFact).where(
                 ValidationFact.artifact_id == self.artifact_id,
                 ValidationFact.parent_id == self.episode_id,
                 ValidationFact.kind == "review_source_plan").order_by(ValidationFact.sequence.desc()).limit(1))
-            if fact is not None:
-                body = store._content(db, fact)
-                if body["plan_ref"] != self.plan_ref:
-                    raise store.HistoryConflict("Source plan changed its configured validator authority")
-                self.plan = {**self.plan, "matches": body["matches"], "envelope": body["envelope"]}
+            if fact is None or fact.id == self._source_plan_fact_id:
+                return
+            body = store._content(db, fact)
+            if body["plan_ref"] != self.plan_ref:
+                raise store.HistoryConflict("Source plan changed its configured validator authority")
+            self.plan = {**self.plan, "matches": body["matches"], "envelope": body["envelope"]}
+            self._source_plan_fact_id = fact.id
 
     async def select_source(self, context, checkpoint_provider, **arguments):
         result = await asyncio.to_thread(self._select_source, context, checkpoint_provider, arguments)
@@ -459,11 +471,24 @@ class ValidatorAdapter:
 
     def match(self, target_id):
         self.refresh_source_plan()
-        if target_id not in self.plan["matches"]:
+        return self._current_match(target_id)
+
+    def current_matches(self):
+        """Every configured match from one refresh of the source plan."""
+        self.refresh_source_plan()
+        # One plan for every match, even if a concurrent selection swaps it.
+        plan = self.plan
+        return {target_id: self._plan_match(plan, target_id) for target_id in plan["matches"]}
+
+    def _current_match(self, target_id):
+        return self._plan_match(self.plan, target_id)
+
+    def _plan_match(self, plan, target_id):
+        if target_id not in plan["matches"]:
             raise store.HistoryAccessError(
                 "Target is outside configured review bindings"
             )
-        match = MATCH.validate_python(self.plan["matches"][target_id])
+        match = MATCH.validate_python(plan["matches"][target_id])
         required = match.binding.required_any_active_group
         if required and not set(required).intersection(
             self.context.authenticated_groups or ()
@@ -472,7 +497,11 @@ class ValidatorAdapter:
         return match
 
     def job(self, frozen):
-        match = self.match(frozen["target_id"])
+        self.refresh_source_plan()
+        return self._plan_job(self.plan, frozen)
+
+    def _plan_job(self, plan, frozen):
+        match = self._plan_match(plan, frozen["target_id"])
         request = DomainValidationRequest.model_validate(frozen["request"])
         if (
             match.binding.validator_agent is None
@@ -493,6 +522,21 @@ class ValidatorAdapter:
                 if match.binding.required_any_active_group else None
             ),
         )
+
+    def jobs(self, frozen_requests):
+        """Build dispatch jobs from one source-plan refresh.
+
+        Reads the database, so async callers use a thread. One plan builds
+        every job, even if a concurrent selection swaps it.
+        """
+        self.refresh_source_plan()
+        plan = self.plan
+        return [self._plan_job(plan, frozen) for frozen in frozen_requests]
+
+    def job_targets(self, jobs):
+        """Saved target identity of every job, resolved in one transaction."""
+        with store.SessionLocal.begin() as db:
+            return [runtime.request_target(self.binding, job, db=db) for job in jobs]
 
     def receipt(self, jobs, *, batch_key):
         contracts = {
@@ -550,44 +594,40 @@ class ValidatorAdapter:
                 }
 
         scheduled = await asyncio.to_thread(scheduled_targets)
-        jobs = [self.job(item) for item in frozen if item["target_id"] not in scheduled
-                and not await asyncio.to_thread(self.retained_ready, item["target_id"])]
+        pending = [item for item in frozen if item["target_id"] not in scheduled
+                   and not await asyncio.to_thread(self.retained_ready, item["target_id"])]
+        jobs = await asyncio.to_thread(self.jobs, pending)
+        targets = await asyncio.to_thread(self.job_targets, jobs)
         from . import source_inputs
 
         executable = []
-        for job in jobs:
-            unsupported = source_inputs.unsupported_input(
-                job.match, job.request, runtime.request_target(self.binding, job)
-            )
+        for job, target in zip(jobs, targets, strict=True):
+            unsupported = source_inputs.unsupported_input(job.match, job.request, target)
             if unsupported is None:
-                executable.append(job)
+                executable.append((job, target))
             else:
                 await asyncio.to_thread(source_inputs.record_initial, self.binding, unsupported,
                                         episode_id=self.episode_id)
-        jobs = executable
+        jobs = [job for job, _ in executable]
+        # Keyed by object identity: grouping below returns these same job objects.
+        target_of = {id(job): target for job, target in executable}
         by_target = {item["target_id"]: item for item in frozen}
         grouped = _dedupe_validator_jobs(jobs)
-        work_ids = []
+        items = []
         for group in _plan_validator_run_groups(grouped):
             selected = [
                 job for index in group.dedupe_group_indexes for job in grouped[index]
             ]
-            requests = [
-                by_target[runtime.request_target(self.binding, job)] for job in selected
-            ]
+            requests = [by_target[target_of[id(job)]] for job in selected]
             op = (
                 "initial:" + self.episode_id + ":"
                 + store.canonical({"targets": [r["target_id"] for r in requests]})[0]
             )
-            wid = await asyncio.to_thread(
-                scheduling.initial,
-                self.scope,
-                self.episode_id,
-                operation_id=op,
-                requests=requests,
-                receipt=self.receipt(selected, batch_key=group.batch_key),
-            )
-            work_ids.append(wid)
+            items.append({"operation_id": op, "requests": requests,
+                          "receipt": self.receipt(selected, batch_key=group.batch_key)})
+        if items:
+            # One transaction queues every initial work item, in run-group order.
+            await asyncio.to_thread(scheduling.initial, self.scope, self.episode_id, items)
         # Existing configured validator concurrency applies; no new operational cap.
         from src.lib.openai_agents.config import get_max_parallel_validators
 
@@ -667,7 +707,7 @@ class ValidatorAdapter:
         receipt = payload["receipt"]
         if receipt["plan_ref"] != self.plan_ref:
             raise store.HistoryAccessError("Work belongs to another configured plan")
-        jobs = [self.job(item) for item in payload["requests"]]
+        jobs = await asyncio.to_thread(self.jobs, payload["requests"])
         if any(
             receipt["contracts"].get(key) != value
             for key, value in self.receipt(jobs, batch_key=receipt["batch_key"])[
@@ -994,11 +1034,8 @@ class ValidatorAdapter:
 
     def refresh_inputs(self, frozen_request, sources):
         found = []
-        for tid in self.plan["matches"]:
-            if (
-                self.match(tid).binding.binding_id
-                != frozen_request["validator_binding_id"]
-            ):
+        for tid, match in self.current_matches().items():
+            if match.binding.binding_id != frozen_request["validator_binding_id"]:
                 continue
             request = self.selected_request(tid, sources)
             if (
@@ -1010,23 +1047,56 @@ class ValidatorAdapter:
             raise store.HistoryConflict("Reconsideration has no unique saved target")
         return found[0].selected_inputs
 
+    def _dependent_initial_requests(self, tid, match, matches):
+        """Return (dependencies, frozen requests) for one dependent target.
+
+        ``dependencies`` is None when required prerequisites are unavailable.
+        """
+        from . import source_inputs
+
+        dependencies = _prerequisite_targets(
+            match, matches, self.selected_manifest["units"], self.target_parents
+        )
+        if dependencies is None:
+            return None, None
+        selected = self.selected_input_result(tid, self.selected_sources)
+        if selected.request is not None:
+            unsupported = source_inputs.unsupported_input(
+                self._selected_match(tid, self.selected_sources), selected.request, tid,
+                requires_prerequisites=bool(dependencies))
+            if unsupported is not None:
+                return dependencies, [unsupported]
+            frozen = runtime.frozen_job_requests(self.binding, [
+                ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id)])
+            for request in frozen:
+                request["requires_prerequisites"] = bool(dependencies)
+            return dependencies, frozen
+        if selected.absent_inputs:
+            return dependencies, [source_inputs.absent_input(
+                self._selected_match(tid, self.selected_sources), selected, tid,
+                requires_prerequisites=bool(dependencies))]
+        return dependencies, []
+
     async def advance(self, checkpoint_provider):
         """Only configured dependent initial work may follow explicit selections."""
         from . import waves
 
+        # Database reads and match building block, so they run off the event
+        # loop: the server has one worker, and a blocked loop stalls every user.
+        matches = await asyncio.to_thread(self.current_matches)
         # Nothing depends on another binding, so no selected inputs need preparing.
-        if not any(self.match(tid).binding.runs_after for tid in self.plan["matches"]):
+        if not any(match.binding.runs_after for match in matches.values()):
             return []
         await asyncio.to_thread(self.prepare_inputs, checkpoint_provider)
+        matches = await asyncio.to_thread(self.current_matches)
         outcomes = []
-        for tid in self.plan["matches"]:
-            match = self.match(tid)
+        for tid, match in matches.items():
             if (not match.binding.runs_after or tid in self.attempted_targets
                     or await asyncio.to_thread(self.retained_ready, tid)):
                 continue
-            dependencies = _prerequisite_targets(match,
-                {other_id: self.match(other_id) for other_id in self.plan["matches"]},
-                self.selected_manifest["units"], self.target_parents)
+            dependencies, frozen = await asyncio.to_thread(
+                self._dependent_initial_requests, tid, match, matches
+            )
             if dependencies is None:
                 outcomes.append(
                     {
@@ -1036,25 +1106,6 @@ class ValidatorAdapter:
                     }
                 )
                 continue
-            selected = self.selected_input_result(tid, self.selected_sources)
-            if selected.request is not None:
-                from . import source_inputs
-                unsupported = source_inputs.unsupported_input(
-                    self._selected_match(tid, self.selected_sources), selected.request, tid,
-                    requires_prerequisites=bool(dependencies))
-                if unsupported is not None:
-                    frozen = [unsupported]
-                else:
-                    frozen = runtime.frozen_job_requests(self.binding, [
-                        ValidatorDispatchJob(match, selected.request, history_episode_id=self.episode_id)])
-                    for request in frozen:
-                        request["requires_prerequisites"] = bool(dependencies)
-            elif selected.absent_inputs:
-                from . import source_inputs
-                frozen = [source_inputs.absent_input(self._selected_match(tid, self.selected_sources), selected, tid,
-                    requires_prerequisites=bool(dependencies))]
-            else:
-                frozen = []
 
             def build(sources):
                 # All identity registration happened above, outside the locked

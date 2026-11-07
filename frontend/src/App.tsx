@@ -47,6 +47,7 @@ export const queryClient = new QueryClient()
 const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
 const DEFAULT_RUN_COMPLETION_TOAST_AUTO_HIDE_MS = 6000
 const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
+export const ANSWER_READY_TITLE_PREFIX = 'Answer ready - '
 
 // Per-environment benchmark portal address. Unset or blank hides the nav link.
 export function getBenchmarkPortalUrl(): string | null {
@@ -436,6 +437,30 @@ export function AppContent() {
   }, []);
 
   useEffect(() => {
+    // A curator who switched tabs sees in the tab title that their answer is ready.
+    const onRunFinished = (event: Event) => {
+      const detail = (event as CustomEvent<ChatRunTerminalEventDetail>).detail;
+      if (detail?.status !== 'completed' || !document.hidden) {
+        return;
+      }
+      if (!document.title.startsWith(ANSWER_READY_TITLE_PREFIX)) {
+        document.title = `${ANSWER_READY_TITLE_PREFIX}${document.title}`;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (!document.hidden && document.title.startsWith(ANSWER_READY_TITLE_PREFIX)) {
+        document.title = document.title.slice(ANSWER_READY_TITLE_PREFIX.length);
+      }
+    };
+    window.addEventListener(CHAT_RUN_TERMINAL_EVENT, onRunFinished as EventListener);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener(CHAT_RUN_TERMINAL_EVENT, onRunFinished as EventListener);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
     const onChatRunTerminal = (event: Event) => {
       if (normalizedPathname === '') {
         return;
@@ -756,7 +781,12 @@ export function AppContent() {
         <Routes>
           <Route path="/history" element={renderLazyRoute(<HistoryPage />)} />
           <Route path="/changelog" element={renderLazyRoute(<ChangelogPage />)} />
-          <Route path="/agent-studio" element={renderLazyRoute(<AgentStudioPage />)} />
+          {/* Agent metadata (a multi-megabyte registry) is needed only in Agent Studio.
+              The provider sits outside Suspense so the fetch starts while the page loads. */}
+          <Route
+            path="/agent-studio"
+            element={<AgentMetadataProvider>{renderLazyRoute(<AgentStudioPage />)}</AgentMetadataProvider>}
+          />
           <Route path="/batch" element={renderLazyRoute(<BatchPage />)} />
           <Route path="/curation" element={renderLazyRoute(<CurationInventoryPage />)} />
           <Route element={renderLazyRoute(<PersistentPdfWorkspaceLayout />)}>
@@ -860,9 +890,7 @@ function App() {
         <Router>
           <AuthProvider>
             <ProtectedRoutes>
-              <AgentMetadataProvider>
-                <AppContent />
-              </AgentMetadataProvider>
+              <AppContent />
             </ProtectedRoutes>
           </AuthProvider>
         </Router>

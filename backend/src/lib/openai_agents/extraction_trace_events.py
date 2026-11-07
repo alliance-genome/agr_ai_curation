@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import fcntl
+import functools
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import threading
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -49,6 +51,8 @@ _current_run: ContextVar[ExtractionTraceRun | None] = ContextVar(
     "extraction_trace_run",
     default=None,
 )
+# Parallel extraction writers emit events for one run from several tool threads.
+_sequence_lock = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -171,7 +175,10 @@ def get_current_extraction_trace_run() -> ExtractionTraceRun | None:
     return _current_run.get()
 
 
+# 4096 only bounds an internal memo, not an operational limit: output is identical at any size.
+@functools.lru_cache(maxsize=4096)
 def _is_secret_key(key: str) -> bool:
+    # Pure in the key. Payloads repeat the same keys thousands of times.
     normalized = key.lower().replace("-", "_")
     if normalized in {"tokens", "token_count", "estimated_tokens", "output_reserve_tokens",
         "input_tokens_before", "input_tokens_after", "token_count_requests", "token_count_duration_ms",
@@ -195,7 +202,20 @@ def _redact_value(value: Any, *, budget: "_Budget | None" = None) -> Any:
     got a brand-new budget. Recursion belongs to _redact_with_budget; callers
     that need to share one budget across several payloads pass it explicitly.
     """
-    return _redact_with_budget(value, budget or _Budget(_max_total_chars()))
+    return _redact_with_budget(value, budget or _Budget(_max_total_chars()), _RedactionLimits.current())
+
+
+@dataclass(frozen=True)
+class _RedactionLimits:
+    """Per-node caps, read from the environment once per redacted payload."""
+
+    preview: int
+    depth: int
+    list_items: int
+
+    @classmethod
+    def current(cls) -> "_RedactionLimits":
+        return cls(preview=_preview_limit(), depth=_max_depth(), list_items=_max_list_items())
 
 
 class _Budget:
@@ -211,14 +231,14 @@ class _Budget:
         return True
 
 
-def _redact_with_budget(value: Any, budget: _Budget, *, depth: int = 0) -> Any:
+def _redact_with_budget(value: Any, budget: _Budget, limits: _RedactionLimits, *, depth: int = 0) -> Any:
     # KANBAN-1771. These payloads carry no curator or personal data, and the
     # old caps (depth 6, 1200-char previews, 25 list items) removed exactly the
     # field paths and reason codes needed to diagnose a production failure.
     # Capture is now generous by default and still bounded, so one event cannot
     # grow without limit. Credential-shaped keys stay redacted.
-    limit = _preview_limit()
-    if depth > _max_depth():
+    limit = limits.preview
+    if depth > limits.depth:
         return "<redacted:depth_limit>"
     if value is None or isinstance(value, (bool, int, float)):
         return value
@@ -248,26 +268,26 @@ def _redact_with_budget(value: Any, budget: _Budget, *, depth: int = 0) -> Any:
             if _is_secret_key(key_text):
                 redacted[key_text] = "<redacted>"
             else:
-                redacted[key_text] = _redact_with_budget(item, budget, depth=depth + 1)
+                redacted[key_text] = _redact_with_budget(item, budget, limits, depth=depth + 1)
         return redacted
     if isinstance(value, (list, tuple)):
         items = list(value)
-        max_items = _max_list_items()
+        max_items = limits.list_items
         visible = []
         for item in items[:max_items]:
             if budget.remaining <= 0:
                 visible.append(_BUDGET_SENTINEL)
                 break
-            visible.append(_redact_with_budget(item, budget, depth=depth + 1))
+            visible.append(_redact_with_budget(item, budget, limits, depth=depth + 1))
         if len(items) > max_items:
             visible.append({"truncated": True, "omitted_count": len(items) - max_items})
         return visible
     if hasattr(value, "model_dump"):
         try:
-            return _redact_with_budget(value.model_dump(mode="json"), budget, depth=depth + 1)
+            return _redact_with_budget(value.model_dump(mode="json"), budget, limits, depth=depth + 1)
         except Exception:
             pass
-    return _redact_with_budget(str(value), budget, depth=depth + 1)
+    return _redact_with_budget(str(value), budget, limits, depth=depth + 1)
 
 
 def _json_size(value: Any) -> tuple[int | None, int | None]:
@@ -526,10 +546,11 @@ def write_extraction_trace_event(
     user_id_hash = None
     source = "backend"
     if run is not None and run.trace_id == effective_trace_id:
-        if run.sequence >= MAX_EVENTS_PER_TRACE:
-            return None
-        run.sequence += 1
-        sequence = run.sequence
+        with _sequence_lock:
+            if run.sequence >= MAX_EVENTS_PER_TRACE:
+                return None
+            run.sequence += 1
+            sequence = run.sequence
         session_id = run.session_id
         user_id_hash = run.user_id_hash
         source = run.source

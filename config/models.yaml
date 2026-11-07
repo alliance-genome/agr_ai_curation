@@ -5,8 +5,8 @@ models:
     context_window_tokens: 1050000
     max_input_tokens: 922000
     max_output_tokens: 128000
-    description: Reasoning model for routing, output, and explicitly selected document extraction.
-    guidance: Default for routing and output agents, with low reasoning. Available for extraction agents by explicit selection; new extraction agents use GPT-6.1 Sol with medium reasoning. Agent Studio AI Chat uses medium reasoning separately.
+    description: Used by Agent Studio AI Chat. Available for document extraction by explicit selection.
+    guidance: Agent Studio AI Chat uses GPT-6 Astra with medium reasoning. Routing, output, extraction and validation agents use GPT-6.1 Sol by default; Astra is available for extraction agents by explicit selection.
     default: false
     curator_visible: true
     supports_reasoning: true
@@ -15,15 +15,14 @@ models:
     reasoning_options: [low, medium, high, xhigh]
     default_reasoning: low
     reasoning_descriptions:
-      low: Default for routing and output agents, and when Astra is explicitly selected.
+      low: Fastest GPT-6 Astra mode, for when Astra is explicitly selected.
       medium: More reasoning for complex instructions or ambiguous evidence.
       high: Deeper reasoning for difficult evidence synthesis.
       xhigh: Most intensive supported setting in this application; use for especially difficult cases.
     recommended_for:
-      - Routing and formatting extracted information
       - Paper extraction when explicitly selected
     avoid_for:
-      - Routine validation and database lookups where GPT-6.1 Sol is the default
+      - Routing, formatting, validation and database lookups, where GPT-6.1 Sol is the default
 
   - model_id: gpt-6.1-sol
     name: GPT-6.1 Sol
@@ -31,8 +30,8 @@ models:
     context_window_tokens: 1050000
     max_input_tokens: 922000
     max_output_tokens: 128000
-    description: Default reasoning model for document extraction, validation, and curation.
-    guidance: Default for new extraction agents and for validation and utility agents. Start with medium reasoning; increase it when difficult evidence needs more analysis. GPT-6 Astra is available by explicit selection.
+    description: Default reasoning model for document extraction, validation, routing, output, and curation.
+    guidance: Default for new extraction agents, validation and utility agents, the supervisor, and output formatters. Start with medium reasoning for extraction; routing and output agents use low. GPT-6 Astra is available by explicit selection.
     default: true
     supports_reasoning: true
     supports_temperature: false
@@ -50,8 +49,6 @@ models:
       - Document extraction and high-stakes interpretation where instruction fidelity matters
       - Validation and database lookups after using search/read tools
       - Complex evidence synthesis and conflict resolution
-    avoid_for:
-      - Work that must remain on GPT-6 Astra routing or output settings
 
   - model_id: deepseek/deepseek-v4-pro-0813
     name: DeepSeek V4 Pro 0813 (OpenRouter)

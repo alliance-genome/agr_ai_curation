@@ -92,6 +92,18 @@ class AgrQueryResult(BaseModel):
     result_projections: Optional[List[Dict[str, Any]]] = None
     coverage: Optional[Dict[str, Any]] = None
 
+    def __str__(self) -> str:
+        """The text the SDK sends to the model: compact JSON of the set fields.
+
+        Code reads the result object itself (classification, finalization,
+        evidence summaries), never this text. Unset (None) fields are left out.
+        """
+        return json.dumps(
+            {key: value for key, value in self.model_dump(mode="json").items() if value is not None},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
 
 GENE_EXPRESSION_DOMAIN_PACK_ID = "agr.alliance.gene_expression"
 GENE_EXPRESSION_OBJECT_TYPE = "GeneExpressionAnnotation"

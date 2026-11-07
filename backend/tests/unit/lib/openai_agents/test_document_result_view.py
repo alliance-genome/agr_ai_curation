@@ -28,15 +28,82 @@ def test_window_preserves_exact_evidence_and_routes_geometry_without_mutating_so
 @pytest.mark.parametrize("tool,key", [("search_document", "hits"), ("read_section", "section"), ("read_subsection", "subsection")])
 def test_other_document_views_preserve_content_navigation_and_provenance(tool, key):
     record = {"chunk_id": "c1", "content": "not found in adults", "next_offset": 4,
-              "doc_items": [{"page": 1}], "source_chunks": [{"chunk_id": "c1", "chunk_index": 42}]}
-    raw = {key: [record] if key == "hits" else record}
+              "doc_items": [{"page": 1}], "page_ended_by": None,
+              "source_chunks": [{"chunk_id": "c1", "chunk_index": 42, "snippet": None}]}
+    raw = {key: [record] if key == "hits" else record, "error_code": None}
     view, events = document_result_view(tool, raw)
     actual = view[key][0] if key == "hits" else view[key]
     assert actual["content"] == record["content"]
     assert actual["source_chunks"] == [{"chunk_index": 42}]
     assert actual["next_offset"] == 4
     assert "doc_items" not in actual
+    assert "content_sha256" not in actual
+    assert "page_ended_by" not in actual and "error_code" not in view
     assert events[0]["chunk_id"] == "c1"
+
+
+def test_read_chunk_view_states_shared_span_metadata_once_and_drops_nulls_and_hash():
+    text = "First sentence. Second sentence on page four."
+    spans = [
+        {"span_id": "s0", "span_index": 0, "span_type": "sentence", "text": text[:15],
+         "char_start": 0, "char_end": 15, "page_number": 3, "section_title": "Results",
+         "spanizer_version": "pdf_sentence_v1"},
+        {"span_id": "s1", "span_index": 1, "span_type": "sentence", "text": text[16:],
+         "char_start": 16, "char_end": len(text), "page_number": 4, "section_title": None,
+         "spanizer_version": "pdf_sentence_v1"},
+    ]
+    raw = {"summary": "Read chunk 7.", "error_code": None, "result_bounds": None, "chunk": {
+        "chunk_id": "c7", "chunk_index": 7, "chunk_number": 8, "previous_chunk_id": None,
+        "next_chunk_id": "c8", "previous_chunk_index": None, "next_chunk_index": 8,
+        "page_number": 3, "section_title": "Results", "subsection": None, "content": text,
+        "evidence_spans": spans, "doc_items": None, "content_range": None, "span_page": None}}
+    original = deepcopy(raw)
+
+    view, _ = document_result_view("read_chunk", raw)
+
+    assert view == {"summary": "Read chunk 7.", "chunk": {
+        "chunk_index": 7, "next_chunk_index": 8, "page_number": 3, "section_title": "Results",
+        "content": text, "content_start": 0, "span_text_access": view["chunk"]["span_text_access"],
+        "span_type": "sentence", "spanizer_version": "pdf_sentence_v1",
+        "evidence_spans": [
+            {"span_index": 0, "char_start": 0, "char_end": 15},
+            # Values that differ from the chunk's stay, including an explicit null.
+            {"span_index": 1, "char_start": 16, "char_end": len(text), "page_number": 4,
+             "section_title": None},
+        ]}}
+    assert "content_start" in view["chunk"]["span_text_access"]
+    assert raw == original
+
+
+def test_span_values_are_never_attributed_to_a_chunk_that_lacks_them():
+    text = "One sentence. Two sentence."
+    raw = {"chunk": {"chunk_id": "c", "content": text, "page_number": None, "section_title": None,
+                     "evidence_spans": [
+        {"span_id": "s0", "span_index": 0, "span_type": "sentence", "text": text[:13], "char_start": 0,
+         "char_end": 13, "page_number": 4, "section_title": None, "spanizer_version": None},
+        {"span_id": "s1", "span_index": 1, "span_type": "sentence", "text": text[14:], "char_start": 14,
+         "char_end": len(text), "page_number": 4, "section_title": None, "spanizer_version": None}]}}
+    view, _ = document_result_view("read_chunk", raw)
+    chunk = view["chunk"]
+    # Only span-only metadata moves to the chunk; the chunk's unknown page stays unknown.
+    assert "page_number" not in chunk and "section_title" not in chunk and "spanizer_version" not in chunk
+    assert chunk["span_type"] == "sentence"
+    assert chunk["evidence_spans"] == [
+        {"span_index": 0, "char_start": 0, "char_end": 13, "page_number": 4},
+        {"span_index": 1, "char_start": 14, "char_end": len(text), "page_number": 4},
+    ]
+
+
+def test_mixed_span_metadata_stays_on_each_span():
+    text = "A sentence. A caption"
+    raw = {"chunk": {"chunk_id": "c", "content": text, "evidence_spans": [
+        {"span_id": "s0", "span_index": 0, "span_type": "sentence", "text": text[:11],
+         "char_start": 0, "char_end": 11},
+        {"span_id": "s1", "span_index": 1, "span_type": "caption", "text": text[12:],
+         "char_start": 12, "char_end": len(text)}]}}
+    view, _ = document_result_view("read_chunk", raw)
+    assert "span_type" not in view["chunk"]
+    assert [span["span_type"] for span in view["chunk"]["evidence_spans"]] == ["sentence", "caption"]
 
 
 def test_invalid_offsets_fail_explicitly_instead_of_changing_evidence():
@@ -102,6 +169,8 @@ def test_catalog_keeps_paging_and_size_errors_distinct_from_pdf_failure(tool, ke
     from src.lib.agent_studio import catalog_service
     raw = {key: [] if key == "hits" else None, "error_code": code,
            "summary": "Use the continuation instructions", "result_bounds": {"complete": False}}
-    assert catalog_service._document_model_result(tool, raw) == raw
+    # The model view drops an absent (null) record but keeps the paging error intact.
+    assert catalog_service._document_model_result(tool, raw) == {
+        name: value for name, value in raw.items() if value is not None}
     with full_tool_results_requested():
         assert catalog_service._document_model_result(tool, raw) is raw

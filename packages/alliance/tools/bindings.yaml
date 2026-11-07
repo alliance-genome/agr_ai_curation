@@ -616,6 +616,7 @@ tools:
       category: Database
       builder_output_mode: domain
       builder_run_state: true
+      builder_stage: true
       audit:
         display_name: Stage Gene Expression Observation
       documentation:
@@ -835,6 +836,7 @@ tools:
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
+      builder_stage: true
       audit:
         display_name: Stage Gene Mention Evidence
       documentation:
@@ -1223,6 +1225,7 @@ tools:
       category: Database
       builder_output_mode: generic
       builder_run_state: true
+      builder_stage: true
       audit:
         display_name: Stage Generic Object
       documentation:
@@ -1444,6 +1447,7 @@ tools:
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
+      builder_stage: true
       audit:
         display_name: Stage Allele Observation
       documentation:
@@ -1670,6 +1674,7 @@ tools:
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
+      builder_stage: true
       audit:
         display_name: Stage Phenotype Observation
       documentation:
@@ -1921,6 +1926,7 @@ tools:
       # Run-state builder tool: the platform closure-binds the active builder workspace +
       # evidence records into this tool per run (streaming_tools._bind_run_state_into_tools).
       builder_run_state: true
+      builder_stage: true
       audit:
         display_name: Stage Disease Observation
       documentation:
@@ -2644,6 +2650,7 @@ tools:
       category: Database
       builder_output_mode: domain
       builder_run_state: true
+      builder_stage: true
       audit:
         display_name: Stage GO Recommendation
       documentation:

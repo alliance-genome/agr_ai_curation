@@ -57,6 +57,7 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "finalize_chat_output": "Finalize Chat Output",
     "formatter_cannot_complete": "Formatter Cannot Complete",
     "prepare_for_curation": "Curation Prep",
+    "submit_extraction_plan": "Plan Records",
 }
 
 

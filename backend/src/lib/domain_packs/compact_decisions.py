@@ -93,6 +93,10 @@ class DecisionContract:
     assemble_domain: Callable[[dict[str, Any], CompactValidatorDecision, "ValidatorDecisionWorkspace"], dict[str, Any]] | None = None
     # Package-owned request-specific decision shape, not copied provider facts.
     domain_contract: Mapping[str, Any] = field(default_factory=dict)
+    # Records the package's own decision parts selected (for example condition
+    # components). A record slot may copy these as well as root selections;
+    # the package assembler still checks every one of those selections.
+    selected_refs: Callable[[CompactValidatorDecision], set[str]] | None = None
 
 
 class ValidatorDecisionWorkspace:
@@ -227,6 +231,8 @@ class ValidatorDecisionWorkspace:
                 if result_field in contract.selected_result_fields and assessment.disposition != "selected":
                     continue
                 rows.setdefault(result_field, []).append(deepcopy(row))
+        if contract.selected_refs is not None:
+            selected.update(contract.selected_refs(decision))
         values = {}
         for slot, selection in decision.slots.items():
             # Optional slots are filled only when the record confirms them; never required.
