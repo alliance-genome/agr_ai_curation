@@ -132,11 +132,10 @@ DEFINITION = Definition(
     validator_detail_max_chars=400,
 )
 
-# A packet record shows a role only when the extraction declared one that
-# differs from its type. Records without one, and curatable units, are what a
-# curator acts on. Any other declared role (validated references, metadata,
-# evidence quotes, proxies) is a sub-record and always stays with the supervisor.
-TOP_LEVEL_ROLES = (None, "curatable_unit")
+# The platform's reference roles (as in evidence_summary.py): records that
+# support another record rather than answer the request. They always stay with
+# the supervisor. Every other role, or none, is a top-level record.
+SUB_RECORD_ROLES = frozenset({"metadata_only", "supporting_reference", "validated_reference"})
 # Claim records are top-level but never removed by a rule.
 CLAIM_TYPES = ("generic_claim",)
 # Validator states that carry no resolved answer for the model to compare.
@@ -168,15 +167,18 @@ def review_scope(curator_request, record):
         _SCOPE.reset(token)
 
 
-def packet_pinned(context, packet_id):
-    """Start the shadow check for a freshly pinned packet; never raises or waits."""
+def packet_pinned(context, page):
+    """Start the shadow check for the packet a reviewer read just pinned; never raises or waits."""
     try:
         scope = _SCOPE.get()
-        if scope is None or packet_id in scope.checked:
+        if scope is None:
             return
         from src.lib.openai_agents.config import get_validation_review_quick_check_mode
 
         if get_validation_review_quick_check_mode() != "shadow":
+            return
+        packet_id = page["packet_id"]
+        if packet_id in scope.checked:
             return
         scope.checked.add(packet_id)
         task = asyncio.get_running_loop().create_task(_observe(context, packet_id, scope))
@@ -228,9 +230,9 @@ def _quote(evidence, handle):
 
 def record_kind(record):
     """object, claim or sub_record, from the record's declared role and type."""
-    if record["role"] not in TOP_LEVEL_ROLES:
+    if record["role"] in SUB_RECORD_ROLES:
         return "sub_record"
-    if record["type"] in CLAIM_TYPES:
+    if record["type"] in CLAIM_TYPES or record["role"] in CLAIM_TYPES:
         return "claim"
     return "object"
 
@@ -447,24 +449,67 @@ def _sum_usage(parts):
     return {key: sum(part[key] for part in parts) for key in parts[0]} if parts else None
 
 
-async def _ask_order(client, order, request, records, cache_key, definition):
+@dataclass(frozen=True)
+class OrderCall:
+    """One order's request: its shared input and every question, with what each asks about."""
+
+    order: str
+    input: str
+    # (question, packet record label, question key, validator index or None)
+    asked: tuple
+
+
+@dataclass(frozen=True)
+class PreparedCheck:
+    """Everything built from the pinned packet before any request is sent."""
+
+    records: tuple
+    calls: tuple[OrderCall, ...]
+
+
+def prepare_check(body, *, request, definition=DEFINITION):
+    """Records, inputs and questions for every order; no calls when no record can be asked."""
+    records = packet_records(body, definition)
+    asked = asked_records(records)
+    calls = []
+    if asked:
+        for order in definition.orders:
+            labelled = ordered(asked, order)
+            calls.append(OrderCall(order, build_input(request, labelled, definition), tuple(
+                (question, record["record"], key, index)
+                for rid, record in labelled for question, key, index in record_questions(rid, record, definition))))
+    return PreparedCheck(tuple(records), tuple(calls))
+
+
+async def _ask_order(client, call, cache_key):
     """One order's call: every question about every record, chunked over one shared input."""
-    labelled = ordered(records, order)
-    request_input = build_input(request, labelled, definition)
-    asked = [(question, record["record"], key, index)
-             for rid, record in labelled for question, key, index in record_questions(rid, record, definition)]
     started = perf_counter()
     payloads, requests = [], []
-    for part in chunks([question for question, *_ in asked]):
+    for part in chunks([question for question, *_ in call.asked]):
         sent = perf_counter()
         payload = await client.post(DECISIONS_PATH, cast_to=object, body={
-            "model": MODEL, "input": request_input, "questions": part,
-            "prompt_cache_key": f"{cache_key}:{order}"})
+            "model": MODEL, "input": call.input, "questions": part,
+            "prompt_cache_key": f"{cache_key}:{call.order}"})
         if not isinstance(payload, dict) or not isinstance(payload.get("answers"), list):
             raise QuickCheckResponseError("Decisions response has no answers list")
         payloads.append(payload)
         requests.append({"questions": len(part), "latency_ms": round((perf_counter() - sent) * 1000),
                          "usage": _usage([payload])})
+    return {"order": call.order, "questions": len(call.asked), "requests": requests,
+            "latency_ms": round((perf_counter() - started) * 1000), "usage": _usage(payloads)}, payloads
+
+
+async def run_check(prepared, client, *, cache_key):
+    """Send every order's call at the same time; one failed call fails the check."""
+    outcomes = await asyncio.gather(*(_ask_order(client, call, cache_key) for call in prepared.calls),
+                                    return_exceptions=True)
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+    return outcomes
+
+
+def _parse_answers(call, payloads):
     returned = {}
     for payload in payloads:
         for answer in payload["answers"]:
@@ -472,13 +517,13 @@ async def _ask_order(client, order, request, records, cache_key, definition):
                 raise QuickCheckResponseError("Decisions answer has no name")
             returned[answer["name"]] = answer
     answers, refused, missing = {}, [], []
-    for question, label, key, index in asked:
+    for question, label, key, index in call.asked:
         answer = returned.get(question["name"])
         if answer is None:
-            missing.append(f"{order}:{question['name']}")
+            missing.append(f"{call.order}:{question['name']}")
             continue
         if answer.get("type") == "refusal":
-            refused.append(f"{order}:{question['name']}")
+            refused.append(f"{call.order}:{question['name']}")
             continue
         slot = answers.setdefault(label, {})
         if question["type"] == "choice":
@@ -493,9 +538,7 @@ async def _ask_order(client, order, request, records, cache_key, definition):
                 slot.setdefault(key, {})[index] = float(answer["probability"])
         else:
             raise QuickCheckResponseError("Decisions predicate answer has no probability")
-    call = {"order": order, "questions": len(asked), "requests": requests,
-            "latency_ms": round((perf_counter() - started) * 1000), "usage": _usage(payloads)}
-    return call, answers, refused, missing
+    return answers, refused, missing
 
 
 def _logged(order_answers, record):
@@ -513,34 +556,26 @@ def _rounded(scores):
     return {key: round(value, 6) for key, value in scores.items()}
 
 
-async def check_packet(body, *, request, cache_key, definition=DEFINITION):
-    """Ask every record's questions in each order at once, average the orders and apply every rule."""
-    started = perf_counter()
-    records = packet_records(body, definition)
-    asked = asked_records(records)
-    result = {"record_count": len(records), "asked_record_count": len(asked),
-              "rules": {rule.name: {"remove_scope_below": rule.remove_scope_below,
-                                    "skip_at_least": dict(rule.skip_at_least) if rule.skip_at_least else None}
-                        for rule in definition.rules}}
-    if not asked:
-        return {**result, "status": "no_questions", "calls": [],
-                "latency_ms": round((perf_counter() - started) * 1000)}
-    async with _decisions_client() as client:
-        outcomes = await asyncio.gather(
-            *(_ask_order(client, order, request, asked, cache_key, definition) for order in definition.orders),
-            return_exceptions=True)
-    for outcome in outcomes:
-        if isinstance(outcome, BaseException):
-            raise outcome
-    calls = [call for call, *_ in outcomes]
-    by_order = {order: answers for order, (_, answers, _, _) in zip(definition.orders, outcomes)}
-    refused = [name for *_, names, _ in outcomes for name in names]
-    missing = [name for *_, names in outcomes for name in names]
+def _rules(definition):
+    return {rule.name: {"remove_scope_below": rule.remove_scope_below,
+                        "skip_at_least": dict(rule.skip_at_least) if rule.skip_at_least else None}
+            for rule in definition.rules}
+
+
+def summarize(prepared, outcomes, definition=DEFINITION):
+    """Average the orders, apply every rule and shape the logged result."""
+    calls, by_order, refused, missing = [], {}, [], []
+    for call, (summary, payloads) in zip(prepared.calls, outcomes):
+        answers, order_refused, order_missing = _parse_answers(call, payloads)
+        calls.append(summary)
+        by_order[call.order] = answers
+        refused += order_refused
+        missing += order_missing
     rows = []
     routes = {rule.name: {"skip": 0, "remove": 0, "sol": 0} for rule in definition.rules}
-    for record in records:
+    for record in prepared.records:
         label = record["record"]
-        answers = {order: by_order[order].get(label, {}) for order in definition.orders}
+        answers = {order: by_order[order].get(label, {}) for order in by_order}
         scores = oriented_scores(answers, record, definition) if record["source_available"] else {}
         row = {"record": label, "target_id": record["target_id"], "type": record["type"], "role": record["role"],
                "kind": record["kind"], "routes": {}}
@@ -554,15 +589,16 @@ async def check_packet(body, *, request, cache_key, definition=DEFINITION):
         if reasons:
             row["route_reasons"] = reasons
         if record["source_available"]:
-            for order in definition.orders:
+            for order in by_order:
                 row[order] = _logged(answers[order], record)
             row["average"] = _rounded(scores)
         rows.append(row)
     return {
-        **result,
         "status": "partial" if refused or missing else "completed",
+        "record_count": len(prepared.records),
+        "asked_record_count": sum(1 for record in prepared.records if record["source_available"]),
+        "rules": _rules(definition),
         "calls": calls,
-        "latency_ms": round((perf_counter() - started) * 1000),
         "usage": _sum_usage([call["usage"] for call in calls]),
         "routes": routes,
         "records": rows,
@@ -619,13 +655,13 @@ def _report_unexpected(error):
             report_runtime_exception(
                 safe, component="validation_review", operation="quick_check_failed", level="warning"
             )
+        logger.warning(
+            "Validation review quick check failed",
+            extra={"event": "review_quick_check_failed", "error_type": type(error).__name__,
+                   "sentry_skip_event": True},
+        )
     except Exception:
         pass  # Reporting a shadow observer's failure must never reach review.
-    logger.warning(
-        "Validation review quick check failed",
-        extra={"event": "review_quick_check_failed", "error_type": type(error).__name__,
-               "sentry_skip_event": True},
-    )
 
 
 _LOG_RECORD_FIELDS = ("record", "kind", "routes", "route_reasons", "average")
@@ -636,7 +672,7 @@ def _emit(payload):
 
     The trace event keeps both orders' answers. The log line keeps each
     record's routes and averaged scores, so a large packet stays one
-    reasonably sized line.
+    reasonably sized line. Neither carries quotes, values or request text.
     """
     from src.lib.openai_agents.extraction_trace_events import write_extraction_trace_event
 
@@ -649,27 +685,52 @@ def _emit(payload):
         extra={"event": "review_quick_check", "quick_check": line, "sentry_skip_event": True})
 
 
-async def _observe(context, packet_id, scope):
-    from .provider import ACTIVE_BUDGET
+def _prepare(context, packet_id, scope):
+    """Off the event loop: read the pinned packet, then build every call and the client."""
+    body = _load_packet(context.history_scope, context.episode_id, packet_id)
+    request, source = review_request(scope.curator_request, scope.record.metadata.get("execution_context"))
+    prepared = prepare_check(body, request=request)
+    return source, prepared, _decisions_client() if prepared.calls else None
 
-    # This task runs in its own copy of the reviewer's context. Clearing the
-    # review budget there keeps the check from ever being charged to the review.
-    ACTIVE_BUDGET.set(None)
-    started = perf_counter()
-    payload = {"packet_id": packet_id, "episode_id": context.episode_id, "wording_id": DEFINITION.wording_id,
-               "model": MODEL, "mode": "shadow"}
+
+def _log_cancelled(packet_id):
     try:
+        logger.warning("Validation review quick check cancelled", extra={
+            "event": "review_quick_check",
+            "quick_check": {"packet_id": packet_id, "wording_id": DEFINITION.wording_id, "status": "cancelled"},
+            "sentry_skip_event": True})
+    except Exception:
+        pass  # Best effort while the task is being cancelled.
+
+
+async def _observe(context, packet_id, scope):
+    """Run one check to completion; a review that ends first does not stop it."""
+    started = perf_counter()
+    payload = {"packet_id": packet_id, "wording_id": DEFINITION.wording_id, "model": MODEL, "mode": "shadow"}
+    try:
+        from .provider import ACTIVE_BUDGET
+
+        # This task runs in its own copy of the reviewer's context. Clearing the
+        # review budget there keeps the check from ever being charged to the review.
+        ACTIVE_BUDGET.set(None)
+        payload["episode_id"] = context.episode_id
         try:
-            body = await asyncio.to_thread(_load_packet, context.history_scope, context.episode_id, packet_id)
-            execution_context = scope.record.metadata.get("execution_context")
-            request, source = review_request(scope.curator_request, execution_context)
-            payload.update(request_source=source,
-                           **await check_packet(body, request=request, cache_key=packet_id))
+            source, prepared, client = await asyncio.to_thread(_prepare, context, packet_id, scope)
+            payload["request_source"] = source
+            if client is None:
+                payload.update(status="no_questions", record_count=len(prepared.records), calls=[])
+            else:
+                async with client:
+                    outcomes = await run_check(prepared, client, cache_key=packet_id)
+                payload.update(await asyncio.to_thread(summarize, prepared, outcomes))
         except Exception as error:
-            payload.update(status="failed", latency_ms=round((perf_counter() - started) * 1000),
-                           error=_error_summary(error))
+            payload.update(status="failed", error=_error_summary(error))
             if not _is_provider_failure(error):
                 _report_unexpected(error)
-        _emit(payload)
+        payload["latency_ms"] = round((perf_counter() - started) * 1000)
+        await asyncio.to_thread(_emit, payload)
+    except asyncio.CancelledError:
+        _log_cancelled(packet_id)
+        raise
     except Exception as error:
         _report_unexpected(error)

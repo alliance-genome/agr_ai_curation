@@ -40,7 +40,8 @@
 
 ## sample_fly_publication.pdf
 
-- **Title**: Unknown (pre-existing fixture)
+- **Title**: Absolute Quantification of Proteins in the Eye of Drosophila melanogaster
+- **Journal**: Proteomics 2020, 20:1900049
 - **License**: Creative Commons Attribution 4.0 International (CC BY 4.0)
 - **License URL**: https://creativecommons.org/licenses/by/4.0/
 - **Verified**: 2026-02-12

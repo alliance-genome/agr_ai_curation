@@ -90,6 +90,19 @@ async def test_startup_stops_on_partial_flow_transfer_config(monkeypatch):
             pass
 
 
+@pytest.mark.parametrize("key,value", [
+    ("VALIDATION_REVIEW_QUICK_CHECK_MODE", "on"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS", "0"),
+    ("VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES", "-1"),
+])
+async def test_startup_stops_on_invalid_quick_check_setting(monkeypatch, key, value):
+    main = _main_module()
+    monkeypatch.setenv(key, value)
+    with pytest.raises(RuntimeError, match=key):
+        async with main.lifespan(FastAPI()):
+            pass
+
+
 class TestPdfExtractionTimeoutValidation:
     def test_low_timeout_recommends_canonical_default(self, monkeypatch):
         monkeypatch.setenv("PDF_EXTRACTION_TIMEOUT", "299")

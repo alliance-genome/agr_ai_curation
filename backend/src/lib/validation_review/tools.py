@@ -126,7 +126,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         )
         if packet_id is None:
             # Shadow observer only: it never raises, waits or changes this result.
-            quick_check.packet_pinned(context, result["packet_id"])
+            quick_check.packet_pinned(context, result)
         return result
 
     @function_tool(failure_error_function=None)

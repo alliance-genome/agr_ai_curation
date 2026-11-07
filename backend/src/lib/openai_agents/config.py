@@ -3951,6 +3951,16 @@ def get_validation_review_quick_check_max_retries() -> int:
     return value
 
 
+def validate_validation_review_quick_check_settings() -> None:
+    """Startup check: an invalid quick-check mode, timeout or retry count fails the deploy."""
+    try:
+        get_validation_review_quick_check_mode()
+        get_validation_review_quick_check_timeout_seconds()
+        get_validation_review_quick_check_max_retries()
+    except ValueError as error:
+        raise RuntimeError(f"Invalid validation review quick-check setting: {error}") from error
+
+
 def get_validation_review_initial_corrective_continuations() -> int:
     """Consecutive no-progress nudges per invocation; never a scientific retry cap."""
     name = "VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS"

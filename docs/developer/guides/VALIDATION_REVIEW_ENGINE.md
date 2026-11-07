@@ -288,7 +288,11 @@ With `VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow`, each fresh review packet that 
 chat or flow review pins is also sent to the OpenAI Decisions API (`gpt-6-luna`,
 `src/lib/validation_review/quick_check.py`). The check starts when
 `read_review_packet` pins the packet and runs alongside the supervisor's turn; the
-tool returns the same result without waiting. The packet is asked twice at the
+tool returns the same result without waiting. Once started, a check runs to
+completion even if the review ends first; if the event loop cancels it (for
+example at shutdown), one `cancelled` log line is written. The packet is read
+without locks, and the records, inputs, questions and client are built off the
+event loop. The packet is asked twice at the
 same time, with records in forward and in reversed order, because order shifts
 the answers; the two orders are averaged. Each record gets the questions of the
 definition `v6-shadow`: within the request (lenient wording), an identity value
@@ -304,10 +308,10 @@ record:
   validator answer at least 0.8;
 - strict: balanced, and the accept choice at least 0.5 to skip.
 
-Claim records are never removed. Records with a declared role other than
-`curatable_unit` (validated references, metadata and similar sub-records) always
-route to the supervisor, and so does any record with an answer missing or refused
-in either order.
+Claim records are never removed. Records with one of the platform's reference
+roles (`metadata_only`, `supporting_reference`, `validated_reference`) are
+sub-records and always route to the supervisor, and so does any record with an
+answer missing or refused in either order. Every other role is top-level.
 
 Nothing is applied. Both orders' answers, the averages, the route under each rule,
 and each call's latency and token counts are written as a
@@ -320,8 +324,8 @@ texts, input caps, orders and thresholds form one versioned `Definition` in
 They are code constants rather than environment settings on purpose: every logged
 run must stay comparable with the calibration it is measured against, and a
 per-deployment change would make the shadow data unusable for that. The mode,
-request timeout and retries are environment settings. The default mode is `off`,
-which makes no call.
+request timeout and retries are environment settings, validated at backend
+startup. The default mode is `off`, which makes no call.
 
 Calibration status of `v6-shadow`: the trial measured the lenient scope question
 in both record orders, so the averaged scope and the removal thresholds are

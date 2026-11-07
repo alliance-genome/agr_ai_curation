@@ -706,17 +706,25 @@ def test_review_quick_check_shadow_answers_are_visible_in_timeline_and_diagnosti
              'route_reasons': {'balanced': 'sub_record'}},
         ],
     }
-    _write_event(tmp_path, 'shadow', _event('shadow', 1, 'review_quick_check.shadow', output_summary=summary))
+    # The shape write_extraction_trace_event stores: the payload under preview, plus its size.
+    stored = {'preview': summary, 'preview_length': len(json.dumps(summary, sort_keys=True)),
+              'size': {'kind': 'mapping', 'json_chars': 640, 'json_bytes': 640, 'estimated_tokens': 160,
+                       'top_level_keys': len(summary)},
+              'bounded': True}
+    _write_event(tmp_path, 'shadow', _event('shadow', 1, 'review_quick_check.shadow', output_summary=stored))
     _write_event(tmp_path, 'shadow', _event('shadow', 2, 'extraction_builder.candidate_mutation'))
 
     result = ExtractionTimelineAnalyzer.analyze(trace_id='shadow', raw_trace={}, observations=[], include_raw_outputs=True)
 
     events = result['review_quick_check']['events']
     assert [item['event_type'] for item in events] == ['review_quick_check.shadow']
-    assert events[0]['output'] == summary
+    assert events[0]['output'] == stored
     assert 'calibration only' in result['review_quick_check']['note']
     report = ExtractionTimelineAnalyzer.diagnostic_report(result)
-    assert report['review_quick_check']['events'][0]['output']['routes'] == {'balanced': {'skip': 1, 'remove': 1, 'sol': 1}}
+    assert report['review_quick_check']['events'][0]['output']['preview']['routes'] == {
+        'balanced': {'skip': 1, 'remove': 1, 'sol': 1}}
+    brief = ExtractionTimelineAnalyzer.analyze(trace_id='shadow', raw_trace={}, observations=[])
+    assert brief['review_quick_check']['events'][0]['output'] == 'status: completed'
 
 
 def test_review_quick_check_section_is_absent_when_no_check_ran(tmp_path, monkeypatch):

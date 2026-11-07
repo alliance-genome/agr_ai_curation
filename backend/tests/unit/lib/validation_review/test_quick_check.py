@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -19,6 +19,7 @@ FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "validation_review
 QUESTION = "What transgenic flies are used in the publication?"
 SCOPE = HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session")
 RULES = {rule.name: rule for rule in quick_check.DEFINITION.rules}
+PAGE = {"packet_id": "packet-1"}
 
 
 def _packet(validators=True):
@@ -62,6 +63,7 @@ class FakeDecisions:
 
     def __init__(self):
         self.requests = []
+        self.clients = []
         self.respond = lambda body: {"answers": _answers(body["questions"]),
                                      "usage": {"input_tokens": 3000, "output_tokens": 0,
                                                "input_tokens_details": {"cached_tokens": 1000,
@@ -78,8 +80,10 @@ class FakeDecisions:
         return httpx.Response(200, json=response)
 
     def client(self):
-        return AsyncOpenAI(api_key="test-placeholder", base_url="https://decisions.test/v1", max_retries=0,
-                           http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handler)))
+        client = AsyncOpenAI(api_key="test-placeholder", base_url="https://decisions.test/v1", max_retries=0,
+                             http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handler)))
+        self.clients.append(client)
+        return client
 
     def order(self, order):
         return [sent for sent in self.requests if sent["body"]["prompt_cache_key"].endswith(":" + order)]
@@ -100,6 +104,13 @@ def captured(monkeypatch):
     monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception",
                         lambda exc, **kwargs: sink.reports.append((exc, kwargs)) or True)
     return sink
+
+
+async def _check(fake, packet, *, cache_key="p"):
+    prepared = quick_check.prepare_check(packet, request=QUESTION)
+    async with fake.client() as client:
+        outcomes = await quick_check.run_check(prepared, client, cache_key=cache_key)
+    return quick_check.summarize(prepared, outcomes)
 
 
 async def _drain():
@@ -174,7 +185,7 @@ def _record(*, kind="object", validators=()):
 
 
 def _orders(forward, reversed_=None):
-    """Per-order answers in the shape check_packet collects them."""
+    """Per-order answers in the shape summarize collects them."""
     return {"forward": forward, "reversed": forward if reversed_ is None else reversed_}
 
 
@@ -248,16 +259,20 @@ def test_an_answer_missing_in_either_order_never_removes_or_skips():
     assert _routes(record, _orders({**GOOD, "val_entity": {1: 1.0}}, reverse))["balanced"] == ("sol", "unanswered")
 
 
-def test_curatable_units_and_records_without_a_declared_role_are_top_level():
+def test_only_the_platform_reference_roles_are_sub_records():
     packet = _packet(validators=False)
     packet["records"][0]["role"] = "curatable_unit"
     packet["records"][1]["role"] = "validated_reference"
     packet["records"][2]["type"] = "generic_claim"
+    packet["records"][3]["role"] = "generic_proxy_object"
+    packet["records"][4]["role"] = "metadata_only"
+    packet["records"][5]["role"] = "supporting_reference"
+    packet["records"].append({**copy.deepcopy(packet["records"][0]), "record": "R7", "role": "evidence_quote"})
     packet["records"].append({"record": None, "review": [{"review": "waiting", "codes": ["global"]}]})
     records = quick_check.packet_records(packet)
     assert [(record["record"], record["kind"]) for record in records] == [
-        ("R1", "object"), ("R2", "sub_record"), ("R3", "claim"), ("R4", "object"), ("R5", "object"),
-        ("R6", "object")]
+        ("R1", "object"), ("R2", "sub_record"), ("R3", "claim"), ("R4", "object"), ("R5", "sub_record"),
+        ("R6", "sub_record"), ("R7", "object")]
 
 
 @pytest.mark.asyncio
@@ -279,7 +294,7 @@ async def test_check_asks_both_orders_at_once_and_logs_every_rule(decisions):
 
     decisions.respond = respond
     packet = _packet()
-    result = await quick_check.check_packet(packet, request=QUESTION, cache_key=packet["packet_id"])
+    result = await _check(decisions, packet, cache_key=packet["packet_id"])
 
     for order in ("forward", "reversed"):
         [sent] = decisions.order(order)
@@ -315,7 +330,7 @@ async def test_more_than_400_questions_are_split_within_each_order(decisions):
     template = packet["records"][0]
     packet["records"] = [{**copy.deepcopy(template), "record": f"R{index}", "target_id": f"t{index}"}
                          for index in range(1, 102)]
-    result = await quick_check.check_packet(packet, request=QUESTION, cache_key="packet-big")
+    result = await _check(decisions, packet, cache_key="packet-big")
 
     for order in ("forward", "reversed"):
         sent = decisions.order(order)
@@ -337,7 +352,7 @@ async def test_refused_questions_leave_the_record_with_the_supervisor(decisions)
         return {"answers": answers, "usage": {"input_tokens": 10}}
 
     decisions.respond = respond
-    result = await quick_check.check_packet(_packet(), request=QUESTION, cache_key="p")
+    result = await _check(decisions, _packet())
     assert result["status"] == "partial"
     assert result["refused"] == ["reversed:sup_neg__R6"] and result["missing"] == []
     r1 = next(row for row in result["records"] if row["record"] == "R1")
@@ -355,16 +370,23 @@ async def test_one_failed_order_fails_the_check(decisions):
 
     decisions.respond = respond
     with pytest.raises(Exception) as raised:
-        await quick_check.check_packet(_packet(), request=QUESTION, cache_key="p")
+        await _check(decisions, _packet())
     assert type(raised.value).__name__ == "RateLimitError"
     assert len(decisions.requests) == 2
 
 
 @pytest.mark.asyncio
-async def test_packet_without_records_makes_no_call(decisions):
+async def test_packet_without_records_makes_no_call(decisions, captured, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
     packet = {"packet_id": "p", "evidence": {}, "records": [{"record": None, "review": []}]}
-    result = await quick_check.check_packet(packet, request=QUESTION, cache_key="p")
-    assert result["status"] == "no_questions" and decisions.requests == []
+    assert quick_check.prepare_check(packet, request=QUESTION).calls == ()
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: packet)
+    with quick_check.review_scope(QUESTION, _source()):
+        quick_check.packet_pinned(_context(), PAGE)
+        await _drain()
+    [event] = captured.events
+    assert event["output_summary"]["status"] == "no_questions"
+    assert decisions.requests == [] and decisions.clients == []
 
 
 def test_record_without_its_saved_source_is_not_asked_and_stays_with_the_supervisor():
@@ -387,8 +409,8 @@ async def test_shadow_check_logs_one_trace_event_per_fresh_packet(decisions, cap
                         lambda scope, episode, packet: loads.append((scope, episode, packet)) or _packet())
     metadata = {"execution_context": {"source_kind": "chat", "executed_query": "Extract transgenic fly stocks."}}
     with quick_check.review_scope(QUESTION, _source(metadata)):
-        quick_check.packet_pinned(_context(), "packet-1")
-        quick_check.packet_pinned(_context(), "packet-1")
+        quick_check.packet_pinned(_context(), PAGE)
+        quick_check.packet_pinned(_context(), PAGE)
         await _drain()
     assert loads == [(SCOPE, "episode-1", "packet-1")]
     assert len(decisions.requests) == 2
@@ -415,7 +437,7 @@ async def test_mode_off_makes_no_call(decisions, captured, monkeypatch):
     load = Mock()
     monkeypatch.setattr(quick_check, "_load_packet", load)
     with quick_check.review_scope(QUESTION, _source()):
-        quick_check.packet_pinned(_context(), "packet-1")
+        quick_check.packet_pinned(_context(), PAGE)
         await _drain()
     assert not quick_check._RUNNING and decisions.requests == [] and captured.events == []
     load.assert_not_called()
@@ -425,7 +447,7 @@ async def test_mode_off_makes_no_call(decisions, captured, monkeypatch):
 async def test_default_mode_is_off(decisions, captured, monkeypatch):
     monkeypatch.delenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", raising=False)
     with quick_check.review_scope(QUESTION, _source()):
-        quick_check.packet_pinned(_context(), "packet-1")
+        quick_check.packet_pinned(_context(), PAGE)
         await _drain()
     assert decisions.requests == [] and captured.events == []
 
@@ -433,7 +455,7 @@ async def test_default_mode_is_off(decisions, captured, monkeypatch):
 @pytest.mark.asyncio
 async def test_review_without_a_bound_scope_is_not_checked(decisions, captured, monkeypatch):
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
-    quick_check.packet_pinned(_context(), "packet-1")
+    quick_check.packet_pinned(_context(), PAGE)
     await _drain()
     assert decisions.requests == [] and captured.events == []
 
@@ -445,7 +467,7 @@ async def test_provider_failure_is_logged_without_effect(decisions, captured, mo
     decisions.respond = lambda body: httpx.Response(
         503, json={"error": {"message": "overloaded", "type": "server_error", "code": "server_overloaded"}})
     with quick_check.review_scope(QUESTION, _source()):
-        quick_check.packet_pinned(_context(), "packet-1")
+        quick_check.packet_pinned(_context(), PAGE)
         await _drain()
     [event] = captured.events
     payload = event["output_summary"]
@@ -465,7 +487,7 @@ async def test_unexpected_failure_reports_without_content_and_without_effect(cap
 
     monkeypatch.setattr(quick_check, "_load_packet", broken)
     with quick_check.review_scope(QUESTION, _source()):
-        quick_check.packet_pinned(_context(), "packet-1")
+        quick_check.packet_pinned(_context(), PAGE)
         await _drain()
     [event] = captured.events
     assert event["output_summary"]["status"] == "failed"
@@ -481,7 +503,7 @@ async def test_unexpected_failure_reports_without_content_and_without_effect(cap
 async def test_invalid_mode_is_reported_and_never_raised(captured, monkeypatch):
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "on")
     with quick_check.review_scope(QUESTION, _source()):
-        assert quick_check.packet_pinned(_context(), "packet-1") is None
+        assert quick_check.packet_pinned(_context(), PAGE) is None
     [(exc, _)] = captured.reports
     assert str(exc) == "Validation review quick check failed (ValueError)"
 
@@ -516,7 +538,7 @@ async def test_reviewer_packet_read_is_unchanged_by_the_shadow_check(outcome, de
     if outcome == "provider_failure":
         decisions.respond = lambda body: httpx.Response(500, json={"error": {"message": "boom"}})
     elif outcome == "observer_defect":
-        monkeypatch.setattr(quick_check, "check_packet", Mock(side_effect=TypeError("defect")))
+        monkeypatch.setattr(quick_check, "prepare_check", Mock(side_effect=TypeError("defect")))
     tool = _read_tool(_context())
     with quick_check.review_scope(QUESTION, _source()):
         first = await _invoke(tool, {})
@@ -531,19 +553,20 @@ async def test_reviewer_packet_read_is_unchanged_by_the_shadow_check(outcome, de
 
 
 @pytest.mark.asyncio
-async def test_reviewer_packet_read_does_not_wait_for_the_check(captured, monkeypatch):
+async def test_reviewer_packet_read_does_not_wait_for_the_check(decisions, captured, monkeypatch):
     from src.lib.validation_review import reads
 
     release = asyncio.Event()
+    run_check = quick_check.run_check
 
-    async def slow_check(body, *, request, cache_key):
+    async def slow_check(prepared, client, *, cache_key):
         await release.wait()
-        return {"status": "completed"}
+        return await run_check(prepared, client, cache_key=cache_key)
 
     monkeypatch.setattr(reads, "review_packet", lambda *args, **kwargs: {"packet_id": "packet-1"})
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
     monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
-    monkeypatch.setattr(quick_check, "check_packet", slow_check)
+    monkeypatch.setattr(quick_check, "run_check", slow_check)
     with quick_check.review_scope(QUESTION, _source()):
         result = await asyncio.wait_for(_invoke(_read_tool(_context()), {}), timeout=5)
         assert result == {"packet_id": "packet-1"} and captured.events == []
@@ -557,7 +580,7 @@ async def test_binding_a_scope_reads_nothing_and_a_bad_record_only_fails_the_che
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
     monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
     with quick_check.review_scope(QUESTION, object()):
-        quick_check.packet_pinned(_context(), "packet-1")
+        quick_check.packet_pinned(_context(), PAGE)
         await _drain()
     [event] = captured.events
     assert event["output_summary"]["status"] == "failed"
@@ -566,21 +589,143 @@ async def test_binding_a_scope_reads_nothing_and_a_bad_record_only_fails_the_che
 
 
 @pytest.mark.asyncio
-async def test_the_check_is_never_charged_to_the_review_budget(captured, monkeypatch):
+async def test_the_check_is_never_charged_to_the_review_budget(decisions, captured, monkeypatch):
     from src.lib.validation_review.provider import ACTIVE_BUDGET, ExecutionBudget, budget_scope
 
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
     monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
     seen = []
+    run_check = quick_check.run_check
 
-    async def check(body, *, request, cache_key):
+    async def check(prepared, client, *, cache_key):
         seen.append(ACTIVE_BUDGET.get())
-        return {"status": "completed"}
+        return await run_check(prepared, client, cache_key=cache_key)
 
-    monkeypatch.setattr(quick_check, "check_packet", check)
+    monkeypatch.setattr(quick_check, "run_check", check)
     budget = ExecutionBudget(SCOPE, "episode-1", "reviewer_tokens", True, reviewer_agent_id="reviewer")
     with budget_scope(budget), quick_check.review_scope(QUESTION, _source()):
-        quick_check.packet_pinned(_context(), "packet-1")
+        quick_check.packet_pinned(_context(), PAGE)
         await _drain()
         assert ACTIVE_BUDGET.get() is budget
     assert seen == [None]
+
+
+@pytest.mark.asyncio
+async def test_a_page_without_a_packet_id_is_reported_and_never_raised(captured, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    with quick_check.review_scope(QUESTION, _source()):
+        assert quick_check.packet_pinned(_context(), {}) is None
+        await _drain()
+    [(exc, _)] = captured.reports
+    assert str(exc) == "Validation review quick check failed (KeyError)"
+    assert captured.events == []
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_check_mid_call_closes_the_client_and_lets_nothing_escape(
+        decisions, captured, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=quick_check.__name__)
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    never = asyncio.Event()
+
+    async def hang(body):
+        await never.wait()
+
+    decisions.respond = hang
+    loop_errors = []
+    asyncio.get_running_loop().set_exception_handler(lambda loop, context: loop_errors.append(context))
+    with quick_check.review_scope(QUESTION, _source()):
+        quick_check.packet_pinned(_context(), PAGE)
+        await asyncio.wait_for(_until(lambda: len(decisions.requests) == 2), timeout=5)
+        [task] = list(quick_check._RUNNING)
+        task.cancel()
+        results = await asyncio.gather(task, return_exceptions=True)
+    await asyncio.sleep(0)
+    assert isinstance(results[0], asyncio.CancelledError)
+    assert not quick_check._RUNNING
+    assert [client.is_closed() for client in decisions.clients] == [True]
+    assert captured.events == [] and captured.reports == [] and loop_errors == []
+    [line] = [record for record in caplog.records if getattr(record, "event", None) == "review_quick_check"]
+    assert line.quick_check == {"packet_id": "packet-1", "wording_id": "v6-shadow", "status": "cancelled"}
+
+
+async def _until(condition):
+    while not condition():
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reviews_each_check_their_own_packets(decisions, captured, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    both_bound = asyncio.Barrier(2)
+
+    async def review(episode):
+        with quick_check.review_scope(QUESTION, _source()):
+            await both_bound.wait()
+            context = ReviewContext(SCOPE, episode, "reviewer")
+            quick_check.packet_pinned(context, PAGE)
+            quick_check.packet_pinned(context, PAGE)
+            await _drain()
+
+    await asyncio.gather(review("episode-1"), review("episode-2"))
+    assert sorted(event["output_summary"]["episode_id"] for event in captured.events) == ["episode-1", "episode-2"]
+    assert len(decisions.requests) == 4
+
+
+@pytest.mark.asyncio
+async def test_chat_review_binds_the_scope_only_while_the_reviewer_runs(monkeypatch):
+    from src.lib.openai_agents import extraction_trace_events
+    from src.lib.validation_review import chat
+    from src.lib.validation_review.chat import ChatReview
+
+    review = ChatReview("owner", "document", "session", "turn", None, (), QUESTION)
+    record = SimpleNamespace(extraction_result_id="source", metadata={"execution_context": {"source_kind": "chat"}})
+    context = SimpleNamespace(episode_id="episode", history_scope=None, actor_id="supervisor")
+    monkeypatch.setattr(review, "context", lambda _: context)
+    monkeypatch.setattr(review, "saved_review_outcome", lambda _: None)
+    monkeypatch.setattr(review, "reference", lambda _: dict(artifact_id="artifact", episode_id="episode",
+                                                             plan_ref="plan"))
+    adapter = SimpleNamespace(initial=AsyncMock(), advance=AsyncMock(), execute=None, prepare_inputs=None,
+                              refresh_inputs=None)
+    monkeypatch.setattr(chat, "ValidatorAdapter", lambda *a, **kw: adapter)
+    monkeypatch.setattr(review, "extractor_adapter",
+                        lambda *a: SimpleNamespace(request=None, receipt={"agent_key": "saved", "contract": None}))
+    monkeypatch.setattr(chat.reviewer, "create_supervisor_phase", lambda *a, **kw: SimpleNamespace(tools=[]))
+    monkeypatch.setattr(extraction_trace_events, "write_extraction_trace_event", lambda **kw: None)
+    during = []
+
+    async def run(*args, **kwargs):
+        during.append(quick_check._SCOPE.get())
+        return {"review": {"ready": True}}
+
+    monkeypatch.setattr(chat.reviewer, "run", run)
+    assert quick_check._SCOPE.get() is None
+    assert await review.review_result(record) == {"review": {"ready": True}}
+    [scope] = during
+    assert scope.curator_request == QUESTION and scope.record is record and scope.checked == set()
+    assert quick_check._SCOPE.get() is None
+
+
+@pytest.mark.asyncio
+async def test_logged_event_and_line_carry_no_quotes_values_or_request_text(decisions, captured, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=quick_check.__name__)
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    delegation = "List the transgenic fly stocks used in the paper."
+    metadata = {"execution_context": {"source_kind": "flow", "executed_query": delegation}}
+    with quick_check.review_scope(QUESTION, _source(metadata)):
+        quick_check.packet_pinned(_context(), PAGE)
+        await _drain()
+    [event] = captured.events
+    [line] = [record for record in caplog.records if getattr(record, "event", None) == "review_quick_check"]
+    assert event["output_summary"]["request_source"] == "delegation"
+    assert delegation in decisions.requests[0]["body"]["input"]
+    logged = json.dumps(event, default=str) + json.dumps(line.quick_check, default=str)
+    packet = _packet()
+    quotes = [item["verified_quote"] for item in packet["evidence"].values() if "verified_quote" in item]
+    values = [record["values"]["label"] for record in packet["records"]] + [
+        record["values"]["source_label"] for record in packet["records"]]
+    for text in [QUESTION, delegation, "Exact symbol match.", "FB:FBgn0259685", *quotes, *values]:
+        assert text not in logged, text
