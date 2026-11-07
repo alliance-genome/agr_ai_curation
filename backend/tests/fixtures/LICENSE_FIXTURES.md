@@ -38,6 +38,13 @@
 - **Created**: 2026-11-07
 - **Usage**: Decisions quick-check input and question wording tests; the golden file is the calibration trial's own rendering of this packet in forward and reversed order
 
+## validation_review/quick_check_phenotype_packet.json and quick_check_phenotype_golden.json
+
+- **Source**: The structure of one development-replay phenotype review packet (record types, roles, handles, numbering and value shapes); every quote, value and validator text is a placeholder, so no publication text is included
+- **License**: Project-authored test data
+- **Created**: 2026-11-07
+- **Usage**: Decisions quick-check rendering tests; the golden file is the calibration trial's own rendering of this packet in forward and reversed order
+
 ## sample_fly_publication.pdf
 
 - **Title**: Absolute Quantification of Proteins in the Eye of Drosophila melanogaster

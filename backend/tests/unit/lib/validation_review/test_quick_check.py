@@ -128,7 +128,7 @@ def _source(metadata=None):
 
 
 def test_both_orders_render_exactly_as_the_trial_did():
-    records = quick_check.asked_records(quick_check.packet_records(_packet()))
+    records = quick_check.rendered_records(quick_check.packet_records(_packet()))
     golden = _golden()
     for order in (quick_check.FORWARD, quick_check.REVERSED):
         labelled = quick_check.ordered(records, order)
@@ -446,7 +446,7 @@ def test_record_without_its_saved_source_is_not_asked_and_stays_with_the_supervi
     packet["records"][2] = {"record": "R3", "target_id": "t3", "source_unavailable": "History conflict",
                             "review": [{"review": "record", "handle": "D3"}]}
     records = quick_check.packet_records(packet)
-    asked = quick_check.asked_records(records)
+    asked = quick_check.rendered_records(records)
     assert [record["record"] for record in asked] == ["R1", "R2", "R4", "R5", "R6"]
     assert [rid for rid, _ in quick_check.ordered(asked, "forward")] == ["R1", "R2", "R3", "R4", "R5"]
     assert quick_check.route(records[2], {}, RULES["balanced"]) == ("sol", "source_unavailable")
@@ -785,3 +785,109 @@ async def test_logged_event_and_line_carry_no_quotes_values_or_request_text(deci
         record["values"]["source_label"] for record in packet["records"]]
     for text in [QUESTION, delegation, "Exact symbol match.", "FB:FBgn0259685", *quotes, *values]:
         assert text not in logged, text
+
+
+def _phenotype_packet():
+    """The shape of a phenotype review packet (dev trace f235da27): sub-records, and evidence-quote
+    records whose values are an evidence handle. Texts are placeholders."""
+    quote = {"page": 3, "section": "Figure Legends", "subsection": "Fig. 1", "entity": "Figure 1e",
+             "field_paths": ["phenotype_annotation_object"], "verified_quote": "Treated larvae showed fewer sheaths."}
+    return {
+        "packet_id": "69c38ca9-0000-4000-8000-000000000000",
+        "evidence": {
+            "E1": quote,
+            "E2": {"page": 3, "section": "Figure Legends", "subsection": "Fig. 1", "entity": "Figure 1e",
+                   "same_quote_as": "E1"},
+            "E3": {"page": 2, "section": "Results", "verified_quote": "Larvae were treated from 3 to 4 dpf."},
+        },
+        "records": [
+            {"record": "R1", "type": "PhenotypeSubject", "role": "validated_reference", "target_id": "t1",
+             "review": [{"handle": "D1", "review": "record"}], "values": {"resolution_note": "Pending subject."},
+             "definition_notes": [], "definition_state": "in_development"},
+            {"record": "R2", "type": "PhenotypeTerm", "role": "validated_reference", "target_id": "t2",
+             "review": [{"handle": "D2", "review": "record"}], "evidence": ["E1"],
+             "values": {"curie": None, "label": None, "mention": "sheath number"}},
+            {"record": "R3", "type": "Reference", "role": "validated_reference", "target_id": "t3",
+             "review": [{"handle": "D3", "review": "record"}], "values": {}},
+            {"record": "R4", "type": "EvidenceQuote", "role": "metadata_only", "target_id": "t4",
+             "review": [{"handle": "D4", "review": "record"}], "values": "E2", "evidence": ["E1"]},
+            {"record": "R5", "type": "EvidenceQuote", "role": "metadata_only", "target_id": "t5",
+             "review": [{"handle": "D5", "review": "record"}], "values": "E3", "evidence": ["E3"]},
+            {"record": "R6", "type": "PhenotypeAnnotation", "role": "curatable_unit", "target_id": "t6",
+             "evidence": ["E1", "E3"], "object_refs": ["R1", "R2", "R3"],
+             "values": {"negated": False, "rationale": "Panel e shows fewer sheaths."},
+             "review": [
+                 {"handle": "D6", "review": "validator_answer", "validator": "condition_validator",
+                  "field": "condition_relations[0].conditions[0]", "status": "resolved",
+                  "values": {"condition_class_curie": "ZECO:0000238"}, "evidence": ["E1"]},
+                 {"handle": "D7", "review": "lookup_not_supported", "validator": "subject_validator"},
+             ]},
+        ],
+    }
+
+
+def test_sub_records_are_rendered_and_numbered_but_never_asked():
+    records = quick_check.packet_records(_phenotype_packet())
+    assert [(record["record"], record["kind"], record["asked"]) for record in records] == [
+        ("R1", "sub_record", False), ("R2", "sub_record", False), ("R3", "sub_record", False),
+        ("R4", "sub_record", False), ("R5", "sub_record", False), ("R6", "object", True)]
+    assert records[3]["values"] == {"value": "E2"} and records[4]["values"] == {"value": "E3"}
+    prepared = quick_check.prepare_check(_phenotype_packet(), request=QUESTION)
+    forward, reverse = prepared.calls
+    assert forward.input.index("Record R1 (PhenotypeSubject, role validated_reference):") < forward.input.index(
+        'Record R4 (EvidenceQuote, role metadata_only):\n  value: "E2"') < forward.input.index(
+        "Record R6 (PhenotypeAnnotation, role curatable_unit):")
+    assert reverse.input.index("Record R1 (PhenotypeAnnotation, role curatable_unit):") < reverse.input.index(
+        "Record R6 (PhenotypeSubject, role validated_reference):")
+    assert [question["name"] for question, *_ in forward.asked] == [
+        "scope_lenient__R6", "sup_neg__R6", "own_neg__R6", "val_entity__R6V1", "choice3__R6"]
+    assert [question["name"] for question, *_ in reverse.asked] == [
+        "scope_lenient__R1", "sup_neg__R1", "own_neg__R1", "val_entity__R1V1", "choice3__R1"]
+    assert {label for _, label, *_ in forward.asked + reverse.asked} == {"R6"}
+
+
+def test_a_real_phenotype_group_renders_exactly_as_the_trial_did():
+    """Trial group dev_replay:C_doug_min15:77ce5554 (placeholder text), rendered by the trial's run_v2."""
+    packet = json.loads((FIXTURES / "quick_check_phenotype_packet.json").read_text())
+    golden = json.loads((FIXTURES / "quick_check_phenotype_golden.json").read_text())
+    records = quick_check.rendered_records(quick_check.packet_records(packet))
+    assert {record["kind"] for record in records} == {"object", "sub_record"}
+    for order in (quick_check.FORWARD, quick_check.REVERSED):
+        labelled = quick_check.ordered(records, order)
+        assert {rid: record["record"] for rid, record in labelled} == golden[order]["labels"]
+        assert quick_check.build_input(golden["request"], labelled) == golden[order]["input"]
+    prepared = quick_check.prepare_check(packet, request=golden["request"])
+    asked = {label for call in prepared.calls for _, label, *_ in call.asked}
+    assert asked == {record["record"] for record in records if record["type"] == "PhenotypeAnnotation"}
+
+
+def test_a_top_level_record_whose_values_are_an_evidence_handle_renders_like_the_trial():
+    packet = _phenotype_packet()
+    packet["records"][4]["role"] = None
+    [record] = [record for record in quick_check.packet_records(packet) if record["record"] == "R5"]
+    assert record["asked"] and record["values"] == {"value": "E3"}
+    text = quick_check.build_input(QUESTION, quick_check.ordered([record], "forward"))
+    assert '  value: "E3"\n  evidence E3 (page 2, Results): "Larvae were treated from 3 to 4 dpf."' in text
+    with pytest.raises(TypeError):
+        quick_check._record_values(["E3"])
+
+
+@pytest.mark.asyncio
+async def test_a_phenotype_packet_with_evidence_quote_records_is_checked(decisions, captured, monkeypatch):
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _phenotype_packet())
+    with quick_check.review_scope(QUESTION, _source()):
+        quick_check.packet_pinned(_context(), PAGE)
+        await _drain()
+    [event] = captured.events
+    payload = event["output_summary"]
+    assert payload["status"] == "completed" and captured.reports == []
+    assert payload["record_count"] == 6 and payload["asked_record_count"] == 1
+    assert [len(request["body"]["questions"]) for request in decisions.requests] == [5, 5]
+    rows = {row["record"]: row for row in payload["records"]}
+    for label in ("R1", "R2", "R3", "R4", "R5"):
+        assert rows[label]["routes"] == {"removal_only": "sol", "balanced": "sol", "strict": "sol"}
+        assert set(rows[label]["route_reasons"].values()) == {"sub_record"}
+        assert not set(rows[label]) & {"forward", "reversed", "average"}
+    assert rows["R6"]["routes"] == {"removal_only": "sol", "balanced": "skip", "strict": "skip"}
+    assert rows["R6"]["forward"]["val_entity"] == {"R6V1": 1.0}
