@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.lib.validation_history.store import HistoryConflict
+from src.lib.validation_review.admission import ReviewStopped
 from src.lib.validation_review.chat import ChatReview
 from src.lib.validation_review.progress import review_progress
 from src.lib.openai_agents import streaming_tools, runner
@@ -341,6 +343,17 @@ _NOT_RUN = "Supervisor review: re-check did not run"
       "message": "Parent decision must concern every requested entry"},
      [(_NOT_RUN, "warning")]),
     ({"state": "not_claimed", "work_id": "work"}, [(_NOT_RUN, "warning")]),
+    # A finished re-check with an empty exhausted list has nothing to refuse.
+    ({"state": "completed", "work_id": "work", "contributions": [{}], "exhausted": []},
+     [(_FINISHED + "1 record", None)]),
+    # A refusal that does not list its records cannot say how many; nothing ran.
+    ({"state": "not_applied", "code": "extraction_attempts_exhausted", "resource": _ENTRY_IDS[0],
+      "applied": [], "targets": []},
+     [(_NOT_RUN, "warning")]),
+    # Unknown shapes never claim that a re-check ran.
+    ({"state": "completed", "work_id": "work"}, [(_NOT_RUN, "warning")]),
+    ({"state": "queued"}, [(_NOT_RUN, "warning")]),
+    ({}, [(_NOT_RUN, "warning")]),
 ])
 def test_recheck_says_how_it_ended(events, result, finish):
     from src.lib.validation_review.progress import ReviewLines
@@ -399,6 +412,101 @@ def test_each_of_two_overlapping_rechecks_reports_its_own_end(events):
         "Supervisor review: asking the extraction agent to re-check 1 record",
         "Supervisor review: re-check finished for 1 record",
     ]
+
+
+def test_overlapping_packet_reads_show_each_distinct_page_once(events):
+    """Finish lines collapse by text: two pages read together each show (since ALL-1504)."""
+    from src.lib.validation_review.progress import ReviewLines
+
+    first = {"records": [{}], "page": 1, "pages": 2, "record_count": 81, "answer_count": 0}
+    streaming_tools.set_live_event_list([])
+    try:
+        lines = ReviewLines("episode")
+        for _ in range(3):
+            lines.start("read_review_packet", {"packet_id": "packet", "page": None})
+        lines.finish("read_review_packet", first)
+        lines.finish("read_review_packet", first)
+        lines.finish("read_review_packet", {**first, "page": 2})
+        lines.start("read_review_packet", {"packet_id": "packet", "page": None})
+        lines.finish("read_review_packet", first)
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == [
+        "Supervisor review: reviewing 81 records (part 1 of 2)",
+        "Supervisor review: reviewing more records (part 2 of 2)",
+        "Supervisor review: reviewing 81 records (part 1 of 2)",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome,finish", [
+    (lambda: ReviewStopped("fresh_extraction_required"), [_NOT_RUN]),
+    (lambda: ReviewStopped("saved_extractor_contract_unavailable"), [_NOT_RUN]),
+    (lambda: HistoryConflict("Parent decision must concern every requested entry"), [_NOT_RUN]),
+    (lambda: {"state": "completed", "work_id": "work", "contributions": [{}, {}],
+              "exhausted": [_ENTRY_IDS[2]], "exhausted_note": "Decide these records now."},
+     [_FINISHED + "2 records", _NONE_LEFT + "1 record"]),
+])
+async def test_recheck_lines_through_the_real_review_tool(events, outcome, finish):
+    """The bound tool, its recoverable-result conversion and the lines run for real."""
+    import json
+    from unittest.mock import Mock
+    from agents.tool_context import ToolContext
+    from src.lib.validation_history.store import HistoryScope
+    from src.lib.validation_review.decisions import ReviewContext
+    from src.lib.validation_review.tools import create_tools
+
+    async def request_extraction(**arguments):
+        value = outcome()
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    async def unused(**arguments):
+        raise AssertionError("not called")
+
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    tool = next(t for t in create_tools(context, checkpoint_provider=Mock(), request_extraction=request_extraction,
+                                        select_source=unused, assess_source=unused)
+                if t.name == "request_targeted_extraction")
+    arguments = json.dumps({"operation_id": "recheck", "parent_decision_id": "decision",
+                            "entry_ids": _ENTRY_IDS, "instructions": "Read Methods for the genotype."})
+    streaming_tools.set_live_event_list([])
+    try:
+        await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name, tool_call_id="call",
+                                              tool_arguments=arguments), arguments)
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert _lines(events) == ["Supervisor review: asking the extraction agent to re-check 3 records", *finish]
+    assert [event["details"].get("severity") for event in events[1:]] == [
+        None if line.startswith(_FINISHED) else "warning" for line in finish]
+
+
+def test_live_review_episode_resets_after_review_progress(events):
+    from src.lib.validation_review.progress import _LIVE_REVIEW_EPISODE
+
+    assert _LIVE_REVIEW_EPISODE.get() is None
+    with review_progress("outer"):
+        assert _LIVE_REVIEW_EPISODE.get() == "outer"
+        with pytest.raises(RuntimeError):
+            with review_progress("inner"):
+                assert _LIVE_REVIEW_EPISODE.get() == "inner"
+                raise RuntimeError("review failure")
+        assert _LIVE_REVIEW_EPISODE.get() == "outer"
+    assert _LIVE_REVIEW_EPISODE.get() is None
+
+
+def test_live_review_episode_is_not_left_bound_when_the_opening_line_fails(monkeypatch):
+    from src.lib.validation_review.progress import _LIVE_REVIEW_EPISODE
+
+    def unavailable(event):
+        raise RuntimeError("stream closed")
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", unavailable)
+    with pytest.raises(RuntimeError, match="stream closed"):
+        with review_progress("episode"):
+            raise AssertionError("the review body never starts")
+    assert _LIVE_REVIEW_EPISODE.get() is None
 
 
 def test_every_review_tool_has_a_plain_language_line():

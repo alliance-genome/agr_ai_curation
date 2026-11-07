@@ -68,13 +68,21 @@ def _recheck_finish_lines(result):
     """
     if not isinstance(result, dict):
         return []
-    lines = []
-    if result.get("state") == "completed" and isinstance(result.get("contributions"), list):
-        lines.append(("re-check finished for " + _count(len(result["contributions"]), "record", "records"), {}))
-    exhausted = result.get("exhausted")
-    if isinstance(exhausted, list) and exhausted:
-        lines.append(("no re-check left for " + _count(len(exhausted), "record", "records"), _WARNING))
-    return lines or [("re-check did not run", _WARNING)]
+    state, exhausted = result.get("state"), result.get("exhausted")
+    none_left = (("no re-check left for " + _count(len(exhausted), "record", "records"), _WARNING)
+                 if isinstance(exhausted, list) and exhausted else None)
+    not_run = [("re-check did not run", _WARNING)]
+    if state == "completed" and isinstance(result.get("contributions"), list):
+        finished = ("re-check finished for " + _count(len(result["contributions"]), "record", "records"), {})
+        return [finished] if none_left is None else [finished, none_left]
+    if state == "not_applied" and result.get("code") == "extraction_attempts_exhausted" and none_left:
+        return [none_left]
+    if state in {"not_applied", "conflict", "not_claimed"}:
+        # Refused for another reason, a conflicting request, or work another call
+        # already holds: nothing new ran.
+        return not_run
+    # A shape this presentation module does not know never claims a re-check ran.
+    return not_run
 
 
 def _finish_lines(tool, result):
@@ -157,8 +165,10 @@ class ReviewLines:
     """One plain progress line per burst of the same review tool.
 
     Calls the model issues together overlap, so a burst's start collapses into the
-    line of its first call, and identical finish lines into one. Lines exist only
-    for a live curator stream; they never change review outcomes.
+    line of its first call. Finish lines collapse only when their text is the same:
+    two packet pages read together, or two re-checks that end differently, each
+    show. Lines exist only for a live curator stream; they never change review
+    outcomes.
     """
 
     def __init__(self, episode_id):
@@ -223,8 +233,9 @@ def review_progress(episode_id):
         })
 
     progress = {}
-    live = _LIVE_REVIEW_EPISODE.set(episode_id)
     emit("AGENT_GENERATING", "Reviewing extracted findings and validation results")
+    # Bound only once the review is under way, so the finally below always resets it.
+    live = _LIVE_REVIEW_EPISODE.set(episode_id)
     try:
         yield progress
     except BaseException as error:

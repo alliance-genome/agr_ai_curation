@@ -224,6 +224,52 @@ async def test_recheck_lines_need_a_live_review(phase_trace, monkeypatch):
     assert evidence == [{"evidence_record_id": "evidence-1", "entity": "crb p13A9"}]
 
 
+@pytest.mark.asyncio
+async def test_a_failed_paper_read_still_lets_the_next_read_show_its_line(phase_trace, monkeypatch):
+    from agents.tool_context import ToolContext
+    from src.lib.openai_agents import streaming_tools
+    from src.lib.validation_review.progress import review_progress
+
+    calls = []
+
+    @function_tool(failure_error_function=None)
+    async def read_section(section_name: str) -> str:
+        calls.append(section_name)
+        if len(calls) == 1:
+            raise RuntimeError("document store unavailable")
+        return "section text"
+
+    agent = Agent(name="Saved extractor", model="gpt-test", instructions="Domain extraction policy",
+                  model_settings=ModelSettings(), tools=[read_section])
+    monkeypatch.setattr("src.lib.packages.tool_roles.tool_metadata_by_name",
+                        lambda: {"read_section": {"paper_source": True}})
+    captured = []
+    monkeypatch.setattr("src.lib.openai_agents.evidence_summary.build_record_evidence_summary_record",
+                        lambda **kwargs: captured.append(kwargs) or None)
+    events, evidence = [], []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", events.append)
+    arguments = json.dumps({"section_name": "Methods"})
+    streaming_tools.set_live_event_list([])
+    try:
+        with review_progress("episode"):
+            phase = extractor_phase.create_phase(agent, scope=HistoryScope(
+                "owner", "00000000-0000-0000-0000-000000000001", "session"), artifact_id="artifact",
+                packet={"history": {"records": [{"fact_id": "context", "sha256": "exact"}]}},
+                packet_bytes=2048, evidence_records=evidence)
+            tool = next(tool for tool in phase.tools if tool.name == "read_section")
+            context = ToolContext(context=None, tool_name=tool.name, tool_call_id="call", tool_arguments=arguments)
+            with pytest.raises(RuntimeError, match="document store unavailable"):
+                await tool.on_invoke_tool(context, arguments)
+            assert await tool.on_invoke_tool(context, arguments) == "section text"
+    finally:
+        streaming_tools.set_live_event_list(None)
+    assert [event["details"]["friendlyName"] for event in events if event["type"] == "TOOL_START"] == [
+        "Supervisor review: extraction agent reading Methods",
+        "Supervisor review: extraction agent reading Methods",
+    ]
+    assert len(captured) == 1 and evidence == []
+
+
 def test_every_paper_tool_line_is_plain_language():
     from src.lib.validation_review.progress import recheck_line
 
