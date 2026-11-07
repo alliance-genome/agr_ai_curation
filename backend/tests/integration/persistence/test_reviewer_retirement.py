@@ -96,7 +96,8 @@ def _decision(handle, action, reason=None, **extra):
             "absence_assessment": None, "unresolved_fields": None, **extra}
 
 
-def test_reject_leaves_the_record_pending_and_the_save_names_what_clears_it(generic):
+@pytest.mark.asyncio
+async def test_reject_leaves_the_record_pending_and_the_save_names_what_clears_it(generic):
     item = generic
     packet = reads.review_packet(item.scope, item.ep)
     handles = _record_handles(packet)
@@ -111,6 +112,17 @@ def test_reject_leaves_the_record_pending_and_the_save_names_what_clears_it(gene
     with store.SessionLocal() as db:
         state = store._current(db, item.aid, item.targets[1])
         assert (state["active"], state["review"], state["selected"]) == (True, "reject", None)
+    status_tool = next(tool for tool in create_tools(item.context, checkpoint_provider=item.checkpoint)
+                       if tool.name == "get_validation_review_status")
+    status = await status_tool.on_invoke_tool(ToolContext(context=None, tool_name=status_tool.name,
+        tool_call_id="status", tool_arguments="{}"), "{}")
+    assert status["ready"] is False
+    assert status["blocking"] == [{"code": "unreviewed", "target_ids": [item.targets[1]],
+                                   "clears_with": "accept, or retire if the record does not answer the question"}]
+    retire = await _save(item, packet["packet_id"], [_decision(out, "retire", "Not a transgenic fly.")],
+                         operation_id="retire-after-reject")
+    assert retire["state"] == "conflict" and out in retire["message"] and "version" in retire["message"], (
+        "a record decided after the packet was read needs a fresh packet")
 
 
 @pytest.mark.asyncio
@@ -295,7 +307,7 @@ async def test_a_validated_record_is_retired_by_the_reviewer_and_restored_by_a_c
 
 
 @pytest.mark.asyncio
-async def test_a_curator_round_for_another_record_cannot_retire_this_one(scope):
+async def test_a_curator_round_keeps_its_records_for_the_curator_to_decide(scope):
     item = _generic(scope, count=2)
     with store.SessionLocal() as db:
         previous = selections.effective_episode(db, store._fact(db, item.aid, item.ep))
@@ -318,6 +330,12 @@ async def test_a_curator_round_for_another_record_cannot_retire_this_one(scope):
                 records=[{"target_id": item.targets[1], "expected_version": 0, "reason": "Outside.", "evidence": {}}],
                 source_envelope=item.checkpoint().envelope, rebuild_inputs=lambda db, envelope: {},
                 publish=lambda *args: pytest.fail("nothing is published"))
+        with pytest.raises(store.HistoryConflict, match="curator asked to re-review this record"):
+            retire_in_transaction(db, context, operation_id="requested-record", expected_source_sha=digest,
+                records=[{"target_id": item.targets[0], "expected_version": 0, "reason": "Outside.", "evidence": {}}],
+                source_envelope=item.checkpoint().envelope, rebuild_inputs=lambda db, envelope: {},
+                publish=lambda *args: pytest.fail("nothing is published"))
+        assert store._current(db, item.aid, item.targets[0])["active"]
 
 
 @pytest.mark.parametrize("planned", ["three"], indirect=True)
@@ -354,3 +372,55 @@ def test_a_partial_follow_up_runs_the_records_with_a_follow_up_left(planned):
         ask([first, second], "all-spent")
     assert stopped.value.exhausted == [first, second], "a full refusal names every spent record"
     assert extraction_scheduling.exhausted_entries(item.scope, ask([third], "third-follow-up")) == []
+
+
+def test_only_a_review_actor_retires_in_review(generic):
+    from src.lib.validation_review.record_retirement import retire_in_transaction
+
+    item = generic
+    curator = ReviewContext(item.scope, item.ep, item.scope.owner_id, actor_type="curator")
+    with store.SessionLocal.begin() as db:
+        digest = selections.source_state_digest(db, item.aid)
+        with pytest.raises(store.HistoryAccessError, match="Only a review actor"):
+            retire_in_transaction(db, curator, operation_id="curator-retire", expected_source_sha=digest,
+                records=[{"target_id": item.targets[0], "expected_version": 0, "reason": "Outside.", "evidence": {}}],
+                source_envelope=item.checkpoint().envelope, rebuild_inputs=lambda db, envelope: {},
+                publish=lambda *args: pytest.fail("nothing is published"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guard", ["row decision", "edits"])
+async def test_curator_row_decisions_and_edits_block_reviewer_retirement(generic, monkeypatch, guard):
+    from datetime import datetime, timezone
+    from uuid import UUID
+    from src.lib.curation_workspace.models import CurationCandidate, CurationReviewSession, DomainEnvelopeModel
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
+    from src.schemas.curation_workspace import CurationCandidateSource, CurationCandidateStatus
+
+    item = generic
+    target = item.targets[1]
+    with store.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, item.checkpoint())
+        object_ref = store._content(db, store._fact(db, item.aid, target, kind="target"))["object_ref"]
+        if guard == "row decision":
+            session = CurationReviewSession(adapter_key="fixture", document_id=UUID(item.scope.document_id),
+                created_by_id=item.scope.owner_id, prepared_at=datetime.now(timezone.utc))
+            db.add(session)
+            db.flush()
+            row = db.get(DomainEnvelopeModel, item.checkpoint().envelope.envelope_id)
+            row.session_id = session.id
+            db.add(CurationCandidate(session_id=session.id, adapter_key="fixture",
+                source=CurationCandidateSource.EXTRACTED, envelope_id=row.envelope_id, object_id=object_ref,
+                envelope_revision=row.revision, status=CurationCandidateStatus.ACCEPTED))
+    if guard == "edits":
+        # The curator overlay reader is the existing authority source; the retire path must consult it.
+        monkeypatch.setattr("src.lib.validation_review.record_retirement.active_overlays",
+                            lambda db, artifact_id: [(None, {"changes": [{"target_id": target}]})])
+    packet = reads.review_packet(item.scope, item.ep)
+    handle = _record_handles(packet)[target]
+    result = await _save(item, packet["packet_id"], [_decision(handle, "retire", "Outside the question.")],
+                         operation_id="guarded-" + guard.replace(" ", "-"))
+    assert result["state"] == "conflict" and f"Curator {guard}" in result["message"], result
+    assert handle in result["message"]
+    with store.SessionLocal() as db:
+        assert store._current(db, item.aid, target)["active"]

@@ -244,15 +244,21 @@ decisions publish atomically, and the result names each retired handle with its
 their `selection_id`. When a save leaves review not ready, its result carries
 `blocking`: the round's manifest blockers grouped by code, each with the handles (or
 target IDs for units outside the packet) and a plain `clears_with` step derived from
-the code and the unit's review mode. Curator saves do not get this list.
+the code and the unit's review mode. Curator saves do not get this list;
+`get_validation_review_status` returns the same list, by target ID, when not ready.
+In a curator-requested round the reviewer cannot retire the records the curator asked
+to re-review (`review_target_ids`); it accepts them or leaves them pending with a
+reason, and the curator decides. A save can retire records from one packet only once,
+since a retirement changes the packet's source digest.
 
 Protocol v6 asks the supervisor to read the packet once, decide every handle with a
 reason specific to each record, save in one call (more only when the decisions exceed
 `VALIDATION_REVIEW_DECISION_ENTRIES`), and send one targeted follow-up covering all
 deferred records. It states the outcomes (each record ends accepted, retired or left
 pending), that a record must be shown in the paper to answer the question, that
-reject does not remove a record, and that each record gets one targeted follow-up
-with a fresh one per curator-requested round. Curator-requested rounds, follow-up
+reject does not remove a record, that each record gets one targeted follow-up per
+review round with a fresh one per curator-requested round, and that a follow-up finding
+nothing new about a field is not a finding about the record's scope. Curator-requested rounds, follow-up
 contribution selection and extractor-recommended retirement keep the exact-history
 tools.
 
@@ -516,15 +522,13 @@ investigate existing entries with specialized instructions. The default
 plus one targeted follow-up, not two retries. Multi-entry calls charge each named
 entry that runs. Entries with no follow-up left are not investigated: the request
 runs the rest and the tool result lists the skipped ones under `exhausted`; only a
-request whose every entry is spent stops with `extraction_attempts_exhausted`.
-
-Follow-up protocol v3 (ALL-1502) says a record belongs only if the paper shows it
-answers the curator's question. When the extractor finds no support that it does,
-it recommends whole-record retirement and states what remains uncertain. This rule
-is about the question's scope; for scientific values, not finding support is still
-not evidence against them. The protocol text is part of the pinned extractor
-contract, so an extraction saved under v2 returns `fresh_extraction_required` for a
-new targeted follow-up; its reviewer can still retire record items directly. Reconnects, episodes and provider recovery do not replenish that entitlement.
+request whose every entry is spent stops with `extraction_attempts_exhausted`
+and lists every spent entry under `exhausted` as well. Within a review round,
+reconnects, reviewer runs, machine renewals and provider recovery do not replenish
+the follow-up; a curator-requested round grants a fresh one. The targeted follow-up
+protocol stays at version 2, the text pinned in saved extractor contracts, so older
+extractions keep their follow-ups. The scope rule (a record must be shown in the
+paper to answer the question) lives in the review protocol instead.
 Validation remains two total scientific attempts per target/binding lineage,
 subject to the same shared 16 document/64 batch extra-attempt pools.
 

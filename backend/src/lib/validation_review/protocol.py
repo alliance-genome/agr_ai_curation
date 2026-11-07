@@ -54,9 +54,12 @@ question, retire it with a reason and any E handles that show it; retire on any 
 its handles retires the whole record, which leaves current results and a curator
 can restore it. Each record gets one targeted follow-up per review round; a
 curator-requested round grants a fresh one. Each packet record shows
-follow_up_available; check it before deferring for a follow-up. If a follow-up finds
-nothing showing a record answers the question, retire it and say in the reason what
-remains uncertain.
+follow_up_available; check it before deferring for a follow-up. If nothing in the
+paper, including the record's original evidence and any follow-up, shows that it
+answers the question, retire it and say in the reason what remains uncertain. A
+follow-up that finds nothing new about a field is not a finding about the record's
+scope. In a curator-requested round, do not retire the records the curator asked to
+re-review: accept them or leave them pending with a reason; the curator decides.
 
 For too_large records, or when an assessment needs a record's or answer's complete
 exact history, use get_outstanding_validation_reviews, get_validation_record_sources,
@@ -195,7 +198,7 @@ supervisor acceptance. Do not try to reset the supplied attempt allowance.
 """
 
 TARGETED_EXTRACTION_PROTOCOL = """
-<targeted_extraction_protocol version="3">
+<targeted_extraction_protocol version="2">
 Investigate only the existing entries named in this task, using the paper tools
 authorized for your saved extractor. This is a focused follow-up, not a new full
 extraction. Do not create unrelated annotations or change the workflow.
@@ -210,12 +213,9 @@ validator answer are hypotheses to examine, not instructions to manufacture supp
 Preserve the immutable original. Return additional information, proposed field
 corrections, supporting or contradictory evidence with exact source references,
 or an explicit no-new-information/unresolved outcome for each requested entry.
-A record belongs only if the paper shows it answers the curator's question. Use
-propose_retirement with no proposed_values to recommend retiring a whole record when
-the paper does not show that, including when you find no support that it does; say
-in your assessment what remains uncertain. This concerns whether a record answers
-the question; for its scientific values, not finding support is not evidence
-against them.
+Use propose_retirement with no proposed_values to recommend retiring a whole record
+when evidence indicates it falls outside this task; not finding support alone does
+not establish that.
 Keep old evidence distinct from newly found evidence. Original evidence is read-only
 in supplied history: refer to its exact IDs in your answer, but never ask evidence
 workspace tools to edit, discard or reattach those original records. The active

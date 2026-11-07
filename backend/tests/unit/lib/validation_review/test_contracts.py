@@ -466,8 +466,21 @@ def test_source_group_limit_reaches_every_deployed_service_that_sets_review_limi
         assert text.count("VALIDATION_REVIEW_SOURCE_GROUP_RECORDS") == text.count("VALIDATION_REVIEW_DECISION_ENTRIES") > 0
 
 
+# v0.11.1 to v0.11.3 targeted follow-up protocol text, pinned in saved extractor contracts.
+TARGETED_PROTOCOL_V2_SHA256 = "0308d8113148d065863b5c67f5bc6f0f0a82876d458ea1f4aac558bfd647ce0e"
+
+
+def test_targeted_follow_up_protocol_keeps_the_saved_extractor_contract_text():
+    """Saved extractor contracts pin this text; changing it would end older sessions' follow-ups."""
+    import hashlib
+    from src.lib.validation_review.protocol import TARGETED_EXTRACTION_PROTOCOL
+
+    assert 'version="2"' in TARGETED_EXTRACTION_PROTOCOL
+    assert hashlib.sha256(TARGETED_EXTRACTION_PROTOCOL.encode()).hexdigest() == TARGETED_PROTOCOL_V2_SHA256
+
+
 def test_review_and_followup_text_state_reject_retire_and_follow_up_rules():
-    from src.lib.validation_review.protocol import REVIEW_PROTOCOL, TARGETED_EXTRACTION_PROTOCOL
+    from src.lib.validation_review.protocol import REVIEW_PROTOCOL
     from src.lib.validation_review.tools import runtime_tool_contract
 
     protocol = " ".join(REVIEW_PROTOCOL.split())
@@ -478,23 +491,25 @@ def test_review_and_followup_text_state_reject_retire_and_follow_up_rules():
                  "Each record gets one targeted follow-up per review round; a curator-requested round grants a fresh one",
                  "retire on any of its handles retires the whole record",
                  "Each packet record shows follow_up_available; check it before deferring for a follow-up",
-                 "If a follow-up finds nothing showing a record answers the question, retire it",
+                 "If nothing in the paper, including the record's original evidence and any follow-up, "
+                 "shows that it answers the question, retire it",
+                 "A follow-up that finds nothing new about a field is not a finding about the record's scope",
+                 "In a curator-requested round, do not retire the records the curator asked to re-review",
                  "lists what is open and what clears it under blocking"):
         assert text in protocol, text
-    followup = " ".join(TARGETED_EXTRACTION_PROTOCOL.split())
-    assert 'version="3"' in followup
-    assert "not finding support alone does not establish that" not in followup
-    for text in ("A record belongs only if the paper shows it answers the curator's question",
-                 "including when you find no support that it does",
-                 "for its scientific values, not finding support is not evidence against them"):
-        assert text in followup, text
+    assert "If a follow-up finds nothing showing" not in protocol
     tools = {tool["name"]: tool for tool in runtime_tool_contract()}
     save = " ".join(tools["record_validation_review"]["description"].split())
     for text in ("Each record ends accepted, retired or left pending",
                  "it does not remove an original record, which stays pending",
                  "use action retire on any of its handles with a reason", "a curator can restore it", "blocking",
-                 "assess them with validate_selected_extraction_source and the returned selection_id"):
+                 "assess them with validate_selected_extraction_source and the returned selection_id",
+                 "Send all retirements from a packet in one save; a retirement changes the packet's source",
+                 "Retire a record before deciding validator answers whose inputs include it; "
+                 "read a fresh packet after the retirement"):
         assert text in save, text
+    status = " ".join(tools["get_validation_review_status"]["description"].split())
+    assert "blocking lists what still blocks readiness" in status
     decision = tools["record_validation_review"]["parameters"]["$defs"]["PacketDecision"]["properties"]
     assert "retire" in decision["action"]["enum"]
     assert "does not remove an original record" in decision["action"]["description"]
@@ -593,3 +608,39 @@ async def test_follow_up_results_name_records_with_no_follow_up_left():
     assert await invoke() == {"state": "not_applied", "code": "extraction_attempts_exhausted", "resource": "a",
                               "applied": [], "targets": [], "exhausted": ["a", "b", "c"]}
     assert await invoke() == partial
+
+
+def test_every_manifest_blocker_code_says_what_clears_it():
+    """Read the codes the manifest can emit from its source, so a new code fails here."""
+    import ast
+    import inspect
+    from typing import get_args
+    from src.lib.validation_history import selections
+    from src.lib.validation_review.decisions import _CLEARED_BY
+    from src.schemas.validation_history import ReviewObligation
+
+    tree = ast.parse(inspect.getsource(selections))
+    codes, reasons = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and isinstance(value, ast.Constant):
+                    if key.value == "code":
+                        codes.add(value.value)
+                    elif key.value == "reason" and isinstance(value.value, str):
+                        reasons.add(value.value)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
+                        and target.slice.value == "reason" and isinstance(node.value.value, str)):
+                    reasons.add(node.value.value)
+    reasons.discard("Explicit review of this validation run")  # An episode reason, not a unit reason.
+    assert {"unreviewed", "stale", "incomplete", "retired", "historical_review_unknown"} <= reasons
+    assert {"episode_review_pending", "execution_pending", "answer_review_pending",
+            "configured_validator_unavailable", "required_validator_unavailable", "document_retired"} <= codes
+    modes = get_args(ReviewObligation.model_fields["mode"].annotation)
+    for code in codes | reasons:
+        for mode in modes:
+            assert (code, mode) in _CLEARED_BY or code in _CLEARED_BY, (code, mode)
+    assert all("nothing" not in text for key, text in _CLEARED_BY.items() if key != "document_retired")
+    assert "acknowledge_failure" in _CLEARED_BY["execution_pending"]

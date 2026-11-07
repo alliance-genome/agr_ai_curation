@@ -233,8 +233,11 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         exclude a record that does not answer the question, use action retire on
         any of its handles with a reason (and any E handles that show it); it
         leaves current results, stays in history, and a curator can restore it.
-        Retire is packet-only. If the result lists affected_bindings, assess them
-        with validate_selected_extraction_source and the returned selection_id.
+        Retire is packet-only. Send all retirements from a packet in one save; a
+        retirement changes the packet's source. Retire a record before deciding
+        validator answers whose inputs include it; read a fresh packet after the
+        retirement. If the result lists affected_bindings, assess them with
+        validate_selected_extraction_source and the returned selection_id.
         Give a reason specific to each record. If any decision conflicts, nothing
         in the call applies. From read_review_packet, send its packet_id and one
         packet_decisions item per D handle, with entries null; the server fills in
@@ -346,10 +349,17 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
 
         Read its fact ID/SHA with read_validation_history for all remaining budgets,
         warning thresholds and uncovered targets, with exact continuation if needed.
+        When not ready, blocking lists what still blocks readiness, by target ID,
+        and what clears it.
         """
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             reads.status_reference, context.history_scope, context.episode_id
         )
+        if not result["ready"] and context.actor_type != "curator":
+            open_work = await asyncio.to_thread(decisions.status_blocking, context)
+            if open_work:
+                result = {**result, "blocking": open_work}
+        return result
 
     @function_tool(failure_error_function=None)
     @recoverable

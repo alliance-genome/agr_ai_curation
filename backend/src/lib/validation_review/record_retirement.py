@@ -161,6 +161,9 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
         raise store.HistoryConflict("Records changed after this packet was read; read a fresh packet")
     episode = selections.effective_episode(db, store._fact(db, artifact_id, ep.id))
     permitted = allowed_units(episode)
+    # A curator-requested round names the records the curator asked to re-review;
+    # the curator, not the review actor, decides whether those leave the results.
+    requested = set(episode["review_target_ids"] or ())
     before = rebuild_inputs(db, source_envelope)
     updated = source_envelope.model_copy(deep=True)
     facts, entries = [], []
@@ -173,6 +176,10 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
             _, descendants = entry_coverage(db, artifact_id, [root.id])
             if not descendants.intersection(permitted):
                 raise store.HistoryAccessError("Retirement is outside the requested record scope")
+            if descendants.intersection(requested):
+                raise store.HistoryConflict(
+                    "The curator asked to re-review this record in this round, so it cannot be retired here; "
+                    "accept it or leave it pending with a reason, and the curator decides")
             matches = [obj for obj in source_envelope.extracted_objects
                        if obj.metadata["validation_history"]["target_id"] == root.id]
             if len(matches) != 1:

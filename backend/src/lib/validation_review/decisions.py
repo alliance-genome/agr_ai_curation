@@ -314,15 +314,25 @@ _CLEARED_BY = {
     ("unreviewed", "curator"): "a curator decision",
     "episode_review_pending": "accept",
     "answer_review_pending": "decide the new validator answer",
-    "execution_pending": "wait for the running validation",
+    "execution_pending": "wait for the running validation, or acknowledge_failure if it stopped without an answer",
     "stale": "validate the changed input, then decide the new answer",
     "incomplete": "acknowledge_failure, or request reconsideration",
     "configured_validator_unavailable": "curator review; the validator is unavailable",
     "required_validator_unavailable": "curator review; the validator is unavailable",
     "historical_review_unknown": "curator review",
     "document_retired": "nothing; the document was removed",
-    "retired": "nothing; the record is retired",
+    "retired": "a curator restore; the record is retired and no review decision applies",
 }
+
+
+def status_blocking(context):
+    """The round's open blockers for the status tool, named by target ID."""
+    from src.lib.validation_history.selections import manifest_in_transaction
+
+    with store.SessionLocal.begin() as db:
+        episode, _ = lock_episode(db, context.history_scope, context.episode_id, require_open=False)
+        manifest = manifest_in_transaction(db, context.history_scope, episode.artifact_id, episode_id=episode.id)
+        return blocking(db, episode, manifest, {})
 
 
 def blocking(db, episode, manifest, names):
