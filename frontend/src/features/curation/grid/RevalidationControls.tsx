@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Stack, TextField, Typography } from '@mui/material'
 import { controlReview, fetchCandidateReviewOperation, fetchSessionReviewOperation, fetchReviewOperation, requestReview, type ReviewOperation } from '../services/validationHistoryService'
 
+// Plain words for stop reasons whose code name would read as internals. Every other
+// reason reads as its own words.
+const STOP_WORDING: Record<string, string> = {
+  source_projection_invalid: 'a system error stopped a save before it changed anything, and it was reported',
+}
+const reasonText = (reason: string) => STOP_WORDING[reason] ?? reason.replaceAll('_', ' ')
+
 export default function RevalidationControls({ sessionId, candidateId, onChanged, beforeChange }: {
   sessionId: string; candidateId?: string; onChanged: () => void | Promise<void>; beforeChange?: () => Promise<void>
 }) {
@@ -87,8 +94,8 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
       <Typography role="status">Revalidation: {operation.state.replaceAll('_', ' ')}</Typography>
       {operation.outcome?.excluded_records?.map(record => <Alert severity="warning" key={record.candidate_id}>Record {record.candidate_id}: {record.reason}</Alert>)}
       {operation.outcome?.message && <Typography variant="body2">{operation.outcome.message}</Typography>}
-      {operation.outcome?.reason && <Typography variant="body2">Stopped: {operation.outcome.reason.replaceAll('_', ' ')}</Typography>}
-      {operation.outcome?.results?.map((result, index) => <Typography key={index} variant="body2">Review: {(result.reason ?? result.review.state).replaceAll('_', ' ')}</Typography>)}
+      {operation.outcome?.reason && <Typography variant="body2">Stopped: {reasonText(operation.outcome.reason)}</Typography>}
+      {operation.outcome?.results?.map((result, index) => <Typography key={index} variant="body2">Review: {reasonText(result.reason ?? result.review.state)}</Typography>)}
       {operation.state === 'needs_review' && <Typography variant="body2">Continuing keeps the same allowance. To authorize a fresh bounded round, choose Revalidate.</Typography>}
     </Stack>}
     <Stack direction="row" spacing={1}>

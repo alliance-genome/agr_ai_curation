@@ -50,5 +50,17 @@ describe('Record revalidation', () => {
     await screen.findByText('Revalidation: running')
     expect(vi.mocked(service.requestReview).mock.calls[1]).toEqual(firstRequest)
   })
-
+  it('names a system-error stop in plain words, not its code', async () => {
+    const words = 'a system error stopped a save before it changed anything, and it was reported'
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({ ...saved, state: 'needs_review', outcome: {
+      reason: 'source_projection_invalid',
+      results: [{ reason: 'source_projection_invalid', review: { state: 'needs_review', ready: false } },
+        { review: { state: 'needs_curator_review', ready: false } }],
+    } })
+    render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    await screen.findByText(`Stopped: ${words}`)
+    expect(screen.getByText(`Review: ${words}`)).toBeInTheDocument()
+    expect(screen.getByText('Review: needs curator review')).toBeInTheDocument()
+    expect(screen.queryByText(/source.projection/)).toBeNull()
+  })
 })
