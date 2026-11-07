@@ -24,9 +24,11 @@ from .record_scope import review_ready, review_blockers
 class ReviewStopped(store.HistoryConflict):
     """Expected pending outcome, not a scientific verdict or Sentry error."""
 
-    def __init__(self, reason, *, resource=None):
+    def __init__(self, reason, *, resource=None, exhausted=()):
         self.reason = reason
         self.resource = resource
+        # Targeted follow-up entries with no follow-up left, for extraction_attempts_exhausted.
+        self.exhausted = list(exhausted)
         super().__init__(reason)
 
 
