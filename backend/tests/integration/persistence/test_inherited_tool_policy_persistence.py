@@ -243,6 +243,17 @@ def test_real_template_create_edit_build_and_revocation(policy_db, monkeypatch, 
     built = catalog_service.get_agent_by_id(head.agent_key, **runtime_context)
     assert built.execution_revision_id == str(head.execution_revision_id)
     assert "agr_species_context_lookup" in [tool.name for tool in built.tools]
+    # Sentry's runner wrappers run a clone of the built agent, and tools read
+    # the running identity from that clone (ALL-1514).
+    from dataclasses import replace
+
+    assert built.execution_receipt["agent_revision_id"] == str(head.execution_revision_id)
+    identity = (head.agent_key, built.execution_receipt, tuple(groups))
+    for copy in (built.clone(), replace(built)):
+        assert tuple(
+            getattr(copy, name, None)
+            for name in ("agent_key", "execution_receipt", "authenticated_groups")
+        ) == identity
 
     policy = db.get(ToolPolicy, "agr_species_context_lookup")
     policy.allow_execute = False
