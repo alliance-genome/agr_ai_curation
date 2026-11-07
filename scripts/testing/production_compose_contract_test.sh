@@ -43,6 +43,9 @@ write_test_env() {
       'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback' \
       'VALIDATION_HISTORY_PAGE_SIZE=17' \
       'WORKSPACE_REVIEW_CONCURRENCY=3' \
+      'VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow' \
+      'VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS=12.5' \
+      'VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES=0' \
       'MAX_PARALLEL_VALIDATORS=3' \
       'ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=6000' \
       'BATCH_STREAM_POLL_INTERVAL_SECONDS=2.5' \
@@ -140,6 +143,11 @@ assert str(config["services"]["backend"]["environment"]["ABSTRACT_EXTRACTION_INP
 backend_env = config["services"]["backend"]["environment"]
 assert str(backend_env["VALIDATION_HISTORY_PAGE_SIZE"]) == "5"
 assert str(backend_env["WORKSPACE_REVIEW_CONCURRENCY"]) == "1"
+for service in ("backend", "benchmark_worker"):
+    service_env = config["services"][service]["environment"]
+    assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_MODE"]) == "off"
+    assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS"]) == "30"
+    assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES"]) == "2"
 for service in ("backend", "benchmark_worker"):
     assert str(config["services"][service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "8"
 assert str(backend_env["PDF_JOB_RECOVERY_INTERVAL_SECONDS"]) == "60"
@@ -261,6 +269,11 @@ config = json.load(open(sys.argv[1], encoding="utf-8"))
 backend_env = config["services"]["backend"]["environment"]
 assert str(backend_env["VALIDATION_HISTORY_PAGE_SIZE"]) == "17"
 assert str(backend_env["WORKSPACE_REVIEW_CONCURRENCY"]) == "3"
+for service in ("backend", "benchmark_worker"):
+    service_env = config["services"][service]["environment"]
+    assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_MODE"]) == "shadow"
+    assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS"]) == "12.5"
+    assert str(service_env["VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES"]) == "0"
 for service in ("backend", "benchmark_worker"):
     assert str(config["services"][service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "3"
 assert str(backend_env["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"]) == "6000"

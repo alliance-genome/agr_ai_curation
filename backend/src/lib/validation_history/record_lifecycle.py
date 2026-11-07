@@ -3,6 +3,11 @@ from sqlalchemy import select
 from src.models.sql.validation_history import ValidationFact
 from . import store
 
+# A record_retirement_decision retired its record when the review approved an
+# extractor recommendation ("approve") or the review actor retired it on its own
+# judgment ("retire"); "decline" left the record unchanged.
+RETIRING_DECISIONS = frozenset({"approve", "retire"})
+
 
 def records(db, artifact_id):
     result = []
@@ -31,11 +36,14 @@ def retired_records(db, artifact_id):
         if fact is None:
             continue  # Other lifecycle actions are not supervisor retirement proposals.
         body = store._content(db, fact)
-        if body["identity"]["decision"] != "approve":
+        if body["identity"]["decision"] not in RETIRING_DECISIONS:
             raise store.HistoryConflict("Retired record has no approving disposition")
-        proposal = store._fact(db, artifact_id, fact.parent_id, kind="extraction_contribution")
+        proposal = None  # The review actor retired it itself; no extractor recommendation exists.
+        if body["identity"]["decision"] == "approve":
+            found = store._fact(db, artifact_id, fact.parent_id, kind="extraction_contribution")
+            proposal = {"fact_id": found.id, "sha256": found.body_sha}
         result.append({**record, "retirement": {"fact_id": fact.id, "sha256": fact.body_sha},
-                       "proposal": {"fact_id": proposal.id, "sha256": proposal.body_sha},
+                       "proposal": proposal,
                        "original": {"fact_id": record["target_id"], "sha256": store._fact(db, artifact_id, record["target_id"]).body_sha}})
     return result
 

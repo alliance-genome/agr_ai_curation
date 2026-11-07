@@ -45,7 +45,7 @@ function RetiredItem({ record, beforeChange, onChanged }: { record: RetiredRecor
     <Typography variant="subtitle2">Retired record</Typography>
     <Typography>{record.reason}</Typography>
     <SavedDetails record={record} reference={record.original} label="Original extraction" />
-    <SavedDetails record={record} reference={record.proposal} label="Extractor recommendation and evidence" />
+    {record.proposal && <SavedDetails record={record} reference={record.proposal} label="Extractor recommendation and evidence" />}
     <SavedDetails record={record} reference={record.retirement} label="Supervisor decision" />
     <TextField label="Reason for restoring" value={reason} disabled={busy || pending.current !== null} onChange={event => setReason(event.target.value)} />
     {error && <Alert severity="error">{error}</Alert>}

@@ -223,20 +223,44 @@ Every decidable item carries a `D` handle, or one handle per covered component. 
 pinned fact maps each handle to its target, decision unit, attempt or extraction or
 applicability reference, and the unit version at the time the packet was read.
 `record_validation_review(operation_id, packet_id, packet_decisions)` takes `handle`,
-`action`, `reason` and, where allowed, `absence_assessment` or `unresolved_fields`.
+`action`, `reason` and, where allowed, `absence_assessment`, `unresolved_fields` or,
+for `retire`, `evidence` (`E` handles from the same packet).
 The server expands each handle into the same exact entry the explicit form uses, so
 decision facts keep their existing shape, and the pinned version makes any change
 since the read a stale-version conflict. Two handles for one record field in a call
 are refused, naming both. A conflict that names a record uses its handle; the response
 lists each applied handle with its `decision_unit_id` and binding `target_id`. A
 record too large for one page is listed under `too_large` with its target and handles
-for the exact-history tools. The explicit `entries` form is unchanged.
+for the exact-history tools. The explicit `entries` form is unchanged and has no
+`retire` action.
 
-Protocol v5 asks the supervisor to read the packet once, decide every handle with a
+`reject` records an opinion and does not remove an original extraction-only record:
+its selection stays empty and it remains an `unreviewed` blocker. `retire` on any
+handle of a record removes the whole record, with its validator bindings, from current
+results (see Retirement by the reviewer in `VALIDATION_HISTORY.md`); a save with any
+`retire` runs through the bound source boundary, so retirements and the other
+decisions publish atomically, and the result names each retired handle with its
+`retirement_id` plus the new `source_state_sha256`, and any `affected_bindings` with
+their `selection_id`. When a save leaves review not ready, its result carries
+`blocking`: the round's manifest blockers grouped by code, each with the handles (or
+target IDs for units outside the packet) and a plain `clears_with` step derived from
+the code and the unit's review mode. Curator saves do not get this list;
+`get_validation_review_status` returns the same list, by target ID, when not ready.
+In a curator-requested round the reviewer cannot retire the records the curator asked
+to re-review (`review_target_ids`), directly or through `decide_record_retirement`; it accepts them or leaves them pending with a
+reason, and the curator decides. A save can retire records from one packet only once,
+since a retirement changes the packet's source digest.
+
+Protocol v6 asks the supervisor to read the packet once, decide every handle with a
 reason specific to each record, save in one call (more only when the decisions exceed
 `VALIDATION_REVIEW_DECISION_ENTRIES`), and send one targeted follow-up covering all
-deferred records. Curator-requested rounds, follow-up contribution selection and
-retirement keep the exact-history tools.
+deferred records. It states the outcomes (each record ends accepted, retired or left
+pending), that a record must be shown in the paper to answer the question, that
+reject does not remove a record, that each record gets one targeted follow-up per
+review round with a fresh one per curator-requested round, and that a follow-up finding
+nothing new about a field is not a finding about the record's scope. Curator-requested rounds, follow-up
+contribution selection and extractor-recommended retirement keep the exact-history
+tools.
 
 ### Review progress lines
 
@@ -257,6 +281,78 @@ Supervisor review runs on `VALIDATION_REVIEW_MODEL` with
 `VALIDATION_REVIEW_REASONING`, separately from the supervisor that routes curator
 requests. An empty model keeps the supervisor's own model, and benchmark runs keep
 their pinned route.
+
+### Decisions quick check (shadow mode)
+
+With `VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow`, each fresh review packet that a
+chat or flow review pins is also sent to the OpenAI Decisions API (`gpt-6-luna`,
+`src/lib/validation_review/quick_check.py`). The check starts when
+`read_review_packet` pins the packet and runs alongside the supervisor's turn; the
+tool returns the same result without waiting. Once started, a check runs to
+completion even if the review ends first; if the event loop cancels it (for
+example at shutdown), one `cancelled` log line is written. The packet is read
+without locks, and the records, inputs, questions and client are built off the
+event loop. The packet is asked twice at the
+same time, with records in forward and in reversed order, because order shifts
+the answers; the two orders are averaged. Each record gets the questions of the
+definition `v6-shadow`: within the request (lenient wording), an identity value
+missing from or contradicted by its quotes, not part of this study's own work,
+what should happen to it (accept, remove as out of scope, needs review), and for
+each resolved validator answer, same entity and species. Code turns the negated
+questions around (1 - p) and applies three rules to name a would-be route per
+record:
+
+- removal only: remove a top-level object record whose averaged scope is below 0.5.
+  The 0.5 comes from the trial's averaged-scope analysis (`order_avg_test`,
+  "avg remove<0.5"), not from its forward-only `A_remove_only` rule, which used 0.3;
+- balanced: remove below 0.3; skip the supervisor when scope is at least 0.8,
+  1 - missing-identity at least 0.8, 1 - not-own-study at least 0.9 and every
+  validator answer at least 0.8;
+- strict: balanced, and the accept choice at least 0.5 to skip.
+
+Records with one of the platform's reference roles (`metadata_only`,
+`supporting_reference`, `validated_reference`) are sub-records and always route
+to the supervisor. As in the trial, they are rendered in the input and numbered
+with the other records, but they are never asked about. Every other role is
+top-level. A record whose values are an evidence handle (an evidence-quote record,
+whose whole payload is one saved evidence record) is rendered as one `value` line,
+as the trial did. A record with an answer missing
+or refused in either order is never skipped, and an object record without a scope
+answer is never removed; both are logged with the reason `unanswered`. If either
+order's call fails, the check is logged as failed with the surviving order's call
+and answers, and no record gets an average, a skip or a removal.
+
+Deliberate differences from the trial's rules (`final_rules.py`):
+
+- sub-records are rendered but never asked about, and never skip (the trial asked
+  about every record in a group and let any role skip);
+- claim records are never removed (the trial could remove them);
+- every resolved validator answer must be answered to skip (the trial ignored an
+  absent validator score);
+- every score is the average of the two record orders (the trial's skip rules used
+  forward-order scores).
+
+Nothing is applied. Both orders' answers, the averages, the route under each rule,
+and each call's latency and token counts are written as a
+`review_quick_check.shadow` trace event (TraceReview shows it under
+`review_quick_check`), and one log line carries the routes and averages, for later
+calibration against supervisor decisions. The supervisor still reviews every
+record. A failed or refused check is logged and nothing else happens. Question
+texts, input caps, orders and thresholds form one versioned `Definition` in
+`quick_check.py`; changing any of them needs a new wording id and calibration.
+They are code constants rather than environment settings on purpose: every logged
+run must stay comparable with the calibration it is measured against, and a
+per-deployment change would make the shadow data unusable for that. The mode,
+request timeout and retries are environment settings, validated at backend
+startup. The default mode is `off`, which makes no call.
+
+Calibration status of `v6-shadow`: only the averaged lenient scope was analysed
+across both record orders, so the averaged scope and the removal thresholds are
+calibrated. The choice and validator (same entity and species) questions were
+asked in reversed order, but their averages were never evaluated. The negated
+support and negated own-study questions were never asked in reversed order. The
+skip thresholds come from forward-only scores. Their two-order averages are first
+measured by this shadow data.
 
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when
@@ -427,6 +523,32 @@ plans, coverage grants, executable validator configuration and supervisor phases
 Expected budget/deadline stops are pending outcomes; operational failures use the
 existing sanitized reporting owner.
 
+After each reviewer run, continuation starts another run only for a unit some
+review action can still change (`continuation.classify`). A unit whose latest
+decision in this episode is the reviewer's reject, defer or acknowledge-failure,
+with no newer saved answer, follow-up request, contribution or source input for its
+lineage and no follow-up or reconsideration left, stops with the typed cause
+`reviewer_left_pending` (flow status `review_pending`). A curator's reject, defer or
+acknowledge-failure in this episode stops reviewer runs for that unit with
+`curator_authority_required`, since the reviewer cannot override it. The check uses decision history, actors, sequences and
+counts only, never the decision's reason. A targeted follow-up counts as left only
+when `extraction_scheduling.followup_available` says so: the same three conditions
+the request enforces (saved extractor support, a baseline record, this round's
+count under the ceiling). The stall guard
+(`VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS`) still bounds runs that make
+no progress, and every stall is reported. The stop reason is the current state's
+first cause; refusals seen during the run stay in `causes`. The outcome's `pending`
+list names each pending record once with a plain structural reason
+(`curator_decision`, `cannot_check`, `not_accepted`, `not_decided`) and whether a
+re-check is left. A curator's pending decision reads as `curator_decision` and an
+acknowledged failure as `cannot_check`. A unit bound to the envelope itself has no
+record and is named "the extraction as a whole". Chat saves each record's workspace label
+with the outcome when review stops and renders the saved text only, for example
+"Review finished with 1 record still pending: crb p13A (the reviewer did not
+accept it, and no re-check is left)." Operational stops (cancelled, expired,
+superseded, uncertain execution, retired document, unsupported state) carry no
+`pending` list and keep the "Review paused" notice.
+
 Direct extractor follow-ups first use the resolved supervisor to interpret the
 curator's intent. Continuing saved review does not invoke extraction. Only an
 explicit fresh-extraction request permits the already chosen extractor; the
@@ -495,8 +617,22 @@ The supervisor owns scientific decisions and the large-scale review. It cannot
 read/search the paper itself. It can ask the original configured extractor to
 investigate existing entries with specialized instructions. The default
 `VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY=2` means the original extraction
-plus one targeted follow-up, not two retries. Multi-entry calls charge each named
-entry. Reconnects, episodes and provider recovery do not replenish that entitlement.
+plus one targeted follow-up per review round, not two retries. Multi-entry calls
+charge each named entry that runs. Entries with no follow-up left are not investigated: the request
+runs the rest and the tool result lists the skipped ones under `exhausted`; only a
+request whose every entry is spent stops with `extraction_attempts_exhausted`
+and lists every spent entry under `exhausted` as well. A round opens at an episode
+admitted with `curator_round` (the curator's explicit request for another round,
+`extraction_scheduling.review_round`), so each such round gives every record one fresh
+re-check. The original review, machine renewals and independently admitted episodes
+without a curator-round ancestor share one round. Within a round, new operation IDs,
+turns, reconnects, reviewer runs, machine renewals and provider recovery do not
+replenish the follow-up. Each review packet record carries `follow_up_available`
+from `extraction_scheduling.followup_available`, the same structural conditions the
+request enforces. The targeted follow-up
+protocol stays at version 2, the text pinned in saved extractor contracts, so older
+extractions keep their follow-ups. The scope rule (a record must be shown in the
+paper to answer the question) lives in the review protocol instead.
 Validation remains two total scientific attempts per target/binding lineage,
 subject to the same shared 16 document/64 batch extra-attempt pools.
 
@@ -620,7 +756,8 @@ curator renewal.
 
 `record_validation_review` can accept an extraction-only assessment with optional
 `unresolved_fields`, each containing an exact plain payload `field_path` and an
-`explanation`. The supervisor chooses the uncertainty; code validates ownership,
+`explanation`. List elements are named by index, for example
+`classification_notes[1]`. The supervisor chooses the uncertainty; code validates ownership,
 field existence/type and selection version, then binds the field to stable history
 anchors. Structured resolvable identities keep their validator-owned contract.
 Missing executions, unreviewed records and pending investigation remain incomplete.

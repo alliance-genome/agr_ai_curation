@@ -100,3 +100,31 @@ def test_packet_save_and_read_keep_handles_resolvable_to_exact_targets():
     assert decisions["arguments"] == arguments and decisions["result"] == result
     assert decisions["packet_handles"] == {"D2": {"decision_unit_id": "component", "target_id": "binding",
                                                   "action": "defer"}}
+    assert "retired_records" not in decisions and "blocking" not in decisions
+
+
+def test_packet_save_shows_reviewer_retirements_and_what_still_blocks_readiness():
+    arguments = {"operation_id": "save", "packet_id": "packet-fact", "entries": None, "packet_decisions": [
+        {"handle": "D1", "action": "retire", "reason": "A genetic control, not a transgenic fly",
+         "evidence": ["E1"], "absence_assessment": None, "unresolved_fields": None},
+        {"handle": "D2", "action": "reject", "reason": "Not shown in this paper",
+         "absence_assessment": None, "unresolved_fields": None}]}
+    blocking = [{"code": "unreviewed", "handles": ["D2"],
+                 "clears_with": "accept, or retire if the record does not answer the question"}]
+    result = {"decision_id": "fact", "ready": False, "packet_id": "packet-fact", "blocking": blocking, "applied": [
+        {"decision_unit_id": "record-1", "action": "retire", "handle": "D1", "target_id": "record-1",
+         "retirement_id": "retirement-fact"},
+        {"decision_unit_id": "record-2", "action": "reject", "handle": "D2", "target_id": "record-2"}]}
+    save, = ToolCallAnalyzer.extract_tool_calls([
+        {"id": "call", "type": "GENERATION", "output": [{"type": "function_call", "name": "record_validation_review",
+            "call_id": "s", "arguments": json.dumps(arguments)}]},
+        {"id": "result", "type": "GENERATION", "input": [
+            {"type": "function_call_output", "call_id": "s", "output": json.dumps(result)}]},
+    ])["tool_calls"]
+    decisions = save["validation_review_decisions"]
+    assert decisions["packet_handles"]["D1"] == {"decision_unit_id": "record-1", "target_id": "record-1",
+                                                 "action": "retire"}
+    assert decisions["retired_records"] == [{"handle": "D1", "target_id": "record-1",
+                                             "retirement_id": "retirement-fact"}]
+    assert decisions["blocking"] == blocking
+    assert "leaves an extraction-only record pending" in decisions["note"]

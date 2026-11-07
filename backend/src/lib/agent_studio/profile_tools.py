@@ -15,13 +15,16 @@ from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
 def configure_profile_tools(tools: list[Any], profile: ResolvedGenericProfile) -> list[Any]:
     """Narrow authorized installed tools; never add capabilities to a saved agent."""
     from src.lib.agent_studio.catalog_service import _get_package_tool_binding
+    from src.lib.packages import tool_roles
 
     names = {tool.name for tool in tools}
     if not {"stage_generic_object", "finalize_generic_extraction"}.issubset(names):
         raise ValueError("Profile-bound extraction requires saved generic stage and finalization tools")
+    # The profile fixes the record type, so the record-type catalog is not offered.
+    catalog_names = tool_roles.builder_catalog_tool_names()
     narrowed = []
     for tool in tools:
-        if tool.name == "list_generic_object_classes":
+        if tool.name in catalog_names:
             continue
         if tool.name in {"stage_generic_object", "patch_generic_object"}:
             binding = _get_package_tool_binding(tool.name)

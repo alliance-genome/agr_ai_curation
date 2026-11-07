@@ -3290,6 +3290,7 @@
       "display_name": "List Generic Object Classes"
     },
     "binding_kind": "static",
+    "builder_catalog": true,
     "category": "Runtime Metadata",
     "description": "Show the compact catalog of generic extraction classes that can be staged.",
     "documentation": {

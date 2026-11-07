@@ -67,10 +67,16 @@ class ExtractorAdapter:
             entries = {obj.metadata["validation_history"]["target_id"]: obj.model_dump(mode="json")
                        for obj in source.extracted_objects
                        if obj.metadata["validation_history"]["target_id"] in entry_ids}
-            return extraction_scheduling.request(self.context, operation_id=operation_id,
+            work_id = extraction_scheduling.request(self.context, operation_id=operation_id,
                 parent_decision_id=parent_decision_id, entry_ids=entry_ids, instructions=instructions,
                 receipt=self.receipt, current_entries=entries, expected_source_sha=source_sha)
+            return work_id, extraction_scheduling.exhausted_entries(self.context.history_scope, work_id)
 
-        work_id = await asyncio.to_thread(prepare)
-        return await extraction_execution.execute(self.context.history_scope, work_id,
-                                                  resolve_agent=self.resolve_agent)
+        work_id, exhausted = await asyncio.to_thread(prepare)
+        result = await extraction_execution.execute(self.context.history_scope, work_id,
+                                                    resolve_agent=self.resolve_agent)
+        if exhausted:
+            result = {**result, "exhausted": exhausted,
+                      "exhausted_note": "These records had no follow-up left and were not investigated; "
+                                        "decide them now: accept, retire, or leave pending."}
+        return result

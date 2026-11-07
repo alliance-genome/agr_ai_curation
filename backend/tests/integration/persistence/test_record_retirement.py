@@ -615,3 +615,32 @@ async def test_decision_refreshes_sibling_retired_while_workspace_was_loaded(pla
         assert session.total_candidates == 1
         assert session.pending_candidates == 0
         assert session.current_candidate_id != ids[0]
+
+
+def test_an_extractor_recommendation_cannot_retire_a_record_the_curator_asked_to_re_review(planned):
+    """The curator decides the records of a curator-requested round on every retirement path (ALL-1502)."""
+    from uuid import uuid4
+    from src.lib.validation_review import admission
+    from src.lib.validation_review.record_retirement import CURATOR_ROUND_REFUSAL
+    item = planned
+    _, ref, root = proposal(item)
+    with store.SessionLocal() as db:
+        previous = selections.effective_episode(db, store._fact(db, item.aid, item.ep))
+    requested = previous["obligations"][0]["target_id"]
+    ep = selections.start_episode(item.scope, item.aid, episode={"episode_id": str(uuid4()),
+        "reason": "Curator round for this record", "obligations": previous["obligations"],
+        "review_target_ids": [requested]})
+    parent = admission.create_scope(item.scope, operation_id=str(uuid4()), kind="workspace_operation", targets=1, episodes=1)
+    sid = admission.create_scope(item.scope, operation_id=str(uuid4()), kind="document_run", targets=1, episodes=1, parent_id=parent)
+    admission.attach_episode(item.scope, artifact_id=item.aid, episode_id=ep, scope_id=sid, predecessor_id=item.ep,
+        renewal_actor_id=item.scope.owner_id, renewal_reason="Curator asked again", curator_round=True)
+    context = ReviewContext(item.scope, ep, "supervisor")
+    with store.SessionLocal.begin() as db:
+        with pytest.raises(store.HistoryConflict) as refused:
+            decide(db, item, context, ref, "approve", operation_id="approve-in-curator-round",
+                   publish=lambda *args: pytest.fail("nothing is published"))
+        assert str(refused.value) == CURATOR_ROUND_REFUSAL
+        assert store._current(db, item.aid, root)["active"]
+    with store.SessionLocal.begin() as db:
+        declined = decide(db, item, context, ref, "decline", operation_id="decline-in-curator-round")
+        assert declined["retired"] is False, "declining changes nothing, so it stays available"

@@ -692,6 +692,51 @@ def test_fanout_plan_writers_and_finalize_are_visible(tmp_path, monkeypatch):
     assert events[1]['output'] == {'writer': 2, 'assigned_count': 2, 'staged_count': 1}
 
 
+def test_review_quick_check_shadow_answers_are_visible_in_timeline_and_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    summary = {
+        'packet_id': 'packet-1', 'wording_id': 'v6-shadow', 'model': 'gpt-6-luna', 'mode': 'shadow',
+        'status': 'completed', 'latency_ms': 412, 'usage': {'input': 6916, 'cached_input': 0},
+        'calls': [{'order': 'forward', 'latency_ms': 401}, {'order': 'reversed', 'latency_ms': 412}],
+        'routes': {'balanced': {'skip': 1, 'remove': 1, 'sol': 1}},
+        'records': [
+            {'record': 'R1', 'kind': 'object', 'routes': {'balanced': 'skip'}, 'average': {'scope_lenient': 1.0}},
+            {'record': 'R2', 'kind': 'object', 'routes': {'balanced': 'remove'}, 'average': {'scope_lenient': 0.01}},
+            {'record': 'R3', 'kind': 'sub_record', 'routes': {'balanced': 'sol'},
+             'route_reasons': {'balanced': 'sub_record'}},
+        ],
+    }
+    # The shape write_extraction_trace_event stores: the payload under preview, plus its size.
+    stored = {'preview': summary, 'preview_length': len(json.dumps(summary, sort_keys=True)),
+              'size': {'kind': 'mapping', 'json_chars': 640, 'json_bytes': 640, 'estimated_tokens': 160,
+                       'top_level_keys': len(summary)},
+              'bounded': True}
+    _write_event(tmp_path, 'shadow', _event('shadow', 1, 'review_quick_check.shadow', output_summary=stored))
+    _write_event(tmp_path, 'shadow', _event('shadow', 2, 'extraction_builder.candidate_mutation'))
+
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='shadow', raw_trace={}, observations=[], include_raw_outputs=True)
+
+    events = result['review_quick_check']['events']
+    assert [item['event_type'] for item in events] == ['review_quick_check.shadow']
+    assert events[0]['output'] == stored
+    assert 'calibration only' in result['review_quick_check']['note']
+    report = ExtractionTimelineAnalyzer.diagnostic_report(result)
+    assert report['review_quick_check']['events'][0]['output']['preview']['routes'] == {
+        'balanced': {'skip': 1, 'remove': 1, 'sol': 1}}
+    brief = ExtractionTimelineAnalyzer.analyze(trace_id='shadow', raw_trace={}, observations=[])
+    assert brief['review_quick_check']['events'][0]['output'] == 'status: completed'
+
+
+def test_review_quick_check_section_is_absent_when_no_check_ran(tmp_path, monkeypatch):
+    monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
+    _write_event(tmp_path, 'plain', _event('plain', 1, 'extraction_builder.candidate_mutation'))
+
+    result = ExtractionTimelineAnalyzer.analyze(trace_id='plain', raw_trace={}, observations=[], include_raw_outputs=True)
+
+    assert 'review_quick_check' not in result
+    assert 'review_quick_check' not in ExtractionTimelineAnalyzer.diagnostic_report(result)
+
+
 def test_fanout_section_is_absent_when_fanout_did_not_run(tmp_path, monkeypatch):
     monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
     _write_event(tmp_path, 'single', _event('single', 1, 'extraction_builder.candidate_mutation'))

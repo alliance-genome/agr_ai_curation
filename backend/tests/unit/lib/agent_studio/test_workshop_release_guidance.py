@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[5]
     ("phenotype_terms", "domain_workflows", ["complete declared phenotype_terms", "not the primary display label", "under development", "not a phenotype extraction or an automatic"]),
     ("perturbation", "domain_workflows", ["measured changes after perturbation", "Rescue-only", "reagent, specimen and allele validation remain under development"]),
     ("parallel batches", "extraction_fanout", ["Never assume it is on", "submit_extraction_plan (shown as Plan Records)", "Agent Studio test runs", "run as one writer", "writers get only read_chunk, search_document, record_evidence and the stage tool", "extraction_plan_missing", "writer_completed", "not judgments about the records", "several model-call inputs"]),
-    ("Plan Records", "extraction_fanout", ["code never matches labels or merges records", "a planning miss, a writing miss and a check miss"]),
+    ("Plan Records", "extraction_fanout", ["code never matches labels or merges records", "a planning miss, a writing miss and a check miss", "(binding metadata builder_catalog) is told to call it before reading", "plan only records that answer the request under its instructions and to leave contrasts and exclusions", "code never checks plan labels for it"]),
     ("Checked once", "validator_inputs", ['"Checked once with N other records that had the same value and evidence."', "where N counts the other records", "the same evidence records with the same IDs, quotes and locations", "(a different entity label or different spans) has different IDs and runs separately", "Nothing is matched by similarity", "without any check being skipped", "Revalidate record"]),
     ("custom validator prompt", "validator_inputs", ["The saved validation request keeps every evidence record whole", "receives selected_inputs exactly as saved", "keeps its evidence_record_id, verified_quote and field_path", "In that evidence list, chunk and span locators", "get_trace_payload", "never to span IDs, source fragments or revision bookkeeping", "evidence_record_ids"]),
     ("review packet", "review_history", ["read_review_packet", "review_decision_packet fact", "not a decision", "its applied list gives each handle's decision_unit_id and target_id", "Decision facts keep their usual shape", "under an R handle, which links between records also use", "reads a fresh packet", "decide_record_retirement", "under additional_fields", "A waiting item has no handle", "its codes give the reason", "accepts only acknowledge_failure", "clears that attempt's blocker", "not a scientific verdict", "the answer or source that selection chose", "earlier_decisions per component", "the error names both", "same_quote_as"]),
@@ -132,3 +132,106 @@ def test_review_history_is_available_on_demand_for_each_package(package):
             template=template, render_diagnostic_tools=str, query="revalidation",
         )["topics"]
     }
+
+
+def _alliance_guide(topic):
+    template = (ROOT / "packages/alliance/config/agent_studio_system_prompt.md").read_text()
+    result = read_studio_guide(template=template, render_diagnostic_tools=str, topic=topic)
+    assert result["success"] and result["complete"]
+    always_sent, _ = prepare_studio_prompt_template(template)
+    assert result["content"] not in always_sent
+    return result["content"]
+
+
+def test_fanout_guide_says_in_category_controls_are_planned():
+    guide = _alliance_guide("extraction_fanout")
+    assert "an item inside the requested category is planned even when the paper uses it as a control" in guide
+
+
+def test_extraction_guidance_keeps_contrasts_in_the_written_answer():
+    guide = _alliance_guide("domain_envelopes")
+    for phrase in (
+        "Records answer the curator's question.",
+        "even when the paper uses it as a control",
+        "items whose membership in the category the paper does not establish go in its written answer (its final explanation, with any uncertainty), not as records",
+        "unless the curator asks for those items themselves",
+        "and so does the fan-out planning step, under the agent's own instructions (guide topic extraction_fanout)",
+        "read the extractor's final explanation in the trace before calling it an extraction miss",
+        "keeps the prompt it was saved with",
+        "only their fan-out planning step does",
+    ):
+        assert phrase in guide
+    assert "Controls, wild-type strains, look-alikes" not in guide
+
+
+def test_review_guidance_explains_retiring_and_restoring_out_of_scope_records():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "a record must be shown in the paper to answer the curator's question",
+        "each record ends accepted, retired or left pending",
+        "A reviewer retirement can remove a validated record too",
+        "the reviewer cannot retire the records the curator asked to re-review, either itself or by approving",
+        "Retirement is not deletion",
+        "has no extractor recommendation",
+        "Restore for review, with the curator's reason",
+    ):
+        assert phrase in guide
+    assert "finding no support is still not evidence against them" not in guide
+    assert guide.count("a reject only records an opinion and leaves the record pending") == 1
+
+
+def test_review_guidance_explains_rechecks_and_how_review_ends():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "one targeted re-check per review round",
+        "a round the curator requests (Revalidate record or all records) gives each record a fresh one",
+        "whether one is left (follow_up_available)",
+        "Saved results and history are retained.",
+        "it needs a curator's decision (including a curator's pending decision), it could not be checked (an acknowledged validation failure), the reviewer did not accept it, or the reviewer did not decide it",
+        '"no re-check left for N records"',
+        "removing 2 records that don't answer the question",
+        "Review stops starting new runs once no review action could change the remaining records",
+        'A "Review paused: ..." notice means an operational stop with no pending list',
+        "a cancelled, expired or superseded run, an uncertain execution, a retired document or an unsupported state",
+        "a curator's own reject, defer or acknowledged failure in the round stops reviewer runs for that record",
+        'named "the extraction as a whole"',
+        "a re-check also needs a saved extraction agent that supports re-checks and the record's original extraction",
+    ):
+        assert phrase in guide
+    assert "a time or spending limit" not in guide
+
+
+def test_review_guidance_says_the_quick_check_only_logs():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "Quick check beside review: when the server setting is shadow",
+        "with the records in forward and in reversed order",
+        "question set v6-shadow",
+        "under three candidate rules as the trace event review_quick_check.shadow",
+        "TraceReview groups under review_quick_check",
+        "It is logging only: the supervisor still reviews every record",
+        "Never present its probabilities or would-be routes as review decisions",
+        "With the setting off there is no such event",
+    ):
+        assert phrase in guide
+    workflow = _alliance_guide("trace_investigation")
+    assert "A `review_quick_check.shadow` event is logging only; read studio guide topic `review_history`" in workflow
+
+
+def test_review_guidance_attributes_each_retirement_from_the_stored_origin():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "Which path retired a record is recorded; state it from the record, never assume it.",
+        'the record_retirement_decision fact has origin "review" when the reviewer retired the record itself',
+        'origin "extractor_recommendation" when the extraction agent proposed retirement and the reviewer answered with decide_record_retirement',
+        'only decision "approve" retires the record',
+        "A fact with no origin was saved before this release and follows the extractor path.",
+        "a retire decision in record_validation_review is the reviewer's own retirement; a targeted re-check that came before it is not a retirement recommendation",
+    ):
+        assert phrase in guide
+
+
+def test_prompt_playbook_leads_with_the_saved_prompt_of_a_copied_agent():
+    guide = _alliance_guide("prompt_playbook")
+    assert "say first that it keeps the prompt it was saved with" in guide
+    assert "a later release's change to the packaged prompt does not reach it" in guide
