@@ -225,11 +225,18 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
     ) -> dict:
         """Atomically record explicit decisions for exact target/answer components.
 
+        Each record ends accepted, retired or left pending. Reject records an
+        opinion; it does not remove an original record, which stays pending. To
+        exclude a record item that does not answer the question, use action retire
+        with a reason (and any E handles that show it); it leaves current results,
+        stays in history, and a curator can restore it. Retire is packet-only.
         Give a reason specific to each record. If any decision conflicts, nothing
         in the call applies. From read_review_packet, send its packet_id and one
         packet_decisions item per D handle, with entries null; the server fills in
         the exact target, answer and the version pinned when the packet was read.
-        After a conflict, read a fresh packet and resend. Otherwise
+        After a conflict, read a fresh packet and resend. When not ready, blocking
+        lists what still blocks readiness, by this packet's handles, and what clears
+        it; read a fresh packet before deciding those again. Otherwise
         send entries with packet_id and packet_decisions null, one call per group.
         For answers, target_id is attempt input.target_id; decision_unit_id is a
         covered ID matching the manifest unit target_id. No component units means
@@ -245,15 +252,23 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         Acceptance requires absence_assessment (omission_supported or unresolved)
         and your reason; unsupported lookups require unresolved. Optionality alone
         is not justification. No value is invented.
-        Reject leaves an older selection intact; revoke withdraws
-        it. Operational failures require acknowledge_failure, not scientific rejection.
+        Reject also leaves an older selection intact; revoke withdraws it.
+        Operational failures require acknowledge_failure, not scientific rejection.
         """
         if (entries is None) == (packet_decisions is None) or (packet_id is None) != (packet_decisions is None):
             raise ValueError("Send either packet_id with packet_decisions, or entries")
         started = perf_counter()
-        request = await asyncio.to_thread(checkpoint_provider)
+        retiring = packet_decisions is not None and any(item.action == "retire" for item in packet_decisions)
+        if retiring and select_source is None:
+            raise ValueError("Retiring a record is not available in this review; leave it pending for the curator")
+        request = None if retiring else await asyncio.to_thread(checkpoint_provider)
         checkpointed = perf_counter()
-        if packet_decisions is not None:
+        if retiring:
+            # Retirement changes the source, so it publishes through the bound
+            # source boundary together with the other decisions of this save.
+            result = await select_source(operation_id=operation_id, packet_id=packet_id,
+                packet_decisions=[item.model_dump(mode="json") for item in packet_decisions])
+        elif packet_decisions is not None:
             result = await asyncio.to_thread(
                 decisions.record_packet_decisions,
                 context,
@@ -341,8 +356,10 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
         what is missing or ambiguous and useful search guidance. Runtime supplies
         originals, exact prior validator inputs/answers/caveats, your decision and
         current attempt state automatically. The extractor can use only its saved
-        paper tools. Initial extraction plus one follow-up is the default ceiling;
-        changing operation IDs cannot reset it. A proposal is not an accepted
+        paper tools. Each record gets one follow-up; a curator-requested round grants
+        a fresh one, and changing operation IDs cannot reset it. Records with none
+        left are not investigated and are listed under exhausted: decide them now
+        (accept, retire or leave pending). A proposal is not an accepted
         source or validation. Read it and separately select supported fields and
         item relationships, or retain a truthful no-new-information assessment.
         """
@@ -377,6 +394,7 @@ def create_tools(context, *, checkpoint_provider, refresh_inputs=None, rebind_re
             decision: Literal["approve", "decline"], expected_source_sha: str, reason: str) -> dict:
         """Approve or decline an extractor's whole-record retirement recommendation.
 
+        To retire a record item yourself, use action retire in record_validation_review.
         Read its exact contribution, evidence and uncertainty first. Approval omits
         the record from current results without deleting original data or history;
         decline preserves current values and readiness. Curator authority is protected.

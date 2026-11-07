@@ -303,6 +303,34 @@ An executable extractor contract pins this transport schema. Old contracts remai
 readable but cannot perform a new targeted follow-up with the changed protocol;
 `fresh_extraction_required` is returned before provider execution or admission.
 
+### Retirement by the reviewer (ALL-1502)
+
+The review actor can also retire an extraction-only record itself, without an
+extractor recommendation, when it judges that the record does not answer the
+curator's question. It does so with `action: "retire"` on the record's `D` handle in
+`record_validation_review`, giving a reason and, optionally, `E` handles from the same
+packet. `reject` is different: it records an opinion and leaves the record pending.
+
+Code does not judge scope. It checks authority (a review actor, `actor.type ==
+"agent"`, in its own open round; curator decisions, curator row decisions and curator
+edits block retirement as before), the round's record scope, structure (an active
+whole record with an `extraction_only` obligation, present in the current source, at
+the version pinned by the packet), and the packet's `source_state_sha256`. A record
+with validator answers is still retired only through an extractor recommendation and
+`decide_record_retirement`.
+
+Each retired record gets a `record_retirement_decision` fact whose identity has
+`decision: "retire"`, the actor, the reason and the source digest; the body has
+`origin: "review"`, the cited packet evidence, the previous obligations and the exact
+entry, and its parent is the review episode. Extractor-recommended retirements have
+`decision: "approve"` (or `"decline"`) and `origin: "extractor_recommendation"`, with
+the contribution as parent. The retire decisions, source update, coverage revision and
+publication run in the same transaction as the save's other decisions, so a conflict
+anywhere applies nothing. `record_retirement.retire_in_transaction` is the shared core;
+code can call it for another review actor. Restoration, record counts, exports and the
+retired-records panel treat both kinds alike; the panel omits the extractor
+recommendation when there is none.
+
 Workspace history exposes retired records even when there are no active rows.
 Explicit curator restoration preserves the original identity and history, restores
 pending coverage, and does not schedule a model or renew an allowance. A later

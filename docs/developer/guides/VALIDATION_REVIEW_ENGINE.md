@@ -223,20 +223,37 @@ Every decidable item carries a `D` handle, or one handle per covered component. 
 pinned fact maps each handle to its target, decision unit, attempt or extraction or
 applicability reference, and the unit version at the time the packet was read.
 `record_validation_review(operation_id, packet_id, packet_decisions)` takes `handle`,
-`action`, `reason` and, where allowed, `absence_assessment` or `unresolved_fields`.
+`action`, `reason` and, where allowed, `absence_assessment`, `unresolved_fields` or,
+for `retire`, `evidence` (`E` handles from the same packet).
 The server expands each handle into the same exact entry the explicit form uses, so
 decision facts keep their existing shape, and the pinned version makes any change
 since the read a stale-version conflict. Two handles for one record field in a call
 are refused, naming both. A conflict that names a record uses its handle; the response
 lists each applied handle with its `decision_unit_id` and binding `target_id`. A
 record too large for one page is listed under `too_large` with its target and handles
-for the exact-history tools. The explicit `entries` form is unchanged.
+for the exact-history tools. The explicit `entries` form is unchanged and has no
+`retire` action.
 
-Protocol v5 asks the supervisor to read the packet once, decide every handle with a
+`reject` records an opinion and does not remove an original extraction-only record:
+its selection stays empty and it remains an `unreviewed` blocker. `retire` on a
+`record` item removes the whole record from current results (see Retirement by the
+reviewer in `VALIDATION_HISTORY.md`); a save with any `retire` runs through the bound
+source boundary, so retirements and the other decisions publish atomically, and the
+result names each retired handle with its `retirement_id` plus the new
+`source_state_sha256`. When a save leaves review not ready, its result carries
+`blocking`: the round's manifest blockers grouped by code, each with the handles (or
+target IDs for units outside the packet) and a plain `clears_with` step derived from
+the code and the unit's review mode. Curator saves do not get this list.
+
+Protocol v6 asks the supervisor to read the packet once, decide every handle with a
 reason specific to each record, save in one call (more only when the decisions exceed
 `VALIDATION_REVIEW_DECISION_ENTRIES`), and send one targeted follow-up covering all
-deferred records. Curator-requested rounds, follow-up contribution selection and
-retirement keep the exact-history tools.
+deferred records. It states the outcomes (each record ends accepted, retired or left
+pending), that a record must be shown in the paper to answer the question, that
+reject does not remove a record, and that each record gets one targeted follow-up
+with a fresh one per curator-requested round. Curator-requested rounds, follow-up
+contribution selection and extractor-recommended retirement keep the exact-history
+tools.
 
 ### Review progress lines
 
@@ -496,7 +513,17 @@ read/search the paper itself. It can ask the original configured extractor to
 investigate existing entries with specialized instructions. The default
 `VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY=2` means the original extraction
 plus one targeted follow-up, not two retries. Multi-entry calls charge each named
-entry. Reconnects, episodes and provider recovery do not replenish that entitlement.
+entry that runs. Entries with no follow-up left are not investigated: the request
+runs the rest and the tool result lists the skipped ones under `exhausted`; only a
+request whose every entry is spent stops with `extraction_attempts_exhausted`.
+
+Follow-up protocol v3 (ALL-1502) says a record belongs only if the paper shows it
+answers the curator's question. When the extractor finds no support that it does,
+it recommends whole-record retirement and states what remains uncertain. This rule
+is about the question's scope; for scientific values, not finding support is still
+not evidence against them. The protocol text is part of the pinned extractor
+contract, so an extraction saved under v2 returns `fresh_extraction_required` for a
+new targeted follow-up; its reviewer can still retire record items directly. Reconnects, episodes and provider recovery do not replenish that entitlement.
 Validation remains two total scientific attempts per target/binding lineage,
 subject to the same shared 16 document/64 batch extra-attempt pools.
 
@@ -620,7 +647,8 @@ curator renewal.
 
 `record_validation_review` can accept an extraction-only assessment with optional
 `unresolved_fields`, each containing an exact plain payload `field_path` and an
-`explanation`. The supervisor chooses the uncertainty; code validates ownership,
+`explanation`. List elements are named by index, for example
+`classification_notes[1]`. The supervisor chooses the uncertainty; code validates ownership,
 field existence/type and selection version, then binds the field to stable history
 anchors. Structured resolvable identities keep their validator-owned contract.
 Missing executions, unreviewed records and pending investigation remain incomplete.

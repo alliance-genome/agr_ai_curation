@@ -23,7 +23,10 @@ CORE_GENERATED_BUDGET = 2500
 # Reviewed grouped-review guidance (read and save in groups, read validator answers,
 # judge scope, finish deferred records) adds 2197 characters, bringing it to 9897.
 # This is a source-growth regression ceiling, not a runtime truncation limit.
-AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 10000}
+# Protocol v6 (ALL-1502) adds the reviewed outcome rules (reject keeps a record
+# pending, retire excludes it with a reason, one follow-up per record and a fresh
+# one per curator round, and the blocking list): 769 characters, about 10674.
+AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 10800}
 
 
 def test_core_generated_within_budget_for_all_agents():

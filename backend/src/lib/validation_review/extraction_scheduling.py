@@ -92,23 +92,28 @@ def request(context, *, operation_id, parent_decision_id, entry_ids, instruction
             raise store.HistoryAccessError("Follow-up entry is outside this episode")
         counts = attempt_counts(db, ep.artifact_id, entry_ids)
         ceiling = ep.policy["extraction_attempts_per_entry"]
-        for entry_id, count in counts.items():
-            if count >= ceiling:
-                raise admission.ReviewStopped("extraction_attempts_exhausted", resource=entry_id)
-        attempt = {entry_id: {"ordinal": count + 1, "ceiling": ceiling,
-                             "remaining_after": ceiling - count - 1}
-                   for entry_id, count in counts.items()}
+        # Entries with no follow-up left are reported, not investigated; the
+        # rest still run. Only a request where every entry is spent stops.
+        exhausted = [entry_id for entry_id in entry_ids if counts[entry_id] >= ceiling]
+        if len(exhausted) == len(entry_ids):
+            raise admission.ReviewStopped("extraction_attempts_exhausted", resource=exhausted[0])
+        entry_ids = [entry_id for entry_id in entry_ids if entry_id not in exhausted]
+        attempt = {entry_id: {"ordinal": counts[entry_id] + 1, "ceiling": ceiling,
+                             "remaining_after": ceiling - counts[entry_id] - 1}
+                   for entry_id in entry_ids}
         packet = specialist_context.assemble_in_transaction(
             db, context.history_scope, ep, operation_id="extraction:" + operation_id,
             entry_ids=entry_ids, parent_decision_id=parent_decision_id,
-            instructions=instructions, current_entries=current_entries,
+            instructions=instructions,
+            current_entries={entry_id: current_entries[entry_id] for entry_id in entry_ids},
             attempt=attempt, purpose="targeted_extraction", contributions=contributions,
         )
         fact = append_fact(db, ep.artifact_id,
             operation_id="extraction-followup:" + operation_id,
             kind="extraction_followup_request", parent_id=ep.id,
             body={"entry_ids": entry_ids, "identity": identity, "attempt": attempt,
-                  "context_ref": packet["history"]["records"][0]})
+                  "context_ref": packet["history"]["records"][0],
+                  **({"exhausted_entry_ids": exhausted} if exhausted else {})})
         return enqueue_in_transaction(
             db, context.history_scope, ep.id, operation_id=operation_id,
             kind="extraction_followup", charges={"reviewer_tokens": 0},
@@ -116,3 +121,16 @@ def request(context, *, operation_id, parent_decision_id, entry_ids, instruction
                      "request_ref": specialist_context.reference(fact),
                      "specialist_input": packet, "token_pool": "reviewer_tokens"},
         )
+
+
+def exhausted_entries(scope, work_id):
+    """Entries a follow-up request named but could not investigate: none were left."""
+    with store.SessionLocal() as db:
+        row = db.get(Work, work_id)
+        if row is None or row.kind != "extraction_followup":
+            raise store.HistoryAccessError("Not targeted extraction work")
+        episode = db.get(Episode, row.episode_id)
+        store._artifact(db, episode.artifact_id, scope)
+        # The identity keeps every entry the reviewer named; the work keeps those it runs.
+        return [entry_id for entry_id in row.payload["identity"]["entry_ids"]
+                if entry_id not in row.payload["entry_ids"]]
