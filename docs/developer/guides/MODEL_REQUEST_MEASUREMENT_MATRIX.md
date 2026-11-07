@@ -79,6 +79,7 @@ The guard compares these with the code. A new site must be measured and added.
 | `lib/openai_agents/runner.py` (`SafeAsyncOpenAI`, default and owned clients) | SDK models resolved per turn; `responses.compact` wrapped |
 | `lib/openai_agents/config.py` (`get_model_for_agent`, compatible providers) | SDK models resolved per turn |
 | `lib/openai_agents/prompt_utils.py` | `call_measured_direct_request` |
+| `lib/validation_review/quick_check.py` (Decisions API, shadow mode only) | Not measured here. Decisions requests carry typed questions, not a model context with instructions, tools or history, and are sent only when `VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow`. Each check logs its own latency and token counts in a `review_quick_check.shadow` trace event. They are not charged to the review budget or recorded in the runtime cost ledger |
 
 ## What one measurement record contains
 

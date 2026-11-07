@@ -282,6 +282,73 @@ Supervisor review runs on `VALIDATION_REVIEW_MODEL` with
 requests. An empty model keeps the supervisor's own model, and benchmark runs keep
 their pinned route.
 
+### Decisions quick check (shadow mode)
+
+With `VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow`, each fresh review packet that a
+chat or flow review pins is also sent to the OpenAI Decisions API (`gpt-6-luna`,
+`src/lib/validation_review/quick_check.py`). The check starts when
+`read_review_packet` pins the packet and runs alongside the supervisor's turn; the
+tool returns the same result without waiting. Once started, a check runs to
+completion even if the review ends first; if the event loop cancels it (for
+example at shutdown), one `cancelled` log line is written. The packet is read
+without locks, and the records, inputs, questions and client are built off the
+event loop. The packet is asked twice at the
+same time, with records in forward and in reversed order, because order shifts
+the answers; the two orders are averaged. Each record gets the questions of the
+definition `v6-shadow`: within the request (lenient wording), an identity value
+missing from or contradicted by its quotes, not part of this study's own work,
+what should happen to it (accept, remove as out of scope, needs review), and for
+each resolved validator answer, same entity and species. Code turns the negated
+questions around (1 - p) and applies three rules to name a would-be route per
+record:
+
+- removal only: remove a top-level object record whose averaged scope is below 0.5.
+  The 0.5 comes from the trial's averaged-scope analysis (`order_avg_test`,
+  "avg remove<0.5"), not from its forward-only `A_remove_only` rule, which used 0.3;
+- balanced: remove below 0.3; skip the supervisor when scope is at least 0.8,
+  1 - missing-identity at least 0.8, 1 - not-own-study at least 0.9 and every
+  validator answer at least 0.8;
+- strict: balanced, and the accept choice at least 0.5 to skip.
+
+Records with one of the platform's reference roles (`metadata_only`,
+`supporting_reference`, `validated_reference`) are sub-records and always route
+to the supervisor. Every other role is top-level. A record with an answer missing
+or refused in either order is never skipped, and an object record without a scope
+answer is never removed; both are logged with the reason `unanswered`. If either
+order's call fails, the check is logged as failed with the surviving order's call
+and answers, and no record gets an average, a skip or a removal.
+
+Deliberate differences from the trial's rules (`final_rules.py`):
+
+- sub-records never skip (the trial let any role skip);
+- claim records are never removed (the trial could remove them);
+- every resolved validator answer must be answered to skip (the trial ignored an
+  absent validator score);
+- every score is the average of the two record orders (the trial's skip rules used
+  forward-order scores).
+
+Nothing is applied. Both orders' answers, the averages, the route under each rule,
+and each call's latency and token counts are written as a
+`review_quick_check.shadow` trace event (TraceReview shows it under
+`review_quick_check`), and one log line carries the routes and averages, for later
+calibration against supervisor decisions. The supervisor still reviews every
+record. A failed or refused check is logged and nothing else happens. Question
+texts, input caps, orders and thresholds form one versioned `Definition` in
+`quick_check.py`; changing any of them needs a new wording id and calibration.
+They are code constants rather than environment settings on purpose: every logged
+run must stay comparable with the calibration it is measured against, and a
+per-deployment change would make the shadow data unusable for that. The mode,
+request timeout and retries are environment settings, validated at backend
+startup. The default mode is `off`, which makes no call.
+
+Calibration status of `v6-shadow`: only the averaged lenient scope was analysed
+across both record orders, so the averaged scope and the removal thresholds are
+calibrated. The choice and validator (same entity and species) questions were
+asked in reversed order, but their averages were never evaluated. The negated
+support and negated own-study questions were never asked in reversed order. The
+skip thresholds come from forward-only scores. Their two-order averages are first
+measured by this shadow data.
+
 The supervisor chooses which records and answers are relevant. The full immutable
 baseline, typed source when available, and other history remain accessible when
 needed. Per-record access does not remove old validation findings, summarize away

@@ -291,6 +291,9 @@ async def lifespan(app: FastAPI):
 
     # Validate critical environment variables
     try:
+        from src.lib.openai_agents.config import validate_validation_review_quick_check_settings
+
+        validate_validation_review_quick_check_settings()
         validate_flow_transfer_config()
         _validate_pdf_extraction_timeout()
         _validate_embedding_env()

@@ -3922,6 +3922,45 @@ def get_validation_review_reasoning() -> str:
     return _get_env("VALIDATION_REVIEW_REASONING", "medium").strip()
 
 
+def get_validation_review_quick_check_mode() -> str:
+    """Decisions quick check beside supervisor review: off, or shadow (log answers only)."""
+    name = "VALIDATION_REVIEW_QUICK_CHECK_MODE"
+    value = _get_env(name, "off").strip()
+    if value not in {"off", "shadow"}:
+        raise ValueError(f"{name} must be off or shadow")
+    return value
+
+
+def get_validation_review_quick_check_timeout_seconds() -> float:
+    """Seconds one shadow quick-check request may take before it is logged as failed."""
+    import math
+
+    name = "VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS"
+    value = float(_get_env(name, "30"))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return value
+
+
+def get_validation_review_quick_check_max_retries() -> int:
+    """Provider retries for one shadow quick-check request after a retryable failure."""
+    name = "VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES"
+    value = int(_get_env(name, "2"))
+    if value < 0:
+        raise ValueError(f"{name} must be nonnegative")
+    return value
+
+
+def validate_validation_review_quick_check_settings() -> None:
+    """Startup check: an invalid quick-check mode, timeout or retry count fails the deploy."""
+    try:
+        get_validation_review_quick_check_mode()
+        get_validation_review_quick_check_timeout_seconds()
+        get_validation_review_quick_check_max_retries()
+    except ValueError as error:
+        raise RuntimeError(f"Invalid validation review quick-check setting: {error}") from error
+
+
 def get_validation_review_initial_corrective_continuations() -> int:
     """Consecutive no-progress nudges per invocation; never a scientific retry cap."""
     name = "VALIDATION_REVIEW_INITIAL_CORRECTIVE_CONTINUATIONS"
