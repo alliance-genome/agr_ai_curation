@@ -29,7 +29,7 @@ def _start_line(tool, arguments):
         return "checking review status"
     if tool == "record_validation_review":
         decisions = arguments.get("packet_decisions") or arguments.get("entries") or []
-        removing = sum(getattr(decision, "action", None) == "retire" for decision in decisions)
+        removing = sum(decision.action == "retire" for decision in decisions)
         saving = len(decisions) - removing
         removal = ("removing " + _count(removing, "record", "records")
                    + (" that doesn't" if removing == 1 else " that don't") + " answer the question")

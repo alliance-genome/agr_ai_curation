@@ -8,6 +8,7 @@ import pytest
 from src.lib.validation_history.store import HistoryConflict
 from src.lib.validation_review.admission import ReviewStopped
 from src.lib.validation_review.chat import ChatReview
+from src.lib.validation_review.decisions import PacketDecision, ReviewEntry
 from src.lib.validation_review.progress import review_progress
 from src.lib.openai_agents import streaming_tools, runner
 
@@ -219,13 +220,17 @@ def test_review_tool_lines_need_a_live_curator_stream(monkeypatch):
     monkeypatch.setattr(streaming_tools, "add_specialist_event", added.append)
     streaming_tools.set_live_event_list(None)
     lines = ReviewLines("episode")
-    lines.start("record_validation_review", {"entries": [{}]})
+    entry = ReviewEntry(target_id="target", decision_unit_id="target", expected_version=1,
+                        action="accept", reason="Shown in Methods")
+    lines.start("record_validation_review", {"entries": [entry]})
     lines.finish("record_validation_review", {"applied": []})
     assert added == []
     live = []
     streaming_tools.set_live_event_list(live)
     try:
-        lines.start("record_validation_review", {"packet_decisions": [{}, {}]})
+        lines.start("record_validation_review", {"packet_decisions": [
+            PacketDecision(handle="D1", action="accept", reason="Shown in Methods"),
+            PacketDecision(handle="D2", action="defer", reason="Genotype unclear")]})
         lines.finish("record_validation_review", {"applied": []})
     finally:
         streaming_tools.set_live_event_list(None)
@@ -302,7 +307,6 @@ def test_save_line_names_records_the_reviewer_removes(actions, line):
 
 
 def test_save_line_reads_real_packet_decisions():
-    from src.lib.validation_review.decisions import PacketDecision
     from src.lib.validation_review.progress import _start_line
 
     decisions = [PacketDecision(handle="D1", action="accept", reason="Shown in Methods"),
@@ -516,9 +520,10 @@ def test_every_review_tool_has_a_plain_language_line():
     packet = {"records": [{}], "page": 1, "pages": 1, "record_count": 1, "answer_count": 1}
     for tool in runtime_tool_contract():
         name = tool["name"]
-        line = _start_line(name, {}) or _finish_lines(name, packet)[0][0]
-        assert line, name
-        assert "_" not in line and name not in line
+        lines = [_start_line(name, {}), *(line for line, _ in _finish_lines(name, packet))]
+        shown = [line for line in lines if line is not None]
+        assert shown, name
+        assert all("_" not in line and name not in line for line in shown), (name, shown)
 
 
 @pytest.mark.asyncio
