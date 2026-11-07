@@ -69,6 +69,89 @@ def retired_in_review(db, artifact_id, episode_id):
     return result
 
 
+def _unresolved_references(envelope):
+    """Each record with references to a record absent from this envelope, and those reference keys.
+
+    The envelope's own rule: a record's object references, and the objects its
+    field references name, resolve by object_id or pending_ref_id.
+    """
+    present = {key for obj in envelope.extracted_objects for key in obj.ref_keys()}
+    found = []
+    for obj in envelope.extracted_objects:
+        keys = [ref.ref_key() for ref in (*obj.object_refs, *(field.object_ref for field in obj.field_refs))]
+        missing = list(dict.fromkeys(key for key in keys if key not in present))
+        if missing:
+            found.append((obj, missing))
+    return found
+
+
+def _record_label(domain_pack_id, entry):
+    """The label a curator sees on this record's workspace row."""
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.materialization import object_display_label
+
+    pack = resolve_curation_domain_pack_by_id(domain_pack_id)
+    if pack is None:
+        raise store.HistoryConflict("Saved domain pack is unavailable")
+    return object_display_label(pack.metadata, entry)
+
+
+def _refuse_retiring_referenced(source_envelope, updated, retired_ids, *, approval):
+    """A record another current record still refers to is retired only together with it.
+
+    Mechanics only: which records belong together stays the reviewer's choice, and
+    nothing is retired automatically.
+    """
+    retired = {key: obj for obj in source_envelope.extracted_objects
+               if obj.metadata["validation_history"]["target_id"] in retired_ids for key in obj.ref_keys()}
+    referrers = {}
+    for referrer, keys in _unresolved_references(updated):
+        for key in keys:
+            if key in retired:
+                target_id = retired[key].metadata["validation_history"]["target_id"]
+                referrers.setdefault(target_id, {})[id(referrer)] = referrer
+    if not referrers:
+        return
+    problems = []
+    for target_id, found in referrers.items():
+        names = " and ".join(
+            f'record "{_record_label(source_envelope.domain_pack_id, obj)}" '
+            f'({obj.metadata["validation_history"]["target_id"]})' for obj in found.values())
+        verb, them = ("refers", "it") if len(found) == 1 else ("refer", "them")
+        if approval:
+            problems.append(f"{names} still {verb} to the record this recommendation retires; retire {them} "
+                            "first with record_validation_review, then approve this recommendation")
+        else:
+            problems.append(f"{target_id}: {names} still {verb} to this record; retire them together in this save, "
+                            "or keep this record")
+    raise store.HistoryConflict("; ".join(problems))
+
+
+def _refuse_restoring_with_retired_references(db, artifact_id, updated, root_id):
+    """A restored record that refers to a record still retired waits for that record's restore."""
+    missing = {key for obj, keys in _unresolved_references(updated)
+               if obj.metadata["validation_history"]["target_id"] == root_id for key in keys}
+    if not missing:
+        return
+    from src.schemas.domain_envelope import CuratableObjectEnvelope
+    labels = []
+    for record in retired_records(db, artifact_id):
+        body = store._content(db, store._fact(db, artifact_id, record["retirement"]["fact_id"],
+                                              kind="record_retirement_decision"))
+        entry = CuratableObjectEnvelope.model_validate(body["entry"])
+        if missing.intersection(entry.ref_keys()):
+            labels.append(f'"{_record_label(updated.domain_pack_id, entry)}"')
+    if not labels:
+        # Not a retired record, so not the curator's to fix: publication's
+        # integrity check stops it as a system error.
+        return
+    if len(labels) == 1:
+        raise store.HistoryConflict(f"This record refers to {labels[0]}, which is still removed from the results; "
+                                    "restore that record first")
+    raise store.HistoryConflict("This record refers to " + " and ".join(labels) + ", which are still removed "
+                                "from the results; restore those records first")
+
+
 def _record_targets(targets, root_id):
     """The record root and every target beneath it, by recorded parent links."""
     covered = {root_id}
@@ -137,8 +220,11 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
             supplied["payload"], supplied["metadata"]["validation_history"]):
         raise store.HistoryConflict("The entry changed after this retirement proposal")
     state = store._current(db, artifact_id, root.id)
+    updated = None
     if retirement_decision == "approve":
         _require_no_curator_authority(db, artifact_id, root, descendants, source_envelope)
+        updated = without_records(source_envelope.model_copy(deep=True), {root.id})
+        _refuse_retiring_referenced(source_envelope, updated, {root.id}, approval=True)
     before = rebuild_inputs(db, source_envelope) if retirement_decision == "approve" else None
     fact = append_fact(db, artifact_id, operation_id="record-retirement:" + operation_id,
         kind="record_retirement_decision", target_id=root.id, parent_id=contribution.id,
@@ -151,7 +237,6 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
             operation_id="record-retire:" + operation_id, actor=identity["actor"], entries=[{
                 "target_id": root.id, "expected_version": state["version"],
                 "action": "retire", "reason": reason}])
-        updated = without_records(source_envelope.model_copy(deep=True), {root.id})
         after = rebuild_inputs(db, updated)
         changed = source_inputs.update(db, artifact_id, operation_id=operation_id,
             before=before, after=after, selection_id=fact.id)
@@ -251,7 +336,9 @@ def retire_in_transaction(db, context, *, operation_id, records, expected_source
         entries.append({"target_id": root.id, "action": "retire", "reason": record["reason"],
                         "expected_version": store._current(db, artifact_id, root.id)["version"]
                         if pinned is None else pinned})
-    updated = without_records(updated, {fact.target_id for fact in facts})
+    retired_ids = {fact.target_id for fact in facts}
+    updated = without_records(updated, retired_ids)
+    _refuse_retiring_referenced(source_envelope, updated, retired_ids, approval=False)
     store.apply_decisions_in_transaction(db, context.history_scope, artifact_id,
         operation_id="record-retire:" + operation_id, actor=actor, entries=entries)
     after = rebuild_inputs(db, updated)
@@ -312,6 +399,8 @@ def restore_in_transaction(db, context, *, operation_id, restore_target_id,
             "target_id": root.id, "expected_version": expected_version, "action": "restore", "reason": reason}])
     updated = source_envelope.model_copy(deep=True)
     updated.extracted_objects.append(CuratableObjectEnvelope.model_validate(saved["entry"]))
+    # The saved entry keeps the source's references, so they are checked before replay.
+    _refuse_restoring_with_retired_references(db, artifact_id, updated, root.id)
     # Source projection replays the latest selected extraction for this stable ID.
     from src.lib.validation_history.projection import source_envelope_in_transaction
     updated = source_envelope_in_transaction(db, context.history_scope, artifact_id, updated)
