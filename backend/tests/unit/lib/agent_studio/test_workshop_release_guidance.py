@@ -216,3 +216,22 @@ def test_review_guidance_says_the_quick_check_only_logs():
         assert phrase in guide
     workflow = _alliance_guide("trace_investigation")
     assert "A `review_quick_check.shadow` event is logging only; read studio guide topic `review_history`" in workflow
+
+
+def test_review_guidance_attributes_each_retirement_from_the_stored_origin():
+    guide = _alliance_guide("review_history")
+    for phrase in (
+        "Which path retired a record is recorded; state it from the record, never assume it.",
+        'the record_retirement_decision fact has origin "review" when the reviewer retired the record itself',
+        'origin "extractor_recommendation" when the extraction agent proposed retirement and the reviewer answered with decide_record_retirement',
+        'only decision "approve" retires the record',
+        "A fact with no origin was saved before this release and follows the extractor path.",
+        "a retire decision in record_validation_review is the reviewer's own retirement; a targeted re-check that came before it is not a retirement recommendation",
+    ):
+        assert phrase in guide
+
+
+def test_prompt_playbook_leads_with_the_saved_prompt_of_a_copied_agent():
+    guide = _alliance_guide("prompt_playbook")
+    assert "say first that it keeps the prompt it was saved with" in guide
+    assert "a later release's change to the packaged prompt does not reach it" in guide
