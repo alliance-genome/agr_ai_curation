@@ -302,8 +302,9 @@ def test_save_line_names_records_the_reviewer_removes(actions, line):
     from src.lib.validation_review.progress import _start_line
 
     # Bound tool arguments are model objects; the line reads only their action.
-    decisions = [SimpleNamespace(handle=f"D{index}", action=action) for index, action in enumerate(actions)]
-    assert _start_line("record_validation_review", {"packet_decisions": decisions}) == line
+    decisions = [PacketDecision(handle=f"D{index}", action=action, reason="Specific to this record")
+                 for index, action in enumerate(actions)]
+    assert _start_line("record_validation_review", {"packet_decisions": decisions, "entries": None}) == line
 
 
 def test_save_line_reads_real_packet_decisions():
@@ -442,8 +443,16 @@ def test_overlapping_packet_reads_show_each_distinct_page_once(events):
     ]
 
 
+def _every_record_spent():
+    # Built as extraction_scheduling.request builds a full refusal.
+    stopped = ReviewStopped("extraction_attempts_exhausted", resource=_ENTRY_IDS[0])
+    stopped.exhausted = list(_ENTRY_IDS)
+    return stopped
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome,finish", [
+    (_every_record_spent, [_NONE_LEFT + "3 records"]),
     (lambda: ReviewStopped("fresh_extraction_required"), [_NOT_RUN]),
     (lambda: ReviewStopped("saved_extractor_contract_unavailable"), [_NOT_RUN]),
     (lambda: HistoryConflict("Parent decision must concern every requested entry"), [_NOT_RUN]),
