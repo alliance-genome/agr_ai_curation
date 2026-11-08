@@ -228,9 +228,35 @@ test_rejects_unsupported_lane() {
     --short-sha abc1234
 }
 
+test_release_attach_step_targets_repository() {
+  local workflow_file="${repo_root}/.github/workflows/publish-images.yml"
+  local step_block
+
+  # The assemble-manifest job has no checkout, so gh cannot infer the
+  # repository from a local git remote. The attach step must name it.
+  step_block="$(awk '
+    /^      - name: Attach tagged-release assets$/ { in_step = 1; print; next }
+    in_step && /^      - name: / { exit }
+    in_step { print }
+  ' "${workflow_file}")"
+
+  if [[ -z "${step_block}" ]]; then
+    echo "Expected an 'Attach tagged-release assets' step in ${workflow_file}" >&2
+    exit 1
+  fi
+
+  # shellcheck disable=SC2016 # literal GitHub Actions expression, not a shell expansion
+  if ! grep -Fxq '          GH_REPO: ${{ github.repository }}' <<<"${step_block}"; then
+    echo "Expected the 'Attach tagged-release assets' step to set GH_REPO: \${{ github.repository }}" >&2
+    printf '%s\n' "${step_block}" >&2
+    exit 1
+  fi
+}
+
 test_release_lane_outputs_reproducible_assets
 test_main_lane_outputs_sha_pinned_assets
 test_rejects_missing_required_flags
 test_rejects_unsupported_lane
+test_release_attach_step_targets_repository
 
 echo "prepare_publish_artifacts.sh checks passed"
