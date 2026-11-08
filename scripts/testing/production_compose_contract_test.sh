@@ -43,6 +43,7 @@ write_test_env() {
       'OIDC_REDIRECT_URI=https://curation.example.org/auth/callback' \
       'VALIDATION_HISTORY_PAGE_SIZE=17' \
       'WORKSPACE_REVIEW_CONCURRENCY=3' \
+      'OPENAI_WEBSOCKET_INPUT_REJECTION_MAX_RETRIES=0' \
       'VALIDATION_REVIEW_QUICK_CHECK_MODE=shadow' \
       'VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS=12.5' \
       'VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES=0' \
@@ -114,7 +115,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -Ev '^(MAX_PARALLEL_VALIDATORS=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(OPENAI_WEBSOCKET_INPUT_REJECTION_MAX_RETRIES=|MAX_PARALLEL_VALIDATORS=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -341,6 +342,7 @@ assert len(settings) == 15
 for index, path in enumerate(sys.argv[2:]):
     services = json.loads(Path(path).read_text())["services"]
     for service in ("backend", "benchmark_worker"):
+        assert str(services[service]["environment"]["OPENAI_WEBSOCKET_INPUT_REJECTION_MAX_RETRIES"]) == ("1" if index < 2 else "0")
         assert str(services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == ("8" if index < 2 else "3")
     for key, default, override in settings:
         expected = default if index < 2 else override

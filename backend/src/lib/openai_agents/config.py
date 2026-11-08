@@ -640,6 +640,14 @@ def reasoning_summary_request_settings(
 _DEFAULT_RETRY_HTTP_STATUSES = (408, 409, 429, 500, 502, 503, 504)
 
 
+def get_openai_websocket_input_rejection_max_retries() -> int:
+    """Allow disabling the single resend approved in ALL-1523."""
+    retries = _get_env_int_with_fallback("OPENAI_WEBSOCKET_INPUT_REJECTION_MAX_RETRIES", 1)
+    if retries not in (0, 1):
+        raise ValueError("OPENAI_WEBSOCKET_INPUT_REJECTION_MAX_RETRIES must be 0 or 1")
+    return retries
+
+
 def build_default_model_retry():
     """Opt-in runner-managed retry for transient model-call failures.
 
@@ -652,6 +660,36 @@ def build_default_model_retry():
     # Import here to avoid circular dependency at module load.
     from agents import retry_policies
     from agents.retry import ModelRetrySettings, ModelRetryBackoffSettings
+
+    input_rejection_max_retries = get_openai_websocket_input_rejection_max_retries()
+
+    def retry_responses_websocket_input_rejection(context):
+        from agents.models.openai_responses import ResponsesWebSocketError
+        from agents.retry import RetryDecision
+
+        error = context.error
+        if not (
+            isinstance(error, ResponsesWebSocketError)
+            and error.event_type == "error"
+            and error.payload.get("status") == 400
+            and error.code == "unsupported_parameter"
+            and error.payload["error"].get("param") == "input"
+            and context.attempt <= input_rejection_max_retries
+        ):
+            return False
+
+        # ALL-1523 explicitly approves one unchanged, same-transport resend:
+        # https://linear.app/alliance-of-genome-resources/issue/ALL-1523
+        # The pinned SDK drops the failed socket before raising this frame.
+        # The runner vetoes replay after usable output and reuses the call args.
+        logger.warning(
+            "Retrying Responses WebSocket input rejection (response_id=%s; attempt=%s)",
+            error.payload.get("response_id"),
+            context.attempt,
+        )
+        decision = RetryDecision(retry=True, reason="responses_websocket_input_rejection")
+        setattr(decision, "_approves_replay", True)  # noqa: B010
+        return decision
 
     def retry_responses_websocket_overload(context):
         """Retry a typed pre-response overload frame without logging frame content."""
@@ -703,18 +741,23 @@ def build_default_model_retry():
         retry_policies.any(
             retry_policies.provider_suggested(),
             retry_responses_websocket_overload,
+            retry_responses_websocket_input_rejection,
             retry_policies.retry_after(),
             retry_policies.network_error(),
             retry_policies.http_status(list(_DEFAULT_RETRY_HTTP_STATUSES)),
         ),
         {
-            "id": "agr.default_model_retry", "revision": 1,
+            "id": "agr.default_model_retry", "revision": 2,
             "sdk_version": version("openai-agents"),
             "any": [
                 "provider_suggested",
                 {"id": "responses_websocket_overload", "revision": 1,
                  "event_type": "error", "error_type": "service_unavailable_error",
                  "code": "server_is_overloaded", "approves_replay": True},
+                {"id": "responses_websocket_input_rejection", "revision": 1,
+                 "event_type": "error", "status": 400,
+                 "code": "unsupported_parameter", "param": "input",
+                 "max_retries": input_rejection_max_retries, "approves_replay": True},
                 "retry_after", "network_error",
                 {"http_status": list(_DEFAULT_RETRY_HTTP_STATUSES)},
             ],

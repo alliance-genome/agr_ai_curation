@@ -1225,3 +1225,13 @@ def test_extraction_fanout_contract_covers_every_getter():
 
     getters = {name for name in dir(config) if name.startswith("get_extraction_fanout_")}
     assert getters == {"get_" + key.lower() for key, _, _ in FANOUT_CONTRACT}
+
+
+def test_websocket_input_rejection_retry_setting_reaches_all_consumers():
+    key = "OPENAI_WEBSOCKET_INPUT_REJECTION_MAX_RETRIES"
+    for compose in (_load_dev_compose(), _load_compose()):
+        for service in ("backend", "benchmark_worker"):
+            environment = compose["services"][service]["environment"]
+            if isinstance(environment, list):
+                environment = _list_environment(environment)
+            assert environment[key] == "${" + key + ":-1}"

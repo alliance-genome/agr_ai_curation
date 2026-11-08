@@ -32,7 +32,7 @@ def test_real_default_policy_is_stable_and_retains_live_settings(monkeypatch):
     assert recorded["retry"]["backoff"] == first.retry.backoff.to_json_dict()
     policy = recorded["retry"]["policy"]
     assert policy["id"] == "agr.default_model_retry"
-    assert policy["revision"] == 1
+    assert policy["revision"] == 2
     assert policy["sdk_version"]
     assert policy["any"][-1] == {"http_status": [408, 409, 429, 500, 502, 503, 504]}
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "7")
