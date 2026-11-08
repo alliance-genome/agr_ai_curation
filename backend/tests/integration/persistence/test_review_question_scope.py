@@ -109,15 +109,37 @@ async def test_a_result_whose_question_is_not_stored_is_refused_not_guessed(scop
     chat = await _extracting_turn(scope, monkeypatch, recorded=False)
     if missing == "turn_row":
         later = _later_turn(chat, ALLELES)
-        expected = "The question that produced this saved result is unavailable"
     else:
         later = ChatReview(chat.owner_id, chat.document_id, chat.session_id, uuid4().hex, chat.supervisor, (),
                            ALLELES)
-        expected = "The chat that asked for this saved result is unavailable"
     inputs = _reviewer_inputs(monkeypatch)
-    with pytest.raises(store.HistoryConflict, match=expected):
+    with pytest.raises(store.HistoryConflict, match="The question that produced this saved result is unavailable"):
         await later.resume()
     assert inputs == [], "the reviewer is never asked a different turn's question"
+
+
+@pytest.mark.asyncio
+async def test_a_chat_deleted_while_its_turn_runs_is_still_reviewed_against_its_own_question(scope, monkeypatch):
+    """Deleting a chat keeps its transcript, so a review the running turn resumes still reads its question."""
+    from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatHistoryRepository
+    from src.models.sql.database import SessionLocal
+
+    chat = await _extracting_turn(scope, monkeypatch)
+    later = _later_turn(chat, ALLELES)
+    with SessionLocal() as db:
+        assert ChatHistoryRepository(db).soft_delete_session(
+            session_id=chat.session_id, user_auth_sub=chat.owner_id, chat_kind=ASSISTANT_CHAT_KIND)
+        db.commit()
+    inputs = _reviewer_inputs(monkeypatch)
+    await later.resume()
+    assert [item["user_request"] for item in inputs] == [TRANSGENIC]
+    assert later.supervisor_handoff()["review_outcomes"][0]["question"] == TRANSGENIC
+    with SessionLocal() as db:
+        repository = ChatHistoryRepository(db)
+        record, = chat.records()
+        turn_id = chat.reference(record)["operation_turn_id"]
+        assert repository.get_owned_turn_message_including_deleted(session_id=chat.session_id, user_auth_sub="another-owner",
+                                                 turn_id=turn_id, role="user") is None, "ownership still holds"
 
 
 @pytest.mark.asyncio

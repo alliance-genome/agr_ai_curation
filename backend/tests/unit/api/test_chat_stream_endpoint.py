@@ -797,6 +797,50 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
     assert captured["context_messages"] == [{"role": "user", "content": "hello"}]
 
 
+def test_chat_stream_endpoint_commits_the_turn_row_before_chat_review_can_run(monkeypatch):
+    """A chat review reads its result's question from this turn's user row (v0.11.6 G2).
+
+    The turn is prepared (chat session and user row written and committed) before
+    the runner, the only path that builds a chat review, receives that session and turn.
+    """
+    calls = []
+    for name, value in (("set_current_session_id", lambda _session_id: None),
+                        ("set_current_user_id", lambda _user_id: None),
+                        ("document_state", SimpleNamespace(get_document=lambda _uid: None)),
+                        ("get_groups_from_provider_groups", lambda _groups: []),
+                        ("get_supervisor_tool_agent_map", lambda _active_groups=None: {})):
+        _patch_chat_impl(monkeypatch, name, value)
+
+    async def _quiet(*_args, **_kwargs):
+        return True
+
+    async def _no_signal(_session_id):
+        return False
+
+    for name in ("register_active_stream", "unregister_active_stream", "clear_cancel_signal"):
+        _patch_chat_impl(monkeypatch, name, _quiet)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _no_signal)
+
+    def _prepare(*, session_id, requested_turn_id, user_message, **_kwargs):
+        calls.append(("prepare", session_id, requested_turn_id))
+        return chat.PreparedChatStreamTurn(turn_id=requested_turn_id, effective_user_message=user_message,
+                                           route=chat.ResolvedChatRoute(mode="automatic"), user_turn_created=True)
+
+    async def _run_agent_streamed(**kwargs):
+        calls.append(("runner", kwargs["session_id"], kwargs["turn_id"], kwargs["inline_chat_persistence"]))
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", _prepare)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    response = asyncio.run(chat.chat_stream_endpoint(
+        chat_message=chat.ChatMessage(message="What alleles were examined?", session_id="session-g2",
+                                      turn_id="turn-g2"),
+        user={"sub": "auth-sub", "cognito:groups": []},
+    ))
+    asyncio.run(_consume_stream(response))
+    assert calls == [("prepare", "session-g2", "turn-g2"), ("runner", "session-g2", "turn-g2", True)]
+
+
 def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
