@@ -338,6 +338,37 @@ code can call it for another review actor. Restoration, record counts, exports a
 retired-records panel treat both kinds alike; the panel omits the extractor
 recommendation when there is none.
 
+### Source envelope integrity (v0.11.6)
+
+Every save that changes the source (reviewer retire, an approved extractor
+retirement recommendation, a curator restore, `select_extraction_contribution`)
+starts from `projection.source_envelope_in_transaction`. The source holds source
+values and the findings it owns. It leaves out validator-contributed objects
+(`validated-reference:*`) and every finding derived from a validator answer or a
+review assessment (`projection.derived_finding`: a saved answer reference, a
+pending answer, or a review assessment), including the findings anchored on those
+validated references. `rebuild_selected_envelope` uses the same source, so it no
+longer filters findings itself; it derives findings again only for the selected
+answers and the current assessments, and a pending answer's findings stay out until
+it is selected. A retired record leaves with the findings whose object or
+field reference names it (`projection.without_records`). The adapter validates the
+source once where it builds it, and validates the source and validator matches it
+publishes.
+
+A record another current record still refers to (its `object_refs`, or the objects
+its `field_refs` name) is retired only together with it: a retire or an approval
+that would leave such a reference is refused with a recoverable conflict naming the
+referring record by its workspace label and target ID. Retiring both in one save
+succeeds; nothing is retired automatically. Restoring a record that refers to a
+record still retired is refused the same way, naming the record to restore first.
+
+If the built source or what a save publishes still fails `DomainEnvelope`
+validation, that is a system error, not a review conflict: the save applies
+nothing, review stops with `source_projection_invalid` (never retried), the backend
+logs it at ERROR with structural identifiers only, and
+`audit.report_operational_failure` reports it once. Chat shows "Review paused: a
+system error stopped a save before it changed anything, and it was reported."
+
 Workspace history exposes retired records even when there are no active rows.
 Explicit curator restoration preserves the original identity and history, restores
 pending coverage, and does not schedule a model or renew an allowance. A later

@@ -1,0 +1,2 @@
+# Environment key|default|nondefault contract value
+OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES|1|0

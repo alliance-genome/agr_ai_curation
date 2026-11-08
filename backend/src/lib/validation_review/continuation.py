@@ -1,5 +1,7 @@
 """Structural continuation eligibility and scoped scientific progress, not acceptance."""
 
+from types import SimpleNamespace
+
 from sqlalchemy import select
 
 from src.lib.validation_history import store, selections
@@ -25,6 +27,37 @@ KNOWN_BLOCKERS = frozenset({
     "stale", "incomplete", "retired", "historical_review_unknown",
     "required_validator_unavailable", "document_retired", "configured_validator_unavailable",
 })
+# Blockers no reviewer decision can clear in a run: an outage, a retired record,
+# unknown historical review, or a validation still running.
+BLOCKED_CODES = frozenset({"configured_validator_unavailable", "required_validator_unavailable",
+                           "retired", "historical_review_unknown", "execution_pending"})
+
+
+def _reviewable(codes, unit):
+    """The unit has an existing subject: an extraction, a current completed
+    validator answer or a verified current absence."""
+    return ("episode_review_pending" in codes
+            or ("unreviewed" in codes and unit["has_subject"])
+            or ("stale" in codes and unit["has_current_absence"]))
+
+
+def decidable(codes, unit):
+    """Whether the reviewer can decide this unit now, without a repair.
+
+    Continuation counts a unit when this holds or a re-check or reconsideration
+    is still left (``classify``). The review packet uses the same test to offer
+    an unreviewed validator answer again, with a handle
+    (``reads._outstanding_rows``). The packet's other handles (extraction_ref,
+    applicability_ref, a selected answer, an uncertain outcome) follow their own
+    rules and may offer more than this test counts. A new answer is decidable.
+    An existing subject is decidable unless the reviewer's own reject, defer or
+    acknowledge-failure in this episode left it pending and nothing arrived
+    since. A curator's record or pending decision, and a blocked unit, are never
+    the reviewer's to decide.
+    """
+    if unit["mode"] == "curator" or unit["curator_decided"] or codes & BLOCKED_CODES:
+        return False
+    return "answer_review_pending" in codes or (_reviewable(codes, unit) and unit["settled_by"] is None)
 
 
 def classify(blockers, units):
@@ -32,8 +65,10 @@ def classify(blockers, units):
 
     Units are trusted runtime facts about authority, existing subjects, the latest
     decision and installed repair capabilities. A per-unit outage does not
-    suppress independent units. A unit whose latest decision in this episode left
-    it pending, with nothing new since and no re-check left, cannot change in
+    suppress independent units. A run starts for a unit the packet offers by
+    handle (``decidable``) or one a re-check or reconsideration that is still
+    left can change. A unit whose latest decision in this episode left it
+    pending, with nothing new since and no re-check left, cannot change in
     another run; it stops with a typed cause instead of a reminder.
     """
     eligible, causes = set(), []
@@ -58,26 +93,140 @@ def classify(blockers, units):
             causes.append({"target_id": target, "code": "curator_authority_required"})
             continue
         codes = {item["code"] for item in pending}
-        blocked = codes & {"configured_validator_unavailable", "required_validator_unavailable",
-                           "retired", "historical_review_unknown", "execution_pending"}
+        blocked = codes & BLOCKED_CODES
         if blocked:
             for item in pending:
                 if item["code"] in blocked:
                     causes.append({**item, **({"work_states": unit["work_states"]}
                                              if item["code"] == "execution_pending" else {})})
             continue
-        reviewable = ("episode_review_pending" in codes
-                      or ("unreviewed" in codes and unit["has_subject"])
-                      or ("stale" in codes and unit["has_current_absence"]))
-        if ("answer_review_pending" in codes or (reviewable and unit["settled_by"] is None)
-                or unit["can_repair"]):
+        if decidable(codes, unit) or unit["can_repair"]:
             eligible.add(target)
-        elif reviewable:
+        elif _reviewable(codes, unit):
             causes.append({"target_id": target, "code": "reviewer_left_pending",
                            "decision": unit["settled_by"]})
         else:
             causes.append({"target_id": target, "code": unit["repair_blocker"]})
     return eligible, causes
+
+
+def review_subjects(db, scope, ep, permitted, modes):
+    """What each unit offers the reviewer to decide, from one read of structural history.
+
+    Continuation and the review packet both build units from this and apply
+    ``decidable`` to them, so they agree on what can be decided. ``permitted``
+    are the round's allowed units; ``modes`` maps each unit with an obligation to
+    its review mode. A validation unit's ``answer`` is its newest completed
+    attempt whose inputs are still current, from any round: an answer the
+    reviewer already decided stays decidable once something new arrives.
+    """
+    facts = list(db.scalars(select(ValidationFact).where(
+        ValidationFact.artifact_id == ep.artifact_id,
+        ValidationFact.kind.in_(["target", "attempt", "completion", "validation_source_input",
+                                 "extraction_contribution", "extraction_followup_request"]),
+    ).order_by(ValidationFact.sequence)))
+    targets = {fact.id: fact for fact in facts if fact.kind == "target"}
+    bodies = {fact.id: store._content(db, fact) for fact in facts}
+
+    def ancestry(target_id):
+        seen = set()
+        while target_id in targets:
+            if target_id in seen:
+                raise store.HistoryConflict("Cyclic review target ancestry")
+            seen.add(target_id)
+            target_id = targets[target_id].parent_id
+        return seen
+
+    families = {tid: ancestry(tid) for tid in permitted}
+    relevant = set().union(*families.values()) if families else set()
+    roots = {tid: targets[tid].parent_id if bodies[tid].get("decision_unit") is not None else tid
+             for tid in permitted}
+    sources = {}
+    attempts = {fact.id: fact for fact in facts if fact.kind == "attempt"
+                and permitted.intersection(bodies[fact.id]["coverage"])}
+    completions = {fact.parent_id: fact for fact in facts
+                   if fact.kind == "completion" and fact.parent_id in attempts}
+    for fact in facts:
+        if fact.kind == "validation_source_input" and fact.target_id in relevant:
+            sources[fact.target_id] = fact
+    decided_here = set()
+    for fact in db.scalars(select(ValidationFact).where(
+        ValidationFact.artifact_id == ep.artifact_id,
+        ValidationFact.kind == "episode_disposition",
+        ValidationFact.parent_id == ep.id,
+    )):
+        decided_here.update(store._content(db, fact)["selection_ids"])
+    heads = {head.target_id: store._fact(db, ep.artifact_id, head.fact_id, kind="selection")
+             for head in db.scalars(select(ValidationHead).where(
+                 ValidationHead.artifact_id == ep.artifact_id,
+                 ValidationHead.target_id.in_(permitted)))}
+
+    def latest_input(tid):
+        """Newest saved answer, request, contribution or source for this unit's lineage."""
+        family = families[tid]
+        sequences = [fact.sequence for aid, fact in attempts.items() if tid in bodies[aid]["coverage"]]
+        sequences += [completions[aid].sequence for aid in attempts
+                      if aid in completions and tid in bodies[aid]["coverage"]]
+        sequences += [fact.sequence for fact in facts
+                      if (fact.kind in {"extraction_contribution", "validation_source_input"}
+                          and fact.target_id in family)
+                      or (fact.kind == "extraction_followup_request"
+                          and family.intersection(bodies[fact.id]["entry_ids"]))]
+        return max(sequences, default=0)
+
+    def pending_decision(tid):
+        """Who left the unit pending with this episode's latest decision, and how."""
+        head = heads.get(tid)
+        if head is None or head.id not in decided_here:
+            return None, None
+        body = store._content(db, head)
+        if body["action"] not in PENDING_DECISIONS:
+            return None, None
+        return body["actor"]["type"], body["action"]
+
+    def settled_by(tid):
+        """The reviewer's latest decision of this episode that left the unit pending,
+        if nothing arrived since. A curator's decision is held separately (curator_decided)."""
+        actor, action = pending_decision(tid)
+        if action is None or actor == "curator" or heads[tid].sequence < latest_input(tid):
+            return None
+        return action
+
+    def current_absence(tid):
+        source = sources.get(roots[tid])
+        if source is None or not source_inputs.is_applicability(bodies[source.id]):
+            return False
+        try:
+            source_inputs.require_applicability(db, ep.artifact_id, tid, source.id, scope=scope)
+        except store.HistoryConflict:
+            return False
+        return True
+
+    def current_answer(tid):
+        covering = sorted((aid for aid in attempts if tid in bodies[aid]["coverage"]),
+                          key=lambda aid: attempts[aid].sequence, reverse=True)
+        for aid in covering:
+            completion = completions.get(aid)
+            if (completion is not None and bodies[completion.id]["state"] == "completed"
+                    and store._attempt_is_current(db, scope, ep.artifact_id, bodies[aid], tid)):
+                return attempts[aid], completion
+        return None
+
+    units = {}
+    for tid, mode in modes.items():
+        absent = current_absence(tid)
+        answer = current_answer(tid) if mode == "validation" else None
+        units[tid] = {
+            "mode": mode,
+            "has_current_absence": absent,
+            "has_subject": mode == "extraction_only" or absent or answer is not None,
+            "answer": answer,
+            "settled_by": settled_by(tid),
+            "curator_decided": pending_decision(tid)[0] == "curator",
+        }
+    return SimpleNamespace(facts=facts, targets=targets, bodies=bodies, families=families,
+                           relevant=relevant, roots=roots, attempts=attempts,
+                           completions=completions, sources=sources, units=units)
 
 
 def inspect(context, tool_names):
@@ -91,41 +240,17 @@ def inspect(context, tool_names):
         obligations = {item["target_id"]: item for item in episode["obligations"]
                        if item["target_id"] in permitted}
         manifest = selections.manifest_in_transaction(db, scope, ep.artifact_id, episode_id=ep.id)
-        facts = list(db.scalars(select(ValidationFact).where(
-            ValidationFact.artifact_id == ep.artifact_id,
-            ValidationFact.kind.in_(["target", "attempt", "completion", "validation_source_input",
-                                     "extraction_contribution", "extraction_followup_request"]),
-        ).order_by(ValidationFact.sequence)))
-        targets = {fact.id: fact for fact in facts if fact.kind == "target"}
-        bodies = {fact.id: store._content(db, fact) for fact in facts}
-
-        def ancestry(target_id):
-            seen = set()
-            while target_id in targets:
-                if target_id in seen:
-                    raise store.HistoryConflict("Cyclic review target ancestry")
-                seen.add(target_id)
-                target_id = targets[target_id].parent_id
-            return seen
-
-        families = {tid: ancestry(tid) for tid in permitted}
-        relevant = set().union(*families.values()) if families else set()
-        roots = {tid: targets[tid].parent_id if bodies[tid].get("decision_unit") is not None else tid
-                 for tid in permitted}
+        subjects = review_subjects(db, scope, ep, permitted,
+                                   {tid: item["mode"] for tid, item in obligations.items()})
+        facts, targets, bodies, families = subjects.facts, subjects.targets, subjects.bodies, subjects.families
+        relevant, roots, sources = subjects.relevant, subjects.roots, subjects.sources
+        attempts, completions = subjects.attempts, subjects.completions
         validation_roots = {roots[tid] for tid, obligation in obligations.items()
                             if obligation["mode"] == "validation"}
         attempted = counts(db, ep, validation_roots) if validation_roots else {}
         extra_available = all(admission._allowances(db, row).get("extra_attempts") is None
                               or row.charged.get("extra_attempts", 0) < admission._allowances(db, row)["extra_attempts"]
                               for row in [*chain, ep])
-        sources = {}
-        attempts = {fact.id: fact for fact in facts if fact.kind == "attempt"
-                    and permitted.intersection(bodies[fact.id]["coverage"])}
-        completions = {fact.parent_id: fact for fact in facts
-                       if fact.kind == "completion" and fact.parent_id in attempts}
-        for fact in facts:
-            if fact.kind == "validation_source_input" and fact.target_id in relevant:
-                sources[fact.target_id] = fact
         works = list(db.scalars(select(ValidationReviewWork).where(
             ValidationReviewWork.episode_id == ep.id)))
         from .extraction_scheduling import followup_available
@@ -143,48 +268,6 @@ def inspect(context, tool_names):
         entry_roots = {tid: source_entry(tid) for tid in permitted}
         followups = followup_available(db, ep, provenance,
                                        sorted({entry for entry in entry_roots.values() if entry}))
-        decided_here = set()
-        for fact in db.scalars(select(ValidationFact).where(
-            ValidationFact.artifact_id == ep.artifact_id,
-            ValidationFact.kind == "episode_disposition",
-            ValidationFact.parent_id == ep.id,
-        )):
-            decided_here.update(store._content(db, fact)["selection_ids"])
-        heads = {head.target_id: store._fact(db, ep.artifact_id, head.fact_id, kind="selection")
-                 for head in db.scalars(select(ValidationHead).where(
-                     ValidationHead.artifact_id == ep.artifact_id,
-                     ValidationHead.target_id.in_(permitted)))}
-
-        def latest_input(tid):
-            """Newest saved answer, request, contribution or source for this unit's lineage."""
-            family = families[tid]
-            sequences = [fact.sequence for aid, fact in attempts.items() if tid in bodies[aid]["coverage"]]
-            sequences += [completions[aid].sequence for aid in attempts
-                          if aid in completions and tid in bodies[aid]["coverage"]]
-            sequences += [fact.sequence for fact in facts
-                          if (fact.kind in {"extraction_contribution", "validation_source_input"}
-                              and fact.target_id in family)
-                          or (fact.kind == "extraction_followup_request"
-                              and family.intersection(bodies[fact.id]["entry_ids"]))]
-            return max(sequences, default=0)
-
-        def pending_decision(tid):
-            """Who left the unit pending with this episode's latest decision, and how."""
-            head = heads.get(tid)
-            if head is None or head.id not in decided_here:
-                return None, None
-            body = store._content(db, head)
-            if body["action"] not in PENDING_DECISIONS:
-                return None, None
-            return body["actor"]["type"], body["action"]
-
-        def settled_by(tid):
-            """The reviewer's latest decision of this episode that left the unit pending,
-            if nothing arrived since. A curator's decision is held separately (curator_decided)."""
-            actor, action = pending_decision(tid)
-            if action is None or actor == "curator" or heads[tid].sequence < latest_input(tid):
-                return None
-            return action
 
         units = {}
         for unit in manifest["units"]:
@@ -193,14 +276,6 @@ def inspect(context, tool_names):
                 continue
             root = roots[tid]
             mode = obligations[tid]["mode"]
-            source = sources.get(root)
-            absent = False
-            if source is not None and source_inputs.is_applicability(bodies[source.id]):
-                try:
-                    source_inputs.require_applicability(db, ep.artifact_id, tid, source.id, scope=scope)
-                    absent = True
-                except store.HistoryConflict:
-                    pass
             used = attempted.get(root, 0)
             can_attempt = used < ep.policy["attempts_per_target"] and (not used or extra_available)
             repair = can_attempt and (
@@ -210,14 +285,8 @@ def inspect(context, tool_names):
             can_investigate = (entry is not None and "request_targeted_extraction" in tool_names
                                and followups[entry])
             units[tid] = {
-                "mode": mode,
+                **subjects.units[tid],
                 "record": entry,
-                "has_current_absence": absent,
-                "has_subject": mode == "extraction_only" or absent or any(
-                    tid in bodies[aid]["coverage"] and bodies[completion.id]["state"] == "completed"
-                    for aid, completion in completions.items()),
-                "settled_by": settled_by(tid),
-                "curator_decided": pending_decision(tid)[0] == "curator",
                 # Validator reconsideration and source assessment repair only
                 # validation units; an extraction-only record changes through
                 # the extractor follow-up alone.

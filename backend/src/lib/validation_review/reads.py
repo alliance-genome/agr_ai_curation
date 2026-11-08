@@ -181,8 +181,15 @@ def read(scope, episode_id, *, fact_id, sha256, offset=0):
 
 
 def _outstanding_rows(db, scope, ep, episode_id):
-    """Every live outstanding row of the bound episode, in stable keyset order."""
-    from . import source_inputs
+    """Every live outstanding row of the bound episode, in stable keyset order.
+
+    A validator answer the reviewer already decided is offered again, with its
+    exact references, when continuation's own test (``continuation.decidable``)
+    says it can be decided now: something new arrived since, or a later round
+    began. While it waits, continuation runs for it only to use a re-check or
+    reconsideration that is still left.
+    """
+    from . import continuation, source_inputs
     from .record_scope import allowed_units, review_blockers
     from .record_source import evidence_groups
     from src.lib.validation_history.selections import effective_episode
@@ -198,6 +205,12 @@ def _outstanding_rows(db, scope, ep, episode_id):
     targets = {fact.id: fact for fact in db.scalars(select(ValidationFact).where(
         ValidationFact.artifact_id == ep.artifact_id, ValidationFact.kind == "target"))}
     groups = evidence_groups(db, artifact)
+    codes = {}
+    for blocker in blockers:
+        if blocker["target_id"] is not None:
+            codes.setdefault(blocker["target_id"], set()).add(blocker["code"])
+    subjects = continuation.review_subjects(
+        db, scope, ep, allowed_units(coverage), {tid: obligations[tid]["mode"] for tid in units}).units
 
     def source_record(target_id):
         while target_id is not None:
@@ -217,10 +230,10 @@ def _outstanding_rows(db, scope, ep, episode_id):
             target = targets[unit_id]
             body = store._content(db, target)
             parent = target.parent_id if body.get("decision_unit") is not None else target.id
-            decidable = row["code"] != "historical_review_unknown"
+            history_known = row["code"] != "historical_review_unknown"
             row.update(target_id=parent, decision_unit_id=unit_id,
                 expected_version=unit["version"], mode=obligations[unit_id]["mode"],
-                agent_may_decide=obligations[unit_id]["mode"] != "curator" and decidable,
+                agent_may_decide=obligations[unit_id]["mode"] != "curator" and history_known,
                 record_target_id=source_record(unit_id),
                 unit_ref={"fact_id": target.id, "sha256": target.body_sha})
             record_target = row["record_target_id"]
@@ -231,8 +244,15 @@ def _outstanding_rows(db, scope, ep, episode_id):
             source = source_inputs.latest(db, ep.artifact_id, parent)
             if source is not None and source_inputs.is_applicability(store._content(db, source)):
                 row["applicability_ref"] = source_inputs.reference(source)
-            if obligations[unit_id]["mode"] == "extraction_only" and decidable:
+            if obligations[unit_id]["mode"] == "extraction_only" and history_known:
                 row["extraction_ref"] = artifact.baseline_sha
+            answer = subjects[unit_id]["answer"]
+            if (row["code"] == "unreviewed" and answer is not None
+                    and "answer_review_pending" not in codes[unit_id]
+                    and continuation.decidable(codes[unit_id], subjects[unit_id])):
+                attempt, completion = answer
+                row.update(attempt_ref={"fact_id": attempt.id, "sha256": attempt.body_sha},
+                           completion_ref={"fact_id": completion.id, "sha256": completion.body_sha})
         # Each answer remains independently reachable, even for one unit.
         # Baseline evidence is immutable, so this keeps a stable keyset order.
         key = json.dumps([group, unit_id or "", blocker["code"],
@@ -492,8 +512,14 @@ def _packet_applicability(body, evidence):
     return item
 
 
+IDENTITY_RECORD = ("This record is an identity value, which accepting does not resolve, "
+                   "so send it without unresolved_fields.")
+
+
 def _build_packet(db, scope, ep, episode_id):
     from collections import Counter
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.validation_history.assessments import identity_record, record_specs
     from . import source_inputs
     from .record_scope import review_ready
     from .record_source import _source_fact, packet_record
@@ -502,7 +528,8 @@ def _build_packet(db, scope, ep, episode_id):
     artifact = store._artifact(db, ep.artifact_id, scope)
     units = {unit["target_id"]: unit for unit in manifest["units"]}
     unit_order = {unit["target_id"]: index for index, unit in enumerate(manifest["units"])}
-    original = db.get(ValidationBody, artifact.baseline_sha).content["normalized"]["extracted_objects"]
+    baseline = db.get(ValidationBody, artifact.baseline_sha).content["normalized"]
+    original = baseline["extracted_objects"]
     record_order = {item.get("object_id") or item.get("pending_ref_id"): index
                     for index, item in enumerate(original)}
     uncertain = {fact.parent_id for fact in db.scalars(select(ValidationFact).where(
@@ -577,6 +604,19 @@ def _build_packet(db, scope, ep, episode_id):
                                "selected": selected})
         return references
 
+    specs, packs = {}, []
+
+    def specs_for(object_type):
+        """The pack's resolvable values per record type, read as the binding check reads them."""
+        if not packs:
+            pack = resolve_curation_domain_pack_by_id(baseline["domain_pack_id"])
+            if pack is None:
+                raise store.HistoryConflict("The domain pack of this extraction is unavailable")
+            packs.append(pack)
+        if object_type not in specs:
+            specs[object_type] = record_specs(packs[0], object_type)
+        return specs[object_type]
+
     evidence = _PacketEvidence()
     records, handles, index, record_labels = [], {}, [], {}
     numbered = 0
@@ -588,6 +628,7 @@ def _build_packet(db, scope, ep, episode_id):
             numbered += 1
             label = "R" + str(numbered)
         item = {"record": label}
+        shown = None  # The source record whose values this item shows.
         if record_target is not None:
             item["target_id"] = record_target
             item["follow_up_available"] = followups[record_target]
@@ -597,6 +638,7 @@ def _build_packet(db, scope, ep, episode_id):
                 item["source_unavailable"] = str(error)
             else:
                 source = store._content(db, fact)
+                shown = source["record"]
                 item.update(packet_record(source["record"]))
                 item["values"] = evidence.inline(item["values"])
                 for identity in (source["record"].get("object_id"), source["record"].get("pending_ref_id")):
@@ -654,6 +696,11 @@ def _build_packet(db, scope, ep, episode_id):
                         ref = {"applicability_ref": row["applicability_ref"]}
                     else:
                         entry = {"review": "record"}
+                        # A record that is itself an identity takes no unresolved_fields:
+                        # the binding check asks the same question and refuses each field.
+                        if shown is not None and identity_record(shown["payload"],
+                                                                 specs_for(shown["object_type"])):
+                            entry["identity_record"] = IDENTITY_RECORD
                         ref = {"extraction_ref": subject}
                     slots[key] = {"entry": entry, "units": [], "ref": ref}
                 slots[key]["units"].append((unit_id, row))

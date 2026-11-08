@@ -99,8 +99,13 @@ async def test_canonical_grouped_review_and_reconsideration_use_real_sdk_tools(
                 payload={"evidence_code_curies": [f"eco:{label}"]}) for label in "ABC"])
         envelope = runtime.capture_extraction(scope=item.scope, producer_id=uuid4().hex,
             typed=envelope.model_dump(mode="json"), envelope=envelope, provenance={})
+        from tests.integration.persistence.chat_turn_support import record_user_turn
+
+        turn_id, question = uuid4().hex, "Review the three saved records"
+        record_user_turn(owner_id=item.scope.owner_id, session_id=item.scope.session_id, turn_id=turn_id,
+                         question=question)
         chat = ChatReview(item.scope.owner_id, item.scope.document_id, item.scope.session_id,
-                          uuid4().hex, supervisor, (), "Review the three saved records")
+                          turn_id, supervisor, (), question)
         await chat.receive(envelope, item.pack, agent_key="fixture", adapter_key="fixture",
             tool_name="ask_fixture", execution_receipt=None,
             context=ValidatorRuntimeContext(user_id=item.scope.owner_id,
@@ -374,6 +379,11 @@ async def _canonical_producer_scenario(
     monkeypatch.setattr(reviewer, "create_direct_supervisor", lambda **kwargs: supervisor)
     from src.lib.context import agent_request_scope
     run_id = uuid4().hex
+    if producer != "flow":
+        # The chat API writes the turn's user row before the runner runs it.
+        from tests.integration.persistence.chat_turn_support import record_user_turn
+        record_user_turn(owner_id=item.scope.owner_id, session_id=item.scope.session_id, turn_id=run_id,
+                         question="Extract the three fixture records")
     with agent_request_scope(user_id=item.scope.owner_id,
                              session_id=item.scope.session_id, trace_id=uuid4().hex):
         if producer != "flow":
@@ -894,10 +904,16 @@ async def test_canonical_saved_profile_uses_pinned_agent_and_real_generic_builde
     monkeypatch.setattr(reviewer, "create_direct_supervisor", lambda **kwargs: supervisor)
     monkeypatch.setattr(runner, "get_langfuse", lambda: None)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    from tests.integration.persistence.chat_turn_support import record_user_turn
+
+    turn_id = uuid4().hex
+    # The chat API writes the turn's user row before the runner runs it.
+    record_user_turn(owner_id=scope.owner_id, session_id=scope.session_id, turn_id=turn_id,
+                     question="Extract the three records")
     with agent_request_scope(user_id=scope.owner_id, session_id=scope.session_id, trace_id=uuid4().hex):
         events = [event async for event in runner.run_agent_streamed(
             context_messages=[{"role": "user", "content": "Extract the three records"}],
-            user_id=scope.owner_id, session_id=scope.session_id, turn_id=uuid4().hex,
+            user_id=scope.owner_id, session_id=scope.session_id, turn_id=turn_id,
             document_id=scope.document_id, active_groups=[], agent=extractor,
             chat_route_mode="agent", inline_chat_persistence=True, propagate_runtime_exceptions=True)]
     terminal, = [event for event in events if event["type"] == "RUN_FINISHED"]

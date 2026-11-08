@@ -11,16 +11,41 @@ from . import store
 from .curator_authority import anchor_for_path, anchored_path
 
 FINDING_CODE = "validation_review.assessment_unresolved"
+IDENTITY = ("is part of an identity value, which accepting does not resolve, "
+            "so leave it out of unresolved_fields")
+
+
+def identity_at(specs, tokens, value):
+    """Whether the value at this location is a structured identity, so none of its fields can be assessed.
+
+    It is one when the pack declares it resolvable or it carries a resolution state.
+    The binding check, the assessable-field list and the review packet all ask this.
+    """
+    from src.lib.domain_packs.resolvable_values import declared_spec_for, has_resolution_state
+
+    return declared_spec_for(specs, tokens) is not None or has_resolution_state(value)
+
+
+def record_specs(domain_pack, object_type):
+    """The resolvable values the pack declares for one record type, as binding reads them."""
+    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
+
+    return declared_resolvable_fields(domain_pack.metadata, object_type)
+
+
+def identity_record(payload, specs):
+    """A record that is itself an identity: binding refuses every field of it."""
+    return identity_at(specs, (), payload)
 
 
 def _assessable_paths(obj, specs, profile_context):
     """Every plain field the binding check below accepts, written as it must be sent."""
-    from src.lib.domain_packs.resolvable_values import _format_path, declared_spec_for, has_resolution_state
+    from src.lib.domain_packs.resolvable_values import _format_path
 
     paths = []
 
     def walk(value, tokens):
-        if declared_spec_for(specs, tokens) is not None or has_resolution_state(value):
+        if identity_at(specs, tokens, value):
             return
         if isinstance(value, dict):
             for key, item in value.items():
@@ -44,7 +69,7 @@ def _assessable_paths(obj, specs, profile_context):
 
 def _bind_one(obj, path, specs, profile_context):
     """Why an assessed path cannot be used, and whether that is a source conflict; None if usable."""
-    from src.lib.domain_packs.resolvable_values import declared_spec_for, has_resolution_state
+    from src.lib.domain_packs.resolvable_values import declared_spec_for
 
     try:
         parts = parse_field_path(path)
@@ -52,8 +77,8 @@ def _bind_one(obj, path, specs, profile_context):
         return f"is not a valid field path: {error}", False
     value = obj.payload
     for length, part in enumerate(parts):
-        if declared_spec_for(specs, parts[:length]) is not None or has_resolution_state(value):
-            return "is a structured identity that keeps its validator resolution contract", False
+        if identity_at(specs, parts[:length], value):
+            return IDENTITY, False
         if isinstance(part, int):
             if not isinstance(value, list):
                 return "uses an index on a value that is not a collection", True
@@ -66,7 +91,7 @@ def _bind_one(obj, path, specs, profile_context):
         value = value[part]
     if declared_spec_for(specs, parts) is not None or (
             profile_context is not None and profile_context.profile.resolvable_container(path) is not None):
-        return "is a structured identity that keeps its validator resolution contract", False
+        return IDENTITY, False
     if isinstance(value, (dict, list)):
         return "is not an individual plain field", False
     return None
@@ -92,7 +117,11 @@ def refusal(problems, usable, *, names=None):
         return f" ({count} more not listed; this message was cut to fit the review response size limit)"
 
     for indexes, paths in usable.values():
-        prefix = " Fields that can be assessed for " + " and ".join(label(index) for index in indexes) + ": "
+        named = " and ".join(label(index) for index in indexes)
+        prefix = " Fields that can be assessed for " + named + ": "
+        if not paths:
+            message += prefix + "none, so send " + named + " without unresolved_fields."
+            continue
         listed = []
         for path in paths:
             if len(message) + len(prefix) + len(", ".join([*listed, path])) + len(cut(len(paths))) + 1 > limit:
@@ -115,7 +144,6 @@ def bind_assessments(db, scope, artifact_id, envelope, entries, *, domain_pack, 
     can be assessed. Which field was meant stays the model's choice.
     """
     from .projection import source_envelope_in_transaction
-    from src.lib.domain_packs.resolvable_values import declared_resolvable_fields
 
     if not any(entry.get("unresolved_fields") is not None for entry in entries):
         return entries
@@ -138,7 +166,7 @@ def bind_assessments(db, scope, artifact_id, envelope, entries, *, domain_pack, 
             problems.append((position, "field assessment must name its extraction record", True))
             continue
         refs = obj.metadata["validation_history"]
-        specs = declared_resolvable_fields(domain_pack.metadata, obj.object_type)
+        specs = record_specs(domain_pack, obj.object_type)
         failed, paths = False, set()
         for index, raw in enumerate(assessments):
             assessment = UnresolvedFieldAssessment.model_validate(raw)

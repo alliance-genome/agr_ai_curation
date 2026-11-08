@@ -9,7 +9,7 @@ from .audit import append_fact
 from src.schemas.validation_history import UnresolvedFieldAssessment, HistoryFactReference
 from src.lib.validation_history.projection import publish_decisions_in_transaction
 from src.models.sql.validation_history import ValidationFact
-from .admission import lock_episode
+from .admission import ReviewStopped, lock_episode
 from .policy import ReviewLimits
 from .record_scope import review_blockers, review_ready
 
@@ -219,6 +219,8 @@ def _named_errors(handles, entries):
             yield
         except store.HistoryAccessError:
             raise  # Authorization keeps its own type and never names a record.
+        except ReviewStopped:
+            raise  # A stop keeps its reason; it is not a record conflict to rename.
         except ValueError as error:
             found = getattr(error, "assessment_refusal", None)
             if found is not None:

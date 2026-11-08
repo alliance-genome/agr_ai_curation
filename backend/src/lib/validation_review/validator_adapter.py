@@ -8,6 +8,7 @@ its binding from that plan, including saved custom validator revision pins.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, copy_context
@@ -15,7 +16,7 @@ from functools import partial
 from dataclasses import asdict
 from pydantic_core import to_jsonable_python
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from src.lib.domain_packs.validator_dispatch import (
     ValidatorDispatchJob,
@@ -31,6 +32,7 @@ from src.lib.domain_packs.validator_dispatch import (
 )
 from src.lib.domain_packs.validation_registry import ValidatorBinding, ValidatorBindingMatch, DomainPackValidationRegistry
 from src.lib.validation_history import store, runtime
+from src.schemas.domain_envelope import DomainEnvelope
 from src.schemas.domain_validator import DomainValidationRequest
 from . import admission, execution, scheduling
 from .audit import append_fact
@@ -49,6 +51,35 @@ RECONSIDERATION_INPUT: ContextVar[dict | None] = ContextVar(
 MATCH = TypeAdapter(ValidatorBindingMatch)
 REGISTRY = TypeAdapter(DomainPackValidationRegistry)
 BINDING = TypeAdapter(ValidatorBinding)
+
+LOGGER = logging.getLogger(__name__)
+
+
+def require_source_integrity(validate, *, artifact_id, episode_id, stage):
+    """Run a server-side envelope validation; a failure stops review with an alert.
+
+    A source the save built, or what it publishes, that breaks the envelope's own
+    contract is a system error no resend can fix, never a review conflict. stage
+    names the check (selection_source, published_source or published_match). The
+    log and the one Sentry event carry the stage and the artifact and episode IDs
+    (hashed in Sentry like every runtime identifier) and validation locations only,
+    never record content. The caller's transaction rolls back, so nothing applies.
+    """
+    try:
+        return validate()
+    except ValidationError as error:
+        from .audit import report_operational_failure
+
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in item['loc']) or '<root>'} [{item['type']}] {item['msg']}"
+            for item in error.errors(include_url=False, include_context=False, include_input=False))
+        LOGGER.error("Review stopped: %s failed the envelope contract (artifact %s, episode %s): %s",
+                     stage, artifact_id, episode_id, problems, extra={"sentry_skip_event": True})
+        report_operational_failure(
+            error, operation=admission.SOURCE_PROJECTION_INVALID, tags={"phase": stage},
+            context={"stage": stage, "artifact_id": artifact_id, "episode_id": episode_id},
+            fingerprint=["validation_review", admission.SOURCE_PROJECTION_INVALID, stage])
+        raise admission.ReviewStopped(admission.SOURCE_PROJECTION_INVALID) from error
 
 
 def _prerequisite_targets(match, matches, units, parents):
@@ -348,6 +379,9 @@ class ValidatorAdapter:
             return requests
 
         def publish(db, envelope, requests, changed, selection_id):
+            require_source_integrity(lambda: DomainEnvelope.model_validate(envelope.model_dump(mode="json")),
+                                     artifact_id=self.artifact_id, episode_id=self.episode_id,
+                                     stage="published_source")
             obligations = []
             for target, match in resolved_matches.items():
                 units = match.binding.decision_units
@@ -373,10 +407,13 @@ class ValidatorAdapter:
                     obligations.append(item)
             selections.revise_coverage_in_transaction(db, self.scope, self.artifact_id,
                 episode_id=self.episode_id, source_selection_id=selection_id, obligations=obligations)
+            matches = require_source_integrity(
+                lambda: {target: serialize_match(match) for target, match in resolved_matches.items()},
+                artifact_id=self.artifact_id, episode_id=self.episode_id, stage="published_match")
             append_fact(db, self.artifact_id, operation_id="source-plan:" + selection_id,
                 kind="review_source_plan", parent_id=self.episode_id,
                 body={"plan_ref": self.plan_ref, "envelope": envelope.model_dump(mode="json"),
-                      "matches": {target: serialize_match(match) for target, match in resolved_matches.items()}})
+                      "matches": matches})
             manifest = selections.manifest_in_transaction(db, self.scope, self.artifact_id, episode_id=self.episode_id)
             from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
             profile = resolve_envelope_profile_validation(envelope, domain_pack,
@@ -401,6 +438,10 @@ class ValidatorAdapter:
             admission.lock_episode(db, self.scope, self.episode_id,
                                    require_open=not {"restore_target_id", "packet_decisions"} & set(arguments))
             source = projection.source_envelope_in_transaction(db, self.scope, self.artifact_id, current[0].envelope)
+            # One check where the source is built: every save below starts from it.
+            require_source_integrity(lambda: DomainEnvelope.model_validate(source.model_dump(mode="json")),
+                                     artifact_id=self.artifact_id, episode_id=self.episode_id,
+                                     stage="selection_source")
             if "packet_decisions" in arguments:
                 from . import decisions
                 from .record_retirement import retire_in_transaction
@@ -833,7 +874,6 @@ class ValidatorAdapter:
 
     def specialist_packet(self, payload):
         """Freeze exact reconsideration inputs before constructing provider input."""
-        from src.schemas.domain_envelope import DomainEnvelope
         from src.lib.validation_history.projection import source_envelope_in_transaction
         from . import specialist_context
 

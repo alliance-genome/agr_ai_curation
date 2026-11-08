@@ -552,6 +552,21 @@ def test_before_send_preserves_safe_runtime_exception_context_without_raw_ids(mo
     assert scrubbed["exception"]["values"][0]["value"] == "[Filtered]"
 
 
+def test_before_send_hashes_a_review_stops_artifact_and_episode_ids():
+    """v0.11.6: a source integrity stop names its review by hashed identifiers, like every runtime ID."""
+    event = {"contexts": {"runtime_exception": {
+        "component": "validation_review", "operation": "source_projection_invalid",
+        "stage": "selection_source", "artifact_id": "artifact-fixture", "episode_id": "episode-fixture",
+    }}}
+
+    runtime_context = sentry.before_send(event)["contexts"]["runtime_exception"]
+
+    assert runtime_context["artifact_id"] == "sha256:" + hashlib.sha256(b"artifact-fixture").hexdigest()[:16]
+    assert runtime_context["episode_id"] == "sha256:" + hashlib.sha256(b"episode-fixture").hexdigest()[:16]
+    assert runtime_context["stage"] == "selection_source"
+    assert runtime_context["operation"] == "source_projection_invalid"
+
+
 def test_before_send_transaction_uses_same_redaction_policy(monkeypatch):
     # KANBAN-1771: content redaction is OFF by default since v0.9.18.
     # This test covers the redaction machinery itself, which must keep

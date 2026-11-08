@@ -32,6 +32,12 @@ class ReviewStopped(store.HistoryConflict):
         super().__init__(reason)
 
 
+# A save's own source, or what it publishes, broke the envelope contract: a system
+# error that no resend can fix. Unlike the other stops it is an operational failure,
+# reported once where it is raised.
+SOURCE_PROJECTION_INVALID = "source_projection_invalid"
+
+
 def now():
     return datetime.now(timezone.utc)
 

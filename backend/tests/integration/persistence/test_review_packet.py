@@ -392,6 +392,95 @@ def test_every_unknown_uncertain_field_is_named_with_its_handle_and_the_valid_fi
         assert {store._current(db, artifact, target)["version"] for target in targets} == {0}
 
 
+def _identity_record(index):
+    """A standalone extracted identity: its whole value carries a resolution state, as for an ontology term."""
+    obj = _object(index, ["e1"])
+    return obj.model_copy(update={"payload": {
+        "curie": None, "label": None, "mention": "bifurcation", "resolution_state": "unresolved",
+        "lookup_outcome": "not_validated", "validator_explanation": "Not validated yet."}})
+
+
+def _subject_record(index):
+    """S06 D1/D13: a subject the pack declares resolvable at its root, staged with only a note."""
+    obj = _object(index, ["e1"])
+    return obj.model_copy(update={"object_type": "Subject", "object_role": "validated_reference",
+                                  "model_ref": "SubjectPayload", "payload": {
+        "resolution_note": "Phenotype extraction did not stage the subject the paper names."}})
+
+
+@pytest.fixture
+def subject_pack(monkeypatch):
+    """The generic pack plus a subject type whose model display has a mention, as PhenotypeSubject does."""
+    from dataclasses import replace
+    from src.lib.curation_workspace import adapter_registry
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition, DomainPackObjectDefinition
+
+    resolve = adapter_registry.resolve_curation_domain_pack_by_id
+    generic = resolve("generic")
+    pack = replace(generic, metadata=generic.metadata.model_copy(update={
+        "model_definitions": [*generic.metadata.model_definitions, DomainPackModelDefinition(
+            model_id="SubjectPayload", display_name="Subject payload",
+            metadata={"display": {"label": "subject_label", "id": "subject_identifier", "mention": "mention"}})],
+        "object_definitions": [*generic.metadata.object_definitions, DomainPackObjectDefinition(
+            object_type="Subject", display_name="Subject", model_ref="SubjectPayload")],
+    }))
+    monkeypatch.setattr(adapter_registry, "resolve_curation_domain_pack_by_id",
+                        lambda pack_id: pack if pack_id == "generic" else resolve(pack_id))
+    return pack
+
+
+def test_the_packet_marks_exactly_the_records_the_save_refuses_as_identities(scope, subject_pack):
+    """S06 rerun d9466d62: the save refused all 8 subjects (D1, D13, D25, D34, D43, D52, D64, D76)
+    as identities and the packet marked none. One rule now decides both, for every record."""
+    from src.lib.validation_history.assessments import IDENTITY
+    from src.lib.validation_history.projection import read_published_projection
+
+    # S06's layout: each finding stages a subject, a term and its other records.
+    groups = 8
+    objects = [shape(3 * group + offset) for group in range(groups)
+               for offset, shape in enumerate((_subject_record, _identity_record, lambda index: _object(index, ["e1"])))]
+    _, _, episode, _, checkpoint = _build(scope, objects, [_evidence("e1")])
+    page = reads.review_packet(scope, episode)
+    assert (page["pages"], len(page["records"])) == (1, 3 * groups)
+    handles = {record["target_id"]: _handles(record)[0] for record in page["records"]}
+    marker = "This record is an identity value, which accepting does not resolve, so send it without unresolved_fields."
+    for position, record in enumerate(page["records"]):
+        item = {"handle": handles[record["target_id"]], "review": "record"}
+        assert record["review"] == [{**item, "identity_record": marker} if position % 3 < 2 else item]
+    assert sum(record["type"] == "Subject" for record in page["records"]) == groups
+
+    # Ask the save rule about every value of every record: it refuses as an identity
+    # each field of exactly the marked records, and no field of the others.
+    context = ReviewContext(scope, episode, "fixture-reviewer")
+    probe = [{"handle": handles[record["target_id"]], "action": "accept", "reason": "Probe every field.",
+              "unresolved_fields": [{"field_path": key, "explanation": "Probe."} for key in record["values"]]}
+             for record in page["records"]]
+    with pytest.raises(ValueError) as caught:
+        decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="probe",
+            packet_id=page["packet_id"], packet_decisions=probe)
+    message = str(caught.value)
+    for record in page["records"]:
+        handle = handles[record["target_id"]]
+        refused = {key for key in record["values"] if f'{handle}: unresolved field "{key}" {IDENTITY}' in message}
+        marked = any("identity_record" in item for item in record["review"])
+        assert refused == (set(record["values"]) if marked else set()), handle
+        assert (f"Fields that can be assessed for {handle}: none, so send {handle} without unresolved_fields."
+                in message) == marked
+
+    # A save that follows the packet is accepted, and each identity keeps its staged value.
+    followed = [{"handle": handles[record["target_id"]], "action": "accept", "reason": "E1 supports it.",
+                 **({} if any("identity_record" in item for item in record["review"]) else
+                    {"unresolved_fields": [{"field_path": "label", "explanation": "Label is uncertain."}]})}
+                for record in page["records"]]
+    result = decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="followed",
+        packet_id=page["packet_id"], packet_decisions=followed)
+    assert result["ready"]
+    projected, _ = read_published_projection(scope, result["publication"], finalized=True)
+    assert [obj.payload for obj in projected.extracted_objects] == [obj.payload for obj in objects]
+    assert [finding.field_ref.field_path for finding in projected.validation_findings
+            if finding.code == "validation_review.assessment_unresolved"] == ["label"] * groups
+
+
 def _list_row(index, *, source=True):
     attributes = {"reagent_names": f"UAS-gene{index}-RNAi", "detail_reagent_type": "Transgene or insertion",
                   "detail_associated_gene": f"gene{index}"}
