@@ -1,5 +1,6 @@
 """Tests for strict model/provider config behavior."""
 
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -1093,6 +1094,435 @@ async def test_responses_websocket_overload_is_not_retried_after_usable_event(mo
     assert attempts == 1
     assert rewinds == 0
 
+
+# The frame OpenAI sent on 2026-11-07 (dev traces 4c49, 1578 and 66af9e98) for the
+# SDK's exact replay of a function call OpenAI had returned with a uuid4-hex call_id.
+_INPUT_ITEM_IDS_REFUSED = {
+    "type": "error",
+    "error": {
+        "message": "This request does not support user-supplied input item IDs.",
+        "type": "invalid_request_error",
+        "param": "input",
+        "code": "unsupported_parameter",
+    },
+    "status": 400,
+}
+
+
+def _input_item_ids_refused(**changes):
+    from copy import deepcopy
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    payload = deepcopy(_INPUT_ITEM_IDS_REFUSED)
+    payload["error"].update(changes)
+    return ResponsesWebSocketError(payload)
+
+
+async def _stream_with_refusals(monkeypatch, failures, *, previous_response_id=None,
+                                retries=None, before_error=()):
+    """Run the real SDK retry loop over a request the provider refuses `failures` times.
+
+    Uses the websocket model's own retry advice and a stateless request, as the
+    runtime sends them. Returns the events, each sent request, the rewinds and the
+    raised error (None when the stream finished).
+    """
+    from copy import deepcopy
+    from agents.models.openai_responses import OpenAIResponsesWSModel
+    from agents.run_internal.model_retry import stream_response_with_retry
+    from openai import AsyncOpenAI
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    if retries is not None:
+        monkeypatch.setenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", str(retries))
+    _zero_model_retry_delay(monkeypatch)
+    client = AsyncOpenAI(api_key="test")
+    model = OpenAIResponsesWSModel(model="gpt-test", openai_client=client)
+    call_id = "call_51f898bd67f1441fa60aca2b44e7cb0e"
+    request = {"input": [
+        {"type": "function_call", "id": "fc_fixture", "name": "read_review_packet",
+         "call_id": call_id, "arguments": "{}"},
+        {"type": "function_call_output", "call_id": call_id, "output": "{}"},
+    ]}
+    sent, rewinds, events = [], [], []
+
+    def get_stream():
+        async def stream():
+            sent.append(deepcopy(request))
+            if len(sent) <= failures:
+                for event in before_error:
+                    yield event
+                raise _input_item_ids_refused()
+            yield {"type": "response.completed"}
+
+        return stream()
+
+    async def rewind():
+        rewinds.append(True)
+
+    error = None
+    try:
+        async for event in stream_response_with_retry(
+            get_stream=get_stream, rewind=rewind, retry_settings=build_default_model_retry(),
+            get_retry_advice=model.get_retry_advice, previous_response_id=previous_response_id,
+            conversation_id=None,
+        ):
+            events.append(event)
+    except Exception as raised:  # Each test asserts the exact error it expects.
+        error = raised
+    finally:
+        await client.close()
+    return events, sent, rewinds, error
+
+
+def test_input_item_id_resends_default_to_one_and_follow_the_env(monkeypatch):
+    from src.lib.openai_agents.config import get_responses_input_item_id_retries
+
+    monkeypatch.delenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", raising=False)
+    assert get_responses_input_item_id_retries() == 1
+    monkeypatch.setenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", "2")
+    assert get_responses_input_item_id_retries() == 2
+    monkeypatch.setenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", "0")
+    assert get_responses_input_item_id_retries() == 0
+
+
+@pytest.mark.asyncio
+async def test_a_request_refused_for_its_input_item_ids_is_resent_once_unchanged(monkeypatch, caplog):
+    with caplog.at_level("WARNING", logger="src.lib.openai_agents.config"):
+        events, sent, rewinds, error = await _stream_with_refusals(monkeypatch, failures=1)
+    assert error is None
+    assert events == [{"type": "response.completed"}]
+    assert len(sent) == 2 and len(rewinds) == 1
+    assert sent[1] == sent[0], "the resend keeps the replayed item and its ID exactly"
+    assert sent[1]["input"][0]["id"] == "fc_fixture"
+    assert "retry attempt 1, resend window 1" in caplog.text and "responses_input_item_ids_refused:" in caplog.text
+    marked, = [record for record in caplog.records if getattr(record, "retry_marker", None)]
+    assert marked.retry_marker == "responses_input_item_ids_refused"
+    assert "user-supplied input item IDs" not in caplog.text, "no frame content in logs"
+
+
+@pytest.mark.asyncio
+async def test_a_second_input_item_id_refusal_is_raised_as_before(monkeypatch):
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    events, sent, _, error = await _stream_with_refusals(monkeypatch, failures=5)
+    assert isinstance(error, ResponsesWebSocketError) and error.code == "unsupported_parameter"
+    assert len(sent) == 2, "one resend, although OPENAI_MODEL_MAX_RETRIES allows three"
+    assert events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retries,expected_requests", [(0, 1), (2, 3)])
+async def test_input_item_id_resends_follow_their_setting(monkeypatch, retries, expected_requests):
+    _, sent, _, error = await _stream_with_refusals(monkeypatch, failures=5, retries=retries)
+    assert error is not None and len(sent) == expected_requests
+
+
+@pytest.mark.asyncio
+async def test_an_input_item_id_refusal_after_a_response_event_is_not_resent(monkeypatch):
+    """The runner refuses any resend once the model emitted output, such as a tool call."""
+    tool_call = {"type": "response.output_item.added",
+                 "item": {"type": "function_call", "call_id": "call_fixture", "name": "agr_curation_query"}}
+    events, sent, rewinds, error = await _stream_with_refusals(monkeypatch, failures=1,
+                                                               before_error=[tool_call])
+    assert error is not None and len(sent) == 1 and rewinds == []
+    assert events == [tool_call]
+
+
+@pytest.mark.asyncio
+async def test_a_stateful_request_refused_for_its_input_item_ids_is_not_replayed(monkeypatch):
+    _, sent, _, error = await _stream_with_refusals(monkeypatch, failures=1,
+                                                    previous_response_id="resp_fixture")
+    assert error is not None and len(sent) == 1, "no replay approval for previous_response_id requests"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"param": "tools"},
+    {"code": "invalid_value"},
+    {"type": "server_error"},
+    {"param": None},
+], ids=["other-param", "other-code", "other-type", "no-param"])
+async def test_other_invalid_request_frames_are_still_not_retried(monkeypatch, changes):
+    from agents.models.openai_responses import ResponsesWebSocketError
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    _zero_model_retry_delay(monkeypatch)
+    attempts = 0
+
+    def get_stream():
+        async def stream():
+            nonlocal attempts
+            attempts += 1
+            raise _input_item_ids_refused(**changes)
+            yield  # pragma: no cover - keeps this an async generator
+
+        return stream()
+
+    async def rewind():
+        pytest.fail("a different refusal is never resent")
+
+    with pytest.raises(ResponsesWebSocketError):
+        async for _event in stream_response_with_retry(
+            get_stream=get_stream, rewind=rewind, retry_settings=build_default_model_retry(),
+            get_retry_advice=lambda _request: None, previous_response_id=None, conversation_id=None,
+        ):
+            pass
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_an_http_400_with_the_same_body_is_not_retried(monkeypatch):
+    """Only the Responses websocket frame is resent; an HTTP 400 still fails at once."""
+    import httpx
+    from openai import BadRequestError
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    _zero_model_retry_delay(monkeypatch)
+    attempts = 0
+    response = httpx.Response(400, request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+
+    def get_stream():
+        async def stream():
+            nonlocal attempts
+            attempts += 1
+            raise BadRequestError("refused", response=response, body={"error": _INPUT_ITEM_IDS_REFUSED["error"]})
+            yield  # pragma: no cover - keeps this an async generator
+
+        return stream()
+
+    async def rewind():
+        pytest.fail("an HTTP 400 is never resent")
+
+    with pytest.raises(BadRequestError):
+        async for _event in stream_response_with_retry(
+            get_stream=get_stream, rewind=rewind, retry_settings=build_default_model_retry(),
+            get_retry_advice=lambda _request: None, previous_response_id=None, conversation_id=None,
+        ):
+            pass
+    assert attempts == 1
+
+
+class _RecordedWebSocket:
+    """A websocket connection the real SDK model sends a request on; it replays fixed frames."""
+
+    def __init__(self, frames):
+        self.frames = [json.dumps(frame) for frame in frames]
+        self.sent = []
+        self.closed = False
+        self.state = SimpleNamespace(name="OPEN")
+
+    async def send(self, frame):
+        self.sent.append(json.loads(frame))
+
+    async def recv(self):
+        return self.frames.pop(0)
+
+    async def close(self):
+        self.closed = True
+        self.state = SimpleNamespace(name="CLOSED")
+
+
+@pytest.mark.asyncio
+async def test_the_resend_goes_over_a_fresh_websocket_connection(monkeypatch):
+    """The real websocket model drops the refused connection; the resend opens a new one."""
+    from agents.models.openai_responses import OpenAIResponsesWSModel
+    from agents.run_internal.model_retry import stream_response_with_retry
+    from openai import AsyncOpenAI
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    _zero_model_retry_delay(monkeypatch)
+    completed = {"type": "response.completed", "sequence_number": 1,
+                 "response": {"id": "resp_resent", "object": "response", "created_at": 0, "model": "gpt-test",
+                              "status": "completed", "output": []}}
+    connections = [_RecordedWebSocket([_INPUT_ITEM_IDS_REFUSED]),
+                   _RecordedWebSocket([{"type": "response.created", "sequence_number": 0,
+                                        "response": {**completed["response"], "status": "in_progress"}},
+                                       completed])]
+    opened = []
+
+    async def open_connection(self, ws_url, headers, *, connect_timeout):
+        opened.append(connections[len(opened)])
+        return opened[-1]
+
+    monkeypatch.setattr(OpenAIResponsesWSModel, "_open_websocket_connection", open_connection)
+    client = AsyncOpenAI(api_key="test")
+    model = OpenAIResponsesWSModel(model="gpt-test", openai_client=client)
+    request = {"model": "gpt-test", "input": [
+        {"type": "function_call", "id": "fc_fixture", "name": "read_review_packet",
+         "call_id": "call_51f898bd67f1441fa60aca2b44e7cb0e", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_51f898bd67f1441fa60aca2b44e7cb0e", "output": "{}"},
+    ]}
+
+    async def rewind():
+        pass
+
+    try:
+        events = [event async for event in stream_response_with_retry(
+            get_stream=lambda: model._iter_websocket_response_events(dict(request)), rewind=rewind,
+            retry_settings=build_default_model_retry(), get_retry_advice=model.get_retry_advice,
+            previous_response_id=None, conversation_id=None)]
+    finally:
+        await client.close()
+    assert [event.type for event in events] == ["response.created", "response.completed"]
+    assert len(opened) == 2 and opened[0] is not opened[1], "a new connection, not the refused one"
+    assert opened[0].closed and not opened[1].closed
+    assert len(opened[0].sent) == len(opened[1].sent) == 1
+    assert opened[1].sent[0] == opened[0].sent[0], "the same request, item IDs included"
+    assert opened[1].sent[0]["input"][0]["id"] == "fc_fixture"
+
+
+_RESENT_RESPONSE = {"id": "resp_resent", "object": "response", "created_at": 0, "model": "gpt-test",
+                    "status": "completed", "output": [],
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+                              "input_tokens_details": {"cached_tokens": 0},
+                              "output_tokens_details": {"reasoning_tokens": 0}}}
+_REPLAYED_INPUT = [
+    {"type": "function_call", "id": "fc_fixture", "name": "read_review_packet",
+     "call_id": "call_51f898bd67f1441fa60aca2b44e7cb0e", "arguments": "{}"},
+    {"type": "function_call_output", "call_id": "call_51f898bd67f1441fa60aca2b44e7cb0e", "output": "{}"},
+]
+
+
+def _ws_model_over(monkeypatch, connections):
+    """The real websocket model, opening the given recorded connections in order."""
+    from agents.models.openai_responses import OpenAIResponsesWSModel
+    from openai import AsyncOpenAI
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    _zero_model_retry_delay(monkeypatch)
+    opened = []
+
+    async def open_connection(self, ws_url, headers, *, connect_timeout):
+        opened.append(connections[len(opened)])
+        return opened[-1]
+
+    monkeypatch.setattr(OpenAIResponsesWSModel, "_open_websocket_connection", open_connection)
+    client = AsyncOpenAI(api_key="test")
+    return OpenAIResponsesWSModel(model="gpt-test", openai_client=client), client, opened
+
+
+@pytest.mark.asyncio
+async def test_the_non_streaming_path_resends_once_over_a_fresh_connection(monkeypatch):
+    from agents.models.interface import ModelTracing
+    from agents.run_internal.model_retry import get_response_with_retry
+
+    model, client, opened = _ws_model_over(monkeypatch, [
+        _RecordedWebSocket([_INPUT_ITEM_IDS_REFUSED]),
+        _RecordedWebSocket([{"type": "response.completed", "sequence_number": 0, "response": _RESENT_RESPONSE}]),
+    ])
+
+    async def get_response():
+        return await model.get_response(system_instructions=None, input=list(_REPLAYED_INPUT),
+            model_settings=ModelSettings(), tools=[], output_schema=None, handoffs=[],
+            tracing=ModelTracing.DISABLED, previous_response_id=None, conversation_id=None, prompt=None)
+
+    async def rewind():
+        pass
+
+    try:
+        response = await get_response_with_retry(get_response=get_response, rewind=rewind,
+            retry_settings=build_default_model_retry(), get_retry_advice=model.get_retry_advice,
+            previous_response_id=None, conversation_id=None)
+    finally:
+        await client.close()
+    assert response.response_id == "resp_resent"
+    assert len(opened) == 2 and opened[0].closed, "the refused connection is dropped, a new one opened"
+    assert [len(connection.sent) for connection in opened] == [1, 1]
+    assert opened[1].sent[0] == opened[0].sent[0], "the same request frame, item IDs included"
+    assert opened[1].sent[0]["input"][0]["id"] == "fc_fixture"
+
+
+@pytest.mark.asyncio
+async def test_an_item_id_refusal_after_response_created_is_not_resent(monkeypatch):
+    """Once the server started a response, a resend could repeat work: the SDK refuses it."""
+    from agents.models.openai_responses import ResponsesWebSocketError
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    created = {"type": "response.created", "sequence_number": 0,
+               "response": {**_RESENT_RESPONSE, "status": "in_progress", "usage": None}}
+    model, client, opened = _ws_model_over(monkeypatch, [
+        _RecordedWebSocket([created, _INPUT_ITEM_IDS_REFUSED]),
+        _RecordedWebSocket([{"type": "response.completed", "sequence_number": 0, "response": _RESENT_RESPONSE}]),
+    ])
+    events = []
+
+    async def rewind():
+        pytest.fail("a started response is never resent")
+
+    try:
+        with pytest.raises(ResponsesWebSocketError) as refused:
+            async for event in stream_response_with_retry(
+                get_stream=lambda: model._iter_websocket_response_events(
+                    {"model": "gpt-test", "input": list(_REPLAYED_INPUT)}),
+                rewind=rewind, retry_settings=build_default_model_retry(),
+                get_retry_advice=model.get_retry_advice, previous_response_id=None, conversation_id=None):
+                events.append(event)
+    finally:
+        await client.close()
+    assert refused.value.code == "unsupported_parameter"
+    assert [event.type for event in events] == ["response.created"]
+    assert len(opened) == 1, "no second connection, no resend"
+
+
+@pytest.mark.asyncio
+async def test_the_runner_resends_only_the_model_request_and_runs_no_tool_twice(monkeypatch):
+    """Through the real SDK runner: one tool run, one streamed tool call, the refused request resent."""
+    from copy import deepcopy
+    from agents import Agent, Model, ModelSettings, RunConfig, Runner, function_tool
+    from openai.types.responses import (
+        Response, ResponseCompletedEvent, ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText,
+    )
+
+    monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    _zero_model_retry_delay(monkeypatch)
+    tool_runs = []
+
+    @function_tool
+    def read_review_packet() -> str:
+        """Read the review packet."""
+        tool_runs.append("ran")
+        return "{}"
+
+    class RefusingOnceModel(Model):
+        """Asks for one tool, then OpenAI refuses the follow-up once, as in dev trace 66af9e98."""
+
+        def __init__(self):
+            self.inputs = []
+
+        async def get_response(self, *args, **kwargs):
+            raise AssertionError("chat runs stream")
+
+        async def stream_response(self, system_instructions, input, *args, **kwargs):
+            self.inputs.append(deepcopy(input))
+            request = len(self.inputs)
+            if request == 2:
+                raise _input_item_ids_refused()
+            if request == 1:
+                output = [ResponseFunctionToolCall(id="fc_fixture", call_id="call_51f898bd67f1441fa60aca2b44e7cb0e",
+                                                   name="read_review_packet", arguments="{}", type="function_call")]
+            else:
+                output = [ResponseOutputMessage(id="msg_fixture", type="message", role="assistant",
+                    status="completed", content=[ResponseOutputText(type="output_text", text="Reviewed.",
+                                                                    annotations=[])])]
+            response = Response.model_construct(id=f"resp_{request}", created_at=0, model="gpt-test",
+                object="response", status="completed", usage=None, output=output)
+            yield ResponseCompletedEvent(type="response.completed", sequence_number=0, response=response)
+
+    model = RefusingOnceModel()
+    agent = Agent(name="Reviewer", model=model, tools=[read_review_packet],
+                  model_settings=ModelSettings(retry=build_default_model_retry()))
+    result = Runner.run_streamed(agent, "Review the saved records.", run_config=RunConfig(tracing_disabled=True))
+    events = [event async for event in result.stream_events()]
+    assert tool_runs == ["ran"], "the tool that already ran is not run again"
+    assert len(model.inputs) == 3 and model.inputs[2] == model.inputs[1], "only the refused request is resent"
+    items = [event.name for event in events if event.type == "run_item_stream_event"]
+    assert items.count("tool_called") == 1 and items.count("tool_output") == 1, items
+    completed = [event for event in events if event.type == "raw_response_event"
+                 and event.data.type == "response.completed"]
+    assert [event.data.response.id for event in completed] == ["resp_1", "resp_3"], "nothing streamed twice"
+    assert result.final_output == "Reviewed."
 
 def test_openai_responses_websocket_ping_timeout_invalid_env_uses_default(monkeypatch):
     monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_PING_TIMEOUT_SECONDS", "not-a-float")
