@@ -430,20 +430,24 @@ def subject_pack(monkeypatch):
 
 
 def test_the_packet_marks_exactly_the_records_the_save_refuses_as_identities(scope, subject_pack):
-    """S06 rerun d9466d62: D1/D13 subjects were refused as identities but not marked; one rule now decides both."""
+    """S06 rerun d9466d62: the save refused all 8 subjects (D1, D13, D25, D34, D43, D52, D64, D76)
+    as identities and the packet marked none. One rule now decides both, for every record."""
     from src.lib.validation_history.assessments import IDENTITY
     from src.lib.validation_history.projection import read_published_projection
 
-    objects = [_subject_record(0), _identity_record(1), _object(2, ["e1"])]
+    # S06's layout: each finding stages a subject, a term and its other records.
+    groups = 8
+    objects = [shape(3 * group + offset) for group in range(groups)
+               for offset, shape in enumerate((_subject_record, _identity_record, lambda index: _object(index, ["e1"])))]
     _, _, episode, _, checkpoint = _build(scope, objects, [_evidence("e1")])
     page = reads.review_packet(scope, episode)
-    subject, term, plain = page["records"]
+    assert (page["pages"], len(page["records"])) == (1, 3 * groups)
     handles = {record["target_id"]: _handles(record)[0] for record in page["records"]}
     marker = "This record is an identity value, which accepting does not resolve, so send it without unresolved_fields."
-    for record in (subject, term):
-        assert record["review"] == [{"handle": handles[record["target_id"]], "review": "record",
-                                     "identity_record": marker}]
-    assert plain["review"] == [{"handle": handles[plain["target_id"]], "review": "record"}]
+    for position, record in enumerate(page["records"]):
+        item = {"handle": handles[record["target_id"]], "review": "record"}
+        assert record["review"] == [{**item, "identity_record": marker} if position % 3 < 2 else item]
+    assert sum(record["type"] == "Subject" for record in page["records"]) == groups
 
     # Ask the save rule about every value of every record: it refuses as an identity
     # each field of exactly the marked records, and no field of the others.
@@ -472,9 +476,9 @@ def test_the_packet_marks_exactly_the_records_the_save_refuses_as_identities(sco
         packet_id=page["packet_id"], packet_decisions=followed)
     assert result["ready"]
     projected, _ = read_published_projection(scope, result["publication"], finalized=True)
-    assert [obj.payload for obj in projected.extracted_objects[:2]] == [obj.payload for obj in objects[:2]]
+    assert [obj.payload for obj in projected.extracted_objects] == [obj.payload for obj in objects]
     assert [finding.field_ref.field_path for finding in projected.validation_findings
-            if finding.code == "validation_review.assessment_unresolved"] == ["label"]
+            if finding.code == "validation_review.assessment_unresolved"] == ["label"] * groups
 
 
 def _list_row(index, *, source=True):
