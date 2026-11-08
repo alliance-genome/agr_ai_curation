@@ -250,6 +250,7 @@ def test_review_guidance_explains_refused_retires_restores_and_the_system_error_
         "the reviewer must retire the records that refer to it in the same save, or keep it",
         "to approve an extraction agent's recommendation, it first retires the referring records itself",
         'which is still removed from the results; restore that record first',
+        "the refused restore changes nothing, and both records keep their saved values and history",
         "Nothing is retired or restored automatically to resolve it.",
         '"Review paused: a system error stopped a save before it changed anything, and it was reported. Saved results and history are retained."',
         "that save changed nothing, the error was reported to the maintainers automatically",
