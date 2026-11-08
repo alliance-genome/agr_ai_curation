@@ -129,7 +129,7 @@ def test_pinned_catalog_build_uses_saved_settings_not_live_template(monkeypatch)
     monkeypatch.setattr(config, "resolve_model_provider", lambda *_args, **_kwargs: "openai")
     monkeypatch.setattr(config, "get_model_for_agent", lambda model, **_kwargs: model)
     monkeypatch.setattr(config, "build_model_settings", lambda **kwargs: kwargs)
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **_kwargs: None)
     built = catalog_service._create_db_agent(identity, execution_snapshot=saved)
     assert built.model == "test-model"
@@ -234,7 +234,7 @@ def test_pinned_build_names_its_own_contract_agent_id_per_run(monkeypatch, tool_
     monkeypatch.setattr(config, "resolve_model_provider", lambda *_args, **_kwargs: "openai")
     monkeypatch.setattr(config, "get_model_for_agent", lambda model, **_kwargs: model)
     monkeypatch.setattr(config, "build_model_settings", lambda **kwargs: kwargs)
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(langfuse_client, "log_agent_config", lambda **_kwargs: None)
 
     built = catalog_service._create_db_agent(identity, execution_snapshot=saved)

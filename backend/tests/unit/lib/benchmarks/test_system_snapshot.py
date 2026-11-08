@@ -134,7 +134,7 @@ def test_normal_constructor_uses_saved_system_prompt_settings_and_metadata(monke
     monkeypatch.setattr(catalog, "_attach_live_curation_metadata", forbidden)
     monkeypatch.setattr(catalog, "prompt_templates_for_bundle", forbidden)
     factory = Mock(return_value=SimpleNamespace(name="Extractor"))
-    monkeypatch.setattr(catalog, "Agent", factory)
+    monkeypatch.setattr(catalog, "CatalogAgent", factory)
     monkeypatch.setattr(catalog, "set_pending_prompts", Mock())
     monkeypatch.setattr(catalog, "bind_prompt_run", Mock())
     model = Mock(return_value="no-provider-client")

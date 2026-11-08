@@ -186,7 +186,7 @@ def test_create_custom_db_agent_enforces_inherited_group_tool_policy(
     monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
     monkeypatch.setattr(catalog_service, "set_pending_prompts", lambda *_args, **_kwargs: "run")
     monkeypatch.setattr(catalog_service, "bind_prompt_run", lambda *_args: None)
-    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(catalog_service, "CatalogAgent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     logged_config = {}
     monkeypatch.setattr(

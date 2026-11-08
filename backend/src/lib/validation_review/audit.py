@@ -5,8 +5,12 @@ from sqlalchemy import event
 from src.lib.validation_history import store
 
 
-def report_operational_failure(error):
-    """One sanitized owner; expected review stops and scientific outcomes never call this."""
+def report_operational_failure(error, *, operation="execute_review_work", **details):
+    """One sanitized owner; expected review stops and scientific outcomes never call this.
+
+    details are report_runtime_exception's tags, context and fingerprint: structural
+    names and identifiers only, never record or document content.
+    """
     from src.lib.observability.runtime import report_runtime_exception
 
     from agents import UserError
@@ -31,7 +35,7 @@ def report_operational_failure(error):
         safe.__context__ = None
         safe.__cause__ = None
         captured = report_runtime_exception(
-            safe, component="validation_review", operation="execute_review_work"
+            safe, component="validation_review", operation=operation, **details
         )
     if captured:
         error._ai_curation_sentry_captured = True

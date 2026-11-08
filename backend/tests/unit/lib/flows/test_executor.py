@@ -8308,6 +8308,32 @@ def test_output_role_lookup_reports_unavailable_before_category(monkeypatch, una
     assert "not an output formatter" not in str(error.value)
 
 
+@pytest.mark.parametrize("status,outcome,headline,success", [
+    # Trace 1b937f7b: the search returned 20 candidates and the validator resolved one.
+    ("resolved", "ambiguous", "resolved", True),
+    ("resolved", "conflict", "resolved", True),
+    ("unresolved", "ambiguous", "review required", True),
+    ("incomplete", "success", "review required", True),
+    ("unresolved", "error", "error", False),
+    # A flow validation group can arrive without a status; its details keep "unknown".
+    (None, "ambiguous", "complete", True),
+])
+def test_flow_validator_lookup_line_reports_the_validator_status_not_the_search_outcome(
+        status, outcome, headline, success):
+    executor = _executor_module()
+    step = {"agent_name": "Allele Validation", "validation_group_results": {"groups": [{
+        "validator_binding_id": "alliance_allele_lookup", "status": status,
+        "lookup_attempts": [{"provider": "agr_curation_query", "method": "search_alleles",
+                             "query": {"allele_symbol": "w"}, "result_count": 20, "outcome": outcome,
+                             "message": "lookup failed" if outcome == "error" else None}]}]}}
+    _, complete = executor._build_flow_validator_lookup_audit_events(step)
+    details = complete["details"]
+    assert details["friendlyName"] == f"Allele Validation: Validator Lookup {headline} (alliance_allele_lookup)"
+    # The search step's own outcome and candidate count stay as event detail only.
+    assert (details["outcome"], details["resultCount"], details["success"]) == (outcome, 20, success)
+    assert details["validatorResultStatus"] == (status or "unknown")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind,reason,status,saved', [
     ('review', 'budget_exhausted', 'review_exhausted', False),

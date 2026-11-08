@@ -365,6 +365,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/contract/alliance/domain_packs/test_phenotype_builder_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_phenotype_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_reference_validation_bindings.py"),
+    # The review packet marks the installed phenotype pack's identity records
+    # exactly as the save refuses them.
+    Path("backend/tests/contract/alliance/domain_packs/test_review_identity_records.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_validation_metadata.py"),
     Path("backend/tests/contract/test_auth_logout.py"),
     Path("backend/tests/contract/test_auth_users_me.py"),

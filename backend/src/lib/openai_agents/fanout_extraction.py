@@ -822,9 +822,6 @@ class FanoutExtraction:
             tools=[self._writer_tool(tool) for tool in tools],
             tool_use_behavior="run_llm_again",
         )
-        agent_key = getattr(self.planner_agent, "agent_key", None)
-        if agent_key:
-            writer.agent_key = agent_key
         apply_tool_surface(writer, runtime=self.surface.runtime)
         return writer
 

@@ -76,6 +76,23 @@ def test_new_input_after_a_decision_or_an_unread_answer_keeps_the_record_eligibl
     assert continuation.classify(answered, {"a": unit(settled_by="reject")}) == ({"a"}, [])
 
 
+@pytest.mark.parametrize("codes,changes,expected", [
+    # Trace 1b937f7b: a deferred answer with a follow-up since is decidable, so the packet offers it.
+    ({"unreviewed"}, {}, True),
+    ({"unreviewed"}, {"settled_by": "defer"}, False),
+    ({"unreviewed"}, {"has_subject": False}, False),  # no completed answer with current inputs
+    ({"unreviewed", "answer_review_pending"}, {"settled_by": "reject"}, True),
+    ({"unreviewed"}, {"curator_decided": True}, False),
+    ({"unreviewed"}, {"mode": "curator"}, False),
+    ({"unreviewed", "execution_pending"}, {}, False),
+    ({"stale"}, {"has_current_absence": True}, True),
+])
+def test_without_a_repair_left_a_unit_runs_again_exactly_when_it_is_decidable(codes, changes, expected):
+    blockers = [{"target_id": "a", "code": code} for code in sorted(codes)]
+    assert continuation.decidable(codes, unit(**changes)) is expected
+    assert ("a" in continuation.classify(blockers, {"a": unit(**changes)})[0]) is expected
+
+
 @pytest.mark.parametrize("changes", [{"mode": "curator"}, {"curator_decided": True, "can_repair": True},
                                      {"curator_decided": True}])
 def test_curator_authority_stops_reviewer_runs(changes):

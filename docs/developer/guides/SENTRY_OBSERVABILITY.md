@@ -587,8 +587,18 @@ or exception class; bundle content, flow names, tokens and signatures are omitte
 the companion ERROR logs skip event promotion.
 
 Identifier-like runtime context is hashed by the global Sentry hook when it uses
-recognized keys such as `batch_id`, `document_id`, `flow_id`, `flow_run_id`,
-`job_id`, `run_id`, `session_id`, `trace_id`, or `turn_id`.
+recognized keys such as `artifact_id`, `batch_id`, `document_id`, `episode_id`,
+`flow_id`, `flow_run_id`, `job_id`, `run_id`, `session_id`, `trace_id`, or `turn_id`.
+
+A validation review source that fails envelope validation
+(`source_projection_invalid`, v0.11.6) reports one event with component
+`validation_review`, operation `source_projection_invalid`, tag `phase` naming the
+check (`selection_source`, `published_source` or `published_match`), a fingerprint of
+those fixed codes so these stops group as one issue per check, and context with the
+stage and the hashed `artifact_id` and `episode_id`. The wrapper is chain-free and
+names only the exception class; validation messages and record content are omitted,
+and the companion ERROR log, which names the raw identifiers and the failing
+reference locations, skips event promotion.
 
 Chat partial-result recovery reports failures saving access to durable extraction
 results after a summary failure with component `chat_stream` and operation

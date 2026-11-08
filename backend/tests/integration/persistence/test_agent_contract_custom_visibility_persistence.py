@@ -77,3 +77,53 @@ def test_private_custom_agent_contract_is_visible_only_to_owner_and_itself(priva
     assert itself["success"] is True, itself
     assert itself["custom_agent"]["revision_source"] == "running_agent"
     assert itself["custom_agent"]["execution_revision"] == receipt.revision
+
+
+def test_cloned_running_agent_reads_its_pinned_revision_after_the_head_moves(
+    private_custom_agent,
+):
+    """Sentry's runner wrappers hand tools a clone of the starting agent.
+
+    The clone must still carry the catalog agent's receipt and groups. Otherwise
+    the lookup falls back to the saved head with no groups, which this FB-only
+    agent denies, and a head edited after the flow pinned its revision would be
+    read instead of the running revision.
+    """
+    from types import SimpleNamespace
+
+    from sqlalchemy.orm import object_session
+
+    from src.lib.agent_studio.catalog_service import CatalogAgent
+    from src.lib.agent_studio.execution_revision_service import append_execution_revision
+    from src.lib.agent_studio.execution_snapshot import capture_execution_snapshot
+    from src.schemas.agent_execution_revision import AgentOutputContract
+
+    head, receipt = private_custom_agent
+    db = object_session(head)
+    head.instructions = "Edited after the flow pinned its revision"
+    moved = append_execution_revision(
+        db,
+        head,
+        capture_execution_snapshot(db, head, AgentOutputContract(output_state="none")),
+        user_id=1,
+        expected_revision_id=receipt.agent_revision_id,
+    )
+    db.flush()
+    built = CatalogAgent(name="Test agent")
+    built.agent_key = head.agent_key
+    built.execution_receipt = receipt.model_dump(mode="json")
+    built.authenticated_groups = ("FB",)
+
+    running = _contract_as("1", head.agent_key, built.clone())
+    saved_head = _contract_as(
+        "1", head.agent_key, SimpleNamespace(agent_key="supervisor", authenticated_groups=("FB",))
+    )
+
+    assert head.execution_revision_id == moved.id
+    assert moved.revision != receipt.revision
+    assert running["success"] is True, running
+    assert running["custom_agent"]["revision_source"] == "running_agent"
+    assert running["custom_agent"]["execution_revision"] == receipt.revision
+    assert saved_head["success"] is True, saved_head
+    assert saved_head["custom_agent"]["revision_source"] == "saved_head"
+    assert saved_head["custom_agent"]["execution_revision"] == moved.revision

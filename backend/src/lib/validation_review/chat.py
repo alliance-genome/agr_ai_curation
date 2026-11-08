@@ -27,6 +27,13 @@ ACTIVE_CHAT_REVIEW: ContextVar[ChatReview | None] = ContextVar(
     "chat_validation_review", default=None
 )
 
+# Plain curator wording for stop reasons whose code name would read as internals.
+# Every other stop reason reads as its own words.
+PAUSE_WORDING = {
+    admission.SOURCE_PROJECTION_INVALID:
+        "a system error stopped a save before it changed anything, and it was reported",
+}
+
 
 class DirectChatAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -400,6 +407,27 @@ class ChatReview:
             authenticated_groups=self.authenticated_groups, checkpoint_provider=checkpoint,
             source_agent=self.source_agents.get(artifact_id))
 
+    def review_request(self, record):
+        """The curator's question for this saved result: the message of the turn that extracted it.
+
+        A later turn resumes earlier turns' unfinished reviews, and each is reviewed
+        against its own question, never this turn's. The question is the stored user
+        row of the record's operation turn. The chat API is the only path that reaches
+        this lookup (FlowReview overrides it with its own step query), and it commits
+        that row before a turn runs. The row is read even if the curator deleted the
+        chat while the turn ran (soft deletion keeps the transcript). A missing row is
+        a conflict, not a guess.
+        """
+        from src.lib.chat_history_repository import ChatHistoryRepository
+
+        with store.SessionLocal() as db:
+            message = ChatHistoryRepository(db).get_owned_turn_message_including_deleted(
+                session_id=self.session_id, user_auth_sub=self.owner_id,
+                turn_id=self.reference(record)["operation_turn_id"], role="user")
+        if message is None:
+            raise store.HistoryConflict("The question that produced this saved result is unavailable")
+        return message.content
+
     def history_scope(self, record):
         """The owner's history scope for a saved result; needs no reviewer identity."""
         return store.HistoryScope(
@@ -424,6 +452,7 @@ class ChatReview:
         if saved is not None:
             return saved
         ref = self.reference(record)
+        question = await asyncio.to_thread(self.review_request, record)
         from .progress import review_progress
 
         adapter = ValidatorAdapter(
@@ -471,13 +500,13 @@ class ChatReview:
                         "tools": [tool.name for tool in agent.tools],
                     },
                 )
-                with quick_check.review_scope(self.user_request, record):
+                with quick_check.review_scope(question, record):
                     progress["outcome"] = await reviewer.run(
                         context,
                         agent,
                         input=json.dumps(
                             {
-                                "user_request": self.user_request,
+                                "user_request": question,
                                 "instruction": "Review this saved extraction. Read all outstanding work once with read_review_packet, decide every record, and save the decisions together. If paper investigation is needed, use only the bounded targeted-extraction tool; never restart full extraction.",
                                 "result_ref": (
                                     "extraction-result:" + record.extraction_result_id
@@ -626,6 +655,11 @@ class ChatReview:
 
     def review_notes(self, *, result_refs=None, current_turn_only=False):
         """Latest phase explanation per result; older explanations remain auditable."""
+        return [entry for _, entry in self.noted_records(
+            result_refs=result_refs, current_turn_only=current_turn_only)]
+
+    def noted_records(self, *, result_refs=None, current_turn_only=False):
+        """Each saved result with its latest phase explanation, as (record, entry) pairs."""
         from src.models.sql.validation_history import ValidationFact
 
         notes = []
@@ -652,11 +686,16 @@ class ChatReview:
                 if fact is not None:
                     entry = store._content(db, fact)
                     if not current_turn_only or entry["turn_id"] == self.turn_id:
-                        notes.append(entry)
+                        notes.append((record, entry))
         return notes
 
     def supervisor_handoff(self):
-        return {"status": self.status(), "review_outcomes": self.review_notes()}
+        """Saved review outcomes, each with the question its result was extracted and reviewed for.
+
+        Only results with a saved outcome are named, each from the record it belongs to.
+        """
+        return {"status": self.status(), "review_outcomes": [
+            {**entry, "question": self.review_request(record)} for record, entry in self.noted_records()]}
 
     def render_review_notes(self, *, result_refs=None, current_turn_only=False):
         from .continuation import pending_message, removal_message
@@ -683,7 +722,7 @@ class ChatReview:
             elif reason and reason != "complete":
                 notes.append(
                     "Review paused: "
-                    + reason.replace("_", " ")
+                    + PAUSE_WORDING.get(reason, reason.replace("_", " "))
                     + ". Saved results and history are retained."
                 )
         return "\n\nReviewer's notes:\n" + "\n\n".join(notes) if notes else ""

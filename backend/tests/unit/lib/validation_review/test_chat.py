@@ -9,7 +9,7 @@ from src.lib.observability.cost_context import (
     get_agent_cost_identity,
 )
 from src.lib.validation_review.decisions import ReviewContext
-from src.lib.validation_history.store import HistoryScope
+from src.lib.validation_history.store import HistoryConflict, HistoryScope
 
 
 def test_named_phase_keeps_model_policy_and_has_no_dispatch_or_validator_paper_tools(
@@ -582,6 +582,34 @@ def test_finished_review_names_pending_records_instead_of_a_bare_stop_code():
     assert "extraction attempts exhausted" not in notes
 
 
+def test_a_system_error_stop_reads_as_plain_words_not_its_code():
+    from src.lib.validation_review.chat import ChatReview
+
+    context = SimpleNamespace(review_notes=lambda **kwargs: [
+        {"outcome": {"state": "needs_curator_review", "reason": "source_projection_invalid", "resource": None}}])
+    notes = ChatReview.render_review_notes(context)
+    assert notes == ("\n\nReviewer's notes:\nReview paused: a system error stopped a save before it changed "
+                     "anything, and it was reported. Saved results and history are retained.")
+    assert "source projection" not in notes
+
+
+def test_a_stop_inside_a_packet_save_keeps_its_reason():
+    """A packet save names record conflicts by handle; a review stop is not a record conflict."""
+    from src.lib.validation_review.admission import ReviewStopped
+    from src.lib.validation_review.decisions import _named_errors
+
+    entries = [{"target_id": "record-target", "decision_unit_id": "record-target", "action": "retire"}]
+    with pytest.raises(ReviewStopped) as stopped:
+        with _named_errors(["D1"], entries):
+            raise ReviewStopped("source_projection_invalid")
+    assert stopped.value.reason == "source_projection_invalid"
+    with pytest.raises(HistoryConflict) as conflict:
+        with _named_errors(["D1"], entries):
+            raise HistoryConflict("record-target: Curator authority prevents supervisor retirement")
+    assert str(conflict.value) == "D1: Curator authority prevents supervisor retirement"
+    assert not isinstance(conflict.value, ReviewStopped)
+
+
 CRB_REASON = "Crb-GFP is named only in the Discussion imaging legend; its use in this study is not established."
 # The line quotes the saved reason whole, without its one final period.
 CRB_QUOTED = CRB_REASON.removesuffix(".")
@@ -725,10 +753,14 @@ async def test_final_answer_gets_the_review_facts_and_is_followed_by_the_removal
     outcome = {"output": "Reviewed all records.", "review": {"ready": True, "state": "complete"},
                "review_counts": {"accepted": 41, "pending": 0, "retired_in_this_review": 1},
                "retired": [CRB_RETIRED]}
+    result = SimpleNamespace(extraction_result_id="result-1")
+    note = {"result_ref": "extraction-result:result-1", "turn_id": "current-turn", "outcome": outcome}
     context = SimpleNamespace(
         turn_id="current-turn", resume=AsyncMock(),
         status=lambda: {"pending_count": 0, "results": []},
-        review_notes=lambda **kwargs: [{"turn_id": "current-turn", "outcome": outcome}],
+        review_request=lambda record: "What transgenic flies are used?" if record is result else None,
+        noted_records=lambda **kwargs: [(result, note)],
+        review_notes=lambda **kwargs: [note],
     )
     context.supervisor_handoff = lambda: ChatReview.supervisor_handoff(context)
     context.render_review_notes = lambda **kwargs: ChatReview.render_review_notes(context, **kwargs)
@@ -742,6 +774,7 @@ async def test_final_answer_gets_the_review_facts_and_is_followed_by_the_removal
     events = [event async for event in runner._run_agent_with_chat_review(review_context=context, input_items=[])]
     assert '"review_counts": {"accepted": 41, "pending": 0, "retired_in_this_review": 1}' in seen[0]
     assert '"label": "Crb-GFP"' in seen[0] and '"retired_by": "review"' in seen[0]
+    assert '"question": "What transgenic flies are used?"' in seen[0], "each outcome names its own question"
     line = ("Review removed 1 record that doesn't answer the question: Crb-GFP (" + CRB_QUOTED
             + "). 41 records are current.")
     response = events[-1]["data"]["response"]

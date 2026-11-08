@@ -31,6 +31,10 @@ class FlowReview(ChatReview):
     def reference(self, record):
         return record.metadata["flow_review"]
 
+    def review_request(self, record):
+        """A flow step reviews only its own record, against its own resolved step query."""
+        return self.user_request
+
     def operation_scope(self, scope):
         return admission.create_scope(scope,
             operation_id="flow:" + store.canonical({"run": self.flow_run_id,

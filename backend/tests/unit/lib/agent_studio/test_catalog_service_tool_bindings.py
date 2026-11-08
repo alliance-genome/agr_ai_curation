@@ -540,7 +540,7 @@ def test_create_db_agent_does_not_require_a_curation_lookup_call(monkeypatch):
 
     monkeypatch.setattr(guardrails_mod, "ToolCallTracker", _DummyTracker)
     monkeypatch.setattr(guardrails_mod, "create_tool_required_output_guardrail", _fake_guardrail)
-    monkeypatch.setattr(catalog_service, "Agent", _FakeAgent)
+    monkeypatch.setattr(catalog_service, "CatalogAgent", _FakeAgent)
 
     built = catalog_service._create_db_agent(fake_row)
 
