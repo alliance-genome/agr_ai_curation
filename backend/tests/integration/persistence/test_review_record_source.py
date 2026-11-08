@@ -20,7 +20,8 @@ def setup_record(scope, *, historical=False, evidence=None, origin=None, provena
               "evidence_record_ids": ["e1"], "object_refs": []}
     evidence = evidence if evidence is not None else [
         {"evidence_record_id": "e1", "quote": "β source", "page_number": 2}]
-    normalized = {"extracted_objects": [record, {
+    # A captured envelope always names its domain pack, which review packets read.
+    normalized = {"domain_pack_id": "generic", "extracted_objects": [record, {
         "object_id": "unrelated", "payload": {"term": "other"}, "evidence_record_ids": []}],
         "metadata": {"evidence_records": evidence},
         "validation_findings": [{"historical": "large unrelated history" * 2000}]}

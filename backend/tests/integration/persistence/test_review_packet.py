@@ -400,41 +400,81 @@ def _identity_record(index):
         "lookup_outcome": "not_validated", "validator_explanation": "Not validated yet."}})
 
 
-def test_an_identity_record_is_marked_and_accepting_it_keeps_its_own_resolution_state(scope):
-    """S06/S07: the reviewer listed an identity record's curie as uncertain; the packet now says up front."""
+def _subject_record(index):
+    """S06 D1/D13: a subject the pack declares resolvable at its root, staged with only a note."""
+    obj = _object(index, ["e1"])
+    return obj.model_copy(update={"object_type": "Subject", "object_role": "validated_reference",
+                                  "model_ref": "SubjectPayload", "payload": {
+        "resolution_note": "Phenotype extraction did not stage the subject the paper names."}})
+
+
+@pytest.fixture
+def subject_pack(monkeypatch):
+    """The generic pack plus a subject type whose model display has a mention, as PhenotypeSubject does."""
+    from dataclasses import replace
+    from src.lib.curation_workspace import adapter_registry
+    from src.schemas.domain_pack_metadata import DomainPackModelDefinition, DomainPackObjectDefinition
+
+    resolve = adapter_registry.resolve_curation_domain_pack_by_id
+    generic = resolve("generic")
+    pack = replace(generic, metadata=generic.metadata.model_copy(update={
+        "model_definitions": [*generic.metadata.model_definitions, DomainPackModelDefinition(
+            model_id="SubjectPayload", display_name="Subject payload",
+            metadata={"display": {"label": "subject_label", "id": "subject_identifier", "mention": "mention"}})],
+        "object_definitions": [*generic.metadata.object_definitions, DomainPackObjectDefinition(
+            object_type="Subject", display_name="Subject", model_ref="SubjectPayload")],
+    }))
+    monkeypatch.setattr(adapter_registry, "resolve_curation_domain_pack_by_id",
+                        lambda pack_id: pack if pack_id == "generic" else resolve(pack_id))
+    return pack
+
+
+def test_the_packet_marks_exactly_the_records_the_save_refuses_as_identities(scope, subject_pack):
+    """S06 rerun d9466d62: D1/D13 subjects were refused as identities but not marked; one rule now decides both."""
+    from src.lib.validation_history.assessments import IDENTITY
     from src.lib.validation_history.projection import read_published_projection
 
-    objects = [_identity_record(0), _object(1, ["e1"])]
+    objects = [_subject_record(0), _identity_record(1), _object(2, ["e1"])]
     _, _, episode, _, checkpoint = _build(scope, objects, [_evidence("e1")])
     page = reads.review_packet(scope, episode)
-    identity, plain = page["records"]
-    first, second = _handles(identity)[0], _handles(plain)[0]
-    assert identity["review"] == [{"handle": first, "review": "record", "identity_record": (
-        "Accepting keeps this record's own resolution_state; send it without unresolved_fields.")}]
-    assert plain["review"] == [{"handle": second, "review": "record"}], "a plain record is not marked"
+    subject, term, plain = page["records"]
+    handles = {record["target_id"]: _handles(record)[0] for record in page["records"]}
+    marker = "This record is an identity value, which accepting does not resolve, so send it without unresolved_fields."
+    for record in (subject, term):
+        assert record["review"] == [{"handle": handles[record["target_id"]], "review": "record",
+                                     "identity_record": marker}]
+    assert plain["review"] == [{"handle": handles[plain["target_id"]], "review": "record"}]
+
+    # Ask the save rule about every value of every record: it refuses as an identity
+    # each field of exactly the marked records, and no field of the others.
     context = ReviewContext(scope, episode, "fixture-reviewer")
-    decided = [
-        {"handle": first, "action": "accept", "reason": "E1 names bifurcation; no ontology mapping ran.",
-         "unresolved_fields": [{"field_path": "curie", "explanation": "Ontology identity is unresolved."}]},
-        {"handle": second, "action": "accept", "reason": "E1 supports the reagent."},
-    ]
+    probe = [{"handle": handles[record["target_id"]], "action": "accept", "reason": "Probe every field.",
+              "unresolved_fields": [{"field_path": key, "explanation": "Probe."} for key in record["values"]]}
+             for record in page["records"]]
     with pytest.raises(ValueError) as caught:
-        decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="identity-uncertain",
-            packet_id=page["packet_id"], packet_decisions=decided)
+        decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="probe",
+            packet_id=page["packet_id"], packet_decisions=probe)
     message = str(caught.value)
-    assert message.startswith(
-        f'Nothing in this call was saved. {first}: unresolved field "curie" is part of an identity that keeps '
-        "its own resolution_state, which accepting does not resolve, so leave it out of unresolved_fields.")
-    assert message.endswith(f"Fields that can be assessed for {first}: none, so send {first} without unresolved_fields.")
-    assert f"{second}:" not in message
-    result = decisions.record_packet_decisions(context, checkpoint_request=checkpoint(),
-        operation_id="identity-accepted", packet_id=page["packet_id"],
-        packet_decisions=[{key: value for key, value in decided[0].items() if key != "unresolved_fields"}, decided[1]])
+    for record in page["records"]:
+        handle = handles[record["target_id"]]
+        refused = {key for key in record["values"] if f'{handle}: unresolved field "{key}" {IDENTITY}' in message}
+        marked = any("identity_record" in item for item in record["review"])
+        assert refused == (set(record["values"]) if marked else set()), handle
+        assert (f"Fields that can be assessed for {handle}: none, so send {handle} without unresolved_fields."
+                in message) == marked
+
+    # A save that follows the packet is accepted, and each identity keeps its staged value.
+    followed = [{"handle": handles[record["target_id"]], "action": "accept", "reason": "E1 supports it.",
+                 **({} if any("identity_record" in item for item in record["review"]) else
+                    {"unresolved_fields": [{"field_path": "label", "explanation": "Label is uncertain."}]})}
+                for record in page["records"]]
+    result = decisions.record_packet_decisions(context, checkpoint_request=checkpoint(), operation_id="followed",
+        packet_id=page["packet_id"], packet_decisions=followed)
     assert result["ready"]
     projected, _ = read_published_projection(scope, result["publication"], finalized=True)
-    assert projected.extracted_objects[0].payload == objects[0].payload, "the identity stays unresolved"
-    assert not any(finding.code == "validation_review.assessment_unresolved"
-                   for finding in projected.validation_findings)
+    assert [obj.payload for obj in projected.extracted_objects[:2]] == [obj.payload for obj in objects[:2]]
+    assert [finding.field_ref.field_path for finding in projected.validation_findings
+            if finding.code == "validation_review.assessment_unresolved"] == ["label"]
 
 
 def _list_row(index, *, source=True):
