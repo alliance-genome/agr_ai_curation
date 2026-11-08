@@ -412,14 +412,16 @@ class ChatReview:
 
         A later turn resumes earlier turns' unfinished reviews, and each is reviewed
         against its own question, never this turn's. The question is the stored user
-        row of the record's operation turn, which the chat API commits before a turn
-        runs. It is read even if the curator deleted the chat while the turn ran
-        (soft deletion keeps the transcript). A missing row is a conflict, not a guess.
+        row of the record's operation turn. The chat API is the only path that reaches
+        this lookup (FlowReview overrides it with its own step query), and it commits
+        that row before a turn runs. The row is read even if the curator deleted the
+        chat while the turn ran (soft deletion keeps the transcript). A missing row is
+        a conflict, not a guess.
         """
         from src.lib.chat_history_repository import ChatHistoryRepository
 
         with store.SessionLocal() as db:
-            message = ChatHistoryRepository(db).get_owned_turn_message(
+            message = ChatHistoryRepository(db).get_owned_turn_message_including_deleted(
                 session_id=self.session_id, user_auth_sub=self.owner_id,
                 turn_id=self.reference(record)["operation_turn_id"], role="user")
         if message is None:

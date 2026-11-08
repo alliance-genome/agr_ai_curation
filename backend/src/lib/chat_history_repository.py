@@ -995,7 +995,7 @@ class ChatHistoryRepository:
 
         return _message_record(message)
 
-    def get_owned_turn_message(
+    def get_owned_turn_message_including_deleted(
         self,
         *,
         session_id: str,

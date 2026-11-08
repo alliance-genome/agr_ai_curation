@@ -138,7 +138,7 @@ async def test_a_chat_deleted_while_its_turn_runs_is_still_reviewed_against_its_
         repository = ChatHistoryRepository(db)
         record, = chat.records()
         turn_id = chat.reference(record)["operation_turn_id"]
-        assert repository.get_owned_turn_message(session_id=chat.session_id, user_auth_sub="another-owner",
+        assert repository.get_owned_turn_message_including_deleted(session_id=chat.session_id, user_auth_sub="another-owner",
                                                  turn_id=turn_id, role="user") is None, "ownership still holds"
 
 
