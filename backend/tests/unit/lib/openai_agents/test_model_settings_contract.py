@@ -22,6 +22,7 @@ def settings():
 
 def test_real_default_policy_is_stable_and_retains_live_settings(monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
+    monkeypatch.delenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", raising=False)
     first = settings()
     recorded = model_settings_contract(first)
     assert recorded == model_settings_contract(settings())
@@ -35,6 +36,14 @@ def test_real_default_policy_is_stable_and_retains_live_settings(monkeypatch):
     assert policy["revision"] == 1
     assert policy["sdk_version"]
     assert policy["any"][-1] == {"http_status": [408, 409, 429, 500, 502, 503, 504]}
+    refused, = [item for item in policy["any"]
+                if isinstance(item, dict) and item.get("id") == "responses_input_item_ids_refused"]
+    assert refused == {"id": "responses_input_item_ids_refused", "revision": 1, "event_type": "error",
+                       "error_type": "invalid_request_error", "code": "unsupported_parameter",
+                       "param": "input", "max_resends": 1, "approves_replay": False}
+    monkeypatch.setenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", "2")
+    assert recorded != model_settings_contract(settings()), "a resend change is a pinned behaviour change"
+    monkeypatch.delenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES")
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "7")
     assert recorded == model_settings_contract(first)
     assert recorded != model_settings_contract(settings())

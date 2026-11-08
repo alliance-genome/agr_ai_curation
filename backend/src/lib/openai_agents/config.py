@@ -254,6 +254,20 @@ def get_groq_tool_call_retry_delay_seconds() -> float:
     return max(0.0, delay)
 
 
+def get_responses_input_item_id_retries() -> int:
+    """Resends of a Responses request refused for its replayed input item IDs.
+
+    OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES. Since 2026-11-07 OpenAI sometimes
+    refuses the SDK's exact replay of a function call it returned itself
+    (``invalid_request_error``, ``unsupported_parameter``, param ``input``); the
+    same item was accepted again later. Each resend sends the request unchanged.
+    Default 1; 0 turns the resend off. ``OPENAI_MODEL_MAX_RETRIES`` still bounds
+    every runner-managed retry of a model call.
+    """
+
+    return max(0, _get_env_int_with_fallback("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", 1))
+
+
 def get_openai_compatible_http_max_retries() -> int:
     """Maximum SDK HTTP retries for ordinary OpenAI-compatible providers.
 
@@ -639,6 +653,10 @@ def reasoning_summary_request_settings(
 
 _DEFAULT_RETRY_HTTP_STATUSES = (408, 409, 429, 500, 502, 503, 504)
 
+# Stable log marker and retry reason for a resent request OpenAI refused for its
+# replayed input item IDs (ALL-1523).
+RESPONSES_INPUT_ITEM_IDS_REFUSED = "responses_input_item_ids_refused"
+
 
 def build_default_model_retry():
     """Opt-in runner-managed retry for transient model-call failures.
@@ -688,6 +706,49 @@ def build_default_model_retry():
         setattr(decision, "_approves_replay", True)  # noqa: B010
         return decision
 
+    input_item_id_retries = get_responses_input_item_id_retries()
+
+    def retry_responses_input_item_ids_refused(context):
+        """Resend, unchanged and a bounded number of times, a request refused for its item IDs.
+
+        Matches the typed error frame's structured fields only: event type
+        ``error``, ``invalid_request_error``, code ``unsupported_parameter`` and
+        param ``input``. The pinned SDK raises this frame before any response
+        event, so the refused request produced no output and ran no tool; the
+        runner still vetoes a retry after any response- or tool-bearing event.
+        The SDK drops the failed websocket connection, so the resend opens a new
+        one. Item IDs are never stripped or rewritten, and no other transport is
+        used. A stateful request (previous_response_id or conversation) is not
+        approved for replay here; the runner keeps refusing to replay it.
+        """
+        from agents.models.openai_responses import ResponsesWebSocketError
+        from agents.retry import RetryDecision
+
+        error = context.error
+        if not isinstance(error, ResponsesWebSocketError):
+            return False
+        details = error.payload.get("error")
+        if not (
+            error.event_type == "error"
+            and error.error_type == "invalid_request_error"
+            and error.code == "unsupported_parameter"
+            and isinstance(details, dict)
+            and details.get("param") == "input"
+        ):
+            return False
+        if context.attempt > input_item_id_retries:
+            return False
+        # The stable marker counts hits in production logs; no frame content is logged.
+        logger.warning(
+            "%s: resending a Responses request refused for its replayed input item IDs "
+            "(resend %s/%s)",
+            RESPONSES_INPUT_ITEM_IDS_REFUSED,
+            context.attempt,
+            input_item_id_retries,
+            extra={"retry_marker": RESPONSES_INPUT_ITEM_IDS_REFUSED},
+        )
+        return RetryDecision(retry=True, reason=RESPONSES_INPUT_ITEM_IDS_REFUSED)
+
     try:
         max_retries = int(os.getenv("OPENAI_MODEL_MAX_RETRIES", "3"))
     except ValueError:
@@ -703,6 +764,7 @@ def build_default_model_retry():
         retry_policies.any(
             retry_policies.provider_suggested(),
             retry_responses_websocket_overload,
+            retry_responses_input_item_ids_refused,
             retry_policies.retry_after(),
             retry_policies.network_error(),
             retry_policies.http_status(list(_DEFAULT_RETRY_HTTP_STATUSES)),
@@ -715,6 +777,10 @@ def build_default_model_retry():
                 {"id": "responses_websocket_overload", "revision": 1,
                  "event_type": "error", "error_type": "service_unavailable_error",
                  "code": "server_is_overloaded", "approves_replay": True},
+                {"id": "responses_input_item_ids_refused", "revision": 1,
+                 "event_type": "error", "error_type": "invalid_request_error",
+                 "code": "unsupported_parameter", "param": "input",
+                 "max_resends": input_item_id_retries, "approves_replay": False},
                 "retry_after", "network_error",
                 {"http_status": list(_DEFAULT_RETRY_HTTP_STATUSES)},
             ],
