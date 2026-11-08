@@ -255,14 +255,16 @@ def get_groq_tool_call_retry_delay_seconds() -> float:
 
 
 def get_responses_input_item_id_retries() -> int:
-    """Resends of a Responses request refused for its replayed input item IDs.
+    """Highest runner retry attempt at which a refused-item-ID request is resent.
 
     OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES. Since 2026-11-07 OpenAI sometimes
     refuses the SDK's exact replay of a function call it returned itself
-    (``invalid_request_error``, ``unsupported_parameter``, param ``input``); the
-    same item was accepted again later. Each resend sends the request unchanged.
-    Default 1; 0 turns the resend off. ``OPENAI_MODEL_MAX_RETRIES`` still bounds
-    every runner-managed retry of a model call.
+    (``invalid_request_error``, ``unsupported_parameter``, param ``input``); a
+    fresh connection accepted the same request. The refused request is resent
+    unchanged while the model call's retry attempt, which counts every failed
+    try of that call, is at most this value: with the default 1 it is resent
+    only when the refusal is the call's first failure. 0 turns the resend off.
+    ``OPENAI_MODEL_MAX_RETRIES`` still bounds every runner-managed retry.
     """
 
     return max(0, _get_env_int_with_fallback("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", 1))
@@ -709,7 +711,11 @@ def build_default_model_retry():
     input_item_id_retries = get_responses_input_item_id_retries()
 
     def retry_responses_input_item_ids_refused(context):
-        """Resend, unchanged and a bounded number of times, a request refused for its item IDs.
+        """Resend, unchanged, a request refused for its item IDs while the attempt is at most N.
+
+        ``context.attempt`` is the runner's attempt counter for the whole model
+        call, not a count of these refusals, so an earlier failure of the same
+        call (a network error, an overload) uses up the window too.
 
         Matches the typed error frame's structured fields only: event type
         ``error``, ``invalid_request_error``, code ``unsupported_parameter`` and
@@ -741,7 +747,7 @@ def build_default_model_retry():
         # The stable marker counts hits in production logs; no frame content is logged.
         logger.warning(
             "%s: resending a Responses request refused for its replayed input item IDs "
-            "(resend %s/%s)",
+            "(retry attempt %s, resend window %s)",
             RESPONSES_INPUT_ITEM_IDS_REFUSED,
             context.attempt,
             input_item_id_retries,
