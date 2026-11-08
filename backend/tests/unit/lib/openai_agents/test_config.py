@@ -1221,7 +1221,7 @@ async def test_input_item_id_resends_follow_their_setting(monkeypatch, retries, 
 async def test_an_input_item_id_refusal_after_a_response_event_is_not_resent(monkeypatch):
     """The runner refuses any resend once the model emitted output, such as a tool call."""
     tool_call = {"type": "response.output_item.added",
-                 "item": {"type": "function_call", "call_id": "call_fixture", "name": "agr_curation_query"}}
+                 "item": {"type": "function_call", "call_id": "call_fixture", "name": "lookup_record"}}
     events, sent, rewinds, error = await _stream_with_refusals(monkeypatch, failures=1,
                                                                before_error=[tool_call])
     assert error is not None and len(sent) == 1 and rewinds == []
