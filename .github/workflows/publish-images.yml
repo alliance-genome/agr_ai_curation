@@ -429,6 +429,9 @@ jobs:
         if: needs.prepare.outputs.publish_lane == 'release'
         shell: bash
         env:
+          # This job has no checkout, so gh cannot read the repository from a
+          # local git remote. Name it explicitly.
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           MANIFEST_NAME: ${{ needs.prepare.outputs.manifest_name }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
