@@ -272,6 +272,10 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
     monkeypatch.setattr(runner.Runner, "run_streamed", lambda active, **k: Result(active))
     monkeypatch.setattr(validator_dispatch, "dispatch_active_validator_bindings", validate)
     session_id, turn_id = (str(uuid4()) for _ in range(2))
+    # The chat API commits the chat session and this turn's user row before it runs a turn.
+    from tests.integration.persistence.chat_turn_support import record_user_turn
+    record_user_turn(owner_id="test_pdf_owner_inline_extraction", session_id=session_id, turn_id=turn_id,
+                     question="Extract the synthetic paper")
     events = []
     async for event in runner.run_agent_streamed(
         agent=agent, context_messages=[{"role": "user", "content": "Extract the synthetic paper"}],

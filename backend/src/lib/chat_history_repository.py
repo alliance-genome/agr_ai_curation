@@ -995,6 +995,48 @@ class ChatHistoryRepository:
 
         return _message_record(message)
 
+    def get_owned_turn_message(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+        role: str,
+    ) -> ChatMessageRecord | None:
+        """Return one stored transcript row of the owner's session for a turn and role.
+
+        Unlike get_message_by_turn_id, the session may since have been soft-deleted:
+        soft deletion keeps transcript rows, and work a turn saved (such as a chat
+        review's result) still reads the message that produced it. Ownership is
+        still required.
+        """
+
+        normalized_role = _normalize_required_text(role, field_name="role")
+        if normalized_role not in VALID_CHAT_ROLES:
+            raise ValueError(f"role must be one of {sorted(VALID_CHAT_ROLES)}")
+        message = self._db.scalar(
+            select(ChatMessageModel)
+            .join(
+                ChatSessionModel,
+                (ChatSessionModel.session_id == ChatMessageModel.session_id)
+                & (ChatSessionModel.chat_kind == ChatMessageModel.chat_kind),
+            )
+            .where(
+                ChatSessionModel.session_id == _normalize_required_text(session_id, field_name="session_id"),
+                ChatSessionModel.user_auth_sub == _normalize_required_text(
+                    user_auth_sub, field_name="user_auth_sub"),
+                ChatMessageModel.turn_id == _normalize_required_text(turn_id, field_name="turn_id"),
+                ChatMessageModel.role == normalized_role,
+            )
+            .order_by(
+                ChatMessageModel.created_at.asc(),
+                ChatMessageModel.message_id.asc(),
+            )
+        )
+        if message is None:
+            return None
+        return _message_record(message)
+
     def list_messages_for_turn(
         self,
         *,

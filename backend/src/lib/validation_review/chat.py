@@ -412,17 +412,16 @@ class ChatReview:
 
         A later turn resumes earlier turns' unfinished reviews, and each is reviewed
         against its own question, never this turn's. The question is the stored user
-        row of the record's operation turn; a missing row is a conflict, not a guess.
+        row of the record's operation turn, which the chat API commits before a turn
+        runs. It is read even if the curator deleted the chat while the turn ran
+        (soft deletion keeps the transcript). A missing row is a conflict, not a guess.
         """
-        from src.lib.chat_history_repository import ChatHistoryRepository, ChatHistorySessionNotFoundError
+        from src.lib.chat_history_repository import ChatHistoryRepository
 
         with store.SessionLocal() as db:
-            try:
-                message = ChatHistoryRepository(db).get_message_by_turn_id(
-                    session_id=self.session_id, user_auth_sub=self.owner_id,
-                    turn_id=self.reference(record)["operation_turn_id"], role="user")
-            except ChatHistorySessionNotFoundError as error:
-                raise store.HistoryConflict("The chat that asked for this saved result is unavailable") from error
+            message = ChatHistoryRepository(db).get_owned_turn_message(
+                session_id=self.session_id, user_auth_sub=self.owner_id,
+                turn_id=self.reference(record)["operation_turn_id"], role="user")
         if message is None:
             raise store.HistoryConflict("The question that produced this saved result is unavailable")
         return message.content
