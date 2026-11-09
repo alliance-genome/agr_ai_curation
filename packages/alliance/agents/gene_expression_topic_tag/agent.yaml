@@ -67,4 +67,4 @@ curation:
   domain_pack_id: "agr.alliance.topic_entity_tag"
   launchable: true
 
-group_rules_enabled: false
+group_rules_enabled: true

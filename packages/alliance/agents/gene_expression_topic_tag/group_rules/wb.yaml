@@ -1,0 +1,26 @@
+group_id: WB
+content: |
+  <wormbase_scope>
+  This tag is for WormBase, so count only results in wild-type C. elegans.
+
+  These do not count on their own. If a paper has only these, it has no data for
+  the topic and gets `negated: true`:
+  - Expression data from any organism other than C. elegans, such as mouse, human,
+    fly, yeast or cultured cells.
+  - C. elegans used only as a host to express a gene from another organism.
+  - Expression measured by microarray, RNA-seq or SAGE.
+  - Expression seen only in mutant, RNAi or otherwise perturbed animals, with no
+    wild-type result in the paper.
+  - Studies of how a gene's expression is regulated, such as changes in its level
+    after a mutation or treatment, without reporting where or when the gene is
+    expressed in wild type.
+  - Wild-type animals used only as the control or baseline for a mutant, RNAi,
+    drug or stress comparison.
+  - A reporter or tagged protein used only as a tool, such as a cell marker, an
+    RNAi sensor or a readout of a pathway or stress response.
+
+  A paper has data for the topic when it presents where or when a C. elegans gene
+  is expressed in wild type as a finding of its own, for example in a figure or
+  Results passage that describes the expression pattern. This holds even when the
+  paper's main focus is something else.
+  </wormbase_scope>

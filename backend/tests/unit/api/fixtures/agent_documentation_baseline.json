@@ -1064,6 +1064,7 @@
     ],
     "limitations": [
       "Covers one topic, gene expression in wild type, for WormBase.",
+      "For WormBase curators it counts only results in wild-type C. elegans. It does not count microarray, RNA-seq or SAGE data, expression seen only in mutants, wild-type animals used only as a control, or a reporter used only as a marker or readout.",
       "Proposes one tag per paper.",
       "A paper uploaded directly, rather than imported from ABC, may have no ABC reference. A curator can link it on the review screen, and it cannot be submitted to ABC until then.",
       "Nothing is written to ABC by this agent."
