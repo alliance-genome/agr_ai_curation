@@ -70,6 +70,9 @@ describe('Record revalidation', () => {
     await screen.findByText('Stopped: a different validator answer would replace your edit on a validated reference; '
       + 'use Revalidate on that record if the new answer should replace your edit')
     expect(screen.queryByText(/curator.revalidation.required/)).toBeNull()
+    // Continuing would only stop again; the curator's Revalidate is the way forward.
+    expect(screen.queryByRole('button', { name: 'Continue existing round' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Revalidate record' })).toBeInTheDocument()
   })
   it('offers no continue after a system-error stop, which would only stop again', async () => {
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({ ...saved, state: 'needs_review',

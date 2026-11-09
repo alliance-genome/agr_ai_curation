@@ -32,9 +32,7 @@ ACTIVE_CHAT_REVIEW: ContextVar[ChatReview | None] = ContextVar(
 PAUSE_WORDING = {
     admission.SOURCE_PROJECTION_INVALID:
         "a system error stopped a save before it changed anything, and it was reported",
-    admission.CURATOR_REVALIDATION_REQUIRED:
-        "a different validator answer would replace your edit on a validated reference; "
-        "use Revalidate on that record if the new answer should replace your edit",
+    admission.CURATOR_REVALIDATION_REQUIRED: admission.CURATOR_REVALIDATION_WORDING,
 }
 
 

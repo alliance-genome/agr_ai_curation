@@ -159,7 +159,7 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
             for _ in range(2):
                 reads.clear()
                 replayed = rebuild_selected_envelope(db, scope, aid, envelope=source,
-                    manifest=manifest, domain_pack=pack)
+                    manifest=manifest, domain_pack=pack, history=source.history)
                 # Exactly one narrow read for this rebuild; never a full body
                 # fetch or reuse from the previous rebuild's transaction work.
                 assert reads == [False]
@@ -186,7 +186,7 @@ async def test_go_policy_waits_for_review_then_reads_selected_identities(scope, 
             historical.setattr(store, "_content", historical_content)
             with store.SessionLocal.begin() as db, pytest.raises(store.HistoryConflict, match="new authenticated validation"):
                 rebuild_selected_envelope(db, scope, aid, envelope=source,
-                    manifest=manifest, domain_pack=pack)
+                    manifest=manifest, domain_pack=pack, history=source.history)
         assert checkpoint().envelope.extracted_objects[0].payload == selected.extracted_objects[0].payload
 
 

@@ -440,11 +440,33 @@ def test_a_retired_record_leaves_with_the_findings_that_name_it():
             finding("field", field_ref=FieldRef(object_ref=ObjectRef(pending_ref_id="gone"), field_path="name")),
             finding("other", object_ref=ObjectRef(pending_ref_id="kept")),
             finding("envelope")])
+    from src.schemas.domain_envelope import HistoryEvent, HistoryEventKind
+
+    def event(name, target):
+        return HistoryEvent(event_type=HistoryEventKind.FIELD_UPDATED, event_id=name,
+                            field_ref=FieldRef(object_ref=ObjectRef(pending_ref_id=target), field_path="name"))
+
+    envelope = envelope.model_copy(update={"history": [event("on-gone", "gone"), event("on-kept", "kept")]})
     result = projection.without_records(envelope, {"t-gone"})
     assert [item.pending_ref_id for item in result.extracted_objects] == ["kept"]
     assert [item.code for item in result.validation_findings] == ["fixture.other", "fixture.envelope"]
+    assert [item.event_id for item in result.history] == ["on-kept"], "history leaves with its record (ALL-1518)"
     DomainEnvelope.model_validate(result.model_dump(mode="json"))
     assert len(envelope.extracted_objects) == 2, "the input envelope is unchanged"
+
+
+def test_history_about_an_object_lost_for_no_known_reason_is_kept_for_the_integrity_check():
+    """ALL-1518: only objects that leave by design take their history with them; anything else stays loud."""
+    from src.schemas.domain_envelope import HistoryEvent, HistoryEventKind
+    envelope = DomainEnvelope.model_construct(envelope_id="lost", domain_pack_id="fixture", extracted_objects=[],
+        validation_findings=[], metadata={}, history=[
+            HistoryEvent(event_type=HistoryEventKind.FIELD_UPDATED, event_id=name,
+                         field_ref=FieldRef(object_ref=ObjectRef(object_id=object_id), field_path="name"))
+            for name, object_id in (("retired", "retired-record"), ("lost", "lost-object"))])
+    result = projection.with_resolvable_history(envelope, {"retired-record"})
+    assert [item.event_id for item in result.history] == ["lost"]
+    with pytest.raises(ValidationError, match="lost-object"):
+        DomainEnvelope.model_validate(result.model_dump(mode="json"))
 
 
 @pytest.mark.asyncio

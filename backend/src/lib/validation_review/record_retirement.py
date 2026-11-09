@@ -40,7 +40,7 @@ def _require_no_curator_authority(db, artifact_id, root, descendants, source_env
         # curator's edit of this record too.
         contributor = overlay.get("contributor_completion_id")
         if (any(change["target_id"] == root.id for change in overlay["changes"])
-                or (contributor is not None and contribution_source(db, artifact_id, contributor)[1] == root.id)):
+                or (contributor is not None and contribution_source(db, artifact_id, contributor)[0] == root.id)):
             raise store.HistoryConflict("Curator edits prevent supervisor retirement")
 
 

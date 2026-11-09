@@ -350,7 +350,8 @@ class ValidatorAdapter:
                         profile = resolve_envelope_profile_validation(envelope, domain_pack,
                             db=db, user_id=self.scope.owner_id, active_group_ids=self.context.authenticated_groups)
                         selected_envelope = projection.rebuild_selected_envelope(db, self.scope, self.artifact_id,
-                            envelope=envelope, manifest=manifest, domain_pack=domain_pack, profile_context=profile)
+                            envelope=envelope, manifest=manifest, domain_pack=domain_pack, profile_context=profile,
+                            history=envelope.history)
                     input_match = _match_on_envelope(match, selected_envelope)
                 selected = build_domain_validation_request(input_match)
                 if selected.request is not None:

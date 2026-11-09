@@ -43,6 +43,8 @@ REVIEW_SYSTEM_ERROR_DETAIL = ("A system error stopped this save before it change
 # A save would select a different validator answer for a reference the curator
 # edited. The edit stands until the curator's own Revalidate authorizes replacing it.
 CURATOR_REVALIDATION_REQUIRED = "curator_revalidation_required"
+CURATOR_REVALIDATION_WORDING = ("a different validator answer would replace your edit on a validated reference; "
+                                "use Revalidate on that record if the new answer should replace your edit")
 
 
 def now():

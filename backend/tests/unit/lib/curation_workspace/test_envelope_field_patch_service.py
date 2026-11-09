@@ -1011,3 +1011,24 @@ def test_patch_envelope_field_rejects_before_mismatch_and_records_history(
     action_log = db_session.scalars(select(CurationActionLogEntry)).one()
     assert action_log.action_metadata["accepted"] is False
     assert "before does not match" in action_log.action_metadata["errors"][0]
+
+
+@pytest.mark.parametrize("reason,status_code", [("source_projection_invalid", 500),
+                                                ("curator_revalidation_required", 409)])
+def test_checkpoint_patch_maps_a_review_stop_by_reason(monkeypatch, reason, status_code):
+    """ALL-1518: an integrity stop on a curator edit is the system error, not a conflict to refresh."""
+    from types import SimpleNamespace
+    from src.lib.validation_review.admission import REVIEW_SYSTEM_ERROR_DETAIL, ReviewStopped
+
+    def stop(db, request):
+        raise ReviewStopped(reason)
+
+    monkeypatch.setattr(module, "write_domain_envelope_checkpoint", stop)
+    row = SimpleNamespace(project_key="fixture", document_id=uuid4(), session_id=None, flow_run_id=None,
+                          object_model_ref_json={}, model_field_ref_json={})
+    envelope = DomainEnvelope(envelope_id="fixture-envelope", domain_pack_id="fixture")
+    with pytest.raises(HTTPException) as raised:
+        module._checkpoint_patch_result(None, envelope_row=row, patched_envelope=envelope, expected_revision=1)
+    assert raised.value.status_code == status_code
+    from src.lib.validation_review.admission import CURATOR_REVALIDATION_WORDING
+    assert raised.value.detail == (REVIEW_SYSTEM_ERROR_DETAIL if status_code == 500 else CURATOR_REVALIDATION_WORDING)
