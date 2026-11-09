@@ -63,6 +63,14 @@ describe('Record revalidation', () => {
     expect(screen.getByText('Review: needs curator review')).toBeInTheDocument()
     expect(screen.queryByText(/source.projection/)).toBeNull()
   })
+  it('names the stop for a different answer on an edited validated reference in plain words', async () => {
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({ ...saved, state: 'needs_review',
+      outcome: { reason: 'curator_revalidation_required' } })
+    render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    await screen.findByText('Stopped: a different validator answer would replace your edit on a validated reference; '
+      + 'use Revalidate on that record if the new answer should replace your edit')
+    expect(screen.queryByText(/curator.revalidation.required/)).toBeNull()
+  })
   it('offers no continue after a system-error stop, which would only stop again', async () => {
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({ ...saved, state: 'needs_review',
       outcome: { reason: 'source_projection_invalid' } })

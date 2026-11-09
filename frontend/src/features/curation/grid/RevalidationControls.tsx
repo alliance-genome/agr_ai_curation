@@ -6,6 +6,7 @@ import { controlReview, fetchCandidateReviewOperation, fetchSessionReviewOperati
 // reason reads as its own words.
 const STOP_WORDING: Record<string, string> = {
   source_projection_invalid: 'a system error stopped a save before it changed anything, and it was reported',
+  curator_revalidation_required: 'a different validator answer would replace your edit on a validated reference; use Revalidate on that record if the new answer should replace your edit',
 }
 const reasonText = (reason: string) => STOP_WORDING[reason] ?? reason.replaceAll('_', ' ')
 

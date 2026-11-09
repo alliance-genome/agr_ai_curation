@@ -60,7 +60,8 @@ def require_source_integrity(validate, *, artifact_id, episode_id, stage):
 
     A source the save built, or what it publishes, that breaks the envelope's own
     contract is a system error no resend can fix, never a review conflict. stage
-    names the check (selection_source, published_source or published_match). The
+    names the check (selection_source, published_source, published_match,
+    saved_plan_match or published_projection). The
     log and the one Sentry event carry the stage and the artifact and episode IDs
     (hashed in Sentry like every runtime identifier) and validation locations only,
     never record content. The caller's transaction rolls back, so nothing applies.
@@ -205,7 +206,10 @@ def save_plan(plan, *, context):
     with store.SessionLocal.begin() as db:
         targets = [runtime.binding_target(binding, match, db=db) for match in plan.matches]
         initial_requests = runtime.frozen_job_requests(binding, plan.initial_jobs, db=db)
-    matches = {tid: serialize_match(match) for tid, match in zip(targets, plan.matches, strict=True)}
+    matches = require_source_integrity(
+        lambda: {tid: serialize_match(match) for tid, match in zip(targets, plan.matches, strict=True)},
+        artifact_id=binding.artifact_id, episode_id=plan.envelope.metadata["review_episode_id"],
+        stage="saved_plan_match")
     registry = REGISTRY.dump_python(plan.registry, mode="json")
     registry["bindings"] = [_serialize_binding(binding_definition) for binding_definition in plan.registry.bindings]
     REGISTRY.validate_python(registry)
@@ -419,7 +423,8 @@ class ValidatorAdapter:
             profile = resolve_envelope_profile_validation(envelope, domain_pack,
                 db=db, user_id=self.scope.owner_id, active_group_ids=self.context.authenticated_groups)
             projected = projection.rebuild_selected_envelope(db, self.scope, self.artifact_id,
-                envelope=envelope, manifest=manifest, domain_pack=domain_pack, profile_context=profile)
+                envelope=envelope, manifest=manifest, domain_pack=domain_pack, profile_context=profile,
+                history=current[0].envelope.history)
             projected = projection.pin_publication_in_transaction(db, self.scope, self.artifact_id,
                 operation_id="source:" + selection_id, manifest=manifest, envelope=projected,
                 envelope_revision=current[0].expected_revision + 1)

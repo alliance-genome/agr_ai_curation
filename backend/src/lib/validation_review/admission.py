@@ -36,6 +36,13 @@ class ReviewStopped(store.HistoryConflict):
 # error that no resend can fix. Unlike the other stops it is an operational failure,
 # reported once where it is raised.
 SOURCE_PROJECTION_INVALID = "source_projection_invalid"
+# Curator-facing text for that stop; its code name is not curator text.
+REVIEW_SYSTEM_ERROR_DETAIL = ("A system error stopped this save before it changed anything, and it was reported. "
+                              "Your saved results are unchanged.")
+
+# A save would select a different validator answer for a reference the curator
+# edited. The edit stands until the curator's own Revalidate authorizes replacing it.
+CURATOR_REVALIDATION_REQUIRED = "curator_revalidation_required"
 
 
 def now():

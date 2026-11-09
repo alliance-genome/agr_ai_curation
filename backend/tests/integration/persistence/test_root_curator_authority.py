@@ -251,7 +251,7 @@ def test_root_revalidation_releases_only_authorized_identity(scope, selected_roo
         with pytest.raises(store.HistoryConflict, match="Incomplete"):
             publish()
         with store.SessionLocal() as db:
-            projected = authority.apply_overlays(db, x.aid, env)
+            projected = authority.apply_overlays(db, x.aid, env, {})
     else:
         projected, _, _ = publish()
     assert projected.extracted_objects[0].payload["symbol"] == expected
