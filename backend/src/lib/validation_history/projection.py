@@ -51,17 +51,32 @@ def with_resolvable_history(envelope, absent):
 
 
 def absent_by_design(db, artifact_id):
-    """Objects a source or rebuild may leave out: retired records and validator contributions."""
-    result = set()
+    """Objects a source or rebuild may leave out: retired records and validator contributions.
+
+    Read from the object-level targets only (children of the artifact's root
+    target), never field or element targets. A record whose root was replaced by
+    a curator source edit stays present under its active successor, so its
+    identity is not absent. Any validator-contributed reference counts as absent
+    by design, so a contributed reference lost by a bug also loses its history
+    events from the envelope; the history table keeps them.
+    """
+    roots = select(ValidationFact.id).where(
+        ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target",
+        ValidationFact.parent_id.is_(None))
+    absent, present = set(), set()
     for target in db.scalars(select(ValidationFact).where(
-            ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target")):
-        body = store._content(db, target)
+            ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target",
+            ValidationFact.parent_id.in_(roots))):
+        body = store._shared_content(db, target)
         if "object_ref" not in body:
             continue
-        if (body.get("origin", {}).get("kind") == "validator_contribution"
-                or not store._current(db, artifact_id, target.id)["active"]):
-            result.add(body["object_ref"])
-    return result
+        if body.get("origin", {}).get("kind") == "validator_contribution":
+            absent.add(body["object_ref"])
+        elif store._current(db, artifact_id, target.id)["active"]:
+            present.add(body["object_ref"])
+        else:
+            absent.add(body["object_ref"])
+    return absent - present
 
 
 def without_records(envelope, target_ids):
@@ -385,9 +400,8 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         return found[0]
 
     items = []
-    # The selected answers by record and validator binding; curator edits on a
-    # contributed reference read it (see curator_authority.apply_overlays).
-    from .curator_authority import contribution_source
+    # The selected answers by the exact validator target they answer; curator
+    # edits on a contributed reference read it (see curator_authority.apply_overlays).
     selected_answers = {}
     # Immutable plan authority is shared only within this rebuild. Current
     # source, episode, receipt and binding checks still run for every completion.
@@ -398,7 +412,7 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
             db, artifact_id, completion.parent_id, kind="attempt",
         )
         attempt = store._content(db, attempt_fact)
-        selected_answers.setdefault(contribution_source(db, artifact_id, completion_id), set()).add(completion_id)
+        selected_answers.setdefault(attempt["input"]["target_id"], set()).add(completion_id)
         recipe = db.scalar(select(ValidationFact).where(
             ValidationFact.artifact_id == artifact_id,
             ValidationFact.operation_id == "candidate:" + completion_id,

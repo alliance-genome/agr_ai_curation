@@ -113,12 +113,14 @@ def active_overlays(db, artifact_id, *, through_sequence=None):
     heads = {}
     released = {item for fact in _facts(db, artifact_id, "curator_revalidation_release", through_sequence)
                 for item in store._content(db, fact)["overlay_ids"]}
+    superseded = set()
     for fact in _facts(db, artifact_id, "curator_value", through_sequence):
         body = store._content(db, fact)
         heads[(body["anchor"]["target_id"], tuple(body["anchor"]["suffix"]))] = (fact, body)
+        superseded.update(body.get("supersedes", ()))
     active = []
     for fact, body in heads.values():
-        if fact.id in released or body["action"] == "withdraw_override":
+        if fact.id in released or fact.id in superseded or body["action"] == "withdraw_override":
             continue
         try:
             store._require_active_target(db, artifact_id, body["anchor"]["target_id"])
@@ -141,7 +143,7 @@ def has_active_overlay(db, envelope, object_id, path):
     if refs is None:
         return False
     by_target, by_object = projection_refs(envelope)
-    return any(overlay_refs(by_target, by_object, body) is refs and
+    return any((overlay_refs(by_target, by_object, body) or {}).get("target_id") == refs["target_id"] and
                _overlap(overlay_path(refs, body, body["anchor"], body["value_path"]), path)
                for _, body in active_overlays(db, history["artifact_id"]))
 
@@ -168,8 +170,15 @@ def _record_patch_unit(db, scope, artifact_id, *, event_id, actor_id, body):
         raise store.HistoryAccessError("Curator authority requires the authenticated owner")
     store._require_active_target(db, artifact_id, body["target_id"])
     body = deepcopy(body)
-    previous = next((old for _, old in active_overlays(db, artifact_id)
-                     if old["anchor"] == body["anchor"]), None)
+    active = active_overlays(db, artifact_id)
+    if body.get("contributor_completion_id") is not None:
+        # A validated reference a new run re-materialized under a new target keeps
+        # its earlier edit by exact object ID; a new edit or withdrawal of the same
+        # path replaces that earlier edit instead of running beside it.
+        body["supersedes"] = sorted(fact.id for fact, old in active
+            if old.get("contributor_completion_id") is not None and old["object_id"] == body["object_id"]
+            and old["value_path"] == body["value_path"] and old["anchor"]["target_id"] != body["anchor"]["target_id"])
+    previous = next((old for _, old in active if old["anchor"] == body["anchor"]), None)
     if previous is not None and body["action"] != "withdraw_override":
         merged = deepcopy(previous["changes"])
         for change in body["changes"]:
@@ -437,35 +446,34 @@ NOT_APPLIED_METADATA_KEY = "curator_edits_not_applied"
 
 
 def contribution_source(db, artifact_id, completion_id):
-    """The record a validator answer belongs to, and the validator binding that produced it.
+    """The exact validator target a validator answer answers, and the record it belongs to.
 
-    The pair stays the same across validator runs, including runs whose input
-    target changed (a replaced list item). The record is None for a validator
-    bound to the envelope itself.
+    The record is None for a validator bound to the envelope itself.
     """
     completion = store._fact(db, artifact_id, completion_id, kind="completion")
-    frozen = store._content(db, store._fact(db, artifact_id, completion.parent_id, kind="attempt"))["input"]
-    record = store._content(db, store._fact(db, artifact_id, frozen["target_id"], kind="target")).get("object_target")
-    return record, frozen["binding_id"]
+    target = store._content(db, store._fact(db, artifact_id, completion.parent_id, kind="attempt"))["input"]["target_id"]
+    record = store._content(db, store._fact(db, artifact_id, target, kind="target")).get("object_target")
+    return target, record
 
 
 def _not_applied(db, artifact_id, body, selected_answers):
     """An edit on a contributed reference that no selected answer materializes.
 
     The reference is followed by its exact object ID, so reaching here means no
-    selected answer resolves to it. If an answer is selected for the same record
-    and validator, it is a different reference, which only the curator's own
-    Revalidate may let replace the edit (D1): review stops. Otherwise (the record
-    is retired, or restored and waiting for review) the edit is kept and reported,
-    never written as a dangling reference.
+    selected answer resolves to it. If another answer is selected for the same
+    validator target, it is a different reference, which only the curator's own
+    Revalidate may let replace the edit (D1): review stops. Otherwise the target
+    no longer has a selected answer (its record is retired or restored and
+    waiting for review, or the list item it answered was removed or replaced by
+    a different item): the edit is kept and reported, never written as a
+    dangling reference.
     """
     from src.lib.validation_review.admission import CURATOR_REVALIDATION_REQUIRED, ReviewStopped
     contributor = body.get("contributor_completion_id")
     if contributor is None:
         raise store.HistoryConflict("A curator edit names a record that is absent from the selected projection")
-    source = contribution_source(db, artifact_id, contributor)
-    record = source[0]
-    if selected_answers.get(source):
+    target, record = contribution_source(db, artifact_id, contributor)
+    if selected_answers.get(target):
         raise ReviewStopped(CURATOR_REVALIDATION_REQUIRED, resource=record)
     # A validator bound to the envelope itself contributes for no single record.
     record_object = (store._content(db, store._fact(db, artifact_id, record, kind="target"))["object_ref"]
@@ -476,8 +484,7 @@ def _not_applied(db, artifact_id, body, selected_answers):
 def apply_overlays(db, artifact_id, envelope, selected_answers):
     """Apply only exact target edits. Never transfer a curator edit by similar text.
 
-    selected_answers maps each (record, validator binding) to the completions
-    selected for it (see contribution_source).
+    selected_answers maps each validator target to the completions selected for it.
     """
     from src.lib.domain_envelopes.patches import set_payload_value, _payload_value
     from .assessments import open_assessments, settle_assessments

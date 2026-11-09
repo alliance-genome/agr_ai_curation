@@ -364,13 +364,26 @@ def test_an_edit_follows_its_validated_reference_through_a_new_run_with_the_same
                 "changes": [{"target_id": root, "path": "name", "present": True, "value": "Curator term label"}]}))
     x.publish(x.first)
     x.episode_fn()
-    x.publish(x.propose("ECO:VALIDATED"))  # A new run, same canonical reference, no Revalidate.
+    answer = x.propose("ECO:VALIDATED")
+    x.publish(answer)  # A new run, same canonical reference, no Revalidate.
     rerun = next(obj for obj in x.env.extracted_objects if obj.object_type == "SupportingTerm")
     assert rerun.object_id == support.object_id
     assert rerun.metadata["validation_history"]["target_id"] != root, "a new run materializes a new target"
     assert rerun.payload["name"] == "Curator term label"
     with h.SessionLocal() as db:
         assert c.has_active_overlay(db, x.env, support.object_id, "name"), "a later edit keeps curator authority"
+    # Withdrawing the edit on the moved reference replaces the earlier edit, not runs beside it.
+    moved = rerun.metadata["validation_history"]["target_id"]
+    with h.SessionLocal.begin() as db:
+        c.record_patch(db, scope, x.aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+            body=c.bind_patch_anchors(x.env, {"target_id": moved, "object_id": support.object_id, "value_path": "name",
+                "action": "withdraw_override", "contributor_completion_id": rerun.metadata["selected_contribution"]["completion_id"],
+                "changes": [{"target_id": moved, "path": "name", "present": True, "value": "ECO:VALIDATED"}]}))
+    x.publish(answer)
+    assert [obj.payload["name"] for obj in x.env.extracted_objects
+            if obj.object_type == "SupportingTerm"] == ["ECO:VALIDATED"]
+    with h.SessionLocal() as db:
+        assert not c.has_active_overlay(db, x.env, support.object_id, "name")
 
 
 def test_curator_overlay_follows_stable_element_through_reorder_and_retirement(scope):
