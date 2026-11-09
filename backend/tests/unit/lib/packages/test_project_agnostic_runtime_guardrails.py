@@ -191,6 +191,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/test_domain_envelope_repair_prompt_contract.py"),
     Path("backend/tests/unit/test_gene_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_gene_expression_prompt_policy.py"),
+    Path("backend/tests/unit/test_gene_expression_topic_tag_prompt_policy.py"),
     Path("backend/tests/unit/test_phenotype_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_rgd_go_paper_curator_prompt_policy.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_topic_entity_tag_domain_pack.py"),
