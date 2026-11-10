@@ -448,6 +448,35 @@ def materialize_persisted_envelope_review_rows(
     )
 
 
+def has_no_review_row(
+    db: Session,
+    envelope: DomainEnvelope,
+    domain_object: CuratableObjectEnvelope,
+    *,
+    active_group_ids: Sequence[str] | None = (),
+    user_id: int | str | None = None,
+) -> bool:
+    """Whether review-row materialization deliberately gives this object no row.
+
+    The same rule ``DomainPackMetadataReviewRowMaterializer`` applies: a
+    ``metadata_only`` object (for example an allele mention or an evidence quote)
+    is supporting data, not a curation row. Every object of a closed-profile
+    envelope is a row.
+    """
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if domain_pack is None:
+        return False
+    if resolve_envelope_profile_validation(envelope, domain_pack, db=db,
+                                           active_group_ids=active_group_ids, user_id=user_id) is not None:
+        return False
+    definition = next((item for item in domain_pack.metadata.object_definitions
+                       if item.object_type == domain_object.object_type), None)
+    return _object_role(domain_object, definition,
+                        object_role_key=_object_role_key(domain_pack.metadata)) == "metadata_only"
+
+
 def materialize_validator_results_into_envelope(
     envelope: DomainEnvelope,
     metadata: DomainPackMetadata,

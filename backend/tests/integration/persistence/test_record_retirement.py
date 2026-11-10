@@ -147,8 +147,12 @@ async def test_curator_restores_same_record_pending_without_new_attempt(planned)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("opened_before", [True, False])
-async def test_workspace_history_survives_retirement_and_restore(planned, opened_before, monkeypatch):
+@pytest.mark.parametrize("opened_before,metadata_only", [(True, False), (False, False), (False, True)],
+                         ids=["opened-row", "unopened-row", "metadata-only"])
+async def test_workspace_history_survives_retirement_and_restore(planned, opened_before, metadata_only, monkeypatch):
+    """metadata_only (v0.11.8): a record the pack gives no workspace row, such as an allele mention or
+    evidence quote, is restored without one. v0.11.7 refused every such restore with
+    "Restored record has no unique workspace projection"."""
     from datetime import datetime, timezone
     from uuid import UUID, uuid4
     from sqlalchemy import select
@@ -159,8 +163,17 @@ async def test_workspace_history_survives_retirement_and_restore(planned, opened
     from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
     item = planned
     from src.lib.domain_packs.materialization import DomainPackMetadataReviewRowMaterializer
+    pack = item.pack
+    if metadata_only:
+        from dataclasses import replace as replace_pack
+        definitions = [definition.model_copy(update={"metadata": {**definition.metadata, "object_role": "metadata_only"}})
+                       if definition.object_type == "Annotation" else definition
+                       for definition in pack.metadata.object_definitions]
+        pack = replace_pack(pack, metadata=pack.metadata.model_copy(update={"object_definitions": definitions}))
+        monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id",
+                            lambda _: pack)
     monkeypatch.setattr("src.lib.domain_packs.materialization._registered_materializer_for",
-                        lambda _: DomainPackMetadataReviewRowMaterializer(item.pack.metadata))
+                        lambda _: DomainPackMetadataReviewRowMaterializer(pack.metadata))
     context, ref, target = proposal(item)
     base_checkpoint = checkpoint_provider(item)
     def checkpoint():
@@ -219,7 +232,12 @@ async def test_workspace_history_survives_retirement_and_restore(planned, opened
     assert not result["publication"]["ready"]
     with store.SessionLocal() as db:
         assert listing(db, sid) == []
+        assert store._current(db, item.aid, target)["active"] is True
         candidate = db.scalar(select(CurationCandidate).where(CurationCandidate.session_id == sid))
+        if metadata_only:
+            assert candidate is None, "a record without a workspace row gets no candidate"
+            assert db.get(CurationReviewSession, sid).total_candidates == 0
+            return
         assert candidate.object_id == "one"
         assert not candidate.candidate_metadata.get("record_retired", False)
         assert db.get(CurationReviewSession, sid).total_candidates == 1

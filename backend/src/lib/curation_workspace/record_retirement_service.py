@@ -72,9 +72,14 @@ def restore(envelope_id, *, owner_id, request, groups):
 
 
 def materialize_restored_candidate(db, envelope, revision, target_id, *, groups):
-    """First-open-after-retirement workspaces may not have a draft cache yet."""
+    """First-open-after-retirement workspaces may not have a draft cache yet.
+
+    A restored record the pack gives no review row (``metadata_only``, such as an
+    allele mention or evidence quote) needs no candidate; any other record must
+    have exactly one row.
+    """
     from datetime import datetime, timezone
-    from src.lib.domain_packs.materialization import materialize_persisted_envelope_review_rows
+    from src.lib.domain_packs.materialization import has_no_review_row, materialize_persisted_envelope_review_rows
     from .models import CurationCandidate, CurationReviewSession
     from .pipeline import _prepared_candidate_input_from_review_row
     from .session_persistence import _persist_prepared_candidates
@@ -87,6 +92,8 @@ def materialize_restored_candidate(db, envelope, revision, target_id, *, groups)
                                                    CurationCandidate.object_id == object_id)) is not None:
         return
     session = db.get(CurationReviewSession, row.session_id)
+    if has_no_review_row(db, envelope, obj, active_group_ids=groups, user_id=session.created_by_id):
+        return
     materialized = materialize_persisted_envelope_review_rows(db, envelope.envelope_id, revision=revision,
         active_group_ids=groups, user_id=session.created_by_id)
     rows = [item for item in materialized.rows if item.object_id == object_id]
