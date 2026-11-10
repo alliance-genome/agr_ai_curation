@@ -52,7 +52,8 @@ def _pack(tmp_path):
         "object_type": "SupportingTerm", "display_name": "Supporting term",
         "metadata": {"object_role": "validated_reference"},
         "fields": [{"field_path": "primary_external_id", "field_type": "string"},
-                   {"field_path": "name", "field_type": "string"},
+                   # Curator-editable, as the allele pack's validated allele symbol (ALL-1518).
+                   {"field_path": "name", "field_type": "string", "metadata": {"editable": True}},
                    {"field_path": "evidence_code_curies", "field_type": "string",
                     "metadata": {"multivalued": True}}],
     })
@@ -216,6 +217,33 @@ async def _accept_a(item):
     return current
 
 
+CURATOR_LABEL = "Curator term label"
+
+
+def _edit_reference(item, value=CURATOR_LABEL):
+    """The curator edits the name on A's validated reference, through the real patch and checkpoint write."""
+    from src.lib.domain_envelopes.patches import EnvelopeFieldPatch, EnvelopeFieldPatchOperation, apply_curator_field_patch
+    from src.lib.domain_envelopes.persistence import write_domain_envelope_checkpoint
+    request = item.checkpoint()
+    reference = next(obj for obj in request.envelope.extracted_objects if obj.object_type == "SupportingTerm")
+    patch = EnvelopeFieldPatch(envelope_id=request.envelope.envelope_id, expected_revision=request.expected_revision,
+        object_id=reference.object_id, field_path="name", operation=EnvelopeFieldPatchOperation.REPLACE,
+        before=reference.payload["name"], value=value)
+    edited = apply_curator_field_patch(request.envelope, item.pack, patch, current_revision=request.expected_revision,
+                                       actor_id=item.scope.owner_id, actor_display_name="Curator")
+    assert edited.accepted, edited.errors
+    with store.SessionLocal.begin() as db:
+        write_domain_envelope_checkpoint(db, replace(request, envelope=edited.envelope))
+    current = item.checkpoint().envelope
+    assert _reference_names(current) == [value]
+    return {event.event_id for event in current.history
+            if event.field_ref is not None and event.field_ref.object_ref.object_id == reference.object_id}
+
+
+def _reference_names(envelope):
+    return [obj.payload["name"] for obj in envelope.extracted_objects if obj.object_type == "SupportingTerm"]
+
+
 def _assert_published_source_is_valid(item):
     """The checkpoint, the latest source-plan envelope and every saved match validate."""
     DomainEnvelope.model_validate(item.checkpoint().envelope.model_dump(mode="json"))
@@ -243,10 +271,17 @@ async def test_the_selection_source_is_a_valid_envelope_after_an_accepted_valida
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("edited", [False, True])
 @pytest.mark.parametrize("path", ["reviewer_retire", "approve_recommendation", "curator_restore",
                                   "select_contribution"])
-async def test_a_source_change_after_an_accepted_validated_reference_is_saved(scope, tmp_path, monkeypatch, path):
-    """Production failed every one of these with dangling validation_findings[].field_ref.object_ref."""
+async def test_a_source_change_after_an_accepted_validated_reference_is_saved(scope, tmp_path, monkeypatch, path,
+                                                                              edited):
+    """Production failed every one of these with dangling validation_findings[].field_ref.object_ref.
+
+    edited (ALL-1518): the curator also edited the validated reference, so the
+    checkpoint history names it; every one of these saves failed with a dangling
+    history[].field_ref.object_ref, and a curator edit after it returned 409.
+    """
     item = _review(scope, tmp_path, monkeypatch)
     await item.adapter.initial()
     b = item.roots["B"]
@@ -254,6 +289,8 @@ async def test_a_source_change_after_an_accepted_validated_reference_is_saved(sc
         retired = await _decide(item, {"B": "retire"}, "retire-B-first")
         assert retired.get("state") != "conflict", retired
     await _accept_a(item)
+    edit_events = _edit_reference(item) if edited else set()
+    assert len(edit_events) == (2 if edited else 0), "the field update and the accepted curator patch"
     if path == "reviewer_retire":
         result = await _decide(item, {"B": "retire"}, "retire-B")
         assert result.get("state") != "conflict", result
@@ -287,6 +324,29 @@ async def test_a_source_change_after_an_accepted_validated_reference_is_saved(sc
                     if obj.metadata["validation_history"]["target_id"] == b).payload["evidence_code_curies"] == ["eco:b2"]
     assert _validated_references(current), "A's accepted validated reference is projected again"
     _assert_published_source_is_valid(item)
+    if edited:
+        assert _reference_names(current) == [CURATOR_LABEL], "the curator's edit is applied again"
+        assert edit_events <= {event.event_id for event in current.history}, "its history stays with it"
+        _edit_reference(item, "Second curator label")  # A later curator edit saves, not 409.
+
+
+@pytest.mark.asyncio
+async def test_review_cannot_retire_a_record_whose_validated_reference_the_curator_edited(
+        scope, tmp_path, monkeypatch):
+    """ALL-1518 decision: the curator's edit on a record's contributed reference outranks a review retire."""
+    item = _review(scope, tmp_path, monkeypatch)
+    await item.adapter.initial()
+    await _accept_a(item)
+    _edit_reference(item)
+    contribution = _contribution(item, "A", RETIREMENT)
+    digest = _digest(item)
+    refused = await _call(item, "decide_record_retirement", {"operation_id": "approve-A-after-edit",
+        "contribution": contribution, "decision": "approve", "expected_source_sha": digest,
+        "reason": "A control, not a record the question asks for."})
+    assert refused["state"] == "conflict", refused
+    assert "Curator edits prevent supervisor retirement" in refused["message"]
+    assert _digest(item) == digest, "nothing applied"
+    assert _reference_names(item.checkpoint().envelope) == [CURATOR_LABEL]
 
 
 @pytest.mark.asyncio
@@ -380,18 +440,44 @@ def test_a_retired_record_leaves_with_the_findings_that_name_it():
             finding("field", field_ref=FieldRef(object_ref=ObjectRef(pending_ref_id="gone"), field_path="name")),
             finding("other", object_ref=ObjectRef(pending_ref_id="kept")),
             finding("envelope")])
+    from src.schemas.domain_envelope import HistoryEvent, HistoryEventKind
+
+    def event(name, target):
+        return HistoryEvent(event_type=HistoryEventKind.FIELD_UPDATED, event_id=name,
+                            field_ref=FieldRef(object_ref=ObjectRef(pending_ref_id=target), field_path="name"))
+
+    envelope = envelope.model_copy(update={"history": [event("on-gone", "gone"), event("on-kept", "kept")]})
     result = projection.without_records(envelope, {"t-gone"})
     assert [item.pending_ref_id for item in result.extracted_objects] == ["kept"]
     assert [item.code for item in result.validation_findings] == ["fixture.other", "fixture.envelope"]
+    assert [item.event_id for item in result.history] == ["on-kept"], "history leaves with its record (ALL-1518)"
     DomainEnvelope.model_validate(result.model_dump(mode="json"))
     assert len(envelope.extracted_objects) == 2, "the input envelope is unchanged"
 
 
+def test_history_about_an_object_lost_for_no_known_reason_is_kept_for_the_integrity_check():
+    """ALL-1518: only objects that leave by design take their history with them; anything else stays loud."""
+    from src.schemas.domain_envelope import HistoryEvent, HistoryEventKind
+    envelope = DomainEnvelope.model_construct(envelope_id="lost", domain_pack_id="fixture", extracted_objects=[],
+        validation_findings=[], metadata={}, history=[
+            HistoryEvent(event_type=HistoryEventKind.FIELD_UPDATED, event_id=name,
+                         field_ref=FieldRef(object_ref=ObjectRef(object_id=object_id), field_path="name"))
+            for name, object_id in (("retired", "retired-record"), ("lost", "lost-object"))])
+    result = projection.with_resolvable_history(envelope, {"retired-record"})
+    assert [item.event_id for item in result.history] == ["lost"]
+    with pytest.raises(ValidationError, match="lost-object"):
+        DomainEnvelope.model_validate(result.model_dump(mode="json"))
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["selection_source", "published_source"])
+@pytest.mark.parametrize("stage", ["selection_source", "published_source", "published_projection"])
 async def test_an_invalid_source_stops_review_once_with_an_alert(scope, monkeypatch, caplog, stage,
                                                                    source_envelope_guard):
-    """A source integrity failure is a system error: no conflict to retry, no second run, one report."""
+    """A source integrity failure is a system error: no conflict to retry, no second run, one report.
+
+    published_projection (ALL-1518): the rebuilt projection itself is checked before
+    any publication is written, so an invalid one is never stored.
+    """
     from tests.integration.persistence.test_review_end_summary import QUOTE, _chat_review, _outcome, _reviewer, _target
     from src.lib.validation_review import record_retirement
 
@@ -410,6 +496,14 @@ async def test_an_invalid_source_stops_review_once_with_an_alert(scope, monkeypa
             return source.model_copy(update={"validation_findings": [*source.validation_findings, dangling]})
 
         monkeypatch.setattr(projection, "source_envelope_in_transaction", broken_source)
+    elif stage == "published_projection":
+        rebuild = projection.rebuild_selected_envelope
+
+        def broken_rebuild(*args, **kwargs):
+            rebuilt = rebuild(*args, **kwargs)
+            return rebuilt.model_copy(update={"validation_findings": [*rebuilt.validation_findings, dangling]})
+
+        monkeypatch.setattr(projection, "rebuild_selected_envelope", broken_rebuild)
     else:
         remove = record_retirement.without_records
 

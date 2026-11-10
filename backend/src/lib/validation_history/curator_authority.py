@@ -71,6 +71,35 @@ def rebind_output_path(path, old_target_path, current_target_path):
     return _path(rebound)
 
 
+def overlay_refs(refs_by_target, refs_by_object, body):
+    """The current object an edit applies to, or None when it is not in the projection.
+
+    An edit on a validated reference follows that reference by its exact object ID
+    (fixed by type and canonical ID) when another validator run materializes the
+    same reference under a new target (Chris, 2026-11-09). Any other edit stays on
+    its own target. No value or text is compared.
+    """
+    refs = refs_by_target.get(body["target_id"])
+    if refs is None and body.get("contributor_completion_id") is not None:
+        refs = refs_by_object.get(body["object_id"])
+    return refs
+
+
+def overlay_path(refs, body, anchor, recorded_path):
+    """An anchor resolves on its own target; on a re-materialized reference, the recorded path does."""
+    return anchored_path(refs, anchor) if refs["target_id"] == body["target_id"] else recorded_path
+
+
+def projection_refs(envelope):
+    """Each object's stable references, by its root target and by its exact object identity."""
+    by_target, by_object = {}, {}
+    for obj in envelope.extracted_objects:
+        refs = obj.metadata["validation_history"]
+        by_target[refs["target_id"]] = refs
+        by_object[obj.object_id or obj.pending_ref_id] = refs
+    return by_target, by_object
+
+
 def bind_patch_anchors(envelope, body):
     body = deepcopy(body)
     refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
@@ -84,12 +113,14 @@ def active_overlays(db, artifact_id, *, through_sequence=None):
     heads = {}
     released = {item for fact in _facts(db, artifact_id, "curator_revalidation_release", through_sequence)
                 for item in store._content(db, fact)["overlay_ids"]}
+    superseded = set()
     for fact in _facts(db, artifact_id, "curator_value", through_sequence):
         body = store._content(db, fact)
         heads[(body["anchor"]["target_id"], tuple(body["anchor"]["suffix"]))] = (fact, body)
+        superseded.update(body.get("supersedes", ()))
     active = []
     for fact, body in heads.values():
-        if fact.id in released or body["action"] == "withdraw_override":
+        if fact.id in released or fact.id in superseded or body["action"] == "withdraw_override":
             continue
         try:
             store._require_active_target(db, artifact_id, body["anchor"]["target_id"])
@@ -111,8 +142,9 @@ def has_active_overlay(db, envelope, object_id, path):
     refs = obj.metadata.get("validation_history")
     if refs is None:
         return False
-    return any(body["target_id"] == refs["target_id"] and
-               _overlap(anchored_path(refs, body["anchor"]), path)
+    by_target, by_object = projection_refs(envelope)
+    return any((overlay_refs(by_target, by_object, body) or {}).get("target_id") == refs["target_id"] and
+               _overlap(overlay_path(refs, body, body["anchor"], body["value_path"]), path)
                for _, body in active_overlays(db, history["artifact_id"]))
 
 
@@ -138,8 +170,15 @@ def _record_patch_unit(db, scope, artifact_id, *, event_id, actor_id, body):
         raise store.HistoryAccessError("Curator authority requires the authenticated owner")
     store._require_active_target(db, artifact_id, body["target_id"])
     body = deepcopy(body)
-    previous = next((old for _, old in active_overlays(db, artifact_id)
-                     if old["anchor"] == body["anchor"]), None)
+    active = active_overlays(db, artifact_id)
+    if body.get("contributor_completion_id") is not None:
+        # A validated reference a new run re-materialized under a new target keeps
+        # its earlier edit by exact object ID; a new edit or withdrawal of the same
+        # path replaces that earlier edit instead of running beside it.
+        body["supersedes"] = sorted(fact.id for fact, old in active
+            if old.get("contributor_completion_id") is not None and old["object_id"] == body["object_id"]
+            and old["value_path"] == body["value_path"] and old["anchor"]["target_id"] != body["anchor"]["target_id"])
+    previous = next((old for _, old in active if old["anchor"] == body["anchor"]), None)
     if previous is not None and body["action"] != "withdraw_override":
         merged = deepcopy(previous["changes"])
         for change in body["changes"]:
@@ -256,11 +295,20 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
     if actor_id != binding.scope.owner_id:
         raise store.HistoryAccessError("Revalidation intent requires the authenticated curator")
     store._fact(db, binding.artifact_id, episode_id, kind="review_episode")
-    refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
-            for obj in envelope.extracted_objects}
+    by_target, by_object = projection_refs(envelope)
     checkpoints = {}
+    def refs_for(body):
+        refs = overlay_refs(by_target, by_object, body)
+        if refs is None:
+            raise store.HistoryConflict("Curator value anchor is no longer in this projection")
+        return refs
     def current_path(body):
-        return anchored_path(refs[body["target_id"]], body["anchor"])
+        refs = overlay_refs(by_target, by_object, body)
+        if refs is None and body.get("contributor_completion_id") is not None:
+            # A contributed reference not in the results (its edit is not applied):
+            # the edit is still named by the path it was recorded at.
+            return body["value_path"]
+        return overlay_path(refs_for(body), body, body["anchor"], body["value_path"])
     def requested(body):
         if body["object_id"] == object_id:
             if not field_paths:
@@ -268,7 +316,7 @@ def record_revalidation_intent_in_transaction(db, binding, *, envelope, episode_
             if body.get("atomic"):
                 members = _atomic_identity_anchors(db, binding.artifact_id, body, checkpoints)
                 return any(_anchor_covers(db, binding.artifact_id,
-                    anchor_for_path(refs[body["target_id"]], path), member, atomic=True)
+                    anchor_for_path(refs_for(body), path), member, atomic=True)
                     for path in field_paths for member in members)
             return any(_covers(path, current_path(body)) for path in field_paths)
         contributor = body.get("contributor_completion_id")
@@ -392,23 +440,81 @@ def release_accepted_overlays(db, scope, artifact_id, *, episode_id, operation_i
             body={"overlay_ids": sorted(released), "reason": "Explicit curator revalidation accepted"})
 
 
-def apply_overlays(db, artifact_id, envelope):
-    """Apply only exact target edits. Never transfer a curator edit by similar text."""
+# Projection metadata listing the curator edits whose contributed reference is not
+# in the current results, by contributing record. Nothing displays it yet (0.12.0).
+NOT_APPLIED_METADATA_KEY = "curator_edits_not_applied"
+
+
+def contribution_source(db, artifact_id, completion_id):
+    """The exact validator target a validator answer answers, and the record it belongs to.
+
+    The record is None for a validator bound to the envelope itself.
+    """
+    completion = store._fact(db, artifact_id, completion_id, kind="completion")
+    target = store._content(db, store._fact(db, artifact_id, completion.parent_id, kind="attempt"))["input"]["target_id"]
+    record = store._content(db, store._fact(db, artifact_id, target, kind="target")).get("object_target")
+    return target, record
+
+
+def _not_applied(db, artifact_id, body, selected_answers):
+    """An edit on a contributed reference that no selected answer materializes.
+
+    The reference is followed by its exact object ID, so reaching here means no
+    selected answer resolves to it. If another answer is selected for the same
+    validator target, it is a different reference, which only the curator's own
+    Revalidate may let replace the edit (D1): review stops. Otherwise the target
+    no longer has a selected answer (its record is retired or restored and
+    waiting for review, or the list item it answered was removed or replaced by
+    a different item): the edit is kept and reported, never written as a
+    dangling reference.
+    """
+    from src.lib.validation_review.admission import CURATOR_REVALIDATION_REQUIRED, ReviewStopped
+    contributor = body.get("contributor_completion_id")
+    if contributor is None:
+        raise store.HistoryConflict("A curator edit names a record that is absent from the selected projection")
+    target, record = contribution_source(db, artifact_id, contributor)
+    if selected_answers.get(target):
+        raise ReviewStopped(CURATOR_REVALIDATION_REQUIRED, resource=record)
+    # A validator bound to the envelope itself contributes for no single record.
+    record_object = (store._content(db, store._fact(db, artifact_id, record, kind="target"))["object_ref"]
+                     if record is not None else None)
+    return {"record_object_id": record_object, "object_id": body["object_id"], "value_path": body["value_path"]}
+
+
+def apply_overlays(db, artifact_id, envelope, selected_answers):
+    """Apply only exact target edits. Never transfer a curator edit by similar text.
+
+    selected_answers maps each validator target to the completions selected for it.
+    """
     from src.lib.domain_envelopes.patches import set_payload_value, _payload_value
     from .assessments import open_assessments, settle_assessments
     result = envelope.model_copy(deep=True)
+    result.metadata.pop(NOT_APPLIED_METADATA_KEY, None)
+    not_applied = []
     objects = {obj.metadata["validation_history"]["target_id"]: obj for obj in result.extracted_objects}
+    by_object = {obj.object_id or obj.pending_ref_id: obj for obj in result.extracted_objects}
     for _, body in active_overlays(db, artifact_id):
         store._require_active_target(db, artifact_id, body["target_id"])
+        edited = objects.get(body["target_id"])
+        if edited is None and body.get("contributor_completion_id") is not None:
+            edited = by_object.get(body["object_id"])  # The same reference, materialized by another run.
+        if edited is None:
+            not_applied.append(_not_applied(db, artifact_id, body, selected_answers))
+            continue
         for change in body["changes"]:
             try:
                 store._require_active_target(db, artifact_id, change["anchor"]["target_id"])
             except store.HistoryConflict:
                 continue  # Retired list elements remain in history, not current output.
-            obj = objects.get(change["target_id"])
-            if obj is None:
-                raise store.HistoryConflict("Replacing this record requires explicit curator revalidation authority")
-            current_path = anchored_path(obj.metadata["validation_history"], change["anchor"])
+            # A change may name another object (a mirrored value); the edited object may be re-materialized.
+            if change["target_id"] == body["target_id"]:
+                obj = edited
+                current_path = overlay_path(obj.metadata["validation_history"], body, change["anchor"], change["path"])
+            else:
+                obj = objects.get(change["target_id"])
+                if obj is None:
+                    raise store.HistoryConflict("A curator edit change names an object absent from the projection")
+                current_path = anchored_path(obj.metadata["validation_history"], change["anchor"])
             findings = open_assessments(result, obj, current_path)
             # A whole-collection value overlay also preserves removal/change of
             # assessed leaves. Capture exact old values before replay; unchanged
@@ -432,6 +538,8 @@ def apply_overlays(db, artifact_id, envelope):
                 finding.finding_id for finding in structural_findings
                 if finding.field_ref is not None and previous_values[finding.finding_id] != _payload_value(obj.payload, finding.field_ref.field_path)
             })
+    if not_applied:
+        result.metadata[NOT_APPLIED_METADATA_KEY] = not_applied
     return result
 
 

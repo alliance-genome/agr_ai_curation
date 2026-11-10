@@ -290,7 +290,7 @@ def test_real_pack_projection_uses_only_selected_completion(scope, tmp_path, mon
     assert manifest["ready"]
     with h.SessionLocal.begin() as db:
         projected = rebuild_selected_envelope(
-            db, scope, aid, envelope=env, manifest=manifest, domain_pack=pack,
+            db, scope, aid, envelope=env, manifest=manifest, domain_pack=pack, history=env.history,
         )
     assert projected.extracted_objects[0].payload["evidence_code_curies"] == ["ECO:ACCEPTED"]
     assert "ECO:REJECTED" not in str(projected.extracted_objects[0].payload)
@@ -418,10 +418,10 @@ def test_profile_selected_projection_enforces_whole_record_contract(scope, ident
         if not valid:
             with pytest.raises(h.HistoryConflict, match="structurally incomplete"):
                 rebuild_selected_envelope(db, scope, aid, envelope=source, manifest=manifest,
-                    domain_pack=context.registry.domain_pack, profile_context=context)
+                    domain_pack=context.registry.domain_pack, profile_context=context, history=source.history)
         else:
             projected = rebuild_selected_envelope(db, scope, aid, envelope=source, manifest=manifest,
-                domain_pack=context.registry.domain_pack, profile_context=context)
+                domain_pack=context.registry.domain_pack, profile_context=context, history=source.history)
             assert projected.extracted_objects[0].payload["attributes"] == {
                 "paper_name": "A", "resolved_id": identifier,
             }

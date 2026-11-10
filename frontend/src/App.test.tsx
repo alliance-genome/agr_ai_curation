@@ -382,9 +382,9 @@ describe('AppContent global notifications', () => {
     expect(screen.queryByText(`What's New: v${POPUP_CHANGELOG_ENTRY!.version}`)).not.toBeInTheDocument();
   });
 
-  it('uses the substantive v0.11.4 release notes for the changelog popup', () => {
-    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-11-07-v0.11.4');
-    expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.11.4');
+  it('uses the v0.11.7 release notes for the changelog popup', () => {
+    expect(POPUP_CHANGELOG_ENTRY?.id).toBe('2026-11-09-v0.11.7');
+    expect(POPUP_CHANGELOG_ENTRY?.version).toBe('0.11.7');
   });
 
   it('seeds existing PDF terminal jobs and only toasts new terminal updates on subsequent polls', async () => {
