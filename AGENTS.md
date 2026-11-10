@@ -47,6 +47,17 @@ For isolated backend test runs:
 - Specific backend test:
   `bash scripts/testing/docker-test-compose.sh run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"`
 
+Tear the test stack down after every run, including a failed one:
+
+`bash scripts/testing/docker-test-compose.sh down -v --remove-orphans`
+
+`run --rm` removes only the test runner container. The Postgres, Weaviate and
+Redis service containers it started, and their data volumes, stay until
+`down -v`. Abandoned stacks quietly fill the host disk. Run the `down -v` in the
+same script or shell step as the `run`, so it also runs after a failure. Pass
+the same `-p`/`COMPOSE_PROJECT_NAME` and the same extra `-f` files you used for
+the run. Before finishing, `docker ps -a` must show no test stack of yours.
+
 For a local development checkout with the main app stack running:
 
 - Backend unit tests: `docker compose exec backend pytest tests/unit/ -v`
