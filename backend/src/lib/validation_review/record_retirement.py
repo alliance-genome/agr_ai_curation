@@ -2,7 +2,7 @@
 from sqlalchemy import select
 
 from src.lib.validation_history import selections, store
-from src.lib.validation_history.curator_authority import active_overlays
+from src.lib.validation_history.curator_authority import active_overlays, contribution_source
 from src.lib.validation_history.projection import without_records
 from src.lib.validation_history.record_lifecycle import RETIRING_DECISIONS, retired_records
 from src.models.sql.validation_history import ValidationFact
@@ -36,7 +36,11 @@ def _require_no_curator_authority(db, artifact_id, root, descendants, source_env
     if reviewed is not None:
         raise store.HistoryConflict("Curator row decision prevents supervisor retirement")
     for _, overlay in active_overlays(db, artifact_id):
-        if any(change["target_id"] == root.id for change in overlay["changes"]):
+        # An edit on a validated reference this record's answer contributed is the
+        # curator's edit of this record too.
+        contributor = overlay.get("contributor_completion_id")
+        if (any(change["target_id"] == root.id for change in overlay["changes"])
+                or (contributor is not None and contribution_source(db, artifact_id, contributor)[1] == root.id)):
             raise store.HistoryConflict("Curator edits prevent supervisor retirement")
 
 

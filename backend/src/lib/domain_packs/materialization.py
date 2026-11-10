@@ -234,15 +234,8 @@ class DomainPackMetadataReviewRowMaterializer:
         for object_index, domain_object in enumerate(envelope.extracted_objects):
             object_definition = object_definitions.get(domain_object.object_type)
             object_id = stable_object_id(domain_object)
-            object_role = _object_role(
-                domain_object,
-                object_definition,
-                object_role_key=_object_role_key(self.metadata),
-            )
-            if self.profile_context is not None:
-                # Every closed-profile object is a curation record. Model-supplied
-                # metadata cannot hide it as a packaged metadata/reference row.
-                object_role = None
+            object_role = _review_row_role(domain_object, object_definition, self.metadata,
+                                           closed_profile=self.profile_context is not None)
             if object_role == "metadata_only":
                 continue
 
@@ -446,6 +439,33 @@ def materialize_persisted_envelope_review_rows(
         row_count=len(rows),
         rows=rows,
     )
+
+
+def has_no_review_row(
+    db: Session,
+    envelope: DomainEnvelope,
+    domain_object: CuratableObjectEnvelope,
+    *,
+    active_group_ids: Sequence[str] | None = (),
+    user_id: int | str | None = None,
+) -> bool:
+    """Whether review-row materialization deliberately gives this object no row.
+
+    Applies the materializer's own rule (``_review_row_role``): a ``metadata_only``
+    object, for example an allele mention or an evidence quote, is supporting
+    data, not a curation row.
+    """
+    from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+    from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if domain_pack is None:
+        return False
+    closed_profile = resolve_envelope_profile_validation(
+        envelope, domain_pack, db=db, active_group_ids=active_group_ids, user_id=user_id) is not None
+    definition = next((item for item in domain_pack.metadata.object_definitions
+                       if item.object_type == domain_object.object_type), None)
+    return _review_row_role(domain_object, definition, domain_pack.metadata,
+                            closed_profile=closed_profile) == "metadata_only"
 
 
 def materialize_validator_results_into_envelope(
@@ -4280,6 +4300,23 @@ def _object_role(
         if isinstance(definition_role, str) and definition_role.strip():
             return definition_role.strip()
     return None
+
+
+def _review_row_role(
+    domain_object: CuratableObjectEnvelope,
+    object_definition: DomainPackObjectDefinition | None,
+    metadata: DomainPackMetadata,
+    *,
+    closed_profile: bool,
+) -> str | None:
+    """The object role review-row materialization uses; ``metadata_only`` gets no row.
+
+    Every closed-profile object is a curation record: model-supplied metadata
+    cannot hide it as a packaged metadata/reference row.
+    """
+    if closed_profile:
+        return None
+    return _object_role(domain_object, object_definition, object_role_key=_object_role_key(metadata))
 
 
 def _object_role_key(metadata: DomainPackMetadata) -> str:

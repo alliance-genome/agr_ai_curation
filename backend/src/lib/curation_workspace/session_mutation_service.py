@@ -1594,6 +1594,10 @@ def _checkpoint_patch_result(
     authenticated_groups=(),
 ) -> int:
     from src.lib.validation_history.store import HistoryAccessError, HistoryConflict
+    from src.lib.validation_review.admission import (
+        CURATOR_REVALIDATION_REQUIRED, CURATOR_REVALIDATION_WORDING, REVIEW_SYSTEM_ERROR_DETAIL,
+        SOURCE_PROJECTION_INVALID, ReviewStopped,
+    )
     try:
         checkpoint = write_domain_envelope_checkpoint(
             db,
@@ -1611,6 +1615,13 @@ def _checkpoint_patch_result(
         )
     except HistoryAccessError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ReviewStopped as exc:
+        if exc.reason == SOURCE_PROJECTION_INVALID:
+            # The republished projection broke the envelope contract: a system error,
+            # logged and reported where it was raised, not a conflict to refresh.
+            raise HTTPException(status_code=500, detail=REVIEW_SYSTEM_ERROR_DETAIL) from exc
+        detail = CURATOR_REVALIDATION_WORDING if exc.reason == CURATOR_REVALIDATION_REQUIRED else str(exc)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
     except (DomainEnvelopePersistenceError, HistoryConflict) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

@@ -1660,7 +1660,8 @@ def test_extraction_assessment_is_selected_unresolved_without_rewriting_source(s
     assert all(f.details["review_assessment"]["actor"] == {"type": "agent", "id": "reviewer"} for f in findings)
     with h.SessionLocal.begin() as db:
         manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
-        rebuilt = rebuild_selected_envelope(db, scope, aid, envelope=projected, manifest=manifest, domain_pack=pack)
+        rebuilt = rebuild_selected_envelope(db, scope, aid, envelope=projected, manifest=manifest, domain_pack=pack,
+            history=projected.history)
     assert [f.finding_id for f in rebuilt.validation_findings] == [f.finding_id for f in findings]
     assert rebuilt.history == projected.history
 
@@ -1710,7 +1711,8 @@ def test_extraction_assessment_is_selected_unresolved_without_rewriting_source(s
         write_domain_envelope_checkpoint(db, replace(request, envelope=confirmed.envelope, expected_revision=1))
     with h.SessionLocal.begin() as db:
         assert len(curator_authority.active_overlays(db, aid)) == 1
-        rebuilt = rebuild_selected_envelope(db, scope, aid, envelope=confirmed.envelope, manifest=manifest, domain_pack=pack)
+        rebuilt = rebuild_selected_envelope(db, scope, aid, envelope=confirmed.envelope, manifest=manifest, domain_pack=pack,
+            history=confirmed.envelope.history)
     assert {f.field_ref.field_path: f.status.value for f in rebuilt.validation_findings} == {
         "statement": "resolved", "items[1]": "open"}
     assert rebuilt.extracted_objects[0].payload == env.extracted_objects[0].payload
@@ -1748,7 +1750,7 @@ def test_extraction_assessment_is_selected_unresolved_without_rewriting_source(s
         write_domain_envelope_checkpoint(db, replace(request, envelope=removed_open.envelope, expected_revision=4))
         current_manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
         removed_replay = rebuild_selected_envelope(db, scope, aid, envelope=removed_open.envelope,
-            manifest=current_manifest, domain_pack=pack)
+            manifest=current_manifest, domain_pack=pack, history=removed_open.envelope.history)
         assert removed_replay.extracted_objects[0].payload["items"] == ["first"]
         assert all(f.status.value == "resolved" for f in removed_replay.validation_findings)
         db.rollback()
@@ -1764,7 +1766,8 @@ def test_extraction_assessment_is_selected_unresolved_without_rewriting_source(s
     with h.SessionLocal.begin() as db:
         current_manifest = selections.manifest_in_transaction(db, scope, aid, episode_id=ep)
         rebuilt = rebuild_selected_envelope(db, scope, aid,
-            envelope=collection_confirmation.envelope, manifest=current_manifest, domain_pack=pack)
+            envelope=collection_confirmation.envelope, manifest=current_manifest, domain_pack=pack,
+            history=collection_confirmation.envelope.history)
         overlays = curator_authority.active_overlays(db, aid)
         assert any(change["path"] == "items[1]" for _, body in overlays for change in body["changes"])
     assert all(f.status.value == "resolved" for f in rebuilt.validation_findings)
@@ -1780,7 +1783,7 @@ def test_extraction_assessment_is_selected_unresolved_without_rewriting_source(s
         write_domain_envelope_checkpoint(db, replace(request, envelope=shortened.envelope, expected_revision=5))
     with h.SessionLocal.begin() as db:
         replayed = rebuild_selected_envelope(db, scope, aid, envelope=shortened.envelope,
-            manifest=current_manifest, domain_pack=pack)
+            manifest=current_manifest, domain_pack=pack, history=shortened.envelope.history)
     assert replayed.extracted_objects[0].payload["items"] == ["first"]
     assert all(f.status.value == "resolved" for f in replayed.validation_findings)
 

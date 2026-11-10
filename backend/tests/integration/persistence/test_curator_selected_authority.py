@@ -289,8 +289,11 @@ def test_edited_support_record_is_preserved_until_authorized_replacement(scope, 
         c.record_revalidation_intent(x.bound, envelope=x.env, episode_id=x.episode, object_id="one", field_paths=[], actor_id=scope.owner_id)
     answer = x.propose("ECO:NEW")
     if not authorized:
-        with pytest.raises(h.HistoryConflict, match="explicit curator revalidation"):
+        # ALL-1518 decision: the edit stands, and review stops for the curator's Revalidate.
+        from src.lib.validation_review.admission import CURATOR_REVALIDATION_REQUIRED, ReviewStopped
+        with pytest.raises(ReviewStopped) as stopped:
             x.publish(answer)
+        assert stopped.value.reason == CURATOR_REVALIDATION_REQUIRED
     else:
         assert x.publish(answer)["ready"]
         new_support = next(obj for obj in x.env.extracted_objects if obj.object_type == "SupportingTerm")
@@ -299,6 +302,88 @@ def test_edited_support_record_is_preserved_until_authorized_replacement(scope, 
     old, _ = read_published_projection(scope, old_reference)
     assert next(obj for obj in old.extracted_objects if obj.object_type == "SupportingTerm").payload["name"] == "Curator term label"
     assert h.read_fact(scope, x.aid, edit)["content"]["changes"][0]["value"] == "Curator term label"
+
+
+@pytest.mark.parametrize("scenario", [True], indirect=True)
+def test_an_edit_on_a_retired_records_reference_is_kept_and_reported(scope, scenario):
+    """ALL-1518: a record retired after its contributed reference was edited keeps the edit, reported as not applied."""
+    from src.lib.validation_history import projection
+    from src.schemas.domain_envelope import DomainEnvelope
+    from tests.integration.persistence.test_validation_history import decision
+    x = scenario
+    support = next(obj for obj in x.env.extracted_objects if obj.object_type == "SupportingTerm")
+    record = next(obj for obj in x.env.extracted_objects if obj.object_type == "Annotation")
+    record_root = record.metadata["validation_history"]["target_id"]
+    support_root = support.metadata["validation_history"]["target_id"]
+    with h.SessionLocal.begin() as db:
+        edit = c.record_patch(db, scope, x.aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+            body=c.bind_patch_anchors(x.env, {"target_id": support_root, "object_id": support.object_id,
+                "value_path": "name", "action": "override", "contributor_completion_id": x.first,
+                "changes": [{"target_id": support_root, "path": "name", "present": True, "value": "Curator term label"}]}))
+    x.publish(x.first)
+
+    def rebuild():
+        with h.SessionLocal.begin() as db:
+            manifest = s.manifest_in_transaction(db, scope, x.aid, episode_id=x.episode)
+            return projection.rebuild_selected_envelope(db, scope, x.aid, envelope=x.env, manifest=manifest,
+                                                        domain_pack=x.pack, history=x.env.history)
+
+    with h.SessionLocal() as db:
+        version = h._current(db, x.aid, record_root)["version"]
+    decision(scope, x.aid, record_root, version, "retire")
+    retired = rebuild()
+    DomainEnvelope.model_validate(retired.model_dump(mode="json"))
+    assert [obj.object_type for obj in retired.extracted_objects] == []
+    assert retired.metadata[c.NOT_APPLIED_METADATA_KEY] == [
+        {"record_object_id": record.object_id or record.pending_ref_id, "object_id": support.object_id,
+         "value_path": "name"}]
+    decision(scope, x.aid, record_root, version + 1, "restore")
+    # Restored and waiting for review: still kept, still reported, never a dangling reference.
+    restored = rebuild()
+    DomainEnvelope.model_validate(restored.model_dump(mode="json"))
+    assert restored.metadata[c.NOT_APPLIED_METADATA_KEY] == retired.metadata[c.NOT_APPLIED_METADATA_KEY]
+    assert h.read_fact(scope, x.aid, edit)["content"]["changes"][0]["value"] == "Curator term label"
+    # Chris, 2026-11-09: a fresh run that resolves the same reference (same exact ID) keeps the edit.
+    x.episode_fn()
+    x.publish(x.propose("ECO:VALIDATED"))
+    assert c.NOT_APPLIED_METADATA_KEY not in x.env.metadata
+    assert [obj.payload["name"] for obj in x.env.extracted_objects
+            if obj.object_type == "SupportingTerm"] == ["Curator term label"]
+
+
+@pytest.mark.parametrize("scenario", [True], indirect=True)
+def test_an_edit_follows_its_validated_reference_through_a_new_run_with_the_same_answer(scope, scenario):
+    """Chris, 2026-11-09: the edit follows the reference by its exact ID; only a different reference stops review."""
+    x = scenario
+    support = next(obj for obj in x.env.extracted_objects if obj.object_type == "SupportingTerm")
+    root = support.metadata["validation_history"]["target_id"]
+    with h.SessionLocal.begin() as db:
+        c.record_patch(db, scope, x.aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+            body=c.bind_patch_anchors(x.env, {"target_id": root, "object_id": support.object_id, "value_path": "name",
+                "action": "override", "contributor_completion_id": x.first,
+                "changes": [{"target_id": root, "path": "name", "present": True, "value": "Curator term label"}]}))
+    x.publish(x.first)
+    x.episode_fn()
+    answer = x.propose("ECO:VALIDATED")
+    x.publish(answer)  # A new run, same canonical reference, no Revalidate.
+    rerun = next(obj for obj in x.env.extracted_objects if obj.object_type == "SupportingTerm")
+    assert rerun.object_id == support.object_id
+    assert rerun.metadata["validation_history"]["target_id"] != root, "a new run materializes a new target"
+    assert rerun.payload["name"] == "Curator term label"
+    with h.SessionLocal() as db:
+        assert c.has_active_overlay(db, x.env, support.object_id, "name"), "a later edit keeps curator authority"
+    # Withdrawing the edit on the moved reference replaces the earlier edit, not runs beside it.
+    moved = rerun.metadata["validation_history"]["target_id"]
+    with h.SessionLocal.begin() as db:
+        c.record_patch(db, scope, x.aid, event_id=uuid4().hex, actor_id=scope.owner_id,
+            body=c.bind_patch_anchors(x.env, {"target_id": moved, "object_id": support.object_id, "value_path": "name",
+                "action": "withdraw_override", "contributor_completion_id": rerun.metadata["selected_contribution"]["completion_id"],
+                "changes": [{"target_id": moved, "path": "name", "present": True, "value": "ECO:VALIDATED"}]}))
+    x.publish(answer)
+    assert [obj.payload["name"] for obj in x.env.extracted_objects
+            if obj.object_type == "SupportingTerm"] == ["ECO:VALIDATED"]
+    with h.SessionLocal() as db:
+        assert not c.has_active_overlay(db, x.env, support.object_id, "name")
 
 
 def test_curator_overlay_follows_stable_element_through_reorder_and_retirement(scope):
@@ -314,7 +399,7 @@ def test_curator_overlay_follows_stable_element_through_reorder_and_retirement(s
     ids = env.extracted_objects[0].metadata["validation_history"]["elements"]["terms"]
     env.extracted_objects[0] = runtime.reorder_element_projection(env.extracted_objects[0], "terms", list(reversed(ids)))
     with h.SessionLocal.begin() as db:
-        current = c.apply_overlays(db, aid, env)
+        current = c.apply_overlays(db, aid, env, {})
     assert [term["label"] for term in current.extracted_objects[0].payload["terms"]] == ["b", "Curator A"]
     decision(scope, aid, ids[0], 0, "retire")
     with h.SessionLocal.begin() as db:
@@ -435,13 +520,13 @@ def test_overlay_sequence_and_retired_child_changes(scope):
     edit("terms[0].label", "older child edit")
     edit("terms", "newest whole list edit")
     with h.SessionLocal.begin() as db:
-        assert c.apply_overlays(db, aid, env).extracted_objects[0].payload["terms"][0]["label"] == "newest whole list edit"
+        assert c.apply_overlays(db, aid, env, {}).extracted_objects[0].payload["terms"][0]["label"] == "newest whole list edit"
     metadata, retired = runtime.retire_element_projection(obj.metadata, "terms[0]", payload=obj.payload)
     obj.metadata = metadata
     obj.payload["terms"].pop(0)
     decision(scope, aid, retired, 0, "retire")
     with h.SessionLocal.begin() as db:
-        assert c.apply_overlays(db, aid, env).extracted_objects[0].payload["terms"] == [{"label": "b"}]
+        assert c.apply_overlays(db, aid, env, {}).extracted_objects[0].payload["terms"] == [{"label": "b"}]
 
 
 def test_failed_intent_does_not_supersede_current_episode(scope, scenario):
@@ -676,7 +761,7 @@ def test_null_parent_then_new_leaf_cannot_resurrect_old_aggregate(scope, request
         c.record_revalidation_intent(runtime.CapturedArtifact(scope, aid), envelope=env, episode_id=ep,
             object_id="one", field_paths=requested, actor_id=scope.owner_id)
     with h.SessionLocal.begin() as db:
-        assert c.apply_overlays(db, aid, env).extracted_objects[0].payload["terms"][0]["label"] == "new"
+        assert c.apply_overlays(db, aid, env, {}).extracted_objects[0].payload["terms"][0]["label"] == "new"
 
 
 def test_queued_revalidation_cannot_authorize_edit_made_after_click(scope, scenario):

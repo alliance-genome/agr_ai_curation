@@ -31,8 +31,56 @@ def derived_finding(finding):
             or finding.code == FINDING_CODE)
 
 
+def with_resolvable_history(envelope, absent):
+    """Leave out the history events about objects that left this envelope by design.
+
+    absent holds the object identities that may leave: retired records and
+    validator-contributed references (see ``absent_by_design``). An event naming
+    any other object the envelope lacks is kept, so the integrity check stops on
+    it rather than hiding a lost object. The append-only envelope history table
+    keeps every event, and a curator's edit itself lives on as a curator value fact.
+    """
+    keys = {key for obj in envelope.extracted_objects for key in obj.ref_keys()}
+
+    def kept(event):
+        refs = (event.object_ref, event.field_ref.object_ref if event.field_ref is not None else None)
+        missing = [ref.ref_key() for ref in refs if ref is not None and ref.ref_key() not in keys]
+        return not missing or not all(value in absent for _, value in missing)
+
+    return envelope.model_copy(update={"history": [event for event in envelope.history if kept(event)]})
+
+
+def absent_by_design(db, artifact_id):
+    """Objects a source or rebuild may leave out: retired records and validator contributions.
+
+    Read from the object-level targets only (children of the artifact's root
+    target), never field or element targets. A record whose root was replaced by
+    a curator source edit stays present under its active successor, so its
+    identity is not absent. Any validator-contributed reference counts as absent
+    by design, so a contributed reference lost by a bug also loses its history
+    events from the envelope; the history table keeps them.
+    """
+    roots = select(ValidationFact.id).where(
+        ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target",
+        ValidationFact.parent_id.is_(None))
+    absent, present = set(), set()
+    for target in db.scalars(select(ValidationFact).where(
+            ValidationFact.artifact_id == artifact_id, ValidationFact.kind == "target",
+            ValidationFact.parent_id.in_(roots))):
+        body = store._shared_content(db, target)
+        if "object_ref" not in body:
+            continue
+        if body.get("origin", {}).get("kind") == "validator_contribution":
+            absent.add(body["object_ref"])
+        elif store._current(db, artifact_id, target.id)["active"]:
+            present.add(body["object_ref"])
+        else:
+            absent.add(body["object_ref"])
+    return absent - present
+
+
 def without_records(envelope, target_ids):
-    """Remove whole records and the findings that belong to them.
+    """Remove whole records and the findings and history events that belong to them.
 
     A finding belongs to the record its object or field reference names, by the
     envelope's own reference keys, so it leaves with that record.
@@ -45,11 +93,11 @@ def without_records(envelope, target_ids):
         refs = (finding.object_ref, finding.field_ref.object_ref if finding.field_ref is not None else None)
         return any(ref is not None and ref.ref_key() in removed for ref in refs)
 
-    return envelope.model_copy(update={
+    return with_resolvable_history(envelope.model_copy(update={
         "extracted_objects": [obj for obj in envelope.extracted_objects
                               if obj.metadata["validation_history"]["target_id"] not in target_ids],
         "validation_findings": [finding for finding in envelope.validation_findings if not owned(finding)],
-    })
+    }), {value for _, value in removed})
 
 
 def source_envelope_in_transaction(db, scope, artifact_id, envelope):
@@ -58,6 +106,8 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
     The source holds source values and the findings it owns. Validator-contributed
     objects and every derived finding (see ``derived_finding``) are left out; the
     selected rebuild derives the selected answers' objects and findings again.
+    History events about the objects left out leave with them (see
+    ``with_resolvable_history``).
     """
     artifact = store._artifact(db, artifact_id, scope)
     store.prime_artifact(db, artifact_id)
@@ -188,8 +238,9 @@ def source_envelope_in_transaction(db, scope, artifact_id, envelope):
                 if not any(item.get("evidence_record_id") == record["evidence_record_id"] for item in records):
                     records.append(resolved)
     findings = [finding for finding in envelope.validation_findings if not derived_finding(finding)]
-    return envelope.model_copy(update={"extracted_objects": objects, "validation_findings": findings,
-                                       "metadata": metadata})
+    return with_resolvable_history(envelope.model_copy(update={
+        "extracted_objects": objects, "validation_findings": findings, "metadata": metadata}),
+        absent_by_design(db, artifact_id))
 
 
 def read_dispatch_source(binding, envelope):
@@ -217,6 +268,13 @@ def pin_publication_in_transaction(
     ref = envelope.metadata.get("validation_history", {})
     if ref.get("artifact_id") != artifact_id:
         raise store.HistoryConflict("Published projection has a different artifact")
+    # Every publication (review decisions, a source save, a curator checkpoint)
+    # passes here before anything is written: a projection that breaks the
+    # envelope contract is the review system stop, never a stored checkpoint.
+    from src.lib.validation_review.validator_adapter import require_source_integrity
+    require_source_integrity(lambda: DomainEnvelope.model_validate(envelope.model_dump(mode="json")),
+                             artifact_id=artifact_id, episode_id=manifest["episode_id"],
+                             stage="published_projection")
     from .record_lifecycle import counts
     envelope = envelope.model_copy(update={"metadata": {**envelope.metadata,
         "record_counts": counts(db, artifact_id, manifest["blockers"])}})
@@ -287,8 +345,15 @@ def read_published_projection_in_transaction(db, scope, reference, *, current=Fa
     return projection, deepcopy(manifest)
 
 
-def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, domain_pack, profile_context=None, apply_curator=True):
-    """Replay exact selected recipes onto immutable source values."""
+def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, domain_pack, profile_context=None,
+                              apply_curator=True, history):
+    """Replay exact selected recipes onto immutable source values.
+
+    history is the checkpoint's history: envelope.history when envelope is the
+    checkpoint, and the checkpoint's own when envelope is a source built from it (a
+    source leaves out the events about the objects it leaves out). The result keeps
+    the events whose objects it holds.
+    """
     from dataclasses import replace
     from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
     from src.lib.domain_packs.materialization import (
@@ -335,6 +400,9 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
         return found[0]
 
     items = []
+    # The selected answers by the exact validator target they answer; curator
+    # edits on a contributed reference read it (see curator_authority.apply_overlays).
+    selected_answers = {}
     # Immutable plan authority is shared only within this rebuild. Current
     # source, episode, receipt and binding checks still run for every completion.
     plans = {}
@@ -344,6 +412,7 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
             db, artifact_id, completion.parent_id, kind="attempt",
         )
         attempt = store._content(db, attempt_fact)
+        selected_answers.setdefault(attempt["input"]["target_id"], set()).add(completion_id)
         recipe = db.scalar(select(ValidationFact).where(
             ValidationFact.artifact_id == artifact_id,
             ValidationFact.operation_id == "candidate:" + completion_id,
@@ -460,14 +529,14 @@ def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, dom
     from .curator_authority import apply_overlays
     # Replaying a recipe derives values, not a second execution/history event.
     # Immutable attempts and publication facts already record both operations.
-    working = working.model_copy(update={"history": deepcopy(envelope.history)})
+    working = working.model_copy(update={"history": deepcopy(history)})
     from .assessments import project_assessments
     working = project_assessments(db, artifact_id, working, manifest)
-    projected = apply_overlays(db, artifact_id, working) if apply_curator else working
+    projected = apply_overlays(db, artifact_id, working, selected_answers) if apply_curator else working
     if profile_context is not None:
         for obj in projected.extracted_objects:
             profile_context.profile.require_attributes(obj.payload["attributes"])
-    return projected
+    return with_resolvable_history(projected, absent_by_design(db, artifact_id))
 
 
 def publish_decisions(scope, *, checkpoint_request, episode_id, operation_id, actor, entries):
@@ -510,7 +579,7 @@ def publish_decisions_in_transaction(db, scope, *, checkpoint_request, episode_i
     manifest = selections.manifest_in_transaction(db, scope, artifact_id, episode_id=episode_id)
     projected = rebuild_selected_envelope(
         db, scope, artifact_id, envelope=envelope, manifest=manifest,
-        domain_pack=pack, profile_context=profile,
+        domain_pack=pack, profile_context=profile, history=envelope.history,
     )
     projected = pin_publication_in_transaction(
         db, scope, artifact_id, operation_id=operation_id,
@@ -611,7 +680,7 @@ def republish_curator_checkpoint(db, envelope, *, revision, authenticated_groups
     profile = resolve_envelope_profile_validation(envelope, pack, db=db,
         user_id=scope.owner_id, active_group_ids=authenticated_groups or ())
     projected = rebuild_selected_envelope(db, scope, artifact.id, envelope=envelope,
-        manifest=manifest, domain_pack=pack, profile_context=profile)
+        manifest=manifest, domain_pack=pack, profile_context=profile, history=envelope.history)
     return pin_publication_in_transaction(db, scope, artifact.id,
         operation_id=f"curator-checkpoint:{envelope.envelope_id}:{revision}",
         manifest=manifest, envelope=projected, envelope_revision=revision)
@@ -621,14 +690,20 @@ def read_underlying_curator_value(scope, envelope, *, object_id, value_path, ide
     """Resolve the current selected value without replaying curator overlays."""
     from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
     from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
-    from .curator_authority import active_overlays, _overlap, anchored_path, rebind_output_path
+    from .curator_authority import (active_overlays, _overlap, anchored_path, overlay_path, overlay_refs,
+                                    projection_refs, rebind_output_path)
     member_paths = [f"{value_path}.{key}" if value_path else key for key in identity_keys]
     artifact_id = envelope.metadata["validation_history"]["artifact_id"]
     with store.SessionLocal.begin() as db:
         selections._lock_artifact(db, scope, artifact_id)
-        object_refs = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
-                       for obj in envelope.extracted_objects}
-        if not any(body["object_id"] == object_id and any(_overlap(anchored_path(object_refs[body["target_id"]], body["anchor"]), member) for member in member_paths)
+        by_target, by_object = projection_refs(envelope)
+
+        def edits_member(body):
+            refs = overlay_refs(by_target, by_object, body)
+            return refs is not None and any(
+                _overlap(overlay_path(refs, body, body["anchor"], body["value_path"]), member) for member in member_paths)
+
+        if not any(body["object_id"] == object_id and edits_member(body)
                    for _, body in active_overlays(db, artifact_id)):
             return None
         from .episodes import latest_effective_episode
@@ -669,7 +744,8 @@ def read_underlying_curator_value(scope, envelope, *, object_id, value_path, ide
         profile = resolve_envelope_profile_validation(envelope, pack, db=db, user_id=scope.owner_id,
             active_group_ids=authenticated_groups)
         result = rebuild_selected_envelope(db, scope, artifact_id, envelope=envelope,
-            manifest=manifest, domain_pack=pack, profile_context=profile, apply_curator=False)
+            manifest=manifest, domain_pack=pack, profile_context=profile, apply_curator=False,
+            history=envelope.history)
         obj = next((obj for obj in result.extracted_objects if object_id in {obj.object_id, obj.pending_ref_id}), None)
         if obj is None:
             return {}

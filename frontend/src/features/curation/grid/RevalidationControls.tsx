@@ -6,6 +6,7 @@ import { controlReview, fetchCandidateReviewOperation, fetchSessionReviewOperati
 // reason reads as its own words.
 const STOP_WORDING: Record<string, string> = {
   source_projection_invalid: 'a system error stopped a save before it changed anything, and it was reported',
+  curator_revalidation_required: 'a different validator answer would replace your edit on a validated reference; use Revalidate on that record if the new answer should replace your edit',
 }
 const reasonText = (reason: string) => STOP_WORDING[reason] ?? reason.replaceAll('_', ' ')
 
@@ -101,7 +102,7 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
     <Stack direction="row" spacing={1}>
       <Button disabled={!loaded || busy || Boolean(active)} onClick={() => void start()}>{request.current ? 'Retry this request' : candidateId ? 'Revalidate record' : 'Revalidate all records'}</Button>
       {active && <Button disabled={busy} onClick={() => void control('cancel')}>Stop revalidation</Button>}
-      {operation?.state === 'needs_review' && !['record_or_access_changed', 'no_eligible_records', 'preparation_abandoned', 'source_projection_invalid'].includes(operation.outcome?.reason ?? '') && <Button disabled={busy} onClick={() => void control('resume')}>Continue existing round</Button>}
+      {operation?.state === 'needs_review' && !['record_or_access_changed', 'no_eligible_records', 'preparation_abandoned', 'source_projection_invalid', 'curator_revalidation_required'].includes(operation.outcome?.reason ?? '') && <Button disabled={busy} onClick={() => void control('resume')}>Continue existing round</Button>}
     </Stack>
   </Stack>
 }
