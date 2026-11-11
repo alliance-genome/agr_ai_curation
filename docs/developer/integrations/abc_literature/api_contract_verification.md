@@ -279,8 +279,14 @@ Verified and implemented contract:
 - `show_all` is the reference-level artifact refresh/listing endpoint.
 - `download_file/{referencefile_id}` is the authoritative byte download and
   final server-side access gate.
-- `reference/external_lookup/{external_curie}` is the first-cut PMID lookup
-  path.
+- A PMID import calls `reference/external_lookup/{external_curie}`, then
+  `GET /reference/{curie}` with the returned `reference_curie`, because only
+  the reference record has cross-references. If the lookup returns no
+  `reference_curie`, ABC does not hold the paper and no second call is made.
+- The stored `external_ids` come from the reference's `cross_references`:
+  `cross_references` lists the curies of non-obsolete entries; `pmid`, `doi`
+  and `pmcid` hold the bare ID after the curie's `:` (for example `23970418`)
+  for entries whose `curie_prefix` is `PMID`, `DOI` or `PMCID`.
 - `reference/{curie_or_reference_id}` is the first-cut provider-native
   AGRKB/reference lookup path.
 - `conversion_request/{curie_or_reference_id}` is allowed only for an existing

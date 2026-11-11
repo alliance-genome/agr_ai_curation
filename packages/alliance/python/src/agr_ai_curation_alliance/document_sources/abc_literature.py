@@ -728,8 +728,10 @@ def _extract_external_ids(
 
     ABC reference records carry PMID, DOI and PMCID only as cross-references
     (``{"curie": "PMID:123", "curie_prefix": "PMID", "is_obsolete": ...}``).
-    Obsolete entries are skipped. ``pmid``/``doi``/``pmcid`` hold the local
-    identifier after the prefix (``"123"``, ``"10.1/x"``). ABC allows at most
+    Obsolete entries are skipped. ``pmid``/``doi``/``pmcid`` are chosen by
+    ``curie_prefix`` and hold the local identifier after the curie's first
+    ``:`` (``"123"``, ``"10.1/x"``); an entry without ``curie_prefix`` is
+    listed under ``cross_references`` only. ABC allows at most
     one current cross-reference per prefix on a reference; if a payload ever
     carries more than one, no identifier is chosen for that prefix and the
     curies stay listed under ``cross_references``.
@@ -748,13 +750,10 @@ def _extract_external_ids(
         if curie is None:
             continue
         curies.append(curie)
-        prefix, separator, local_id = curie.partition(":")
-        if not separator or not local_id.strip():
-            continue
-        key = _CROSS_REFERENCE_PREFIX_KEYS.get(
-            _first_string(item, "curie_prefix") or prefix.strip()
-        )
-        if key is not None:
+        curie_prefix = _first_string(item, "curie_prefix")
+        key = _CROSS_REFERENCE_PREFIX_KEYS.get(curie_prefix) if curie_prefix else None
+        _, separator, local_id = curie.partition(":")
+        if key is not None and separator and local_id.strip():
             local_ids_by_key.setdefault(key, []).append(local_id.strip())
 
     external_ids: dict[str, str | Sequence[str]] = {}

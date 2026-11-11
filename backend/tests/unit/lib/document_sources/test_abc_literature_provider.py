@@ -660,7 +660,7 @@ async def test_show_reference_reads_identifiers_from_abc_cross_references() -> N
 
 
 @pytest.mark.asyncio
-async def test_cross_reference_without_curie_prefix_uses_curie_structure() -> None:
+async def test_cross_reference_without_curie_prefix_lists_curie_only() -> None:
     fake_client = FakeABCLiteratureClient()
     entry = _abc_cross_reference(1, "PMID:12345", "PMID")
     del entry["curie_prefix"]
@@ -673,10 +673,7 @@ async def test_cross_reference_without_curie_prefix_uses_curie_structure() -> No
 
     reference = await provider.resolve_reference("AGRKB:404")
 
-    assert reference.external_ids == {
-        "pmid": "12345",
-        "cross_references": ["PMID:12345"],
-    }
+    assert reference.external_ids == {"cross_references": ["PMID:12345"]}
 
 
 @pytest.mark.asyncio

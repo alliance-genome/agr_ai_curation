@@ -2144,8 +2144,7 @@ def _document_intent_payload(document: PDFDocument) -> dict[str, Any]:
     """Describe the document for a retry fingerprint, without fields that may change later.
 
     ``pmid`` and ``doi`` are display-only source identifiers. They are held at
-    ``None`` (their value before the workspace showed them) so the payload, and
-    therefore every existing fingerprint, stays the same.
+    ``None`` so the fingerprint does not depend on them.
     """
 
     return (
