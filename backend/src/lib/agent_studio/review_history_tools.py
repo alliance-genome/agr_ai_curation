@@ -26,8 +26,8 @@ def inspect_history(*, session_factory, user_auth_sub, envelope_id, action="summ
             ref = row.envelope_json.get("metadata", {}).get("validation_history")
             if ref is None:
                 # Do not disclose existence or history availability before checking visibility.
-                from .domain_envelope_tools import _envelope_visible_to_user
-                if not _envelope_visible_to_user(db, row=row, user_auth_sub=user_auth_sub):
+                from src.lib.curation_workspace.session_ownership import envelope_visible_to
+                if not envelope_visible_to(db, envelope_id, user_auth_sub):
                     raise store.HistoryAccessError("History source unavailable")
                 raise store.HistoryConflict("Historical validation history is unavailable")
             scope = store.HistoryScope(user_auth_sub,

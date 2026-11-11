@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import String, and_, case, exists, func, or_, select
+from sqlalchemy import String, case, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -25,6 +25,7 @@ from src.lib.curation_workspace.session_common import (
     _normalize_uuid,
     _ordered_clause,
 )
+from src.lib.curation_workspace.session_ownership import owned_by
 from src.lib.curation_workspace.session_loading import (
     CANDIDATE_DETAIL_LOAD_OPTIONS,
     DETAIL_LOAD_OPTIONS,
@@ -52,7 +53,6 @@ from src.schemas.curation_workspace import (
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
     CurationFlowRunSummary,
-    CurationInventoryScope,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
     CurationPageInfo,
@@ -116,39 +116,19 @@ EVIDENCE_COUNT_SORT_ORDER = (
     .scalar_subquery()
 )
 
-def _apply_inventory_scope(
+def _apply_owner_scope(
     statement: Any,
-    filters: CurationSessionFilters,
     *,
     current_user_id: str | None,
 ) -> Any:
-    if filters.inventory_scope == CurationInventoryScope.SHOW_ALL:
-        return statement
-
-    if filters.inventory_scope == CurationInventoryScope.MY_ORGANIZATION:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "The my_organization inventory scope is not available until "
-                "review sessions persist organization or group metadata."
-            ),
-        )
-
+    # Inventory is always the caller's own sessions (ALL-1547). The request's
+    # inventory_scope and curator_ids are accepted but no longer applied.
     if not current_user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User identifier is required for my_inventory scope",
+            detail="User identifier is required to list review sessions",
         )
-
-    return statement.where(
-        or_(
-            ReviewSessionModel.assigned_curator_id == current_user_id,
-            and_(
-                ReviewSessionModel.assigned_curator_id.is_(None),
-                ReviewSessionModel.created_by_id == current_user_id,
-            ),
-        )
-    )
+    return statement.where(owned_by(current_user_id))
 
 
 def _apply_filters(
@@ -157,20 +137,13 @@ def _apply_filters(
     *,
     current_user_id: str | None,
 ) -> Any:
-    statement = _apply_inventory_scope(
-        statement,
-        filters,
-        current_user_id=current_user_id,
-    )
+    statement = _apply_owner_scope(statement, current_user_id=current_user_id)
 
     if filters.statuses:
         statement = statement.where(ReviewSessionModel.status.in_(filters.statuses))
 
     if filters.adapter_keys:
         statement = statement.where(ReviewSessionModel.adapter_key.in_(filters.adapter_keys))
-
-    if filters.curator_ids:
-        statement = statement.where(ReviewSessionModel.assigned_curator_id.in_(filters.curator_ids))
 
     if filters.flow_run_id:
         statement = statement.where(ReviewSessionModel.flow_run_id == filters.flow_run_id)

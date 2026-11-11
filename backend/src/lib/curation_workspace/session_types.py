@@ -148,7 +148,6 @@ class ReusablePreparedSessionContext:
     """Existing unreviewed session metadata that is safe to refresh in place."""
 
     session_id: str
-    created_by_id: str | None = None
     assigned_curator_id: str | None = None
     notes: str | None = None
     tags: list[str] = field(default_factory=list)

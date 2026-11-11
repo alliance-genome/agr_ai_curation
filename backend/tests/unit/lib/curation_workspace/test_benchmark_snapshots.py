@@ -225,6 +225,29 @@ def test_snapshot_access_fails_closed_for_another_curator():
     assert (exc_info.value.status_code, exc_info.value.error) == (404, "snapshot_not_found")
 
 
+@pytest.mark.parametrize(
+    ("assigned_curator_id", "created_by_id"),
+    [("curator-1", "curator-2"), ("curator-1", None), (None, None)],
+)
+def test_snapshot_access_requires_the_session_creator(assigned_curator_id, created_by_id):
+    class _AssignedOnlyDb(_SnapshotDb):
+        def get(self, model, _identity):
+            return SimpleNamespace(
+                assigned_curator_id=assigned_curator_id, created_by_id=created_by_id
+            )
+
+    with pytest.raises(module.CurationBenchmarkSnapshotError) as exc_info:
+        module.create_benchmark_snapshot(
+            _AssignedOnlyDb(envelope=_envelope_row()),
+            session_id=uuid4(),
+            envelope_id="env-1",
+            expected_revision=7,
+            current_user_id="curator-1",
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.error) == (404, "snapshot_not_found")
+
+
 def test_destination_registry_rejects_caller_selected_or_insecure_urls(monkeypatch):
     monkeypatch.setattr(
         module,

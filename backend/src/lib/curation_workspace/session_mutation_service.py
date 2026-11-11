@@ -228,19 +228,6 @@ def update_session(
         session.notes = request.notes
         changed = True
 
-    if "curator_id" in request.model_fields_set and request.curator_id != session.assigned_curator_id:
-        session.assigned_curator_id = request.curator_id
-        changed = True
-        if action_log_row is None:
-            action_log_row = SessionActionLogModel(
-                session_id=session.id,
-                action_type=CurationActionType.SESSION_ASSIGNED,
-                actor_type=CurationActorType.USER,
-                actor=_actor_claims_payload(actor_claims),
-                occurred_at=now,
-                message="Session curator updated",
-            )
-
     if "status" in request.model_fields_set and request.status != session.status:
         previous_status = session.status
         session.status = request.status

@@ -728,6 +728,55 @@ def test_resolved_object_id_accepts_pending_ref_id():
     assert domain_tools._resolved_object_id("missing-ref", object_id_by_ref) == "missing-ref"
 
 
+def test_domain_envelope_tools_show_only_sessions_the_curator_created(db_session_factory):
+    seed_db = db_session_factory()
+    try:
+        document = _persist_document(seed_db)
+        assigned_only = _persist_review_session(
+            seed_db, document_id=document.id, curator_id="curator-2"
+        )
+        assigned_only.assigned_curator_id = "curator-1"
+        ownerless = _persist_review_session(seed_db, document_id=document.id, curator_id="curator-2")
+        ownerless.created_by_id = None
+        ownerless.assigned_curator_id = None
+        _persist_domain_envelope(
+            seed_db, envelope_id="env-assigned-only", document_id=document.id,
+            session_id=assigned_only.id,
+        )
+        _persist_domain_envelope(
+            seed_db, envelope_id="env-ownerless", document_id=document.id, session_id=ownerless.id,
+        )
+        seed_db.commit()
+        assigned_only_id = str(assigned_only.id)
+    finally:
+        seed_db.close()
+
+    listing = domain_tools.list_domain_envelopes(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        document_id=str(document.id),
+        limit=10,
+    )
+    by_session = domain_tools.list_domain_envelopes(
+        session_factory=db_session_factory,
+        user_auth_sub="curator-1",
+        session_id=assigned_only_id,
+        limit=10,
+    )
+
+    assert listing["success"] is True and listing["envelopes"] == []
+    assert by_session == {
+        "success": False,
+        "error": f"Curation review session {assigned_only_id} was not found.",
+    }
+    for envelope_id in ("env-assigned-only", "env-ownerless"):
+        assert domain_tools.get_domain_envelope_state(
+            session_factory=db_session_factory,
+            user_auth_sub="curator-1",
+            envelope_id=envelope_id,
+        ) == {"success": False, "error": f"Domain envelope {envelope_id} was not found."}
+
+
 def test_sessionless_domain_envelope_visibility_requires_visible_candidate_session(
     db_session_factory,
 ):
@@ -1614,11 +1663,7 @@ def test_export_submission_readiness_replays_stale_revision_pin_for_blockers(mon
                 ],
             }
 
-    monkeypatch.setattr(
-        domain_tools,
-        "_session_visible_to_user",
-        lambda _db, **_kwargs: True,
-    )
+    monkeypatch.setattr(domain_tools, "session_is_owned", lambda *_args: True)
     monkeypatch.setattr(
         domain_tools,
         "_load_session_for_validation",
@@ -1689,11 +1734,7 @@ def test_export_submission_readiness_is_not_ready_without_candidates(monkeypatch
         def close(self):
             pass
 
-    monkeypatch.setattr(
-        domain_tools,
-        "_session_visible_to_user",
-        lambda _db, **_kwargs: True,
-    )
+    monkeypatch.setattr(domain_tools, "session_is_owned", lambda *_args: True)
     monkeypatch.setattr(
         domain_tools,
         "_load_session_for_validation",
@@ -1751,7 +1792,7 @@ def test_large_readiness_is_authoritative_then_pages_candidates_and_blockers(mon
             }
 
     candidates = [SimpleNamespace(id=f"candidate-{index}") for index in range(1000)]
-    monkeypatch.setattr(domain_tools, "_session_visible_to_user", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(domain_tools, "session_is_owned", lambda *_args: True)
     monkeypatch.setattr(
         domain_tools,
         "_load_session_for_validation",
@@ -1836,7 +1877,7 @@ def test_readiness_partial_revision_pin_is_completed_for_every_selected_envelope
             return {"candidate_id": self.candidate_id, "ready": True, "blockers": []}
 
     candidates = [SimpleNamespace(id="candidate-1"), SimpleNamespace(id="candidate-2")]
-    monkeypatch.setattr(domain_tools, "_session_visible_to_user", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(domain_tools, "session_is_owned", lambda *_args: True)
     monkeypatch.setattr(
         domain_tools,
         "_load_session_for_validation",

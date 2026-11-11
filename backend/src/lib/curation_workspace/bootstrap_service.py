@@ -433,6 +433,7 @@ async def bootstrap_document_session(
         adapter_key=adapter_key,
         flow_run_id=extraction_result.flow_run_id,
         prep_extraction_result_id=str(extraction_result.id),
+        owner_id=current_user_id,
     )
 
     prepared_at = datetime.now(timezone.utc)
@@ -448,9 +449,7 @@ async def bootstrap_document_session(
                 trace_id=extraction_result.trace_id,
                 user_id=current_user_id,
                 active_groups=active_groups,
-                created_by_id=(
-                    reusable_session.created_by_id if reusable_session else current_user_id
-                ),
+                created_by_id=current_user_id,
                 assigned_curator_id=(
                     request.curator_id
                     if request.curator_id is not None
@@ -503,6 +502,7 @@ def get_document_bootstrap_availability(
             db,
             document_id=document_id,
             request=request,
+            current_user_id=current_user_id,
         )
     except HTTPException as exc:
         if exc.status_code == status.HTTP_404_NOT_FOUND:
@@ -597,11 +597,13 @@ def _select_bootstrap_extraction_result(
     *,
     document_id: str,
     request: CurationDocumentBootstrapRequest,
+    current_user_id: str,
 ) -> ExtractionResultModel:
     statement = (
         select(ExtractionResultModel)
         .where(ExtractionResultModel.document_id == _parse_uuid(document_id, field_name="document_id"))
         .where(ExtractionResultModel.agent_key == CURATION_PREP_AGENT_ID)
+        .where(ExtractionResultModel.user_id == current_user_id)
         .order_by(ExtractionResultModel.created_at.desc(), ExtractionResultModel.id.desc())
     )
 
@@ -677,6 +679,7 @@ async def _ensure_bootstrap_extraction_result(
             db,
             document_id=document_id,
             request=request,
+            current_user_id=current_user_id,
         )
     except HTTPException as exc:
         if exc.status_code != status.HTTP_404_NOT_FOUND:
@@ -731,6 +734,7 @@ async def _ensure_bootstrap_extraction_result(
             db,
             document_id=document_id,
             request=request,
+            current_user_id=current_user_id,
         )
 
     origin_session_id = _normalized_optional_str(request.origin_session_id)
@@ -797,6 +801,7 @@ async def _ensure_bootstrap_extraction_result(
         db,
         document_id=document_id,
         request=request,
+        current_user_id=current_user_id,
     )
 
 

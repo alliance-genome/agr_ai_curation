@@ -163,6 +163,7 @@ def test_select_bootstrap_extraction_result_honors_flow_run_id(db_session):
         db_session,
         document_id=str(document.id),
         request=CurationDocumentBootstrapRequest(flow_run_id="flow-1"),
+        current_user_id="user-1",
     )
 
     assert selected.id == older_matching.id
@@ -189,6 +190,7 @@ def test_select_bootstrap_extraction_result_honors_origin_session_id(db_session)
         db_session,
         document_id=str(document.id),
         request=CurationDocumentBootstrapRequest(origin_session_id="chat-session-1"),
+        current_user_id="user-1",
     )
 
     assert selected.id == older_matching.id
@@ -218,6 +220,7 @@ def test_select_bootstrap_extraction_result_rejects_ambiguous_multi_adapter_scop
             db_session,
             document_id=str(document.id),
             request=CurationDocumentBootstrapRequest(),
+            current_user_id="user-1",
         )
 
     assert exc.value.status_code == 409
@@ -269,7 +272,7 @@ def test_get_document_bootstrap_availability_returns_true_for_scoped_flow_result
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: (_ for _ in ()).throw(
+        lambda db, *, document_id, request, current_user_id: (_ for _ in ()).throw(
             module.HTTPException(status_code=404, detail="missing")
         ),
     )
@@ -296,7 +299,7 @@ def test_get_document_bootstrap_availability_returns_true_for_scoped_flow_result
 def test_get_document_bootstrap_availability_returns_true_when_chat_prep_can_run(monkeypatch):
     monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
 
-    def _fake_select_bootstrap_extraction_result(db, *, document_id, request):
+    def _fake_select_bootstrap_extraction_result(db, *, document_id, request, current_user_id):
         raise module.HTTPException(status_code=404, detail="missing")
 
     captured: dict[str, object] = {}
@@ -350,7 +353,7 @@ def test_get_document_bootstrap_availability_returns_false_when_chat_prep_docume
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: (_ for _ in ()).throw(
+        lambda db, *, document_id, request, current_user_id: (_ for _ in ()).throw(
             module.HTTPException(status_code=404, detail="missing")
         ),
     )
@@ -385,7 +388,7 @@ def test_get_document_bootstrap_availability_returns_false_when_chat_prep_flow_r
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: (_ for _ in ()).throw(
+        lambda db, *, document_id, request, current_user_id: (_ for _ in ()).throw(
             module.HTTPException(status_code=404, detail="missing")
         ),
     )
@@ -559,7 +562,7 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: extraction_result,
+        lambda db, *, document_id, request, current_user_id: extraction_result,
     )
     monkeypatch.setattr(module, "_replayable_prep_output", lambda extraction_result: object())
     monkeypatch.setattr(module, "_resolved_adapter_key", lambda extraction_result: "reference_adapter")
@@ -660,7 +663,7 @@ async def test_bootstrap_document_session_replays_envelope_refs_into_pipeline(mo
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: extraction_result,
+        lambda db, *, document_id, request, current_user_id: extraction_result,
     )
     monkeypatch.setattr(module, "find_reusable_prepared_session", lambda *args, **kwargs: None)
 
@@ -857,7 +860,7 @@ async def test_ensure_bootstrap_extraction_result_runs_chat_prep_when_missing(mo
     prepared_record = SimpleNamespace(id=uuid4(), adapter_key="gene")
     captured: dict[str, object] = {}
 
-    def _fake_select_bootstrap_extraction_result(db, *, document_id, request):
+    def _fake_select_bootstrap_extraction_result(db, *, document_id, request, current_user_id):
         selection_calls["count"] += 1
         if selection_calls["count"] == 1:
             raise module.HTTPException(status_code=404, detail="missing")
@@ -916,7 +919,7 @@ async def test_ensure_bootstrap_extraction_result_prepares_scoped_flow_result(mo
     )
     captured: dict[str, object] = {}
 
-    def _fake_select_bootstrap_extraction_result(db, *, document_id, request):
+    def _fake_select_bootstrap_extraction_result(db, *, document_id, request, current_user_id):
         selection_calls["count"] += 1
         if selection_calls["count"] == 1:
             raise module.HTTPException(status_code=404, detail="missing")
@@ -987,7 +990,7 @@ async def test_ensure_bootstrap_extraction_result_sanitizes_validation_errors(mo
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: (_ for _ in ()).throw(
+        lambda db, *, document_id, request, current_user_id: (_ for _ in ()).throw(
             module.HTTPException(status_code=404, detail="missing")
         ),
     )
@@ -1023,7 +1026,7 @@ async def test_ensure_bootstrap_extraction_result_sanitizes_chat_prep_errors(mon
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: (_ for _ in ()).throw(
+        lambda db, *, document_id, request, current_user_id: (_ for _ in ()).throw(
             module.HTTPException(status_code=404, detail="missing")
         ),
     )
@@ -1069,7 +1072,7 @@ async def test_ensure_bootstrap_extraction_result_does_not_run_chat_prep_when_se
     monkeypatch.setattr(
         module,
         "_select_bootstrap_extraction_result",
-        lambda db, *, document_id, request: (_ for _ in ()).throw(
+        lambda db, *, document_id, request, current_user_id: (_ for _ in ()).throw(
             module.HTTPException(status_code=404, detail="missing")
         ),
     )
