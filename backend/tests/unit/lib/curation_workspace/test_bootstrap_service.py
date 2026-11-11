@@ -592,15 +592,14 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
 
     response = await module.bootstrap_document_session(
         "document-1",
-        CurationDocumentBootstrapRequest(origin_session_id="chat-session-1", curator_id="someone-else"),
+        CurationDocumentBootstrapRequest(origin_session_id="chat-session-1"),
         current_user_id="user-1",
         db=fake_db,
     )
 
     assert response.created is True
     assert response.session == session_payload
-    # A request never names an assignee or owner (ALL-1547).
-    assert pipeline_request["request"].assigned_curator_id is None
+    # The caller is the session owner (ALL-1547).
     assert pipeline_request["request"].created_by_id == "user-1"
     assert pipeline_request["db"] is fake_db
     assert detail_request == {"db": fake_db, "session_id": "session-123"}

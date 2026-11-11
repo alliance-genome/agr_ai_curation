@@ -126,7 +126,6 @@ from src.schemas.curation_workspace import (
     CurationFlowRunListResponse,
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
-    CurationInventoryScope,
     CurationManualCandidateCreateRequest,
     CurationManualCandidateCreateResponse,
     CurationNextSessionRequest,
@@ -237,13 +236,8 @@ def _date_range(from_at: datetime | None, to_at: datetime | None) -> CurationDat
 
 
 def _session_filters_from_query(
-    inventory_scope: CurationInventoryScope = Query(
-        default=CurationInventoryScope.MY_INVENTORY,
-        alias="inventory_scope",
-    ),
     statuses: Annotated[list[CurationSessionStatus] | None, Query(alias="status")] = None,
     adapter_keys: Annotated[list[str] | None, Query(alias="adapter_key")] = None,
-    curator_ids: Annotated[list[str] | None, Query(alias="curator_id")] = None,
     tags: Annotated[list[str] | None, Query(alias="tag")] = None,
     flow_run_id: str | None = Query(default=None),
     origin_session_id: str | None = Query(default=None),
@@ -256,10 +250,8 @@ def _session_filters_from_query(
     last_worked_to: datetime | None = Query(default=None, alias="last_worked_to"),
 ) -> CurationSessionFilters:
     return CurationSessionFilters(
-        inventory_scope=inventory_scope,
         statuses=statuses or [],
         adapter_keys=adapter_keys or [],
-        curator_ids=curator_ids or [],
         tags=tags or [],
         flow_run_id=flow_run_id,
         origin_session_id=origin_session_id,

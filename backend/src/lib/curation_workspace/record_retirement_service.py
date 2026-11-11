@@ -92,7 +92,9 @@ def materialize_restored_candidate(db, envelope, revision, target_id, *, groups)
     if db.scalar(select(CurationCandidate.id).where(CurationCandidate.envelope_id == envelope.envelope_id,
                                                    CurationCandidate.object_id == object_id)) is not None:
         return
-    # Reached only from ``restore`` after ``binding`` checked the owner.
+    # Called by the validator adapter while it publishes a recorded
+    # restoration fact for the history scope's owner; no curator request
+    # reaches this load directly.
     session = load_session_for_system(db, row.session_id)
     if has_no_review_row(db, envelope, obj, active_group_ids=groups, user_id=session.created_by_id):
         return

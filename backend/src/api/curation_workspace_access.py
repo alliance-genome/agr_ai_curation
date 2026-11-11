@@ -54,20 +54,18 @@ def require_current_user_id(user: dict) -> str:
 
 
 def _checked(db: Session, check: Callable[[], Any]) -> None:
-    """Run an identifier-only ownership query, then end the read it opened.
+    """Run an identifier-only ownership query, then end its read.
 
-    The guard loads no rows. When the guard's query began the session's
-    transaction, it is ended here so a route that awaits other work does not
-    hold it open; the handler starts its own. A transaction that was already
-    open belongs to its owner and is left alone.
+    ``get_db`` gives each request its own session and the guard runs before
+    the handler, so the only open work is this read. Ending it means a route
+    that awaits other work does not hold a transaction; the handler starts
+    its own. The guard loads no rows.
     """
 
-    opened_here = not db.in_transaction()
     try:
         check()
     finally:
-        if opened_here and db.in_transaction():
-            db.rollback()
+        db.rollback()
 
 
 def owned_session_in_path(

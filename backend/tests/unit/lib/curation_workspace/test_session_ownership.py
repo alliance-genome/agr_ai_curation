@@ -15,7 +15,6 @@ from src.lib.curation_workspace.bootstrap_service import _select_bootstrap_extra
 from src.lib.curation_workspace.prepared_session_service import find_reusable_prepared_session
 from src.schemas.curation_workspace import (
     CurationDocumentBootstrapRequest,
-    CurationInventoryScope,
     CurationNextSessionRequest,
     CurationSessionFilters,
     CurationSessionListRequest,
@@ -45,13 +44,8 @@ def world(ownership_db):
     other = add_user(ownership_db, OTHER)
     document = add_document(ownership_db, owner=owner)
     other_document = add_document(ownership_db, owner=other)
-    # Assigned to the other curator: assignment no longer grants anything.
-    mine = add_session(
-        ownership_db, document_id=document.id, created_by_id=OWNER, assigned_curator_id=OTHER
-    )
-    theirs = add_session(
-        ownership_db, document_id=document.id, created_by_id=OTHER, assigned_curator_id=OWNER
-    )
+    mine = add_session(ownership_db, document_id=document.id, created_by_id=OWNER)
+    theirs = add_session(ownership_db, document_id=document.id, created_by_id=OTHER)
     ownerless = add_session(ownership_db, document_id=document.id, created_by_id=None)
     ownership_db.commit()
     return {
@@ -260,18 +254,9 @@ def test_document_check_requires_the_callers_own_curator_document(world):
     assert unknown_user.value.status_code == 404
 
 
-@pytest.mark.parametrize(
-    "scope",
-    [
-        CurationInventoryScope.MY_INVENTORY,
-        CurationInventoryScope.SHOW_ALL,
-        CurationInventoryScope.MY_ORGANIZATION,
-    ],
-)
-def test_inventory_queries_filter_by_owner_for_every_scope(world, scope):
+def test_inventory_queries_filter_by_owner(world):
     db = world["db"]
-    # The old filter reached sessions through assignment; it is ignored now.
-    filters = CurationSessionFilters(inventory_scope=scope, curator_ids=[OWNER, OTHER])
+    filters = CurationSessionFilters()
 
     listed = session_queries.list_sessions(
         db, CurationSessionListRequest(filters=filters), current_user_id=OWNER
@@ -348,28 +333,23 @@ def test_bootstrap_selects_only_the_callers_prep_result(world):
     assert selected.id == own.id
 
 
-def test_session_update_cannot_reassign_the_session(world):
-    from src.lib.curation_workspace.models import CurationActionLogEntry
-    from src.lib.curation_workspace.session_mutation_service import update_session
-    from src.schemas.curation_workspace import CurationSessionUpdateRequest
+@pytest.mark.parametrize(
+    ("model", "values"),
+    [
+        ("CurationSessionUpdateRequest", {"session_id": "s", "curator_id": OTHER}),
+        ("CurationSessionCreateRequest", {"document_id": "d", "adapter_key": "a", "curator_id": OTHER}),
+        ("CurationDocumentBootstrapRequest", {"curator_id": OTHER}),
+        ("CurationSessionFilters", {"inventory_scope": "show_all"}),
+        ("CurationSessionFilters", {"curator_ids": [OTHER]}),
+    ],
+)
+def test_assignment_and_scope_fields_no_longer_exist(model, values):
+    from pydantic import ValidationError
+    from src.schemas import curation_workspace as schemas
 
-    db = world["db"]
-    session_id = str(world["mine"].id)
-
-    response = update_session(
-        db,
-        session_id,
-        CurationSessionUpdateRequest(session_id=session_id, curator_id="curator-new", notes="kept"),
-        {"sub": OWNER},
-    )
-    db.commit()
-
-    refreshed = ownership.load_session_for_system(db, session_id)
-    assert refreshed.created_by_id == OWNER
-    assert refreshed.assigned_curator_id == OTHER
-    assert refreshed.notes == "kept"
-    assert response.action_log_entry is None
-    assert db.query(CurationActionLogEntry).count() == 0
+    with pytest.raises(ValidationError) as exc_info:
+        getattr(schemas, model).model_validate(values)
+    assert {error["type"] for error in exc_info.value.errors()} == {"extra_forbidden"}
 
 
 def _service_calls(world):
@@ -481,26 +461,6 @@ def test_record_retirement_binding_requires_the_envelope_session_owner(world):
 
     with pytest.raises(store.HistoryAccessError):
         binding(db, "env-retired-theirs", OWNER)
-
-
-def test_manual_session_takes_no_assignee_from_the_request(world):
-    from src.lib.curation_workspace.bootstrap_service import create_manual_session
-    from src.schemas.curation_workspace import CurationSessionCreateRequest
-
-    db = world["db"]
-    response = create_manual_session(
-        CurationSessionCreateRequest(
-            document_id=str(world["document"].id), adapter_key="fixture", curator_id=OTHER
-        ),
-        current_user_id=OWNER,
-        actor_claims={"sub": OWNER},
-        db=db,
-    )
-    db.commit()
-
-    created = ownership.load_session_for_system(db, response.session.session_id)
-    assert created.created_by_id == OWNER
-    assert created.assigned_curator_id is None
 
 
 @pytest.mark.parametrize(

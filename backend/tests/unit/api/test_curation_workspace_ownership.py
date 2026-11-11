@@ -190,8 +190,7 @@ def world(ownership_session_factory, monkeypatch):
     own_document = add_document(db, owner=owner)
     other_document = add_document(db, owner=other)
     mine = add_session(db, document_id=own_document.id, created_by_id=OWNER)
-    # Assigned to the caller, created by someone else: still not the caller's.
-    theirs = add_session(db, document_id=other_document.id, created_by_id=OTHER, assigned_curator_id=OWNER)
+    theirs = add_session(db, document_id=other_document.id, created_by_id=OTHER)
     add_envelope(db, envelope_id="env-theirs", document_id=other_document.id, session_id=theirs.id)
     their_candidate = add_candidate(db, session_id=theirs.id, envelope_id="env-theirs")
     their_submission = add_submission(db, session_id=theirs.id)
@@ -344,16 +343,42 @@ def test_guard_holds_no_rows_and_no_open_transaction(world, monkeypatch):
     assert seen == {"in_transaction": False, "cached_rows": 0}
 
 
-def test_guard_leaves_a_transaction_it_did_not_open(ownership_session_factory):
-    db = ownership_session_factory()
-    try:
-        owner = add_user(db, OWNER)  # flushed, not committed: the caller's open work
-        document = add_document(db, owner=owner)
-        session = add_session(db, document_id=document.id, created_by_id=OWNER)
+VALID_VIEW = {"name": "view", "filters": {}, "sort_by": "prepared_at", "sort_direction": "desc"}
 
-        access.owned_session_in_path(session.id, user={"sub": OWNER}, db=db)
 
-        assert db.in_transaction()
-        assert access.owned_session_in_path(session.id, user={"sub": OWNER}, db=db) is None
-    finally:
-        db.close()
+def test_valid_saved_view_body_is_accepted(world):
+    response = world["client"].post("/api/curation-workspace/views", json=VALID_VIEW)
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "path_template", "body"),
+    [
+        ("patch", "/api/curation-workspace/sessions/{mine}", {"session_id": "{mine}", "curator_id": OTHER}),
+        ("post", "/api/curation-workspace/sessions",
+         {"document_id": "{own_document}", "adapter_key": "fixture", "curator_id": OTHER}),
+        ("post", "/api/curation-workspace/documents/{own_document}/bootstrap",
+         {"adapter_key": "fixture", "curator_id": OTHER}),
+        ("post", "/api/curation-workspace/views",
+         {**VALID_VIEW, "filters": {"inventory_scope": "show_all"}}),
+        ("post", "/api/curation-workspace/views", {**VALID_VIEW, "filters": {"curator_ids": [OTHER]}}),
+        ("post", "/api/curation-workspace/views", {**VALID_VIEW, "sort_by": "curator"}),
+    ],
+)
+def test_removed_assignment_and_scope_inputs_are_rejected(world, method, path_template, body):
+    ids = {"mine": str(world["mine"].id), "own_document": str(world["own_document"].id)}
+
+    def fill(value):
+        if isinstance(value, str):
+            return value.format(**ids)
+        if isinstance(value, dict):
+            return {key: fill(item) for key, item in value.items()}
+        return value
+
+    response = getattr(world["client"], method)(path_template.format(**ids), json=fill(body))
+    assert response.status_code == 422, response.text
+
+
+def test_removed_curator_sort_is_rejected(world):
+    response = world["client"].get("/api/curation-workspace/sessions", params={"sort_by": "curator"})
+    assert response.status_code == 422, response.text

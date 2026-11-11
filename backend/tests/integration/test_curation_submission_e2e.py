@@ -502,6 +502,8 @@ def _run_prep_and_bootstrap_domain_envelope(
     assert prep_output.review_row_count > 0
     assert prep_output.envelope_refs[0].envelope_id == envelope.envelope_id
 
+    # A request reads committed state; route guards end their own read.
+    test_db.commit()
     bootstrap_response = client.post(
         (
             "/api/curation-workspace/documents/"

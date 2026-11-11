@@ -472,7 +472,6 @@ async def test_post_review_session_delegates_to_manual_create_service(monkeypatc
     request = CurationSessionCreateRequest(
         document_id="document-1",
         adapter_key="reference_adapter",
-        curator_id="curator-2",
         notes="Manual queue seed.",
         tags=["triage"],
     )
@@ -672,7 +671,6 @@ async def test_post_document_bootstrap_delegates_to_bootstrap_service(monkeypatc
         adapter_key="reference_adapter",
         flow_run_id="flow-7",
         origin_session_id="chat-session-7",
-        curator_id="curator-2",
     )
     db = object()
 

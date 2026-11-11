@@ -67,7 +67,6 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
     CurationFlowRunListRequest,
     CurationFlowRunSessionsRequest,
-    CurationInventoryScope,
     CurationManualCandidateCreateRequest,
     CurationSessionFilters,
     CurationSessionListRequest,
@@ -432,7 +431,6 @@ def _create_review_session(
     last_worked_at: datetime | None,
     reviewed_candidates: int,
     pending_candidates: int,
-    assigned_curator_id: str | None = None,
     created_by_id: str | None = SESSION_OWNER,
 ) -> ReviewSessionModel:
     session_row = ReviewSessionModel(
@@ -442,7 +440,6 @@ def _create_review_session(
         profile_key="primary",
         document_id=UUID(document_id),
         flow_run_id=flow_run_id,
-        assigned_curator_id=assigned_curator_id,
         created_by_id=created_by_id,
         session_version=1,
         notes="Prepared session.",
@@ -1568,10 +1565,9 @@ def test_inventory_lists_only_sessions_the_caller_created_with_pagination(db_ses
         last_worked_at=now.replace(hour=10),
         reviewed_candidates=0,
         pending_candidates=1,
-        assigned_curator_id=current_user_id,
         created_by_id=other_user_id,
     )
-    unassigned_created_by_current = _create_review_session(
+    first_created_by_current = _create_review_session(
         db_session,
         document_id=document_id,
         flow_run_id="flow-alpha",
@@ -1580,10 +1576,9 @@ def test_inventory_lists_only_sessions_the_caller_created_with_pagination(db_ses
         last_worked_at=now.replace(hour=11),
         reviewed_candidates=1,
         pending_candidates=0,
-        assigned_curator_id=None,
         created_by_id=current_user_id,
     )
-    assigned_to_other_created_by_current = _create_review_session(
+    second_created_by_current = _create_review_session(
         db_session,
         document_id=document_id,
         flow_run_id="flow-beta",
@@ -1592,7 +1587,6 @@ def test_inventory_lists_only_sessions_the_caller_created_with_pagination(db_ses
         last_worked_at=now.replace(hour=12),
         reviewed_candidates=0,
         pending_candidates=1,
-        assigned_curator_id=other_user_id,
         created_by_id=current_user_id,
     )
     _create_review_session(
@@ -1604,7 +1598,6 @@ def test_inventory_lists_only_sessions_the_caller_created_with_pagination(db_ses
         last_worked_at=now.replace(hour=13),
         reviewed_candidates=1,
         pending_candidates=0,
-        assigned_curator_id=None,
         created_by_id=other_user_id,
     )
 
@@ -1614,12 +1607,11 @@ def test_inventory_lists_only_sessions_the_caller_created_with_pagination(db_ses
         current_user_id=current_user_id,
     )
 
-    assert my_inventory_response.applied_filters.inventory_scope == CurationInventoryScope.MY_INVENTORY
-    # Assignment grants nothing; only the creator sees a session (ALL-1547).
+    # Only the creator sees a session (ALL-1547).
     assert my_inventory_response.page_info.total_items == 2
     assert my_inventory_response.page_info.total_pages == 2
     assert [session.session_id for session in my_inventory_response.sessions] == [
-        str(assigned_to_other_created_by_current.id)
+        str(second_created_by_current.id)
     ]
 
     second_page = module.list_sessions(
@@ -1628,102 +1620,8 @@ def test_inventory_lists_only_sessions_the_caller_created_with_pagination(db_ses
         current_user_id=current_user_id,
     )
     assert [session.session_id for session in second_page.sessions] == [
-        str(unassigned_created_by_current.id)
+        str(first_created_by_current.id)
     ]
-
-    show_all_response = module.list_sessions(
-        db_session,
-        CurationSessionListRequest(
-            filters=CurationSessionFilters(
-                inventory_scope=CurationInventoryScope.SHOW_ALL,
-            ),
-            page=1,
-            page_size=10,
-        ),
-        current_user_id=current_user_id,
-    )
-    # show_all is accepted but no longer widens the inventory.
-    assert show_all_response.page_info.total_items == 2
-
-
-def test_curator_filter_is_ignored_and_the_creator_scopes_inventory(db_session):
-    document = _create_document(db_session)
-    document_id = str(document.id)
-    now = _now()
-
-    _create_review_session(
-        db_session,
-        document_id=document_id,
-        flow_run_id=None,
-        status=CurationSessionStatus.NEW,
-        prepared_at=now,
-        last_worked_at=now,
-        reviewed_candidates=0,
-        pending_candidates=1,
-        assigned_curator_id="curator-1",
-        created_by_id="creator-1",
-    )
-    _create_review_session(
-        db_session,
-        document_id=document_id,
-        flow_run_id=None,
-        status=CurationSessionStatus.NEW,
-        prepared_at=now.replace(hour=16),
-        last_worked_at=now.replace(hour=16),
-        reviewed_candidates=0,
-        pending_candidates=1,
-        assigned_curator_id="curator-2",
-        created_by_id="curator-1",
-    )
-
-    response = module.list_sessions(
-        db_session,
-        CurationSessionListRequest(
-            filters=CurationSessionFilters(curator_ids=["curator-2"]),
-        ),
-        current_user_id="curator-1",
-    )
-
-    assert response.page_info.total_items == 1
-    assert response.sessions[0].assigned_curator.actor_id == "curator-2"
-
-
-def test_my_organization_scope_lists_only_the_callers_sessions(db_session):
-    document = _create_document(db_session)
-    now = _now()
-    own = _create_review_session(
-        db_session,
-        document_id=str(document.id),
-        flow_run_id=None,
-        status=CurationSessionStatus.NEW,
-        prepared_at=now,
-        last_worked_at=now,
-        reviewed_candidates=0,
-        pending_candidates=1,
-    )
-    _create_review_session(
-        db_session,
-        document_id=str(document.id),
-        flow_run_id=None,
-        status=CurationSessionStatus.NEW,
-        prepared_at=now,
-        last_worked_at=now,
-        reviewed_candidates=0,
-        pending_candidates=1,
-        created_by_id="curator-2",
-    )
-
-    response = module.list_sessions(
-        db_session,
-        CurationSessionListRequest(
-            filters=CurationSessionFilters(
-                inventory_scope=CurationInventoryScope.MY_ORGANIZATION,
-            )
-        ),
-        current_user_id=SESSION_OWNER,
-    )
-
-    assert [session.session_id for session in response.sessions] == [str(own.id)]
 
 
 def test_list_flow_runs_returns_aggregated_summaries(db_session):

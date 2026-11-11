@@ -113,7 +113,6 @@ class PreparedSessionUpsertRequest:
     review_session_id: str | UUID | None = None
     flow_run_id: str | None = None
     created_by_id: str | None = None
-    assigned_curator_id: str | None = None
     notes: str | None = None
     tags: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -148,7 +147,6 @@ class ReusablePreparedSessionContext:
     """Existing unreviewed session metadata that is safe to refresh in place."""
 
     session_id: str
-    assigned_curator_id: str | None = None
     notes: str | None = None
     tags: list[str] = field(default_factory=list)
 

@@ -1220,7 +1220,6 @@ def _session_payload(session_row: CurationReviewSession) -> dict[str, Any]:
             "document_id": session_row.document_id,
             "flow_run_id": session_row.flow_run_id,
             "current_candidate_id": session_row.current_candidate_id,
-            "assigned_curator_id": session_row.assigned_curator_id,
             "created_by_id": session_row.created_by_id,
             "session_version": session_row.session_version,
             "notes": session_row.notes,

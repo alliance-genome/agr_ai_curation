@@ -18,7 +18,6 @@ from src.lib.curation_workspace.models import CurationSavedView as SavedViewMode
 from src.models.sql.database import Base
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
-    CurationInventoryScope,
     CurationSavedViewCreateRequest,
     CurationSessionSortField,
     CurationSortDirection,
@@ -111,7 +110,6 @@ def _create_saved_view(
         filters={
             "statuses": ["new"],
             "adapter_keys": ["gene"],
-            "curator_ids": [],
             "tags": [],
             "flow_run_id": None,
             "origin_session_id": "chat-session-7",
@@ -142,10 +140,8 @@ def test_create_saved_view_persists_view_and_sanitizes_queue_state(db_session):
             name="  My pending sessions  ",
             description="  Sessions assigned to me  ",
             filters={
-                "inventory_scope": "show_all",
                 "statuses": ["in_progress"],
                 "adapter_keys": ["gene"],
-                "curator_ids": ["user-1"],
                 "tags": [],
                 "flow_run_id": None,
                 "origin_session_id": "chat-session-1",
@@ -167,12 +163,13 @@ def test_create_saved_view_persists_view_and_sanitizes_queue_state(db_session):
     assert saved_view.name == "My pending sessions"
     assert saved_view.description == "Sessions assigned to me"
     assert saved_view.created_by_id == "user-1"
-    assert saved_view.filters["inventory_scope"] == "show_all"
+    assert set(saved_view.filters) >= {"statuses", "adapter_keys"}
+    assert "inventory_scope" not in saved_view.filters
     assert saved_view.filters["origin_session_id"] is None
     assert saved_view.filters["saved_view_id"] is None
 
     assert response.view.name == "My pending sessions"
-    assert response.view.filters.inventory_scope == CurationInventoryScope.SHOW_ALL
+    assert response.view.filters.statuses == ["in_progress"]
     assert response.view.filters.origin_session_id is None
     assert response.view.filters.saved_view_id is None
     assert response.view.created_by is not None
@@ -193,7 +190,6 @@ def test_list_saved_views_strips_deleted_scope_fields_from_legacy_payloads(db_se
     response = module.list_saved_views(db_session, current_user_id="user-1")
 
     assert len(response.views) == 1
-    assert response.views[0].filters.inventory_scope == CurationInventoryScope.MY_INVENTORY
     assert response.views[0].filters.adapter_keys == ["gene"]
     assert not hasattr(response.views[0].filters, "profile_keys")
     assert not hasattr(response.views[0].filters, "domain_keys")

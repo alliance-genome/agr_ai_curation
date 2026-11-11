@@ -270,14 +270,6 @@ class CurationSessionStatus(str, Enum):
     REJECTED = "rejected"
 
 
-class CurationInventoryScope(str, Enum):
-    """Server-resolved inventory visibility scope."""
-
-    MY_INVENTORY = "my_inventory"
-    MY_ORGANIZATION = "my_organization"
-    SHOW_ALL = "show_all"
-
-
 class CurationCandidateStatus(str, Enum):
     """Curator-facing decision state for an individual candidate."""
 
@@ -345,6 +337,8 @@ class CurationActionType(str, Enum):
 
     SESSION_CREATED = "session_created"
     SESSION_STATUS_UPDATED = "session_status_updated"
+    # Nothing writes this since sessions became private to their creator
+    # (ALL-1547); it stays so action-log rows written before then still load.
     SESSION_ASSIGNED = "session_assigned"
     CANDIDATE_CREATED = "candidate_created"
     CANDIDATE_DELETED = "candidate_deleted"
@@ -405,7 +399,6 @@ class CurationSessionSortField(str, Enum):
     CANDIDATE_COUNT = "candidate_count"
     VALIDATION = "validation"
     EVIDENCE = "evidence"
-    CURATOR = "curator"
 
 
 class CurationSortDirection(str, Enum):
@@ -1539,15 +1532,13 @@ class CurationActionLogEntry(CurationWorkspaceBaseModel):
 
 
 class CurationSessionFilters(CurationWorkspaceBaseModel):
-    """Reusable inventory and queue filter contract for session list APIs and saved views."""
+    """Reusable inventory and queue filter contract for session list APIs and saved views.
 
-    inventory_scope: CurationInventoryScope = Field(
-        default=CurationInventoryScope.MY_INVENTORY,
-        description="Server-resolved inventory visibility scope",
-    )
+    Every list is the caller's own sessions; there is no scope or curator filter.
+    """
+
     statuses: list[CurationSessionStatus] = Field(default_factory=list)
     adapter_keys: list[str] = Field(default_factory=list)
-    curator_ids: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     flow_run_id: Optional[str] = Field(
         default=None,
@@ -1805,10 +1796,6 @@ class CurationSessionSummary(CurationWorkspaceBaseModel):
         default=None,
         description="Current candidate selected within the session",
     )
-    assigned_curator: Optional[CurationActorRef] = Field(
-        default=None,
-        description="Curator currently assigned to the session",
-    )
     created_by: Optional[CurationActorRef] = Field(
         default=None,
         description="Actor that created the session",
@@ -1913,8 +1900,6 @@ class CurationSessionStats(CurationWorkspaceBaseModel):
     paused_sessions: int = Field(default=0, ge=0)
     submitted_sessions: int = Field(default=0, ge=0)
     rejected_sessions: int = Field(default=0, ge=0)
-    assigned_to_current_user: int = Field(default=0, ge=0)
-    assigned_to_others: int = Field(default=0, ge=0)
     submitted_last_7_days: int = Field(default=0, ge=0)
 
 
@@ -2081,10 +2066,6 @@ class CurationSessionCreateRequest(CurationWorkspaceBaseModel):
 
     document_id: str = Field(description="Document identifier")
     adapter_key: str = Field(description="Adapter that will own the session")
-    curator_id: Optional[str] = Field(
-        default=None,
-        description="Curator who should own the new session",
-    )
     notes: Optional[str] = Field(default=None, description="Initial session notes")
     tags: list[str] = Field(
         default_factory=list,
@@ -2114,10 +2095,6 @@ class CurationDocumentBootstrapRequest(CurationWorkspaceBaseModel):
         default=None,
         description="Optional upstream chat or flow session identifier used to scope bootstrap selection",
     )
-    curator_id: Optional[str] = Field(
-        default=None,
-        description="Curator who should own the bootstrapped session",
-    )
 
 
 class CurationDocumentBootstrapResponse(CurationWorkspaceBaseModel):
@@ -2138,7 +2115,7 @@ class CurationDocumentBootstrapAvailabilityResponse(CurationWorkspaceBaseModel):
 
 
 class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
-    """Request contract for patching session status, ownership, or notes."""
+    """Request contract for patching session status, notes, or current candidate."""
 
     session_id: str = Field(description="Session identifier")
     expected_session_version: Optional[int] = Field(
@@ -2160,10 +2137,6 @@ class CurationSessionUpdateRequest(CurationWorkspaceBaseModel):
         description="New session status",
     )
     notes: Optional[str] = Field(default=None, description="Updated session notes")
-    curator_id: Optional[str] = Field(
-        default=None,
-        description="New assigned curator identifier",
-    )
     current_candidate_id: Optional[str] = Field(
         default=None,
         description="Candidate to mark as currently active for resume flows",
@@ -2908,7 +2881,6 @@ __all__ = [
     "CurationSavedViewCreateResponse",
     "CurationSavedViewDeleteResponse",
     "CurationSavedViewListResponse",
-    "CurationInventoryScope",
     "CurationSessionCreateRequest",
     "CurationSessionCreateResponse",
     "CurationSessionFilters",

@@ -448,11 +448,6 @@ async def bootstrap_document_session(
                 user_id=current_user_id,
                 active_groups=active_groups,
                 created_by_id=current_user_id,
-                # A request never names an assignee (ALL-1547); a refreshed
-                # session keeps the value it already had.
-                assigned_curator_id=(
-                    reusable_session.assigned_curator_id if reusable_session else None
-                ),
                 notes=reusable_session.notes if reusable_session else None,
                 tags=tuple(reusable_session.tags) if reusable_session else (),
                 prepared_at=prepared_at,

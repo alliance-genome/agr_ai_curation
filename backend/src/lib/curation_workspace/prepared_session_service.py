@@ -85,7 +85,6 @@ def find_reusable_prepared_session(
             continue
         return ReusablePreparedSessionContext(
             session_id=str(session_row.id),
-            assigned_curator_id=session_row.assigned_curator_id,
             notes=session_row.notes,
             tags=list(session_row.tags or []),
         )
@@ -214,7 +213,6 @@ def _apply_prepared_session_metadata(
     session_row.profile_key = None
     session_row.document_id = _normalize_uuid(request.document_id, field_name="document_id")
     session_row.flow_run_id = request.flow_run_id
-    session_row.assigned_curator_id = request.assigned_curator_id
     session_row.created_by_id = request.created_by_id
     session_row.notes = request.notes
     session_row.tags = list(request.tags)

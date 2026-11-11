@@ -399,7 +399,6 @@ def _persist_review_session(db, *, document_id, curator_id: str):
         status=CurationSessionStatus.NEW,
         adapter_key="fixture",
         document_id=document_id,
-        assigned_curator_id=curator_id,
         created_by_id=curator_id,
         session_version=1,
         total_candidates=1,
@@ -732,22 +731,20 @@ def test_domain_envelope_tools_show_only_sessions_the_curator_created(db_session
     seed_db = db_session_factory()
     try:
         document = _persist_document(seed_db)
-        assigned_only = _persist_review_session(
+        others_session = _persist_review_session(
             seed_db, document_id=document.id, curator_id="curator-2"
         )
-        assigned_only.assigned_curator_id = "curator-1"
         ownerless = _persist_review_session(seed_db, document_id=document.id, curator_id="curator-2")
         ownerless.created_by_id = None
-        ownerless.assigned_curator_id = None
         _persist_domain_envelope(
-            seed_db, envelope_id="env-assigned-only", document_id=document.id,
-            session_id=assigned_only.id,
+            seed_db, envelope_id="env-others-session", document_id=document.id,
+            session_id=others_session.id,
         )
         _persist_domain_envelope(
             seed_db, envelope_id="env-ownerless", document_id=document.id, session_id=ownerless.id,
         )
         seed_db.commit()
-        assigned_only_id = str(assigned_only.id)
+        others_session_id = str(others_session.id)
     finally:
         seed_db.close()
 
@@ -760,16 +757,16 @@ def test_domain_envelope_tools_show_only_sessions_the_curator_created(db_session
     by_session = domain_tools.list_domain_envelopes(
         session_factory=db_session_factory,
         user_auth_sub="curator-1",
-        session_id=assigned_only_id,
+        session_id=others_session_id,
         limit=10,
     )
 
     assert listing["success"] is True and listing["envelopes"] == []
     assert by_session == {
         "success": False,
-        "error": f"Curation review session {assigned_only_id} was not found.",
+        "error": f"Curation review session {others_session_id} was not found.",
     }
-    for envelope_id in ("env-assigned-only", "env-ownerless"):
+    for envelope_id in ("env-others-session", "env-ownerless"):
         assert domain_tools.get_domain_envelope_state(
             session_factory=db_session_factory,
             user_auth_sub="curator-1",

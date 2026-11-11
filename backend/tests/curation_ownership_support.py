@@ -26,6 +26,7 @@ from src.lib.curation_workspace.models import (
     CurationEvidenceRecord,
     CurationExtractionResultRecord,
     CurationReviewSession,
+    CurationSavedView,
     CurationSessionAgentRevision,
     CurationSubmissionRecord,
     CurationValidationSnapshot,
@@ -72,6 +73,7 @@ OWNERSHIP_TABLES = [
     CurationActionLogEntry.__table__,
     CurationBenchmarkSnapshot.__table__,
     WorkspaceReviewOperation.__table__,
+    CurationSavedView.__table__,
 ]
 
 NOW = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
@@ -155,7 +157,6 @@ def add_session(
     *,
     document_id: UUID,
     created_by_id: str | None,
-    assigned_curator_id: str | None = None,
     status: CurationSessionStatus = CurationSessionStatus.NEW,
     adapter_key: str = "fixture",
     flow_run_id: str | None = None,
@@ -166,7 +167,6 @@ def add_session(
         adapter_key=adapter_key,
         document_id=document_id,
         flow_run_id=flow_run_id,
-        assigned_curator_id=assigned_curator_id,
         created_by_id=created_by_id,
         session_version=1,
         total_candidates=0,

@@ -121,8 +121,7 @@ def _apply_owner_scope(
     *,
     current_user_id: str | None,
 ) -> Any:
-    # Inventory is always the caller's own sessions (ALL-1547). The request's
-    # inventory_scope and curator_ids are accepted but no longer applied.
+    # Inventory is always the caller's own sessions (ALL-1547).
     if not current_user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -275,15 +274,6 @@ def _sort_order_clauses(
             ReviewSessionModel.prepared_at.desc(),
             ReviewSessionModel.id.asc(),
         )
-    if sort_by == CurationSessionSortField.CURATOR:
-        return (
-            _ordered_clause(
-                func.lower(func.coalesce(ReviewSessionModel.assigned_curator_id, "")),
-                sort_direction,
-            ),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
     return (ReviewSessionModel.prepared_at.desc(), ReviewSessionModel.id.asc())
 
 
@@ -385,7 +375,7 @@ def _session_context_maps(
         [
             actor_id
             for session in sessions
-            for actor_id in (session.assigned_curator_id, session.created_by_id)
+            for actor_id in (session.created_by_id,)
         ],
     )
     return document_map, user_map
@@ -847,13 +837,6 @@ def get_session_stats(
                 ReviewSessionModel.status == CurationSessionStatus.REJECTED
             ),
             func.count(ReviewSessionModel.id).filter(
-                ReviewSessionModel.assigned_curator_id == current_user_id
-            ),
-            func.count(ReviewSessionModel.id).filter(
-                ReviewSessionModel.assigned_curator_id.is_not(None)
-                & (ReviewSessionModel.assigned_curator_id != current_user_id)
-            ),
-            func.count(ReviewSessionModel.id).filter(
                 ReviewSessionModel.submitted_at >= datetime.now(timezone.utc) - timedelta(days=7)
             ),
         )
@@ -876,9 +859,7 @@ def get_session_stats(
             paused_sessions=count_row[4],
             submitted_sessions=count_row[5],
             rejected_sessions=count_row[6],
-            assigned_to_current_user=count_row[7],
-            assigned_to_others=count_row[8],
-            submitted_last_7_days=count_row[9],
+            submitted_last_7_days=count_row[7],
         ),
         applied_filters=request.filters,
     )

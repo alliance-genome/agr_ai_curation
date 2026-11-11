@@ -612,7 +612,6 @@ def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db
     assert len(sessions) == 1
     assert sessions[0].adapter_key == "gene"
     assert sessions[0].created_by_id == user.auth_sub
-    assert sessions[0].assigned_curator_id is None
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) > 0
 
     source_row = handoff_db.scalars(
@@ -694,7 +693,6 @@ def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
 
     sessions = _review_sessions(handoff_db, batch_doc.review_session_ids)
     assert {session.adapter_key for session in sessions} == {"gene", "gene_expression"}
-    assert {session.assigned_curator_id for session in sessions} == {None}
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) >= 2
 
     batch_service = BatchService(handoff_db)
