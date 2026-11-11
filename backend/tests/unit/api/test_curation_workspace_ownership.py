@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, Depends, FastAPI
+from fastapi.dependencies.utils import get_flat_dependant
 from fastapi.routing import APIRoute
+from pydantic import BaseModel
 from fastapi.testclient import TestClient
 
 from src.api import curation_workspace as module
@@ -75,6 +77,102 @@ def test_every_route_is_owner_guarded_or_explicitly_exempt():
 
     assert unguarded == []
     assert guarded_and_exempt == []
+
+
+def _guard_dependants(dependant, guards) -> Iterator[object]:
+    for dependency in dependant.dependencies:
+        if dependency.call in guards:
+            yield dependency
+        yield from _guard_dependants(dependency, guards)
+
+
+def _guard_binding_problems(route: APIRoute, guards) -> list[str]:
+    """A guard must bind the identifier the route was given, not a stray input.
+
+    A guard parameter that is not in the path silently becomes a query
+    parameter, and a body guard whose parameter name differs from the
+    handler's makes FastAPI expect an embedded body instead of sharing one.
+    """
+
+    problems = []
+    route_path_params = set(route.param_convertors)
+    guard_dependants = list(_guard_dependants(route.dependant, guards))
+    for guard in guard_dependants:
+        name = getattr(guard.call, "__name__", repr(guard.call))
+        if guard.query_params:
+            problems.append(f"{name} reads query params {[p.name for p in guard.query_params]}")
+        guard_path_params = {p.name for p in guard.path_params}
+        if not guard_path_params <= route_path_params:
+            problems.append(f"{name} path params {sorted(guard_path_params - route_path_params)} not in path")
+    if any(guard.body_params for guard in guard_dependants):
+        body_names = {p.name for p in get_flat_dependant(route.dependant).body_params}
+        if len(body_names) != 1:
+            problems.append(f"body guard does not share one body: {sorted(body_names)}")
+    return problems
+
+
+def test_every_guard_binds_the_routes_own_identifier():
+    problems = {
+        f"{sorted(route.methods)} {route.path}": found
+        for route in _routes()
+        if (found := _guard_binding_problems(route, access.SESSION_OWNERSHIP_GUARDS))
+    }
+    assert problems == {}
+
+
+class _ThrowawayBody(BaseModel):
+    session_id: str
+
+
+def _misdeclared_path_guard(session_uuid: str) -> None:  # not the route's {session_id}
+    return None
+
+
+def _misdeclared_body_guard(payload: _ThrowawayBody) -> None:  # handler names it ``request``
+    return None
+
+
+def test_binding_check_catches_a_guard_reading_a_query_param():
+    router = APIRouter()
+
+    @router.get("/sessions/{session_id}", dependencies=[Depends(_misdeclared_path_guard)])
+    def handler(session_id: str) -> None:
+        return None
+
+    route = next(item for item in router.routes if isinstance(item, APIRoute))
+    problems = _guard_binding_problems(route, {_misdeclared_path_guard})
+    assert problems == ["_misdeclared_path_guard reads query params ['session_uuid']"]
+
+
+def test_binding_check_catches_a_body_guard_not_sharing_the_body():
+    router = APIRouter()
+
+    @router.post("/evidence", dependencies=[Depends(_misdeclared_body_guard)])
+    def handler(request: _ThrowawayBody) -> None:
+        return None
+
+    route = next(item for item in router.routes if isinstance(item, APIRoute))
+    problems = _guard_binding_problems(route, {_misdeclared_body_guard})
+    assert problems == ["body guard does not share one body: ['payload', 'request']"]
+
+
+def test_binding_check_catches_a_guard_path_param_missing_from_the_route():
+    from fastapi.dependencies.models import Dependant
+    from fastapi.dependencies.utils import get_dependant
+
+    router = APIRouter()
+
+    @router.get("/sessions/{session_id}")
+    def handler(session_id: str) -> None:
+        return None
+
+    route = next(item for item in router.routes if isinstance(item, APIRoute))
+    # A dependant resolved against another path keeps a path param the route lacks.
+    foreign = get_dependant(path="/other/{session_uuid}", call=_misdeclared_path_guard)
+    route.dependant.dependencies.append(foreign)
+    assert isinstance(foreign, Dependant)
+    problems = _guard_binding_problems(route, {_misdeclared_path_guard})
+    assert problems == ["_misdeclared_path_guard path params ['session_uuid'] not in path"]
 
 
 def test_exempt_list_names_only_existing_routes():
