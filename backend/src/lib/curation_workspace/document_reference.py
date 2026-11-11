@@ -21,7 +21,12 @@ from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationReviewSession as ReviewSessionModel,
 )
-from src.lib.curation_workspace.session_common import build_actor_claims_payload
+from src.lib.curation_workspace.session_common import (
+    _normalize_uuid,
+    actor_user_id,
+    build_actor_claims_payload,
+)
+from src.lib.curation_workspace.session_ownership import owned_by
 from src.lib.document_sources.access import build_document_source_request_context
 from src.lib.document_sources.identifier_import import normalize_source_identifier
 from src.lib.document_sources.models import (
@@ -85,8 +90,12 @@ def _has_imported_reference(document: PDFDocument) -> bool:
     return bool(document.source_provider_reference_id or document.source_provider_reference_curie)
 
 
-def _session_or_404(db: Session, session_id: str | UUID) -> ReviewSessionModel:
-    session = db.get(ReviewSessionModel, session_id)
+def _session_or_404(db: Session, session_id: str | UUID, owner_sub: str | None) -> ReviewSessionModel:
+    session = db.scalars(
+        select(ReviewSessionModel)
+        .where(ReviewSessionModel.id == _normalize_uuid(session_id, field_name="session_id"))
+        .where(owned_by(owner_sub))
+    ).first()
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -120,10 +129,15 @@ def _refuse_link(document: PDFDocument) -> None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_ALREADY_LINKED_DETAIL)
 
 
-def require_document_can_be_linked(db: Session, session_id: str | UUID) -> None:
+def require_document_can_be_linked(
+    db: Session,
+    session_id: str | UUID,
+    *,
+    owner_sub: str | None,
+) -> None:
     """Refuse before a lookup when the session's document cannot take a link."""
 
-    session = _session_or_404(db, session_id)
+    session = _session_or_404(db, session_id, owner_sub)
     _refuse_link(_document_or_404(db, session.document_id))
 
 
@@ -251,7 +265,7 @@ def link_document_reference(
 ) -> CurationDocumentReferenceResult:
     """Save a reference the server just resolved, without committing ``db``."""
 
-    session = _session_or_404(db, session_id)
+    session = _session_or_404(db, session_id, actor_user_id(actor_claims))
     document = _document_or_404(db, session.document_id, for_update=True)
     _refuse_link(document)
     now = datetime.now(timezone.utc)
@@ -290,7 +304,7 @@ def unlink_document_reference(
 ) -> CurationDocumentReferenceResult:
     """Remove a curator link, without committing ``db``."""
 
-    session = _session_or_404(db, session_id)
+    session = _session_or_404(db, session_id, actor_user_id(actor_claims))
     document = _document_or_404(db, session.document_id, for_update=True)
     if _has_imported_reference(document):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_IMPORTED_DETAIL)

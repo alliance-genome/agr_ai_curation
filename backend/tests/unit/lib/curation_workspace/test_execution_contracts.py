@@ -214,7 +214,7 @@ def test_session_validation_prechecks_all_candidates_before_first_write(review_c
     monkeypatch.setattr(validation, "_apply_candidate_validation", apply_validation)
     request = CurationSessionValidationRequest(session_id=str(session.id))
     with pytest.raises(ProfileConformanceError):
-        validation.validate_session(db, session.id, request)
+        validation.validate_session(db, session.id, request, user_id="curator-1")
     apply_validation.assert_not_called()
     db.flush.assert_not_called()
 
@@ -629,7 +629,7 @@ def test_session_validation_never_dispatches_retired_cache(review_candidate, mon
     request = CurationSessionValidationRequest(session_id=str(session.id),
         candidate_ids=[str(candidate.id)] if explicit else [])
     with pytest.raises(HTTPException if explicit else ReachedAggregate) as caught:
-        validation.validate_session(db, session.id, request)
+        validation.validate_session(db, session.id, request, user_id="curator-1")
     if explicit:
         assert caught.value.status_code == 409
     dispatch.assert_not_called()

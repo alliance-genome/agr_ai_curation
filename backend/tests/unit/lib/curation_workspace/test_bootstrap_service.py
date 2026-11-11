@@ -577,7 +577,8 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
 
     session_payload = {"session_id": "session-123"}
 
-    def _get_session_detail(db, session_id):
+    def _get_session_detail(db, session_id, *, owner_sub):
+        assert owner_sub == "user-1"
         detail_request["db"] = db
         detail_request["session_id"] = session_id
         return session_payload
@@ -591,13 +592,16 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
 
     response = await module.bootstrap_document_session(
         "document-1",
-        CurationDocumentBootstrapRequest(origin_session_id="chat-session-1"),
+        CurationDocumentBootstrapRequest(origin_session_id="chat-session-1", curator_id="someone-else"),
         current_user_id="user-1",
         db=fake_db,
     )
 
     assert response.created is True
     assert response.session == session_payload
+    # A request never names an assignee or owner (ALL-1547).
+    assert pipeline_request["request"].assigned_curator_id is None
+    assert pipeline_request["request"].created_by_id == "user-1"
     assert pipeline_request["db"] is fake_db
     assert detail_request == {"db": fake_db, "session_id": "session-123"}
     assert fake_db.commit_calls == 1
@@ -673,7 +677,7 @@ async def test_bootstrap_document_session_replays_envelope_refs_into_pipeline(mo
         return SimpleNamespace(session_id="session-env", created=True)
 
     monkeypatch.setattr(module, "run_post_curation_pipeline", _run_post_curation_pipeline)
-    monkeypatch.setattr(module, "get_session_detail", lambda db, session_id: {"session_id": session_id})
+    monkeypatch.setattr(module, "get_session_detail", lambda db, session_id, *, owner_sub: {"session_id": session_id})
     monkeypatch.setattr(
         module,
         "CurationDocumentBootstrapResponse",

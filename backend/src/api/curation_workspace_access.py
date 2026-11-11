@@ -22,12 +22,12 @@ from sqlalchemy.orm import Session
 from src.api.auth import get_auth_dependency
 from src.lib.curation_workspace.session_ownership import (
     OwnedResourceNotFound,
-    load_owned_candidate_session,
-    load_owned_operation_session,
-    load_owned_session,
-    load_owned_snapshot_session,
-    load_owned_submission_session,
+    require_owned_candidate,
     require_owned_document,
+    require_owned_operation,
+    require_owned_session,
+    require_owned_snapshot,
+    require_owned_submission,
     require_visible_envelope,
 )
 from src.models.sql.database import get_db
@@ -53,12 +53,30 @@ def require_current_user_id(user: dict) -> str:
     return user_id
 
 
+def _checked(db: Session, check: Callable[[], Any]) -> None:
+    """Run an identifier-only ownership query, then end the read it opened.
+
+    The guard loads no rows. When the guard's query began the session's
+    transaction, it is ended here so a route that awaits other work does not
+    hold it open; the handler starts its own. A transaction that was already
+    open belongs to its owner and is left alone.
+    """
+
+    opened_here = not db.in_transaction()
+    try:
+        check()
+    finally:
+        if opened_here and db.in_transaction():
+            db.rollback()
+
+
 def owned_session_in_path(
     session_id: UUID,
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> None:
-    load_owned_session(db, session_id, require_current_user_id(user))
+    owner_sub = require_current_user_id(user)
+    _checked(db, lambda: require_owned_session(db, session_id, owner_sub))
 
 
 def owned_candidate_in_path(
@@ -66,7 +84,8 @@ def owned_candidate_in_path(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> None:
-    load_owned_candidate_session(db, candidate_id, require_current_user_id(user))
+    owner_sub = require_current_user_id(user)
+    _checked(db, lambda: require_owned_candidate(db, candidate_id, owner_sub))
 
 
 def visible_envelope_in_path(
@@ -74,7 +93,8 @@ def visible_envelope_in_path(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> None:
-    require_visible_envelope(db, envelope_id, require_current_user_id(user))
+    owner_sub = require_current_user_id(user)
+    _checked(db, lambda: require_visible_envelope(db, envelope_id, owner_sub))
 
 
 def owned_submission_in_path(
@@ -83,7 +103,8 @@ def owned_submission_in_path(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> None:
-    load_owned_submission_session(db, session_id, submission_id, require_current_user_id(user))
+    owner_sub = require_current_user_id(user)
+    _checked(db, lambda: require_owned_submission(db, session_id, submission_id, owner_sub))
 
 
 def owned_operation_in_path(
@@ -91,7 +112,8 @@ def owned_operation_in_path(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> None:
-    load_owned_operation_session(db, operation_id, require_current_user_id(user))
+    owner_sub = require_current_user_id(user)
+    _checked(db, lambda: require_owned_operation(db, operation_id, owner_sub))
 
 
 def owned_document_in_path(
@@ -99,7 +121,8 @@ def owned_document_in_path(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> None:
-    require_owned_document(db, document_id, require_current_user_id(user))
+    owner_sub = require_current_user_id(user)
+    _checked(db, lambda: require_owned_document(db, document_id, owner_sub))
 
 
 def owned_benchmark_session_in_path(
@@ -109,8 +132,9 @@ def owned_benchmark_session_in_path(
 ) -> None:
     """Session guard for benchmark routes, which answer in their own error shape."""
 
+    owner_sub = require_current_user_id(user)
     try:
-        load_owned_session(db, session_id, require_current_user_id(user))
+        _checked(db, lambda: require_owned_session(db, session_id, owner_sub))
     except OwnedResourceNotFound:
         raise HTTPException(status_code=404, detail=_SNAPSHOT_NOT_FOUND) from None
 
@@ -120,8 +144,9 @@ def owned_snapshot_in_path(
     user: dict = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> None:
+    owner_sub = require_current_user_id(user)
     try:
-        load_owned_snapshot_session(db, snapshot_id, require_current_user_id(user))
+        _checked(db, lambda: require_owned_snapshot(db, snapshot_id, owner_sub))
     except OwnedResourceNotFound:
         raise HTTPException(status_code=404, detail=_SNAPSHOT_NOT_FOUND) from None
 
@@ -138,14 +163,15 @@ def _body_guard(
         user: dict = get_auth_dependency(),
         db: Session = Depends(get_db),
     ) -> None:
-        check(db, request, require_current_user_id(user))
+        owner_sub = require_current_user_id(user)
+        _checked(db, lambda: check(db, request, owner_sub))
 
     guard.__name__ = guard.__qualname__ = name
     return guard
 
 
 def _check_session_in_body(db: Session, request: Any, owner_sub: str) -> None:
-    load_owned_session(db, request.session_id, owner_sub)
+    require_owned_session(db, request.session_id, owner_sub)
 
 
 def _check_document_in_body(db: Session, request: Any, owner_sub: str) -> None:

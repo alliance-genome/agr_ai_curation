@@ -1667,7 +1667,7 @@ def test_export_submission_readiness_replays_stale_revision_pin_for_blockers(mon
     monkeypatch.setattr(
         domain_tools,
         "_load_session_for_validation",
-        lambda _db, *, session_id: SimpleNamespace(
+        lambda _db, *, session_id, owner_sub: SimpleNamespace(
             candidates=[SimpleNamespace(id="candidate-1")]
         ),
     )
@@ -1738,7 +1738,7 @@ def test_export_submission_readiness_is_not_ready_without_candidates(monkeypatch
     monkeypatch.setattr(
         domain_tools,
         "_load_session_for_validation",
-        lambda _db, *, session_id: SimpleNamespace(candidates=[]),
+        lambda _db, *, session_id, owner_sub: SimpleNamespace(candidates=[]),
     )
     monkeypatch.setattr(
         domain_tools,

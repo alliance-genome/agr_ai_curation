@@ -95,7 +95,6 @@ def create_manual_session(
             document_id=request.document_id,
             adapter_key=request.adapter_key,
             created_by_id=current_user_id,
-            assigned_curator_id=request.curator_id,
             notes=request.notes,
             tags=list(request.tags),
             prepared_at=prepared_at,
@@ -109,7 +108,7 @@ def create_manual_session(
 
     return CurationSessionCreateResponse(
         created=result.created,
-        session=get_session_detail(db, result.session_id),
+        session=get_session_detail(db, result.session_id, owner_sub=current_user_id),
     )
 
 
@@ -322,7 +321,6 @@ async def _run_flow_curation_handoff_impl(
                     adapter_key=adapter_key,
                     flow_run_id=flow_run_id,
                     origin_session_id=origin_session_id,
-                    curator_id=runner_user_id,
                 ),
                 current_user_id=runner_user_id,
                 active_groups=active_groups,
@@ -450,10 +448,10 @@ async def bootstrap_document_session(
                 user_id=current_user_id,
                 active_groups=active_groups,
                 created_by_id=current_user_id,
+                # A request never names an assignee (ALL-1547); a refreshed
+                # session keeps the value it already had.
                 assigned_curator_id=(
-                    request.curator_id
-                    if request.curator_id is not None
-                    else reusable_session.assigned_curator_id if reusable_session else None
+                    reusable_session.assigned_curator_id if reusable_session else None
                 ),
                 notes=reusable_session.notes if reusable_session else None,
                 tags=tuple(reusable_session.tags) if reusable_session else (),
@@ -473,7 +471,9 @@ async def bootstrap_document_session(
 
         response = CurationDocumentBootstrapResponse(
             created=bool(pipeline_result.created),
-            session=get_session_detail(db, pipeline_result.session_id),
+            session=get_session_detail(
+                db, pipeline_result.session_id, owner_sub=current_user_id
+            ),
         )
         if manage_transaction:
             db.commit()

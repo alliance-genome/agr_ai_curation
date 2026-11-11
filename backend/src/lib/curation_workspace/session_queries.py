@@ -357,7 +357,10 @@ def _load_sessions_by_ids(
     session_ids: Sequence[UUID],
     *,
     detailed: bool,
+    owner_sub: str | None,
 ) -> list[ReviewSessionModel]:
+    """Load the caller's sessions among ``session_ids``; others are absent."""
+
     if not session_ids:
         return []
 
@@ -365,6 +368,7 @@ def _load_sessions_by_ids(
     sessions = db.scalars(
         select(ReviewSessionModel)
         .where(ReviewSessionModel.id.in_(session_ids))
+        .where(owned_by(owner_sub))
         .options(*load_options)
     ).all()
     session_map = {session.id: session for session in sessions}
@@ -511,7 +515,7 @@ def _list_session_summaries(
     )
     offset = (page - 1) * page_size
     session_ids = list(db.scalars(ordered_id_select.offset(offset).limit(page_size)).all())
-    sessions = _load_sessions_by_ids(db, session_ids, detailed=False)
+    sessions = _load_sessions_by_ids(db, session_ids, detailed=False, owner_sub=current_user_id)
     document_map, user_map = _session_context_maps(db, sessions)
     summaries = [_session_summary(session, document_map, user_map) for session in sessions]
     return summaries, _page_info(page=page, page_size=page_size, total_items=total_items)
@@ -599,9 +603,14 @@ def list_flow_run_sessions(
     )
 
 
-def get_session_detail(db: Session, session_id: str | UUID) -> CurationReviewSession:
+def get_session_detail(
+    db: Session,
+    session_id: str | UUID,
+    *,
+    owner_sub: str | None,
+) -> CurationReviewSession:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True, owner_sub=owner_sub)
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -612,9 +621,14 @@ def get_session_detail(db: Session, session_id: str | UUID) -> CurationReviewSes
     return _session_detail(db, session, document_map, user_map)
 
 
-def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorkspaceResponse:
+def get_session_workspace(
+    db: Session,
+    session_id: str | UUID,
+    *,
+    owner_sub: str | None,
+) -> CurationWorkspaceResponse:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True, owner_sub=owner_sub)
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -950,7 +964,9 @@ def get_next_session(
         )
 
     target_session_id = _normalize_uuid(target_row["id"], field_name="session_id")
-    session = _load_sessions_by_ids(db, [target_session_id], detailed=False)[0]
+    session = _load_sessions_by_ids(
+        db, [target_session_id], detailed=False, owner_sub=current_user_id
+    )[0]
     document_map, user_map = _session_context_maps(db, [session])
     return CurationNextSessionResponse(
         session=_session_summary(session, document_map, user_map),

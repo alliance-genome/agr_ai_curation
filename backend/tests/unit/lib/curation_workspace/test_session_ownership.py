@@ -73,13 +73,13 @@ def _assert_not_found(exc_info, *, leaked: tuple[str, ...] = (OWNER, OTHER)):
         assert value not in detail
 
 
-def test_load_owned_session_returns_only_the_creators_session(world):
+def test_require_owned_session_accepts_only_the_creators_session(world):
     db = world["db"]
 
-    assert ownership.load_owned_session(db, world["mine"].id, OWNER).id == world["mine"].id
+    assert ownership.require_owned_session(db, world["mine"].id, OWNER) == world["mine"].id
     for session_id in (world["theirs"].id, world["ownerless"].id, uuid4()):
         with pytest.raises(HTTPException) as exc_info:
-            ownership.load_owned_session(db, session_id, OWNER)
+            ownership.require_owned_session(db, session_id, OWNER)
         _assert_not_found(exc_info)
 
 
@@ -88,9 +88,9 @@ def test_not_owned_and_missing_sessions_are_indistinguishable(world):
     missing_id = uuid4()
 
     with pytest.raises(HTTPException) as not_owned:
-        ownership.load_owned_session(db, world["theirs"].id, OWNER)
+        ownership.require_owned_session(db, world["theirs"].id, OWNER)
     with pytest.raises(HTTPException) as missing:
-        ownership.load_owned_session(db, missing_id, OWNER)
+        ownership.require_owned_session(db, missing_id, OWNER)
 
     assert not_owned.value.detail.replace(str(world["theirs"].id), "<id>") == (
         missing.value.detail.replace(str(missing_id), "<id>")
@@ -101,7 +101,7 @@ def test_ownerless_session_is_visible_to_nobody(world):
     db = world["db"]
     for caller in (OWNER, OTHER, None, ""):
         with pytest.raises(HTTPException):
-            ownership.load_owned_session(db, world["ownerless"].id, caller)
+            ownership.require_owned_session(db, world["ownerless"].id, caller)
         assert ownership.session_is_owned(db, world["ownerless"].id, caller) is False
 
 
@@ -121,10 +121,10 @@ def test_candidate_resolver_uses_the_candidates_session(world):
     theirs = add_candidate(db, session_id=world["theirs"].id)
     db.commit()
 
-    assert ownership.load_owned_candidate_session(db, mine.id, OWNER).id == world["mine"].id
+    assert ownership.require_owned_candidate(db, mine.id, OWNER) == world["mine"].id
     for candidate_id in (theirs.id, uuid4()):
         with pytest.raises(HTTPException) as exc_info:
-            ownership.load_owned_candidate_session(db, candidate_id, OWNER)
+            ownership.require_owned_candidate(db, candidate_id, OWNER)
         _assert_not_found(exc_info)
 
 
@@ -135,7 +135,7 @@ def test_submission_resolver_requires_owned_session_and_matching_submission(worl
     db.commit()
 
     assert (
-        ownership.load_owned_submission_session(db, world["mine"].id, mine.id, OWNER).id
+        ownership.require_owned_submission(db, world["mine"].id, mine.id, OWNER)
         == world["mine"].id
     )
     for session_id, submission_id in (
@@ -144,7 +144,7 @@ def test_submission_resolver_requires_owned_session_and_matching_submission(worl
         (world["mine"].id, theirs.id),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            ownership.load_owned_submission_session(db, session_id, submission_id, OWNER)
+            ownership.require_owned_submission(db, session_id, submission_id, OWNER)
         _assert_not_found(exc_info)
 
 
@@ -154,10 +154,10 @@ def test_operation_resolver_uses_the_operations_session(world):
     theirs = add_operation(db, session_id=world["theirs"].id, owner_id=OTHER)
     db.commit()
 
-    assert ownership.load_owned_operation_session(db, mine.id, OWNER).id == world["mine"].id
+    assert ownership.require_owned_operation(db, mine.id, OWNER) == world["mine"].id
     for operation_id in (theirs.id, str(uuid4())):
         with pytest.raises(HTTPException) as exc_info:
-            ownership.load_owned_operation_session(db, operation_id, OWNER)
+            ownership.require_owned_operation(db, operation_id, OWNER)
         _assert_not_found(exc_info)
 
 
@@ -169,10 +169,10 @@ def test_snapshot_resolver_uses_the_snapshots_session(world):
     theirs = add_snapshot(db, session_id=world["theirs"].id, envelope_id="env-theirs", created_by_id=OTHER)
     db.commit()
 
-    assert ownership.load_owned_snapshot_session(db, mine.id, OWNER).id == world["mine"].id
+    assert ownership.require_owned_snapshot(db, mine.id, OWNER) == world["mine"].id
     for snapshot_id in (theirs.id, uuid4()):
         with pytest.raises(ownership.OwnedResourceNotFound):
-            ownership.load_owned_snapshot_session(db, snapshot_id, OWNER)
+            ownership.require_owned_snapshot(db, snapshot_id, OWNER)
 
 
 def test_envelope_visible_through_any_linked_owned_session(world):
@@ -250,7 +250,7 @@ def test_document_check_requires_the_callers_own_curator_document(world):
     frozen = add_document(db, owner=world["owner"], viewer_mode="benchmark_frozen")
     db.commit()
 
-    assert ownership.require_owned_document(db, world["document"].id, OWNER).id == world["document"].id
+    assert ownership.require_owned_document(db, world["document"].id, OWNER) is None
     for document_id in (world["other_document"].id, frozen.id, uuid4()):
         with pytest.raises(HTTPException) as exc_info:
             ownership.require_owned_document(db, document_id, OWNER)
@@ -364,9 +364,199 @@ def test_session_update_cannot_reassign_the_session(world):
     )
     db.commit()
 
-    refreshed = ownership.load_owned_session(db, session_id, OWNER)
+    refreshed = ownership.load_session_for_system(db, session_id)
     assert refreshed.created_by_id == OWNER
     assert refreshed.assigned_curator_id == OTHER
     assert refreshed.notes == "kept"
     assert response.action_log_entry is None
     assert db.query(CurationActionLogEntry).count() == 0
+
+
+def _service_calls(world):
+    """Every service entry point a route reaches, called as a non-owner."""
+
+    from src.lib.curation_workspace import document_reference, evidence_service
+    from src.lib.curation_workspace import session_mutation_service as mutation
+    from src.lib.curation_workspace import session_submission_service as submission
+    from src.lib.curation_workspace import session_validation_service as validation
+    from src.schemas import curation_workspace as schemas
+
+    session_id = str(world["theirs"].id)
+    candidate = add_candidate(world["db"], session_id=world["theirs"].id, envelope_id=None)
+    submission_row = add_submission(world["db"], session_id=world["theirs"].id)
+    add_envelope(world["db"], envelope_id="env-their-svc", document_id=world["document"].id,
+                 session_id=world["theirs"].id)
+    world["db"].commit()
+    candidate_id = str(candidate.id)
+    claims = {"sub": OWNER}
+
+    def construct(model, **values):
+        return getattr(schemas, model).model_construct(session_id=session_id, **values)
+
+    db = world["db"]
+    return {
+        "update_session": lambda: mutation.update_session(
+            db, session_id, construct("CurationSessionUpdateRequest", notes="x"), claims),
+        "create_manual_candidate": lambda: mutation.create_manual_candidate(
+            db, session_id, construct("CurationManualCandidateCreateRequest", adapter_key="fixture",
+                      source=schemas.CurationCandidateSource.MANUAL, display_label=None,
+                      draft=schemas.CurationDraft.model_construct(adapter_key="fixture")), actor_claims=claims),
+        "update_candidate_draft": lambda: mutation.update_candidate_draft(
+            db, session_id, candidate_id, construct("CurationCandidateDraftUpdateRequest",
+                                                    candidate_id=candidate_id), claims),
+        "patch_envelope_field": lambda: mutation.patch_envelope_field(
+            db, session_id, construct("CurationEnvelopeFieldPatchRequest", envelope_id="env-their-svc"), claims),
+        "waive_validation_finding": lambda: mutation.waive_validation_finding(
+            db, session_id, construct("CurationValidationFindingWaiveRequest", envelope_id="env-their-svc"), claims),
+        "delete_candidate": lambda: mutation.delete_candidate(
+            db, session_id, candidate_id, actor_claims=claims),
+        "decide_candidate": lambda: mutation.decide_candidate(
+            db, candidate_id, construct("CurationCandidateDecisionRequest", candidate_id=candidate_id), claims),
+        "recompute_evidence": lambda: evidence_service.recompute_evidence(
+            construct("CurationEvidenceRecomputeRequest", candidate_ids=[candidate_id]),
+            current_user_id=OWNER, actor_claims=claims, db=db),
+        "create_manual_evidence": lambda: evidence_service.create_manual_evidence(
+            construct("CurationManualEvidenceCreateRequest", candidate_id=candidate_id),
+            actor_claims=claims, db=db),
+        "resolve_evidence": lambda: evidence_service.resolve_evidence(
+            construct("CurationEvidenceResolveRequest", candidate_id=candidate_id),
+            current_user_id=OWNER, db=db),
+        "submission_preview": lambda: submission.submission_preview(
+            db, session_id, construct("CurationSubmissionPreviewRequest", candidate_ids=[]), actor_claims=claims),
+        "execute_submission": lambda: submission.execute_submission(
+            db, session_id, construct("CurationSubmissionExecuteRequest", candidate_ids=[]), actor_claims=claims),
+        "retry_submission": lambda: submission.retry_submission(
+            db, session_id, str(submission_row.id), construct("CurationSubmissionRetryRequest", submission_id=str(submission_row.id)),
+            actor_claims=claims),
+        "get_submission": lambda: submission.get_submission(
+            db, session_id, str(submission_row.id), owner_sub=OWNER),
+        "get_session_detail": lambda: session_queries.get_session_detail(db, session_id, owner_sub=OWNER),
+        "get_session_workspace": lambda: session_queries.get_session_workspace(
+            db, session_id, owner_sub=OWNER),
+        "validate_session": lambda: validation.validate_session(
+            db, session_id, construct("CurationSessionValidationRequest", candidate_ids=[]), user_id=OWNER),
+        "validate_candidate": lambda: validation.validate_candidate(
+            db, candidate_id, construct("CurationCandidateValidationRequest", candidate_id=candidate_id),
+            user_id=OWNER),
+        "require_document_can_be_linked": lambda: document_reference.require_document_can_be_linked(
+            db, session_id, owner_sub=OWNER),
+        "unlink_document_reference": lambda: document_reference.unlink_document_reference(
+            db, session_id, actor_claims=claims),
+        "link_document_reference": lambda: document_reference.link_document_reference(
+            db, session_id, None, actor_claims=claims),
+    }
+
+
+SERVICE_ENTRY_POINTS = [
+    "update_session", "create_manual_candidate", "update_candidate_draft", "patch_envelope_field",
+    "waive_validation_finding", "delete_candidate", "decide_candidate", "recompute_evidence",
+    "create_manual_evidence", "resolve_evidence", "submission_preview", "execute_submission",
+    "retry_submission", "get_submission", "get_session_detail", "get_session_workspace",
+    "validate_session", "validate_candidate", "require_document_can_be_linked",
+    "unlink_document_reference", "link_document_reference",
+]
+
+
+@pytest.mark.parametrize("entry_point", SERVICE_ENTRY_POINTS)
+def test_service_entry_points_refuse_another_curators_session(world, entry_point):
+    call = _service_calls(world)[entry_point]
+    with pytest.raises(HTTPException) as exc_info:
+        call()
+    _assert_not_found(exc_info)
+
+
+def test_record_retirement_binding_requires_the_envelope_session_owner(world):
+    from src.lib.curation_workspace.record_retirement_service import binding
+    from src.lib.validation_history import store
+
+    db = world["db"]
+    add_envelope(
+        db,
+        envelope_id="env-retired-theirs",
+        document_id=world["document"].id,
+        session_id=world["theirs"].id,
+        metadata={"validation_history": {"artifact_id": str(uuid4()), "session_id": "history"}},
+    )
+    db.commit()
+
+    with pytest.raises(store.HistoryAccessError):
+        binding(db, "env-retired-theirs", OWNER)
+
+
+def test_manual_session_takes_no_assignee_from_the_request(world):
+    from src.lib.curation_workspace.bootstrap_service import create_manual_session
+    from src.schemas.curation_workspace import CurationSessionCreateRequest
+
+    db = world["db"]
+    response = create_manual_session(
+        CurationSessionCreateRequest(
+            document_id=str(world["document"].id), adapter_key="fixture", curator_id=OTHER
+        ),
+        current_user_id=OWNER,
+        actor_claims={"sub": OWNER},
+        db=db,
+    )
+    db.commit()
+
+    created = ownership.load_session_for_system(db, response.session.session_id)
+    assert created.created_by_id == OWNER
+    assert created.assigned_curator_id is None
+
+
+@pytest.mark.parametrize(
+    ("entry_point", "model"),
+    [
+        ("patch_envelope_field", "CurationEnvelopeFieldPatchRequest"),
+        ("waive_validation_finding", "CurationValidationFindingWaiveRequest"),
+    ],
+)
+def test_foreign_envelope_in_own_session_reads_as_missing(world, entry_point, model):
+    from src.lib.curation_workspace import session_mutation_service as mutation
+    from src.schemas import curation_workspace as schemas
+
+    db = world["db"]
+    add_envelope(db, envelope_id="env-foreign", document_id=world["document"].id,
+                 session_id=world["theirs"].id)
+    db.commit()
+    session_id = str(world["mine"].id)
+
+    def call(envelope_id):
+        request = getattr(schemas, model).model_construct(session_id=session_id, envelope_id=envelope_id)
+        return getattr(mutation, entry_point)(db, session_id, request, {"sub": OWNER})
+
+    with pytest.raises(HTTPException) as foreign:
+        call("env-foreign")
+    with pytest.raises(HTTPException) as missing:
+        call("env-missing")
+
+    assert foreign.value.status_code == missing.value.status_code == 404
+    assert foreign.value.detail == "Domain envelope env-foreign not found"
+    assert missing.value.detail == "Domain envelope env-missing not found"
+
+
+@pytest.mark.parametrize("has_history", [True, False])
+def test_studio_history_applies_envelope_visibility_on_both_branches(
+    world, ownership_session_factory, has_history
+):
+    from src.lib.agent_studio.review_history_tools import inspect_history
+
+    db = world["db"]
+    metadata = (
+        {"validation_history": {"artifact_id": str(uuid4()), "session_id": "history"}}
+        if has_history
+        else {}
+    )
+    add_envelope(db, envelope_id="env-history-theirs", document_id=world["document"].id,
+                 session_id=world["theirs"].id, metadata=metadata)
+    db.commit()
+
+    result = inspect_history(
+        session_factory=ownership_session_factory,
+        user_auth_sub=OWNER,
+        envelope_id="env-history-theirs",
+    )
+    assert result == {
+        "success": False,
+        "code": "history_access_denied",
+        "error": "History source unavailable",
+    }

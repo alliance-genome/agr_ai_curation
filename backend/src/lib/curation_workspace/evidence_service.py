@@ -25,6 +25,8 @@ from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
     CurationReviewSession as ReviewSessionModel,
 )
+from src.lib.curation_workspace.session_common import actor_user_id
+from src.lib.curation_workspace.session_ownership import owned_by
 from src.lib.curation_workspace.session_service import (
     build_action_log_entry,
     build_actor_claims_payload,
@@ -71,7 +73,7 @@ def recompute_evidence(
     The supplied session is flushed but never committed or rolled back here.
     """
 
-    session = _load_session_for_mutation(db, request.session_id)
+    session = _load_session_for_mutation(db, request.session_id, owner_sub=current_user_id)
     target_candidates = _selected_candidates(session, request.candidate_ids)
     now = datetime.now(timezone.utc)
 
@@ -135,7 +137,7 @@ def recompute_evidence(
     db.flush()
 
     response = CurationEvidenceRecomputeResponse(
-        session=get_session_detail(db, session.id),
+        session=get_session_detail(db, session.id, owner_sub=current_user_id),
         updated_evidence_records=[build_evidence_record(row) for row in updated_rows],
         action_log_entry=build_action_log_entry(action_log_row),
     )
@@ -153,7 +155,7 @@ def create_manual_evidence(
     The supplied session is flushed but never committed or rolled back here.
     """
 
-    session = _load_session_for_mutation(db, request.session_id)
+    session = _load_session_for_mutation(db, request.session_id, owner_sub=actor_user_id(actor_claims))
     candidate = _candidate_in_session(session, request.candidate_id)
     field_keys = _normalized_string_list(request.field_keys, field_name="field_keys")
     field_group_keys = _normalized_string_list(
@@ -242,7 +244,7 @@ def resolve_evidence(
     The supplied session is flushed but never committed or rolled back here.
     """
 
-    session = _load_session_for_mutation(db, request.session_id)
+    session = _load_session_for_mutation(db, request.session_id, owner_sub=current_user_id)
     candidate = _candidate_in_session(session, request.candidate_id)
     field_key = _normalized_optional_string(request.field_key, field_name="field_key")
 
@@ -323,11 +325,17 @@ def resolve_evidence(
     return response
 
 
-def _load_session_for_mutation(db: Session, session_id: str | UUID) -> ReviewSessionModel:
+def _load_session_for_mutation(
+    db: Session,
+    session_id: str | UUID,
+    *,
+    owner_sub: str | None,
+) -> ReviewSessionModel:
     normalized_session_id = normalize_uuid(session_id, field_name="session_id")
     session = db.scalars(
         select(ReviewSessionModel)
         .where(ReviewSessionModel.id == normalized_session_id)
+        .where(owned_by(owner_sub))
         .options(*SESSION_EVIDENCE_LOAD_OPTIONS)
     ).first()
     if session is None:

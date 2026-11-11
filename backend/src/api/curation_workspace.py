@@ -669,9 +669,10 @@ async def get_review_session(
     # The database reads and model building run in the thread pool so the
     # single worker's event loop keeps serving other users. Response encoding
     # still happens on the loop after this returns.
+    owner_sub = _require_current_user_id(user)
     if include_workspace:
-        return await run_in_threadpool(get_session_workspace, db, session_id)
-    return await run_in_threadpool(get_session_detail, db, session_id)
+        return await run_in_threadpool(get_session_workspace, db, session_id, owner_sub=owner_sub)
+    return await run_in_threadpool(get_session_detail, db, session_id, owner_sub=owner_sub)
 
 
 def _require_document_source_import() -> None:
@@ -697,7 +698,7 @@ async def find_session_document_reference(
     """Look up the paper an identifier names, without saving anything."""
     _require_document_source_import()
     await provision_user_async(principal_from_claims(user))
-    require_document_can_be_linked(db, session_id)
+    require_document_can_be_linked(db, session_id, owner_sub=_require_current_user_id(user))
     db.rollback()
     return await find_document_reference(
         payload.identifier,
@@ -721,7 +722,7 @@ async def link_session_document_reference(
     """Resolve the identifier again on the server and save what it names."""
     _require_document_source_import()
     await provision_user_async(principal_from_claims(user))
-    require_document_can_be_linked(db, session_id)
+    require_document_can_be_linked(db, session_id, owner_sub=_require_current_user_id(user))
     db.rollback()
     found = await find_document_reference(
         payload.identifier,
@@ -887,6 +888,7 @@ async def post_document_bootstrap(
 
 @router.get(
     "/documents/{document_id}/bootstrap-availability",
+    dependencies=[Depends(owned_document_in_path)],
     response_model=CurationDocumentBootstrapAvailabilityResponse,
 )
 async def get_document_bootstrap_status(
@@ -1203,7 +1205,7 @@ async def get_submission_history(
     db: Session = Depends(get_db),
 ) -> CurationSubmissionHistoryResponse:
     await provision_user_async(principal_from_claims(user))
-    return get_submission(db, session_id, submission_id)
+    return get_submission(db, session_id, submission_id, owner_sub=_require_current_user_id(user))
 
 
 __all__ = ["router"]

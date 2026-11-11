@@ -145,7 +145,9 @@ def update_session(
             detail="Path session_id does not match request body session_id",
         )
 
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -256,7 +258,9 @@ def update_session(
             db.add(action_log_row)
         db.flush()
 
-    updated_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    updated_sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     updated_session = updated_sessions[0]
     document_map, user_map = _session_context_maps(db, [updated_session])
     return CurationSessionUpdateResponse(
@@ -387,7 +391,9 @@ def create_manual_candidate(
             detail="draft.adapter_key must match adapter_key",
         )
 
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -530,7 +536,7 @@ def create_manual_candidate(
             candidate_row.id,
             session_id=session_row.id,
         ),
-        session=get_session_detail(db, session_row.id),
+        session=get_session_detail(db, session_row.id, owner_sub=actor_user_id(actor_claims)),
         action_log_entry=build_action_log_entry(action_log_row),
     )
     db.flush()
@@ -563,6 +569,7 @@ def update_candidate_draft(
         db,
         session_id=normalized_session_id,
         candidate_id=normalized_candidate_id,
+        owner_sub=actor_user_id(actor_claims),
     )
     draft_row = candidate.draft
     if candidate.source == CurationCandidateSource.MANUAL and candidate.envelope_id is None:
@@ -727,6 +734,7 @@ def update_candidate_draft(
         db,
         session_id=normalized_session_id,
         candidate_id=normalized_candidate_id,
+        owner_sub=actor_user_id(actor_claims),
     )
     return CurationCandidateDraftUpdateResponse(
         candidate=_candidate_payload(updated_candidate),
@@ -972,7 +980,9 @@ def patch_envelope_field(
             detail="Path session_id does not match request body session_id",
         )
 
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -981,15 +991,11 @@ def patch_envelope_field(
     session_row = sessions[0]
 
     envelope_row = load_domain_envelope_row_for_patch(db, request.envelope_id)
-    if envelope_row is None:
+    # Another session's envelope reads as missing, so its existence is not revealed.
+    if envelope_row is None or envelope_row.session_id != normalized_session_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {request.envelope_id} not found",
-        )
-    if envelope_row.session_id != normalized_session_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Domain envelope does not belong to the requested session",
         )
     envelope_candidates = load_envelope_candidates_for_patch(
         db,
@@ -1188,7 +1194,9 @@ def patch_envelope_field(
         envelope_id=request.envelope_id,
         object_id=request.object_id,
     )
-    refreshed_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    refreshed_sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     refreshed_session = refreshed_sessions[0] if refreshed_sessions else None
     document_map, user_map = (
         _session_context_maps(db, [refreshed_session])
@@ -1234,7 +1242,9 @@ def waive_validation_finding(
             detail="Path session_id does not match request body session_id",
         )
 
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1243,15 +1253,11 @@ def waive_validation_finding(
     session_row = sessions[0]
 
     envelope_row = load_domain_envelope_row_for_patch(db, request.envelope_id)
-    if envelope_row is None:
+    # Another session's envelope reads as missing, so its existence is not revealed.
+    if envelope_row is None or envelope_row.session_id != normalized_session_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Domain envelope {request.envelope_id} not found",
-        )
-    if envelope_row.session_id != normalized_session_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Domain envelope does not belong to the requested session",
         )
     envelope_candidates = load_envelope_candidates_for_patch(
         db,
@@ -1368,7 +1374,9 @@ def waive_validation_finding(
     db.add(action_log_row)
     db.flush()
 
-    refreshed_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    refreshed_sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     refreshed_session = refreshed_sessions[0]
     document_map, user_map = _session_context_maps(db, [refreshed_session])
     action_log_entry = _action_log_entry(action_log_row)
@@ -1986,7 +1994,9 @@ def delete_candidate(
     """Delete a candidate and flush without committing the supplied session."""
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -2077,7 +2087,7 @@ def delete_candidate(
 
     return CurationCandidateDeleteResponse(
         deleted_candidate_id=str(candidate.id),
-        session=get_session_detail(db, session.id),
+        session=get_session_detail(db, session.id, owner_sub=actor_user_id(actor_claims)),
         action_log_entry=action_log_entry,
     )
 
@@ -2090,7 +2100,9 @@ def decide_candidate(
     """Record a candidate decision without committing the supplied session."""
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     normalized_session_id = _normalize_uuid(request.session_id, field_name="session_id")
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(
+        db, [normalized_session_id], detailed=True, owner_sub=actor_user_id(actor_claims)
+    )
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -2196,7 +2208,7 @@ def decide_candidate(
 
     response = CurationCandidateDecisionResponse(
         candidate=get_candidate_detail(db, candidate.id, session_id=session.id),
-        session=get_session_detail(db, session.id),
+        session=get_session_detail(db, session.id, owner_sub=actor_user_id(actor_claims)),
         next_candidate_id=str(next_candidate_uuid) if next_candidate_uuid else None,
         action_log_entry=build_action_log_entry(action_log_row),
     )

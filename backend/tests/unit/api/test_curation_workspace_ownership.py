@@ -45,9 +45,6 @@ EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/curation-workspace/views"): "saved views are filtered by their creator",
     ("POST", "/api/curation-workspace/views"): "creates a saved view owned by the caller",
     ("DELETE", "/api/curation-workspace/views/{view_id}"): "saved-view deletion is filtered by its creator",
-    ("GET", "/api/curation-workspace/documents/{document_id}/bootstrap-availability"): (
-        "read-only; considers only the caller's own prep results and chat sessions"
-    ),
     ("GET", "/api/curation-workspace/prep/preview"): "previews the caller's own chat session",
     ("POST", "/api/curation-workspace/prep"): "prepares the caller's own chat session; reuse is owner-filtered",
 }
@@ -206,7 +203,11 @@ def world(ownership_session_factory, monkeypatch):
     app.include_router(module.router)
 
     def override_db():
-        yield db
+        request_db = ownership_session_factory()
+        try:
+            yield request_db
+        finally:
+            request_db.close()
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[_get_user_from_cookie_impl] = lambda: {"sub": OWNER}
@@ -234,7 +235,7 @@ def _assert_hidden(response):
 
 
 def test_session_in_path_hides_another_curators_session(world, monkeypatch):
-    monkeypatch.setattr(module, "get_session_detail", lambda _db, session_id: {"session_id": str(session_id)})
+    monkeypatch.setattr(module, "get_session_detail", lambda _db, session_id, *, owner_sub: {"session_id": str(session_id)})
     client = world["client"]
 
     _assert_hidden(client.get(f"/api/curation-workspace/sessions/{world['theirs'].id}"))
@@ -320,4 +321,39 @@ def test_document_routes_require_the_callers_document(world, monkeypatch):
             json={"adapter_key": "fixture"},
         )
     )
+    _assert_hidden(
+        client.get(
+            f"/api/curation-workspace/documents/{world['other_document'].id}/bootstrap-availability"
+        )
+    )
     assert created == []
+
+
+def test_guard_holds_no_rows_and_no_open_transaction(world, monkeypatch):
+    seen = {}
+
+    def detail(db, session_id, **_kwargs):
+        seen["in_transaction"] = db.in_transaction()
+        seen["cached_rows"] = len(db.identity_map)
+        return {"session_id": str(session_id)}
+
+    monkeypatch.setattr(module, "get_session_detail", detail)
+    response = world["client"].get(f"/api/curation-workspace/sessions/{world['mine'].id}")
+
+    assert response.status_code == 200, response.text
+    assert seen == {"in_transaction": False, "cached_rows": 0}
+
+
+def test_guard_leaves_a_transaction_it_did_not_open(ownership_session_factory):
+    db = ownership_session_factory()
+    try:
+        owner = add_user(db, OWNER)  # flushed, not committed: the caller's open work
+        document = add_document(db, owner=owner)
+        session = add_session(db, document_id=document.id, created_by_id=OWNER)
+
+        access.owned_session_in_path(session.id, user={"sub": OWNER}, db=db)
+
+        assert db.in_transaction()
+        assert access.owned_session_in_path(session.id, user={"sub": OWNER}, db=db) is None
+    finally:
+        db.close()

@@ -70,7 +70,8 @@ async def test_get_review_session_builds_response_off_the_event_loop(monkeypatch
     loop_thread = threading.get_ident()
     calls = []
 
-    def build(db, session_id):
+    def build(db, session_id, *, owner_sub):
+        assert owner_sub == "curator-1"
         calls.append(threading.get_ident())
         return {"session_id": str(session_id)}
 
@@ -1315,7 +1316,8 @@ async def test_get_submission_history_delegates_to_service(monkeypatch):
     expected = object()
     captured: dict[str, object] = {}
 
-    def _get_submission(db, session_id, submission_id):
+    def _get_submission(db, session_id, submission_id, *, owner_sub):
+        captured["owner_sub"] = owner_sub
         captured["db"] = db
         captured["session_id"] = session_id
         captured["submission_id"] = submission_id
@@ -1336,6 +1338,7 @@ async def test_get_submission_history_delegates_to_service(monkeypatch):
 
     assert response is expected
     assert captured == {
+        "owner_sub": "user-1",
         "db": db,
         "session_id": session_id,
         "submission_id": submission_id,

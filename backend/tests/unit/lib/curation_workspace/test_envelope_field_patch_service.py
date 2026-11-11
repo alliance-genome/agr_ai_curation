@@ -246,6 +246,7 @@ def _create_session_with_envelope_projection(db_session, *, source_agent_key=Non
         status=CurationSessionStatus.NEW,
         adapter_key="fixture_adapter",
         document_id=document.id,
+        created_by_id="curator-1",
         session_version=1,
         total_candidates=1,
         pending_candidates=1,
@@ -634,8 +635,9 @@ def test_patch_rejects_envelope_without_owning_session(db_session, loaded_pack):
             {"sub": "curator-1"},
         )
 
-    assert exc.value.status_code == 400
-    assert "does not belong" in exc.value.detail
+    # Reads as missing so another session's envelope is not revealed (ALL-1547).
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Domain envelope env-1 not found"
 
 
 def test_patch_refreshes_every_candidate_linked_to_owned_envelope(db_session, loaded_pack):

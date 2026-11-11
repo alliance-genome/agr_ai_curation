@@ -1263,7 +1263,9 @@ def get_export_submission_readiness(
         if not session_is_owned(db, normalized_session_id, _optional_text(user_auth_sub)):
             return _error(f"Curation review session {normalized_session_id} was not found.")
 
-        session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+        session_row = _load_session_for_validation(
+            db, session_id=normalized_session_id, owner_sub=_optional_text(user_auth_sub)
+        )
         candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
         all_candidate_ids = list(candidate_map)
         if readiness_token is not None:

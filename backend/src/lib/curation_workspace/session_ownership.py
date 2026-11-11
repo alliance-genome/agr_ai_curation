@@ -1,19 +1,31 @@
 """Who may reach a curation review session (ALL-1547).
 
 A review session belongs to the curator who created it: ``created_by_id``
-holds that curator's authentication subject. Nobody else can see or change
-it, sessions are never shared or reassigned, and a session without a
-recorded creator is visible to nobody.
+holds that curator's authentication subject. Assignment grants nothing,
+sessions cannot be reassigned, and a session without a recorded creator is
+visible to nobody.
 
-Every caller-facing path loads sessions through the owner-scoped functions
-below. A caller that is not the owner gets the same 404 as a caller asking
-for something that does not exist, so the response never reveals that the
-session exists or who owns it. Background work that runs without a curator
-uses ``load_session_for_system`` and must not hand its result to a caller.
+Enforcement happens at two layers:
+
+* Route guards (``src.api.curation_workspace_access``) call the
+  identifier-only ``require_owned_*`` checks here before a handler runs.
+  A non-owner gets the same 404 as for an identifier that does not exist.
+* The service entry points those routes reach take the caller (an owner
+  subject or actor claims) as a required argument and load sessions,
+  candidates and submissions only through queries filtered by ``owned_by``.
+  Inventory queries filter the same way.
+
+Envelope visibility has one definition, ``envelope_visible_clause``, used by
+routes, record history and the Agent Studio tools. Internal work with no
+curator request behind it uses the ``*_for_system`` functions, which do not
+filter by owner; their callers are background jobs or code that already
+checked the owner. Bulk statements that act on all sessions of a document
+(document deletion cleanup) are outside this module.
 """
 
 from __future__ import annotations
 
+from typing import Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -64,22 +76,21 @@ def owned_session_ids(owner_sub: str | None):
     return select(CurationReviewSession.id).where(owned_by(owner_sub))
 
 
-def load_owned_session(
-    db: Session,
-    session_id: str | UUID,
-    owner_sub: str | None,
-) -> CurationReviewSession:
-    """Return the caller's session, or 404 when it is missing or not theirs."""
+def require_owned_session(db: Session, session_id: str | UUID, owner_sub: str | None) -> UUID:
+    """Return the session id when the caller owns it, else 404.
+
+    Reads only the identifier, so no session row is loaded or cached.
+    """
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
-    session_row = db.scalars(
-        select(CurationReviewSession)
+    found = db.scalar(
+        select(CurationReviewSession.id)
         .where(CurationReviewSession.id == normalized_session_id)
         .where(owned_by(owner_sub))
-    ).first()
-    if session_row is None:
+    )
+    if found is None:
         raise OwnedResourceNotFound(f"Curation review session {normalized_session_id} not found")
-    return session_row
+    return found
 
 
 def session_is_owned(db: Session, session_id: str | UUID, owner_sub: str | None) -> bool:
@@ -102,66 +113,77 @@ def session_is_owned(db: Session, session_id: str | UUID, owner_sub: str | None)
 
 
 def load_session_for_system(db: Session, session_id: str | UUID) -> CurationReviewSession | None:
-    """Load a session for background work that runs without a curator.
+    """Load a session for internal work that has no curator request behind it.
 
-    Only system callers (projection rebuilds, workers acting for a stored
-    owner after their own access check) may use this. Never return its result
-    to a request without an owner check.
+    Callers either run in the background (projection rebuilds) or act after
+    their own owner check for a stored owner. Never return the result to a
+    request without an owner check.
     """
 
     return db.get(CurationReviewSession, _normalize_uuid(session_id, field_name="session_id"))
 
 
-def load_owned_candidate_session(
+def load_session_adapter_keys_for_system(
     db: Session,
-    candidate_id: str | UUID,
-    owner_sub: str | None,
-) -> CurationReviewSession:
-    """Resolve a candidate to the caller's session that holds it."""
+    session_ids: Sequence[UUID],
+) -> dict[UUID, str]:
+    """Adapter key per session for internal metadata assembly (batch results)."""
+
+    return {
+        row.id: row.adapter_key
+        for row in db.execute(
+            select(CurationReviewSession.id, CurationReviewSession.adapter_key).where(
+                CurationReviewSession.id.in_(session_ids)
+            )
+        ).all()
+    }
+
+
+def require_owned_candidate(db: Session, candidate_id: str | UUID, owner_sub: str | None) -> UUID:
+    """Resolve a candidate to the id of the caller's session that holds it, else 404."""
 
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
-    session_row = db.scalars(
-        select(CurationReviewSession)
+    found = db.scalar(
+        select(CurationReviewSession.id)
         .join(CurationCandidate, CurationCandidate.session_id == CurationReviewSession.id)
         .where(CurationCandidate.id == normalized_candidate_id)
         .where(owned_by(owner_sub))
-    ).first()
-    if session_row is None:
+    )
+    if found is None:
         raise OwnedResourceNotFound(f"Curation candidate {normalized_candidate_id} not found")
-    return session_row
+    return found
 
 
-def load_owned_submission_session(
+def submission_not_found(submission_id: UUID, session_id: UUID) -> OwnedResourceNotFound:
+    return OwnedResourceNotFound(
+        f"Curation submission {submission_id} not found in session {session_id}"
+    )
+
+
+def require_owned_submission(
     db: Session,
     session_id: str | UUID,
     submission_id: str | UUID,
     owner_sub: str | None,
-) -> CurationReviewSession:
-    """Resolve a submission to the caller's session, which must be ``session_id``."""
+) -> UUID:
+    """404 unless the submission belongs to ``session_id`` and the caller owns it."""
 
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_submission_id = _normalize_uuid(submission_id, field_name="submission_id")
-    session_row = db.scalars(
-        select(CurationReviewSession)
+    found = db.scalar(
+        select(CurationReviewSession.id)
         .join(CurationSubmissionRecord, CurationSubmissionRecord.session_id == CurationReviewSession.id)
         .where(CurationSubmissionRecord.id == normalized_submission_id)
         .where(CurationReviewSession.id == normalized_session_id)
         .where(owned_by(owner_sub))
-    ).first()
-    if session_row is None:
-        raise OwnedResourceNotFound(
-            f"Curation submission {normalized_submission_id} not found in session "
-            f"{normalized_session_id}"
-        )
-    return session_row
+    )
+    if found is None:
+        raise submission_not_found(normalized_submission_id, normalized_session_id)
+    return found
 
 
-def load_owned_operation_session(
-    db: Session,
-    operation_id: str | UUID,
-    owner_sub: str | None,
-) -> CurationReviewSession:
-    """Resolve a workspace review operation to the caller's session."""
+def require_owned_operation(db: Session, operation_id: str | UUID, owner_sub: str | None) -> UUID:
+    """Resolve a workspace review operation to the caller's session id, else 404."""
 
     normalized_operation_id = str(_normalize_uuid(operation_id, field_name="operation_id"))
     operation_session_id = db.scalar(
@@ -169,37 +191,24 @@ def load_owned_operation_session(
             WorkspaceReviewOperation.id == normalized_operation_id
         )
     )
-    session_row = (
-        db.scalars(
-            select(CurationReviewSession)
-            .where(CurationReviewSession.id == _normalize_uuid(operation_session_id, field_name="session_id"))
-            .where(owned_by(owner_sub))
-        ).first()
-        if operation_session_id is not None
-        else None
-    )
-    if session_row is None:
+    if operation_session_id is None or not session_is_owned(db, operation_session_id, owner_sub):
         raise OwnedResourceNotFound(f"Workspace review operation {normalized_operation_id} not found")
-    return session_row
+    return UUID(operation_session_id)
 
 
-def load_owned_snapshot_session(
-    db: Session,
-    snapshot_id: str | UUID,
-    owner_sub: str | None,
-) -> CurationReviewSession:
-    """Resolve a benchmark snapshot to the caller's session."""
+def require_owned_snapshot(db: Session, snapshot_id: str | UUID, owner_sub: str | None) -> UUID:
+    """Resolve a benchmark snapshot to the caller's session id, else 404."""
 
     normalized_snapshot_id = _normalize_uuid(snapshot_id, field_name="snapshot_id")
-    session_row = db.scalars(
-        select(CurationReviewSession)
+    found = db.scalar(
+        select(CurationReviewSession.id)
         .join(CurationBenchmarkSnapshot, CurationBenchmarkSnapshot.session_id == CurationReviewSession.id)
         .where(CurationBenchmarkSnapshot.id == normalized_snapshot_id)
         .where(owned_by(owner_sub))
-    ).first()
-    if session_row is None:
+    )
+    if found is None:
         raise OwnedResourceNotFound(f"Benchmark snapshot {normalized_snapshot_id} not found")
-    return session_row
+    return found
 
 
 def envelope_visible_clause(owner_sub: str | None) -> ColumnElement[bool]:
@@ -228,6 +237,9 @@ def envelope_visible_clause(owner_sub: str | None) -> ColumnElement[bool]:
                 not_(exists(linked_candidates)),
                 exists(
                     select(CurationExtractionResultRecord.id).where(
+                        # The document match lets Postgres use the indexed
+                        # document_id; the source id is stored as text.
+                        CurationExtractionResultRecord.document_id == DomainEnvelopeModel.document_id,
                         func.cast(CurationExtractionResultRecord.id, String)
                         == DomainEnvelopeModel.source_extraction_result_id,
                         CurationExtractionResultRecord.user_id == owner_sub,
@@ -264,8 +276,8 @@ def require_owned_document(
     db: Session,
     document_id: str | UUID,
     owner_sub: str | None,
-) -> PDFDocument:
-    """Return a curator-library document the caller owns, or 404.
+) -> None:
+    """404 unless the document is a curator-library document the caller owns.
 
     Uses the canonical owned-document query, so another user's document and
     benchmark frozen copies both read as missing. Internal flow handoffs on
@@ -276,16 +288,17 @@ def require_owned_document(
     owner_user_id = (
         db.scalar(select(User.id).where(User.auth_sub == owner_sub)) if owner_sub else None
     )
-    document = (
-        db.scalars(
-            owned_documents_select(owner_user_id).where(PDFDocument.id == normalized_document_id)
-        ).first()
-        if owner_user_id is not None
-        else None
+    owned = owner_user_id is not None and db.scalar(
+        select(
+            exists(
+                owned_documents_select(owner_user_id)
+                .where(PDFDocument.id == normalized_document_id)
+                .with_only_columns(PDFDocument.id)
+            )
+        )
     )
-    if document is None:
+    if not owned:
         raise OwnedResourceNotFound(f"Document {normalized_document_id} not found")
-    return document
 
 
 __all__ = [
@@ -293,15 +306,17 @@ __all__ = [
     "envelope_visible_clause",
     "envelope_visible_to",
     "is_owned_by",
-    "load_owned_candidate_session",
-    "load_owned_operation_session",
-    "load_owned_session",
-    "load_owned_snapshot_session",
-    "load_owned_submission_session",
+    "load_session_adapter_keys_for_system",
     "load_session_for_system",
     "owned_by",
     "owned_session_ids",
+    "require_owned_candidate",
     "require_owned_document",
+    "require_owned_operation",
+    "require_owned_session",
+    "require_owned_snapshot",
+    "require_owned_submission",
     "require_visible_envelope",
     "session_is_owned",
+    "submission_not_found",
 ]
