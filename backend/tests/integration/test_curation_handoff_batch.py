@@ -228,7 +228,7 @@ def _create_user(db, suffix: str):
     return user
 
 
-def _create_document(db, user, suffix: str):
+def _create_document(db, user, suffix: str, *, viewer_mode: str | None = None):
     from src.models.sql.pdf_document import PDFDocument
 
     document = PDFDocument(
@@ -241,6 +241,7 @@ def _create_document(db, user, suffix: str):
         page_count=3,
         status="processed",
         user_id=user.id,
+        viewer_mode=viewer_mode,
     )
     db.add(document)
     db.flush()
@@ -817,6 +818,87 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
     assert envelope_row.envelope_json["metadata"][
         "source_extraction_result_id"
     ] == str(source_row.id)
+
+
+async def test_benchmark_frozen_copy_handoff_creates_the_runners_session(handoff_db):
+    """Benchmark runs hand off on frozen copies through the internal flow path.
+
+    Curator-facing create and bootstrap routes refuse frozen copies (ALL-1547);
+    the flow ``curation_handoff`` path must still create the runner's session.
+    """
+    from fastapi import HTTPException
+
+    from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
+    from src.lib.curation_workspace.domain_envelope_normalization import (
+        domain_envelope_from_extraction_result,
+    )
+    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+    from src.lib.curation_workspace.session_ownership import (
+        load_owned_session,
+        require_owned_document,
+    )
+    from src.lib.flows.executor import _persist_flow_extraction_candidates
+
+    suffix = uuid4().hex[:10]
+    runner = _create_user(handoff_db, suffix)
+    other = _create_user(handoff_db, f"{suffix}_other")
+    document = _create_document(handoff_db, runner, suffix, viewer_mode="benchmark_frozen")
+    handoff_db.commit()
+
+    flow_run_id = f"{TEST_PREFIX}_frozen_{suffix}"
+    origin_session_id = f"{TEST_PREFIX}_frozen_session_{suffix}"
+    fixture = _extraction_record(
+        adapter_key="gene",
+        document_id=str(document.id),
+        user_id=runner.auth_sub,
+        session_id=origin_session_id,
+        flow_run_id=flow_run_id,
+    )
+    canonical_payload = domain_envelope_from_extraction_result(fixture, stored=True).model_dump(
+        mode="json"
+    )
+    source_records = _persist_flow_extraction_candidates(
+        candidates=[
+            ExtractionEnvelopeCandidate(
+                agent_key=fixture.agent_key,
+                adapter_key=fixture.adapter_key,
+                payload_json=canonical_payload,
+                candidate_count=fixture.candidate_count,
+                conversation_summary=fixture.conversation_summary,
+                metadata=dict(fixture.metadata),
+            )
+        ],
+        document_id=str(document.id),
+        user_id=runner.auth_sub,
+        session_id=origin_session_id,
+        trace_id="trace-frozen",
+        flow_run_id=flow_run_id,
+    )
+    _assert_sources_committed(source_records)
+
+    handoff = await run_flow_curation_handoff(
+        extraction_results=source_records,
+        document_id=str(document.id),
+        runner_user_id=runner.auth_sub,
+        flow_run_id=flow_run_id,
+        origin_session_id=origin_session_id,
+        conversation_summary="Frozen benchmark copy fixture.",
+        db=handoff_db,
+    )
+
+    handoff_db.expire_all()
+    assert len(handoff.review_session_ids) == 1
+    sessions = _review_sessions(handoff_db, handoff.review_session_ids)
+    assert sessions[0].created_by_id == runner.auth_sub
+    assert _candidate_count(handoff_db, handoff.review_session_ids) > 0
+    assert load_owned_session(handoff_db, handoff.review_session_ids[0], runner.auth_sub)
+    with pytest.raises(HTTPException) as hidden:
+        load_owned_session(handoff_db, handoff.review_session_ids[0], other.auth_sub)
+    assert hidden.value.status_code == 404
+    # The curator-facing document check refuses the same frozen copy.
+    with pytest.raises(HTTPException) as refused:
+        require_owned_document(handoff_db, document.id, runner.auth_sub)
+    assert refused.value.status_code == 404
 
 
 @pytest.mark.parametrize(
