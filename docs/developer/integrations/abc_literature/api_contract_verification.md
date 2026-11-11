@@ -99,13 +99,21 @@ Converted rows in the `by_md5` response do not carry MOD metadata. AI Curation
 must continue inheriting access from the matched source/main PDF row.
 
 `ReferencefileModSchemaRelated.mod_abbreviation` can be `null`. A null MOD row
-on the source/main PDF may represent global/open access; a null MOD row on a
-converted Markdown artifact must not be used as an entitlement source.
+on the source/main PDF grants global access, even when the same file also has
+named MOD rows; a null MOD row on a converted Markdown artifact must not be
+used as an entitlement source. `open_access` is the reference's copyright
+license flag, the same one ABC's `download_file` checks.
 
 `show_all` returns file rows as `ReferencefileSchemaRelated`. These rows can
-include `referencefile_mods`, but the first-cut import path should still derive
-converted Markdown access from the source/main PDF when the source relationship
-is known.
+include `referencefile_mods` but never `open_access`. The first-cut import path
+still derives converted Markdown access from the source/main PDF when the
+source relationship is known.
+
+`GET /reference/{curie}`, `/reference/by_cross_reference/{id}` and the PMID path
+(`external_lookup` followed by `GET /reference/{curie}`) return
+`ReferenceSchemaShow`, which carries `copyright_license_open_access`. Identifier
+imports already hold this record when they list the reference's files, so the
+listing reads the flag from it without another ABC request.
 
 The allowlisted endpoints have `HTTPBearer` security in OpenAPI. Treat a live
 `403` from `download_file` as authoritative. Do not persist, log, return, or
@@ -311,12 +319,32 @@ Fixture and test evidence:
 - Provider unit tests cover source-PDF null MOD rows mapping to global access
   and malformed/empty MOD payloads not being inferred as global.
 
-Null-MOD/global decision:
+Null-MOD/global decision (aligned with ABC's `download_file` in ALL-1543):
 
-- A null MOD on a source/main PDF row is the only case that may map to global
-  access.
+- ABC serves a file when the reference's copyright license is open access, when
+  any `referencefile_mods` row has no MOD, or when a row names the caller's
+  MOD. AI Curation maps each source/main PDF row the same way:
+
+  | Source PDF row | Access policy |
+  | --- | --- |
+  | Open-access reference (`open_access` on `by_md5`, or the reference record's `copyright_license_open_access`) | global |
+  | Has a null MOD row, with or without named MOD rows | global |
+  | Named MOD rows only | restricted to those MODs |
+  | No usable MOD rows and not open access | unknown (denied) |
+
 - A null MOD on a converted Markdown row is not an access grant. Converted
   Markdown inherits access from the matched source/main PDF.
+- Open access is read only from those structured ABC fields. A listing made
+  from a bare curie or id (conversion follow-up and figure-metadata
+  re-listings) has no reference record, so it applies the MOD rows alone; none
+  of those listings authorizes a source PDF.
+- Global access does not drop a file's named MODs from source-PDF ranking: a
+  PDF with the curator's MOD still outranks a shared PDF, matching ABC's
+  main-PDF lookup. Two shared PDFs, neither naming the curator's MOD, tie, and
+  the identifier import reports an ambiguous match instead of guessing.
+- AI Curation grants global access to any signed-in curator. ABC additionally
+  requires the caller to have some MOD access for the null-MOD grant; under a
+  curator bearer, ABC's `download_file` still enforces that on download.
 - A live restricted fixture plus fake/unit coverage is enough for cutover; no
   additional live global fixture is required before ALL-354 closure.
 

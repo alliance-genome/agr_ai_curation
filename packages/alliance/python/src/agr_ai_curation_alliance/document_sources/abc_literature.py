@@ -50,6 +50,11 @@ _CROSS_REFERENCE_PREFIX_KEYS = {
     "PMCID": "pmcid",
 }
 
+# Artifact metadata key holding a file's named MODs from ``referencefile_mods``.
+# Source-PDF ranking reads it; the access policy records named MODs only when
+# they restrict the file.
+_MOD_ABBREVIATIONS_METADATA_KEY = "mod_abbreviations"
+
 logger = logging.getLogger(__name__)
 
 
@@ -197,9 +202,13 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         ABC intentionally keeps one final main PDF per MOD plus at most one
         shared/null-MOD PMC PDF. Its own main-PDF lookup first restricts the
         candidates to final main PDFs whose PDF type is ``pdf``, then applies
-        this precedence for a requested MOD. Equal MOD-specific ranks remain
-        tied so callers do not guess when a curator genuinely spans multiple
-        MODs. Supplements and non-final PDFs never outrank a canonical main.
+        this precedence for a requested MOD: a PDF with an entry for that MOD,
+        then a PDF with a no-MOD entry. The MOD tier reads the file's own MOD
+        entries, so a PDF tagged both no-MOD and with the curator's MOD (which
+        maps to global access) still ranks first. Equal ranks remain tied so
+        callers do not guess when a curator genuinely spans multiple MODs or
+        two shared PDFs carry no MOD of the curator's. Supplements and
+        non-final PDFs never outrank a canonical main.
         """
 
         file_class = str(artifact.metadata.get("file_class") or "").strip().casefold()
@@ -219,15 +228,12 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             for group_id in authorized_group_ids
             if str(group_id).strip()
         }
-        artifact_group_ids = {
-            group_id.strip().casefold()
-            for group_id in artifact.access_policy.group_ids
-            if group_id.strip()
+        artifact_mods = {
+            str(mod).strip().casefold()
+            for mod in artifact.metadata.get(_MOD_ABBREVIATIONS_METADATA_KEY) or ()
+            if str(mod).strip()
         }
-        if (
-            artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-            and authorized.intersection(artifact_group_ids)
-        ):
+        if authorized.intersection(artifact_mods):
             return (0,)
         if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
             return (1,)
@@ -549,10 +555,24 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             and not _has_artifact_status_signal(payload)
         ):
             status = SourceArtifactStatus.AVAILABLE
+        mod_abbreviations = _extract_access_group_ids(payload)
         access_policy = inherited_access_policy or _map_access_policy(
             payload,
+            mod_abbreviations=mod_abbreviations,
             source_pdf_null_mods_are_global=role is SourceArtifactRole.SOURCE_PDF,
+            reference_open_access=(
+                payload.get("open_access") is True
+                or _reference_is_open_access(reference)
+            ),
         )
+        metadata = dict(
+            _compact_metadata(
+                payload,
+                exclude={"converted_referencefiles", "referencefile_mods"},
+            )
+        )
+        if mod_abbreviations:
+            metadata[_MOD_ABBREVIATIONS_METADATA_KEY] = tuple(sorted(mod_abbreviations))
 
         return SourceArtifact(
             provider=self.provider_id,
@@ -566,10 +586,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             md5sum=_first_string(payload, "md5sum", "md5"),
             parent_artifact_id=parent_artifact_id,
             access_policy=access_policy,
-            metadata=_compact_metadata(
-                payload,
-                exclude={"converted_referencefiles", "referencefile_mods"},
-            ),
+            metadata=metadata,
         )
 
 
@@ -776,19 +793,43 @@ def _extract_external_ids(
 def _map_access_policy(
     payload: Mapping[str, Any],
     *,
+    mod_abbreviations: set[str],
     source_pdf_null_mods_are_global: bool,
+    reference_open_access: bool,
 ) -> SourceAccessPolicy:
-    group_ids = _extract_access_group_ids(payload)
-    if group_ids:
-        return SourceAccessPolicy(
-            scope=SourceAccessScope.RESTRICTED,
-            group_ids=tuple(sorted(group_ids)),
-        )
+    """Map one ABC file row to the access ABC's ``download_file`` grants.
+
+    ABC serves a file when its reference's copyright license is open access,
+    when any of its ``referencefile_mods`` rows has no MOD, or when a row names
+    the caller's MOD. The no-MOD grant is honored only on source PDFs:
+    converted rows inherit their source PDF's policy, and a no-MOD row on a
+    converted row alone grants nothing. A file with no usable MOD rows and no
+    open-access signal stays ``UNKNOWN`` and is denied.
+    """
+
+    if reference_open_access:
+        return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
     if source_pdf_null_mods_are_global and _has_null_mod_entry(payload):
         return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
-    if payload.get("open_access") is True:
-        return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
+    if mod_abbreviations:
+        return SourceAccessPolicy(
+            scope=SourceAccessScope.RESTRICTED,
+            group_ids=tuple(sorted(mod_abbreviations)),
+        )
     return SourceAccessPolicy(scope=SourceAccessScope.UNKNOWN)
+
+
+def _reference_is_open_access(reference: SourceReference | str | None) -> bool:
+    """Read ABC's reference-record open-access flag when the record is in hand.
+
+    ``resolve_reference`` maps ABC's ``ReferenceSchemaShow``, whose
+    ``copyright_license_open_access`` is the same flag ``download_file``
+    checks. A bare curie or id carries no record, so it grants nothing.
+    """
+
+    if not isinstance(reference, SourceReference):
+        return False
+    return reference.metadata.get("copyright_license_open_access") is True
 
 
 def _extract_access_group_ids(payload: Mapping[str, Any]) -> set[str]:

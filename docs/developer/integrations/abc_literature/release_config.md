@@ -107,9 +107,13 @@ Curator access is based on identity-provider group claims mapped through
 `config/groups.yaml` / deployment overrides. The relevant claims are
 `cognito:groups` and `groups`.
 
-Source/main PDF metadata is the entitlement source for ABC-backed imports.
-Converted Markdown rows may have null MOD metadata and must not grant access by
-themselves.
+Source/main PDF metadata is the entitlement source for ABC-backed imports. It
+follows ABC's `download_file` rule: a source PDF is open to every curator when
+its reference is open access or when any of its `referencefile_mods` rows has a
+null MOD (even if other rows name MODs); otherwise it is open only to curators
+of the MODs its rows name; with no usable rows it is denied. Converted Markdown
+rows may have null MOD metadata and must not grant access by themselves. See
+`api_contract_verification.md` for the full table.
 
 This cutover does not add a separate "all MOD" or full-access provider-group
 allowlist. A machine reader sees every ABC file, so AI Curation applies
