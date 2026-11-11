@@ -299,9 +299,14 @@ def test_reference_source_artifact_sort_key_prefers_curator_mod_over_global() ->
 @pytest.mark.asyncio
 async def test_reference_import_uses_actual_abc_main_pdf_precedence() -> None:
     fake_client = FakeABCLiteratureClient()
-    fake_client.external_lookup_payload = {
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41902664",
+        reference_curie="AGRKB:101",
+        title="Production-shaped ABC paper",
+    )
+    fake_client.show_reference_payload = {
         "reference_id": 101,
-        "reference_curie": "AGRKB:101",
+        "curie": "AGRKB:101",
         "title": "Production-shaped ABC paper",
     }
     fake_client.show_referencefiles_payload = {
@@ -458,13 +463,40 @@ def test_zfin_normalization_does_not_rewrite_other_cross_references(identifier) 
     assert provider.normalize_identifier(identifier).normalized == identifier
 
 
+def _abc_external_lookup(
+    external_curie: str,
+    *,
+    reference_curie: str | None,
+    title: str = "",
+    external_curie_found: bool = True,
+) -> dict[str, Any]:
+    """ABC ``ReferenceExternalLookupResponse`` for ``/reference/external_lookup``."""
+
+    return {
+        "exists_in_db": reference_curie is not None,
+        "reference_curie": reference_curie,
+        "external_curie": external_curie,
+        "external_curie_found": external_curie_found,
+        "title": title,
+    }
+
+
 @pytest.mark.asyncio
 async def test_resolve_numeric_identifier_as_pmid() -> None:
     fake_client = FakeABCLiteratureClient()
-    fake_client.external_lookup_payload = {
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:12345",
+        reference_curie="AGRKB:101",
+        title="Example paper",
+    )
+    fake_client.show_reference_payload = {
         "reference_id": 101,
-        "reference_curie": "AGRKB:101",
+        "curie": "AGRKB:101",
         "title": "Example paper",
+        "cross_references": [
+            _abc_cross_reference(1, "PMID:12345", "PMID"),
+            _abc_cross_reference(2, "DOI:10.1234/example", "DOI"),
+        ],
     }
     provider = provider_from_fake(fake_client)
 
@@ -474,11 +506,69 @@ async def test_resolve_numeric_identifier_as_pmid() -> None:
         (
             "lookup_external_curie",
             {"external_curie": "PMID:12345", "request_bearer_token": None},
-        )
+        ),
+        (
+            "show_reference",
+            {"reference": "AGRKB:101", "request_bearer_token": None},
+        ),
     ]
     assert reference.provider == "abc_literature"
     assert reference.reference_id == "101"
     assert reference.reference_curie == "AGRKB:101"
+    assert reference.title == "Example paper"
+    assert reference.external_ids == {
+        "pmid": "12345",
+        "doi": "10.1234/example",
+        "cross_references": ["PMID:12345", "DOI:10.1234/example"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_pmid_not_in_abc_does_not_fetch_a_reference() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:99999",
+        reference_curie=None,
+        title="Known to PubMed only",
+    )
+    provider = provider_from_fake(fake_client)
+
+    reference = await provider.resolve_reference("PMID:99999")
+
+    assert fake_client.calls == [
+        (
+            "lookup_external_curie",
+            {"external_curie": "PMID:99999", "request_bearer_token": None},
+        )
+    ]
+    assert reference.reference_curie is None
+    assert reference.reference_id is None
+    assert reference.title == "Known to PubMed only"
+    assert reference.external_ids == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [404, 403, 500])
+async def test_pmid_reference_fetch_failure_uses_lookup_error_mapping(status) -> None:
+    class FailingShowClient(FakeABCLiteratureClient):
+        async def show_reference(self, *args, **kwargs):
+            raise ABCLiteratureHTTPError(
+                "show failed",
+                status_code=status,
+                endpoint="/reference/AGRKB:101",
+            )
+
+    fake_client = FailingShowClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:12345",
+        reference_curie="AGRKB:101",
+    )
+    provider = provider_from_fake(fake_client)
+
+    with pytest.raises(DocumentSourceError) as error:
+        await provider.resolve_reference("PMID:12345")
+
+    assert isinstance(error.value, DocumentSourceReferenceNotFound) is (status == 404)
 
 
 @pytest.mark.asyncio
@@ -630,11 +720,12 @@ async def test_reference_top_level_identifier_fields_are_not_read() -> None:
 @pytest.mark.asyncio
 async def test_resolve_reference_forwards_request_bearer_token() -> None:
     fake_client = FakeABCLiteratureClient()
-    fake_client.external_lookup_payload = {
-        "reference_id": 101,
-        "reference_curie": "AGRKB:101",
-        "title": "Example paper",
-    }
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:12345",
+        reference_curie="AGRKB:101",
+        title="Example paper",
+    )
+    fake_client.show_reference_payload = {"reference_id": 101, "curie": "AGRKB:101"}
     provider = provider_from_fake(fake_client)
 
     await provider.resolve_reference(
@@ -649,7 +740,14 @@ async def test_resolve_reference_forwards_request_bearer_token() -> None:
                 "external_curie": "PMID:12345",
                 "request_bearer_token": "curator-token",
             },
-        )
+        ),
+        (
+            "show_reference",
+            {
+                "reference": "AGRKB:101",
+                "request_bearer_token": "curator-token",
+            },
+        ),
     ]
 
 

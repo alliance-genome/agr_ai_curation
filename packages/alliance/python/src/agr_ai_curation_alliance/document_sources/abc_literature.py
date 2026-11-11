@@ -90,16 +90,20 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
 
         try:
             upper = normalized.upper()
-            if normalized.isdigit():
+            if normalized.isdigit() or upper.startswith("PMID:"):
                 payload = await self._client.lookup_external_curie(
-                    f"PMID:{normalized}",
+                    f"PMID:{normalized}" if normalized.isdigit() else normalized,
                     request_bearer_token=request_bearer_token,
                 )
-            elif upper.startswith("PMID:"):
-                payload = await self._client.lookup_external_curie(
-                    normalized,
-                    request_bearer_token=request_bearer_token,
-                )
+                # The PMID lookup returns only the ABC curie and title; the
+                # reference record carries the cross-references (PMID, DOI).
+                # No curie means ABC does not hold the paper.
+                found_curie = _first_string(payload, "reference_curie")
+                if found_curie is not None:
+                    payload = await self._client.show_reference(
+                        found_curie,
+                        request_bearer_token=request_bearer_token,
+                    )
             elif upper.startswith(("AGRKB:", "ABC:")):
                 payload = await self._client.show_reference(
                     normalized,
