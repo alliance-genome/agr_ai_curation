@@ -131,16 +131,26 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
     from src.lib.curation_workspace.document_reference import effective_document_reference
 
     reference = effective_document_reference(document)
+    external_ids = document.source_external_ids or {}
     return CurationDocumentRef(
         document_id=str(document.id),
         title=document.title or document.filename,
         filename=document.filename,
+        pmid=_external_id(external_ids, "pmid"),
+        doi=_external_id(external_ids, "doi"),
         pdf_url=viewer_url,
         viewer_url=viewer_url,
         page_count=document.page_count,
         reference_curie=reference.curie if reference is not None else None,
         reference_source=reference.source if reference is not None else None,
     )
+
+
+def _external_id(external_ids: Mapping[str, Any], key: str) -> str | None:
+    """Return one stored single-valued source identifier (e.g. ``pmid``)."""
+
+    value = external_ids.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _session_progress(session: ReviewSessionModel) -> CurationSessionProgress:

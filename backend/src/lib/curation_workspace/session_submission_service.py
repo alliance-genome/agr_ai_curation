@@ -2141,11 +2141,19 @@ def _submission_intent_fingerprint(
 
 
 def _document_intent_payload(document: PDFDocument) -> dict[str, Any]:
-    """Describe the document for a retry fingerprint, without fields that may change later."""
+    """Describe the document for a retry fingerprint, without fields that may change later.
 
-    return _document_ref(document).model_dump(
-        mode="json",
-        exclude={"filename", "reference_curie", "reference_source"},
+    ``pmid`` and ``doi`` are display-only source identifiers. They are held at
+    ``None`` so the fingerprint does not depend on them.
+    """
+
+    return (
+        _document_ref(document)
+        .model_copy(update={"pmid": None, "doi": None})
+        .model_dump(
+            mode="json",
+            exclude={"filename", "reference_curie", "reference_source"},
+        )
     )
 
 

@@ -213,6 +213,7 @@ def test_document_ref_uses_protected_document_id_url():
         source_provider_reference_curie=None,
         reference_link=None,
         viewer_mode="local_pdf",
+        source_external_ids=None,
     )
 
     reference = serializer_module._document_ref(document)
@@ -232,12 +233,73 @@ def test_document_ref_omits_pdf_url_for_text_only_document():
         source_provider_reference_curie=None,
         reference_link=None,
         viewer_mode="text_only",
+        source_external_ids=None,
     )
 
     reference = serializer_module._document_ref(document)
 
     assert reference.pdf_url is None
     assert reference.viewer_url is None
+
+
+def _imported_document(source_external_ids):
+    return SimpleNamespace(
+        id=UUID("6f0c1f4e-3a0f-4c39-9a51-6f0b2d1c0a11"),
+        title="Imported article",
+        filename="article.pdf",
+        page_count=3,
+        source_provider_reference_id=None,
+        source_provider_reference_curie=None,
+        reference_link=None,
+        viewer_mode="local_pdf",
+        source_external_ids=source_external_ids,
+    )
+
+
+def test_document_ref_shows_stored_pmid_and_doi():
+    document = _imported_document(
+        {
+            "pmid": "41902664",
+            "doi": "10.1016/j.cell.2020.01.001",
+            "pmcid": "PMC7000001",
+            "cross_references": ["PMID:41902664", "DOI:10.1016/j.cell.2020.01.001"],
+        }
+    )
+
+    reference = serializer_module._document_ref(document)
+
+    assert reference.pmid == "41902664"
+    assert reference.doi == "10.1016/j.cell.2020.01.001"
+
+
+def test_document_ref_leaves_pmid_and_doi_empty_without_stored_ids():
+    reference = serializer_module._document_ref(_imported_document(None))
+
+    assert reference.pmid is None
+    assert reference.doi is None
+
+
+def test_document_intent_payload_ignores_display_only_pmid_and_doi():
+    without_ids = submission_module._document_intent_payload(_imported_document(None))
+    with_ids = submission_module._document_intent_payload(
+        _imported_document({"pmid": "41902664", "doi": "10.1016/j.cell.2020.01.001"})
+    )
+
+    assert with_ids == without_ids
+    # Same payload shape as before pmid/doi were filled, so stored fingerprints hold.
+    assert with_ids["pmid"] is None
+    assert with_ids["doi"] is None
+    assert set(with_ids) == {
+        "document_id",
+        "title",
+        "pmid",
+        "doi",
+        "citation_label",
+        "pdf_url",
+        "viewer_url",
+        "page_count",
+        "publication_year",
+    }
 
 
 def _create_document(db_session):

@@ -148,6 +148,25 @@ def test_sanitize_document_source_provenance_drops_unknown_nested_raw_values() -
     }
 
 
+def test_sanitize_document_source_provenance_keeps_cross_reference_identifiers() -> None:
+    external_ids = {
+        "pmid": "41902664",
+        "doi": "10.1016/j.cell.2020.01.001",
+        "pmcid": "PMC7000001",
+        "cross_references": [
+            "PMID:41902664",
+            "DOI:10.1016/j.cell.2020.01.001",
+            "PMCID:PMC7000001",
+        ],
+    }
+
+    provenance = sanitize_document_source_provenance(
+        {"provider": "abc_literature", "external_ids": external_ids}
+    )
+
+    assert provenance == {"provider": "abc_literature", "external_ids": external_ids}
+
+
 def test_sanitize_document_source_provenance_rejects_scalar_access_group() -> None:
     provenance = sanitize_document_source_provenance(
         {"provider": "mock_literature", "access_group_ids": "GROUP"}

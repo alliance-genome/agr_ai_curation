@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import logging
 import re
 from typing import Any, Self, TypeGuard
 
@@ -42,6 +43,15 @@ _ARTIFACT_STATUS_KEYS = (
     "file_publication_status",
 )
 
+# ABC cross-reference prefix -> provider-neutral external-ID key read by core.
+_CROSS_REFERENCE_PREFIX_KEYS = {
+    "PMID": "pmid",
+    "DOI": "doi",
+    "PMCID": "pmcid",
+}
+
+logger = logging.getLogger(__name__)
+
 
 def _canonical_publication_identifier(identifier: str) -> str:
     """ABC cross-reference lookup requires ZFIN's full publication CURIE."""
@@ -80,16 +90,20 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
 
         try:
             upper = normalized.upper()
-            if normalized.isdigit():
+            if normalized.isdigit() or upper.startswith("PMID:"):
                 payload = await self._client.lookup_external_curie(
-                    f"PMID:{normalized}",
+                    f"PMID:{normalized}" if normalized.isdigit() else normalized,
                     request_bearer_token=request_bearer_token,
                 )
-            elif upper.startswith("PMID:"):
-                payload = await self._client.lookup_external_curie(
-                    normalized,
-                    request_bearer_token=request_bearer_token,
-                )
+                # The PMID lookup returns only the ABC curie and title; the
+                # reference record carries the cross-references (PMID, DOI).
+                # No curie means ABC does not hold the paper.
+                found_curie = _first_string(payload, "reference_curie")
+                if found_curie is not None:
+                    payload = await self._client.show_reference(
+                        found_curie,
+                        request_bearer_token=request_bearer_token,
+                    )
             elif upper.startswith(("AGRKB:", "ABC:")):
                 payload = await self._client.show_reference(
                     normalized,
@@ -710,26 +724,52 @@ def _looks_like_provider_cross_reference(identifier: str) -> bool:
 def _extract_external_ids(
     payload: Mapping[str, Any],
 ) -> dict[str, str | Sequence[str]]:
+    """Read publication identifiers from ABC's ``cross_references`` objects.
+
+    ABC reference records carry PMID, DOI and PMCID only as cross-references
+    (``{"curie": "PMID:123", "curie_prefix": "PMID", "is_obsolete": ...}``).
+    Obsolete entries are skipped. ``pmid``/``doi``/``pmcid`` are chosen by
+    ``curie_prefix`` and hold the local identifier after the curie's first
+    ``:`` (``"123"``, ``"10.1/x"``); an entry without ``curie_prefix`` is
+    listed under ``cross_references`` only. ABC allows at most
+    one current cross-reference per prefix on a reference; if a payload ever
+    carries more than one, no identifier is chosen for that prefix and the
+    curies stay listed under ``cross_references``.
+    """
+
+    raw_cross_references = payload.get("cross_references")
+    if not _is_non_string_sequence(raw_cross_references):
+        return {}
+
+    curies: list[str] = []
+    local_ids_by_key: dict[str, list[str]] = {}
+    for item in raw_cross_references:
+        if not isinstance(item, Mapping) or item.get("is_obsolete") is True:
+            continue
+        curie = _first_string(item, "curie")
+        if curie is None:
+            continue
+        curies.append(curie)
+        curie_prefix = _first_string(item, "curie_prefix")
+        key = _CROSS_REFERENCE_PREFIX_KEYS.get(curie_prefix) if curie_prefix else None
+        _, separator, local_id = curie.partition(":")
+        if key is not None and separator and local_id.strip():
+            local_ids_by_key.setdefault(key, []).append(local_id.strip())
+
     external_ids: dict[str, str | Sequence[str]] = {}
-    for source_key, target_key in (
-        ("pmid", "pmid"),
-        ("pubmed_id", "pmid"),
-        ("doi", "doi"),
-        ("pmcid", "pmcid"),
-    ):
-        value = payload.get(source_key)
-        if isinstance(value, str | int) and str(value).strip():
-            external_ids[target_key] = str(value).strip()
-
-    cross_references = payload.get("cross_references")
-    if isinstance(cross_references, Sequence) and not isinstance(
-        cross_references,
-        (str, bytes, bytearray),
-    ):
-        values = [str(item).strip() for item in cross_references if str(item).strip()]
-        if values:
-            external_ids["cross_references"] = values
-
+    for key, local_ids in local_ids_by_key.items():
+        if len(local_ids) == 1:
+            external_ids[key] = local_ids[0]
+            continue
+        logger.warning(
+            "ABC reference %s has %d current %s cross-references; leaving %s unset",
+            _first_string(payload, "curie", "reference_curie"),
+            len(local_ids),
+            key,
+            key,
+        )
+    if curies:
+        external_ids["cross_references"] = curies
     return external_ids
 
 
