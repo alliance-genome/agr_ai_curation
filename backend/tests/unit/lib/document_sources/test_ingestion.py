@@ -362,7 +362,7 @@ async def test_ingest_provider_markdown_document_rejects_unknown_access_scope(
     status_mock = AsyncMock()
     monkeypatch.setattr(ingestion, "_sync_sql_document_status", status_mock)
 
-    with pytest.raises(DocumentSourceIngestionError, match="global or restricted"):
+    with pytest.raises(DocumentSourceIngestionError, match="global, any_group or restricted"):
         await ingest_provider_markdown_document(
             ProviderMarkdownIngestionRequest(
                 document_id="doc-1",
@@ -383,6 +383,14 @@ def test_provider_markdown_ingestion_allows_global_without_mods() -> None:
     )
 
     assert provenance["access_scope"] == "global"
+
+
+def test_provider_markdown_ingestion_allows_any_group_without_mods() -> None:
+    provenance = ingestion._require_ingestable_provenance(
+        _source_provenance(access_scope="any_group", access_group_ids=None)
+    )
+
+    assert provenance["access_scope"] == "any_group"
 
 
 def test_render_provider_figure_metadata_appendix_uses_caption_as_legend() -> None:

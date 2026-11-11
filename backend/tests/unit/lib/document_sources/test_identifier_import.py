@@ -159,6 +159,9 @@ class _FakeProvider:
     def main_text_artifact_sort_key(self, artifact: SourceArtifact) -> tuple[int, ...]:
         return _fake_main_text_artifact_sort_key(artifact, provider_id=self.provider_id)
 
+    def is_reference_source_artifact(self, artifact: SourceArtifact) -> bool:
+        return _fake_is_reference_source_artifact(artifact, provider_id=self.provider_id)
+
     def reference_source_artifact_sort_key(
         self,
         artifact: SourceArtifact,
@@ -246,6 +249,20 @@ def _fake_main_text_artifact_sort_key(
     return (10,)
 
 
+def _fake_is_reference_source_artifact(
+    artifact: SourceArtifact,
+    *,
+    provider_id: str,
+) -> bool:
+    if provider_id != "abc_literature":
+        return True
+    return (
+        artifact.metadata.get("file_class") == "main"
+        and artifact.metadata.get("file_publication_status") == "final"
+        and artifact.metadata.get("pdf_type") == "pdf"
+    )
+
+
 def _fake_reference_source_artifact_sort_key(
     artifact: SourceArtifact,
     *,
@@ -254,12 +271,6 @@ def _fake_reference_source_artifact_sort_key(
 ) -> tuple[int, ...]:
     if provider_id != "abc_literature":
         return (0,)
-    if not (
-        artifact.metadata.get("file_class") == "main"
-        and artifact.metadata.get("file_publication_status") == "final"
-        and artifact.metadata.get("pdf_type") == "pdf"
-    ):
-        return (20,)
     authorized = {str(group_id).strip().casefold() for group_id in authorized_group_ids}
     artifact_mods = {mod.strip().casefold() for mod in artifact.access_policy.group_ids}
     if (
@@ -343,7 +354,9 @@ def _source_artifact(
         display_name=display_name,
         md5sum=md5sum,
         access_policy=SourceAccessPolicy(scope=access_scope, group_ids=group_ids),
-        metadata=metadata or {},
+        # A canonical main PDF unless a test says otherwise.
+        metadata=metadata
+        or {"file_class": "main", "file_publication_status": "final", "pdf_type": "pdf"},
     )
 
 
@@ -578,6 +591,9 @@ async def test_select_reference_import_candidate_keeps_true_abc_mod_tie_ambiguou
 async def test_select_reference_import_candidate_without_provider_preference_stays_ambiguous():
     class _ProviderWithoutSourcePreference:
         provider_id = "provider_without_preference"
+
+        def is_reference_source_artifact(self, artifact):
+            return True
 
         async def resolve_reference(self, identifier, *, request_bearer_token=None):
             _ = identifier, request_bearer_token

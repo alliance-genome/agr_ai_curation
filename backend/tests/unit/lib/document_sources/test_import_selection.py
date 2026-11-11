@@ -1220,3 +1220,33 @@ async def test_abc_checksum_source_without_mod_entries_stays_denied():
 
     assert decision.status is ChecksumImportDecisionStatus.ACCESS_DENIED
     assert decision.selected is None
+
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_no_mod_source_is_denied_to_a_caller_without_groups():
+    decision = await _abc_checksum_decision(_abc_by_md5_source(None, "WB"), ())
+
+    assert decision.status is ChecksumImportDecisionStatus.ACCESS_DENIED
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_open_access_source_is_allowed_to_a_caller_without_groups():
+    decision = await _abc_checksum_decision(
+        _abc_by_md5_source("WB", open_access=True), ()
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+
+
+@pytest.mark.parametrize(
+    ("authorized_group_ids", "expected"),
+    [((), False), (("anything",), True)],
+)
+def test_any_group_scope_needs_at_least_one_authorized_group(authorized_group_ids, expected):
+    artifact = _source("source-1", scope=SourceAccessScope.ANY_GROUP)
+
+    assert (
+        source_artifact_is_authorized(artifact, authorized_group_ids=authorized_group_ids)
+        is expected
+    )

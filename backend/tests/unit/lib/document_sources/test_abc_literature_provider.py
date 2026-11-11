@@ -1259,8 +1259,8 @@ async def test_source_pdf_null_mods_map_to_global_for_inheritance() -> None:
         "abc123"
     )
 
-    assert source_artifact.access_policy.scope is SourceAccessScope.GLOBAL
-    assert converted_artifact.access_policy.scope is SourceAccessScope.GLOBAL
+    assert source_artifact.access_policy.scope is SourceAccessScope.ANY_GROUP
+    assert converted_artifact.access_policy.scope is SourceAccessScope.ANY_GROUP
 
 
 @pytest.mark.asyncio
@@ -1369,6 +1369,7 @@ def _abc_by_md5_main_pdf(
 def _abc_reference_record(
     *,
     copyright_license_open_access: bool | None = None,
+    copyright_license_name: str | None = None,
 ) -> dict[str, Any]:
     return {
         "reference_id": 101,
@@ -1382,12 +1383,13 @@ def _abc_reference_record(
                 "is_obsolete": False,
             },
         ],
+        "copyright_license_name": copyright_license_name,
         "copyright_license_open_access": copyright_license_open_access,
     }
 
 
 @pytest.mark.asyncio
-async def test_source_pdf_null_and_named_mod_maps_to_global() -> None:
+async def test_source_pdf_null_and_named_mod_maps_to_any_group() -> None:
     fake_client = FakeABCLiteratureClient()
     fake_client.by_md5_payload = [_abc_by_md5_main_pdf(None, "WB")]
     provider = provider_from_fake(fake_client)
@@ -1397,15 +1399,17 @@ async def test_source_pdf_null_and_named_mod_maps_to_global() -> None:
     )
 
     assert source_artifact.access_policy == SourceAccessPolicy(
-        scope=SourceAccessScope.GLOBAL
+        scope=SourceAccessScope.ANY_GROUP
     )
     assert converted_artifact.access_policy == source_artifact.access_policy
     assert source_artifact_is_authorized(source_artifact, authorized_group_ids=("FB",))
     assert source_artifact_is_authorized(source_artifact, authorized_group_ids=("WB",))
+    # ABC refuses a caller with no MOD access the no-MOD grant.
+    assert not source_artifact_is_authorized(source_artifact, authorized_group_ids=())
 
 
 @pytest.mark.asyncio
-async def test_listed_source_pdf_null_and_named_mod_maps_to_global() -> None:
+async def test_listed_source_pdf_null_and_named_mod_maps_to_any_group() -> None:
     fake_client = FakeABCLiteratureClient()
     fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
         _abc_show_all_main_pdf(5001, None, "WB"),
@@ -1414,7 +1418,9 @@ async def test_listed_source_pdf_null_and_named_mod_maps_to_global() -> None:
 
     (artifact,) = await provider.list_artifacts("AGRKB:101")
 
-    assert artifact.access_policy == SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
+    assert artifact.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.ANY_GROUP
+    )
 
 
 @pytest.mark.asyncio
@@ -1489,6 +1495,8 @@ async def test_checksum_open_access_reference_maps_named_mod_pdf_to_global() -> 
         scope=SourceAccessScope.GLOBAL
     )
     assert converted_artifact.access_policy == source_artifact.access_policy
+    # ABC serves open-access files even to a caller with no MOD access.
+    assert source_artifact_is_authorized(source_artifact, authorized_group_ids=())
 
 
 @pytest.mark.asyncio
@@ -1675,3 +1683,153 @@ async def test_two_no_mod_only_pdfs_remain_ambiguous() -> None:
 
     assert decision.status is ReferenceImportDecisionStatus.AMBIGUOUS_MATCH
     assert decision.metadata == {"match_count": 2}
+
+
+async def _identifier_decision(
+    referencefiles: list[dict[str, Any]],
+    authorized_group_ids: tuple[str, ...],
+    **reference_fields: Any,
+):
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41000001",
+        reference_curie="AGRKB:101",
+        title="A WormBase paper",
+    )
+    fake_client.show_reference_payload = _abc_reference_record(**reference_fields)
+    fake_client.show_referencefiles_payload = referencefiles  # type: ignore[assignment]
+    provider = provider_from_fake(fake_client)
+    return await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.SERVICE,
+        provider=provider,
+        identifier="PMID:41000001",
+        authorized_group_ids=authorized_group_ids,
+        allow_conversion_request=False,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mods", [(None,), (None, "WB")])
+async def test_caller_without_groups_is_denied_no_mod_pdfs(
+    mods: tuple[str | None, ...],
+) -> None:
+    decision = await _identifier_decision([_abc_show_all_main_pdf(5001, *mods)], ())
+
+    assert decision.status is ReferenceImportDecisionStatus.ACCESS_DENIED
+    assert decision.selected is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mods", [(None,), (None, "WB")])
+async def test_caller_with_any_group_is_allowed_no_mod_pdfs(
+    mods: tuple[str | None, ...],
+) -> None:
+    decision = await _identifier_decision(
+        [_abc_show_all_main_pdf(5001, *mods)], ("SGD",)
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+
+
+@pytest.mark.asyncio
+async def test_caller_without_groups_is_allowed_open_access_pdfs() -> None:
+    decision = await _identifier_decision(
+        [_abc_show_all_main_pdf(5001, "WB")],
+        (),
+        copyright_license_name="CC BY",
+        copyright_license_open_access=True,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mods", [("WB",), (None,), (None, "WB")])
+async def test_license_with_unset_open_access_refuses_every_caller(
+    mods: tuple[str | None, ...],
+) -> None:
+    # ABC's download_file: a license whose open_access is NULL leaves the
+    # permission unset, skips the MOD checks and refuses the download.
+    decision = await _identifier_decision(
+        [_abc_show_all_main_pdf(5001, *mods)],
+        ("WB",),
+        copyright_license_name="Some license",
+        copyright_license_open_access=None,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.ACCESS_DENIED
+
+
+@pytest.mark.asyncio
+async def test_closed_license_keeps_the_mod_rule() -> None:
+    decision = await _identifier_decision(
+        [_abc_show_all_main_pdf(5001, "WB")],
+        ("WB",),
+        copyright_license_name="Closed license",
+        copyright_license_open_access=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+
+
+def _abc_show_all_supplement_pdf(referencefile_id: int, *mods: str | None) -> dict[str, Any]:
+    return {
+        **_abc_show_all_main_pdf(referencefile_id, *mods, display_name="supp1"),
+        "file_class": "supplement",
+    }
+
+
+@pytest.mark.asyncio
+async def test_lone_accessible_supplement_is_never_imported_as_the_paper() -> None:
+    decision = await _identifier_decision(
+        [
+            _abc_show_all_main_pdf(5001, "WB"),
+            _abc_show_all_supplement_pdf(5002, None, "WB"),
+        ],
+        ("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.ACCESS_DENIED
+    assert decision.selected is None
+
+
+@pytest.mark.asyncio
+async def test_lone_non_final_main_pdf_is_never_imported_as_the_paper() -> None:
+    decision = await _identifier_decision(
+        [
+            {
+                **_abc_show_all_main_pdf(5001, None),
+                "file_publication_status": "temp",
+            },
+            _abc_show_all_supplement_pdf(5002, None),
+        ],
+        ("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.NO_SOURCE_ARTIFACT
+    assert decision.selected is None
+
+
+def test_reference_source_artifact_contract_accepts_only_final_main_pdfs() -> None:
+    provider = provider_from_fake(FakeABCLiteratureClient())
+
+    def _pdf(**metadata: str) -> SourceArtifact:
+        return SourceArtifact(
+            provider="abc_literature",
+            artifact_id="pdf",
+            role=SourceArtifactRole.SOURCE_PDF,
+            artifact_format=SourceArtifactFormat.PDF,
+            metadata={
+                "file_class": "main",
+                "file_publication_status": "final",
+                "pdf_type": "pdf",
+                **metadata,
+            },
+        )
+
+    assert provider.is_reference_source_artifact(_pdf()) is True
+    assert provider.is_reference_source_artifact(_pdf(file_class="supplement")) is False
+    assert provider.is_reference_source_artifact(_pdf(file_publication_status="temp")) is False
+    assert provider.is_reference_source_artifact(_pdf(pdf_type="ocr")) is False
