@@ -272,6 +272,7 @@ def test_reference_source_artifact_sort_key_prefers_curator_mod_over_global() ->
             "file_class": "main",
             "file_publication_status": "final",
             "pdf_type": "pdf",
+            "mod_abbreviations": ("FB",),
         },
     )
     shared_pdf = SourceArtifact(
@@ -1302,3 +1303,362 @@ async def test_bare_mod_string_does_not_create_access_entitlement() -> None:
     assert not source_artifact_is_authorized(
         artifacts[0], authorized_group_ids=("FB",)
     )
+
+
+# ALL-1543: AI Curation's file-access rule matches ABC's ``download_file``:
+# open-access reference, OR a no-MOD (null) entry on the source PDF, OR the
+# curator's MOD among the file's entries. Payloads below follow ABC's
+# ``ReferencefileSchemaRelated`` (show_all), ``ReferencefileByMd5MatchSchema``
+# (by_md5) and ``ReferenceSchemaShow`` (reference record) shapes.
+
+
+def _abc_mod_rows(*mod_abbreviations: str | None) -> list[dict[str, Any]]:
+    return [
+        {"referencefile_mod_id": 7000 + index, "mod_abbreviation": mod}
+        for index, mod in enumerate(mod_abbreviations)
+    ]
+
+
+def _abc_show_all_main_pdf(
+    referencefile_id: int,
+    *mods: str | None,
+    display_name: str = "WBPaper00067001",
+) -> dict[str, Any]:
+    return {
+        "referencefile_id": referencefile_id,
+        "display_name": display_name,
+        "file_class": "main",
+        "file_publication_status": "final",
+        "file_extension": "pdf",
+        "pdf_type": "pdf",
+        "md5sum": f"md5-{referencefile_id}",
+        "is_annotation": False,
+        "referencefile_mods": _abc_mod_rows(*mods),
+    }
+
+
+def _abc_by_md5_main_pdf(
+    *mods: str | None,
+    open_access: bool = False,
+) -> dict[str, Any]:
+    return {
+        "referencefile_id": 10,
+        "reference_id": 101,
+        "reference_curie": "AGRKB:101",
+        "display_name": "WBPaper00067001",
+        "file_class": "main",
+        "file_publication_status": "final",
+        "file_extension": "pdf",
+        "pdf_type": "pdf",
+        "md5sum": "abc123",
+        "is_annotation": False,
+        "open_access": open_access,
+        "copyright_license_name": None,
+        "referencefile_mods": _abc_mod_rows(*mods),
+        "converted_referencefiles": [
+            {
+                "referencefile_id": 11,
+                "display_name": "WBPaper00067001_merged",
+                "file_class": "converted_merged_main",
+                "file_extension": "md",
+            }
+        ],
+    }
+
+
+def _abc_reference_record(
+    *,
+    copyright_license_open_access: bool | None = None,
+) -> dict[str, Any]:
+    return {
+        "reference_id": 101,
+        "curie": "AGRKB:101",
+        "title": "A WormBase paper",
+        "cross_references": [
+            {"curie": "PMID:41000001", "curie_prefix": "PMID", "is_obsolete": False},
+            {
+                "curie": "WB:WBPaper00067001",
+                "curie_prefix": "WB",
+                "is_obsolete": False,
+            },
+        ],
+        "copyright_license_open_access": copyright_license_open_access,
+    }
+
+
+@pytest.mark.asyncio
+async def test_source_pdf_null_and_named_mod_maps_to_global() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.by_md5_payload = [_abc_by_md5_main_pdf(None, "WB")]
+    provider = provider_from_fake(fake_client)
+
+    source_artifact, converted_artifact = await provider.find_artifacts_by_checksum(
+        "abc123"
+    )
+
+    assert source_artifact.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.GLOBAL
+    )
+    assert converted_artifact.access_policy == source_artifact.access_policy
+    assert source_artifact_is_authorized(source_artifact, authorized_group_ids=("FB",))
+    assert source_artifact_is_authorized(source_artifact, authorized_group_ids=("WB",))
+
+
+@pytest.mark.asyncio
+async def test_listed_source_pdf_null_and_named_mod_maps_to_global() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, None, "WB"),
+    ]
+    provider = provider_from_fake(fake_client)
+
+    (artifact,) = await provider.list_artifacts("AGRKB:101")
+
+    assert artifact.access_policy == SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
+
+
+@pytest.mark.asyncio
+async def test_source_pdf_with_only_named_mods_stays_restricted_to_them() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, "WB", "ZFIN"),
+    ]
+    provider = provider_from_fake(fake_client)
+
+    (artifact,) = await provider.list_artifacts("AGRKB:101")
+
+    assert artifact.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.RESTRICTED,
+        group_ids=("WB", "ZFIN"),
+    )
+    assert not source_artifact_is_authorized(artifact, authorized_group_ids=("FB",))
+    assert source_artifact_is_authorized(artifact, authorized_group_ids=("ZFIN",))
+
+
+@pytest.mark.asyncio
+async def test_source_pdf_without_mod_entries_stays_unknown_and_denied() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.by_md5_payload = [_abc_by_md5_main_pdf()]
+    provider = provider_from_fake(fake_client)
+
+    source_artifact, _converted = await provider.find_artifacts_by_checksum("abc123")
+
+    assert source_artifact.access_policy.scope is SourceAccessScope.UNKNOWN
+    assert not source_artifact_is_authorized(
+        source_artifact, authorized_group_ids=("WB",)
+    )
+
+
+@pytest.mark.asyncio
+async def test_null_mod_on_converted_row_is_still_not_an_access_grant() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        {
+            "referencefile_id": 6001,
+            "display_name": "WBPaper00067001_merged",
+            "file_class": "converted_merged_main",
+            "file_publication_status": "final",
+            "file_extension": "md",
+            "md5sum": "md5-6001",
+            "is_annotation": False,
+            "referencefile_mods": _abc_mod_rows(None, "WB"),
+        }
+    ]
+    provider = provider_from_fake(fake_client)
+
+    (artifact,) = await provider.list_artifacts("AGRKB:101")
+
+    assert artifact.role is SourceArtifactRole.CONVERTED_TEXT
+    assert artifact.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.RESTRICTED,
+        group_ids=("WB",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_checksum_open_access_reference_maps_named_mod_pdf_to_global() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.by_md5_payload = [_abc_by_md5_main_pdf("WB", open_access=True)]
+    provider = provider_from_fake(fake_client)
+
+    source_artifact, converted_artifact = await provider.find_artifacts_by_checksum(
+        "abc123"
+    )
+
+    assert source_artifact.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.GLOBAL
+    )
+    assert converted_artifact.access_policy == source_artifact.access_policy
+
+
+@pytest.mark.asyncio
+async def test_checksum_open_access_reference_maps_entryless_pdf_to_global() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.by_md5_payload = [_abc_by_md5_main_pdf(open_access=True)]
+    provider = provider_from_fake(fake_client)
+
+    source_artifact, _converted = await provider.find_artifacts_by_checksum("abc123")
+
+    assert source_artifact.access_policy.scope is SourceAccessScope.GLOBAL
+
+
+@pytest.mark.asyncio
+async def test_listing_uses_open_access_from_the_resolved_reference_record() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record(
+        copyright_license_open_access=True
+    )
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, "WB"),
+    ]
+    provider = provider_from_fake(fake_client)
+
+    reference = await provider.resolve_reference("AGRKB:101")
+    (artifact,) = await provider.list_artifacts(reference)
+
+    assert artifact.access_policy == SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("open_access", [False, None])
+async def test_listing_without_open_access_reference_keeps_mod_rule(
+    open_access: bool | None,
+) -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record(
+        copyright_license_open_access=open_access
+    )
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, "WB"),
+    ]
+    provider = provider_from_fake(fake_client)
+
+    reference = await provider.resolve_reference("AGRKB:101")
+    (artifact,) = await provider.list_artifacts(reference)
+
+    assert artifact.access_policy == SourceAccessPolicy(
+        scope=SourceAccessScope.RESTRICTED,
+        group_ids=("WB",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_identifier_import_of_null_and_wb_pdf_is_ready_for_non_wb_curator() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41000001",
+        reference_curie="AGRKB:101",
+        title="A WormBase paper",
+    )
+    fake_client.show_reference_payload = _abc_reference_record()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, None, "WB"),
+    ]
+    provider = provider_from_fake(fake_client)
+
+    decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        provider=provider,
+        identifier="PMID:41000001",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is not ReferenceImportDecisionStatus.ACCESS_DENIED
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+
+
+@pytest.mark.asyncio
+async def test_identifier_import_of_open_access_wb_pdf_is_ready_for_non_wb_curator() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41000001",
+        reference_curie="AGRKB:101",
+        title="A WormBase paper",
+    )
+    fake_client.show_reference_payload = _abc_reference_record(
+        copyright_license_open_access=True
+    )
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, "WB"),
+    ]
+    provider = provider_from_fake(fake_client)
+
+    decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        provider=provider,
+        identifier="PMID:41000001",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=False,
+    )
+
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+
+
+@pytest.mark.asyncio
+async def test_identifier_import_of_wb_only_pdf_stays_denied_for_non_wb_curator() -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41000001",
+        reference_curie="AGRKB:101",
+        title="A WormBase paper",
+    )
+    fake_client.show_reference_payload = _abc_reference_record()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, "WB"),
+    ]
+    provider = provider_from_fake(fake_client)
+
+    decision = await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        provider=provider,
+        identifier="PMID:41000001",
+        authorized_group_ids=("FB",),
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.ACCESS_DENIED
+    assert decision.selected is None
+
+
+async def _two_shared_pdf_decision(authorized_group_ids: tuple[str, ...]):
+    fake_client = FakeABCLiteratureClient()
+    fake_client.external_lookup_payload = _abc_external_lookup(
+        "PMID:41000001",
+        reference_curie="AGRKB:101",
+        title="A WormBase paper",
+    )
+    fake_client.show_reference_payload = _abc_reference_record()
+    fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
+        _abc_show_all_main_pdf(5001, None, "WB", display_name="WBPaper00067001"),
+        _abc_show_all_main_pdf(5002, None, display_name="PMC12000001"),
+    ]
+    provider = provider_from_fake(fake_client)
+    return await select_reference_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        provider=provider,
+        identifier="PMID:41000001",
+        authorized_group_ids=authorized_group_ids,
+        allow_conversion_request=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_shared_pdfs_still_prefer_the_curators_mod_pdf() -> None:
+    decision = await _two_shared_pdf_decision(("WB",))
+
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+
+
+@pytest.mark.asyncio
+async def test_two_shared_pdfs_tie_for_a_curator_of_neither_mod() -> None:
+    # ABC's main-PDF precedence is: the requested MOD's PDF, then a no-MOD PDF.
+    # Both PDFs carry a no-MOD entry, so neither outranks the other for an FB
+    # curator and AI Curation does not guess between them.
+    decision = await _two_shared_pdf_decision(("FB",))
+
+    assert decision.status is ReferenceImportDecisionStatus.AMBIGUOUS_MATCH
+    assert decision.metadata == {"match_count": 2}
