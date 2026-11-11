@@ -1623,7 +1623,11 @@ async def test_identifier_import_of_wb_only_pdf_stays_denied_for_non_wb_curator(
     assert decision.selected is None
 
 
-async def _two_shared_pdf_decision(authorized_group_ids: tuple[str, ...]):
+async def _two_shared_pdf_decision(
+    authorized_group_ids: tuple[str, ...],
+    *,
+    first_pdf_mods: tuple[str | None, ...] = (None, "WB"),
+):
     fake_client = FakeABCLiteratureClient()
     fake_client.external_lookup_payload = _abc_external_lookup(
         "PMID:41000001",
@@ -1632,7 +1636,7 @@ async def _two_shared_pdf_decision(authorized_group_ids: tuple[str, ...]):
     )
     fake_client.show_reference_payload = _abc_reference_record()
     fake_client.show_referencefiles_payload = [  # type: ignore[assignment]
-        _abc_show_all_main_pdf(5001, None, "WB", display_name="WBPaper00067001"),
+        _abc_show_all_main_pdf(5001, *first_pdf_mods, display_name="WBPaper00067001"),
         _abc_show_all_main_pdf(5002, None, display_name="PMC12000001"),
     ]
     provider = provider_from_fake(fake_client)
@@ -1649,16 +1653,25 @@ async def _two_shared_pdf_decision(authorized_group_ids: tuple[str, ...]):
 async def test_two_shared_pdfs_still_prefer_the_curators_mod_pdf() -> None:
     decision = await _two_shared_pdf_decision(("WB",))
 
+    assert decision.status is ReferenceImportDecisionStatus.READY
     assert decision.selected is not None
     assert decision.selected.source_artifact.artifact_id == "5001"
 
 
 @pytest.mark.asyncio
-async def test_two_shared_pdfs_tie_for_a_curator_of_neither_mod() -> None:
-    # ABC's main-PDF precedence is: the requested MOD's PDF, then a no-MOD PDF.
-    # Both PDFs carry a no-MOD entry, so neither outranks the other for an FB
-    # curator and AI Curation does not guess between them.
+async def test_two_shared_pdfs_prefer_the_no_mod_only_pdf_for_other_curators() -> None:
+    # AI Curation's own tie-break below ABC's precedence: the general no-MOD
+    # copy beats a no-MOD PDF that also names another MOD.
     decision = await _two_shared_pdf_decision(("FB",))
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5002"
+
+
+@pytest.mark.asyncio
+async def test_two_no_mod_only_pdfs_remain_ambiguous() -> None:
+    decision = await _two_shared_pdf_decision(("FB",), first_pdf_mods=(None,))
 
     assert decision.status is ReferenceImportDecisionStatus.AMBIGUOUS_MATCH
     assert decision.metadata == {"match_count": 2}

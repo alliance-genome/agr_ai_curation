@@ -205,10 +205,16 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         this precedence for a requested MOD: a PDF with an entry for that MOD,
         then a PDF with a no-MOD entry. The MOD tier reads the file's own MOD
         entries, so a PDF tagged both no-MOD and with the curator's MOD (which
-        maps to global access) still ranks first. Equal ranks remain tied so
-        callers do not guess when a curator genuinely spans multiple MODs or
-        two shared PDFs carry no MOD of the curator's. Supplements and
-        non-final PDFs never outrank a canonical main.
+        maps to global access) still ranks first.
+
+        Below ABC's precedence, AI Curation adds its own tie-break, which ABC
+        does not have (ABC takes whichever no-MOD PDF it reads first): among
+        global PDFs, one with no named MOD entries (the general copy) outranks
+        one that also names another MOD. This keeps the general copy and
+        avoids an ambiguous-match error when a reference holds both. Any
+        remaining equal ranks stay tied so callers do not guess, for example
+        when a curator spans several MODs or two PDFs are both no-MOD only.
+        Supplements and non-final PDFs never outrank a canonical main.
         """
 
         file_class = str(artifact.metadata.get("file_class") or "").strip().casefold()
@@ -236,7 +242,9 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         if authorized.intersection(artifact_mods):
             return (0,)
         if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
-            return (1,)
+            # AI Curation's own tie-break (not ABC's): the general copy, with no
+            # named MOD entries, before a global PDF that names another MOD.
+            return (1,) if not artifact_mods else (2,)
         return (10,)
 
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:

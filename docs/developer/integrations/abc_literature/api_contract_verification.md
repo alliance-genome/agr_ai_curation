@@ -338,10 +338,18 @@ Null-MOD/global decision (aligned with ABC's `download_file` in ALL-1543):
   from a bare curie or id (conversion follow-up and figure-metadata
   re-listings) has no reference record, so it applies the MOD rows alone; none
   of those listings authorizes a source PDF.
-- Global access does not drop a file's named MODs from source-PDF ranking: a
-  PDF with the curator's MOD still outranks a shared PDF, matching ABC's
-  main-PDF lookup. Two shared PDFs, neither naming the curator's MOD, tie, and
-  the identifier import reports an ambiguous match instead of guessing.
+- Source-PDF ranking for identifier imports (final main PDFs only):
+  1. A PDF with an entry for the curator's MOD, even if it is global. This is
+     ABC's main-PDF lookup precedence.
+  2. A global PDF with no named MOD entries (the general no-MOD copy).
+  3. A global PDF that also names another MOD (for example no-MOD + WB for a
+     non-WB curator, or an open-access WB-only PDF).
+
+  Step 1 before steps 2 and 3 is ABC's rule. Splitting steps 2 and 3 is AI
+  Curation's own tie-break; ABC has none and takes whichever no-MOD PDF it
+  reads first. It keeps the general copy and avoids an ambiguous-match error
+  when a reference holds both kinds. Any remaining tie, such as two no-MOD-only
+  PDFs, stays an ambiguous match; AI Curation does not guess further.
 - AI Curation grants global access to any signed-in curator. ABC additionally
   requires the caller to have some MOD access for the null-MOD grant; under a
   curator bearer, ABC's `download_file` still enforces that on download.
