@@ -13,6 +13,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.curation_workspace.session_common import _normalize_uuid
 from src.lib.curation_workspace.session_loading import PREPARED_SESSION_LOAD_OPTIONS
+from src.lib.curation_workspace.session_ownership import owned_by
 from src.lib.curation_workspace.session_persistence import (
     _apply_progress_counts,
     _delete_candidate_children,
@@ -37,8 +38,9 @@ def find_reusable_prepared_session(
     adapter_key: str,
     flow_run_id: str | None,
     prep_extraction_result_id: str | UUID,
+    owner_id: str,
 ) -> ReusablePreparedSessionContext | None:
-    """Return the newest untouched NEW session that can be refreshed in place."""
+    """Return the caller's newest untouched NEW session that can be refreshed in place."""
 
     target_extraction_result_id = _normalize_uuid(
         prep_extraction_result_id,
@@ -49,6 +51,7 @@ def find_reusable_prepared_session(
         .where(ReviewSessionModel.document_id == _normalize_uuid(document_id, field_name="document_id"))
         .where(ReviewSessionModel.adapter_key == adapter_key)
         .where(ReviewSessionModel.status == CurationSessionStatus.NEW)
+        .where(owned_by(owner_id))
         .options(*PREPARED_SESSION_LOAD_OPTIONS)
         .order_by(
             ReviewSessionModel.prepared_at.desc(),
@@ -82,8 +85,6 @@ def find_reusable_prepared_session(
             continue
         return ReusablePreparedSessionContext(
             session_id=str(session_row.id),
-            created_by_id=session_row.created_by_id,
-            assigned_curator_id=session_row.assigned_curator_id,
             notes=session_row.notes,
             tags=list(session_row.tags or []),
         )
@@ -212,7 +213,6 @@ def _apply_prepared_session_metadata(
     session_row.profile_key = None
     session_row.document_id = _normalize_uuid(request.document_id, field_name="document_id")
     session_row.flow_run_id = request.flow_run_id
-    session_row.assigned_curator_id = request.assigned_curator_id
     session_row.created_by_id = request.created_by_id
     session_row.notes = request.notes
     session_row.tags = list(request.tags)

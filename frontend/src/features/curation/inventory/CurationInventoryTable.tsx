@@ -45,7 +45,7 @@ import {
   getValidationSegmentStyles,
 } from './inventoryPresentation'
 
-const COLUMN_COUNT = 9
+const COLUMN_COUNT = 8
 
 type InventoryViewMode = 'sessions' | 'flow_runs'
 
@@ -61,7 +61,6 @@ const COLUMN_HEADERS: Array<{
   { field: 'evidence', label: 'Evidence' },
   { field: 'prepared_at', label: 'Prepared' },
   { field: 'last_worked_at', label: 'Last Worked' },
-  { field: 'curator', label: 'Curator' },
 ]
 
 interface CurationInventoryTableProps {
@@ -113,15 +112,6 @@ function SortableHeader({
         {label}
       </TableSortLabel>
     </TableCell>
-  )
-}
-
-function renderCuratorName(session: CurationSessionSummary): string {
-  return (
-    session.assigned_curator?.display_name ||
-    session.assigned_curator?.email ||
-    session.assigned_curator?.actor_id ||
-    'Unassigned'
   )
 }
 
@@ -264,9 +254,6 @@ function SessionTableRow({ nested = false, onRowClick, session }: SessionTableRo
             </Typography>
           )}
         </Stack>
-      </TableCell>
-      <TableCell>
-        <Typography variant="body2">{renderCuratorName(session)}</Typography>
       </TableCell>
     </TableRow>
   );

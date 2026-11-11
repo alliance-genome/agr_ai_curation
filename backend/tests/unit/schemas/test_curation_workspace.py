@@ -9,7 +9,6 @@ from src.schemas.curation_workspace import (
     CurationCandidateStatus,
     CurationEntityTagDbValidationStatus,
     CurationEntityTagSource,
-    CurationInventoryScope,
     CurationSessionFilters,
     CurationSessionListRequest,
     CurationSessionSortField,
@@ -73,25 +72,11 @@ def make_anchor_payload() -> dict:
     }
 
 
-def test_curation_session_filters_default_and_validate_inventory_scope():
-    default_filters = CurationSessionFilters()
-
-    assert default_filters.inventory_scope == CurationInventoryScope.MY_INVENTORY
-    assert (
-        CurationSessionFilters.model_validate(
-            {"inventory_scope": "show_all"}
-        ).inventory_scope
-        == CurationInventoryScope.SHOW_ALL
-    )
-    assert (
-        CurationSessionFilters.model_validate(
-            {"inventory_scope": "my_organization"}
-        ).inventory_scope
-        == CurationInventoryScope.MY_ORGANIZATION
-    )
-
-    with pytest.raises(ValidationError):
-        CurationSessionFilters.model_validate({"inventory_scope": "global"})
+def test_curation_session_filters_have_no_scope_or_curator_filter():
+    # Every list is the caller's own sessions (ALL-1547).
+    for retired in ({"inventory_scope": "show_all"}, {"curator_ids": ["user-1"]}):
+        with pytest.raises(ValidationError):
+            CurationSessionFilters.model_validate(retired)
 
 
 def make_workspace_response_payload() -> dict:
@@ -156,10 +141,6 @@ def make_workspace_response_payload() -> dict:
                     "warnings": [],
                 },
                 "current_candidate_id": "candidate-1",
-                "assigned_curator": {
-                    "actor_id": "user-1",
-                    "display_name": "Curator One",
-                },
                 "created_by": {
                     "actor_id": "user-1",
                     "display_name": "Curator One",

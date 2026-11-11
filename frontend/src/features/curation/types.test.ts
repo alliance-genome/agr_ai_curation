@@ -36,7 +36,6 @@ describe('curation workspace substrate types', () => {
       'candidate_count',
       'validation',
       'evidence',
-      'curator',
     ])
 
     expect(CURATION_SUBMISSION_STATUSES).toEqual([
@@ -166,10 +165,6 @@ describe('curation workspace substrate types', () => {
             warnings: [],
           },
           current_candidate_id: 'candidate-1',
-          assigned_curator: {
-            actor_id: 'user-1',
-            display_name: 'Curator One',
-          },
           created_by: {
             actor_id: 'user-1',
             display_name: 'Curator One',

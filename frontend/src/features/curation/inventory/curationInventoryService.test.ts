@@ -20,10 +20,8 @@ describe('curationInventoryService', () => {
   it('serializes list request filters, sorting, and pagination into query params', () => {
     const params = buildCurationSessionListQueryParams({
       filters: {
-        inventory_scope: 'show_all',
         statuses: ['new', 'in_progress'],
         adapter_keys: ['gene'],
-        curator_ids: ['curator-1'],
         tags: ['priority'],
         flow_run_id: 'flow-1',
         origin_session_id: 'chat-session-1',
@@ -46,10 +44,10 @@ describe('curationInventoryService', () => {
       group_by_flow_run: true,
     })
 
-    expect(params.get('inventory_scope')).toBe('show_all')
+    expect(params.has('inventory_scope')).toBe(false)
     expect(params.getAll('status')).toEqual(['new', 'in_progress'])
     expect(params.getAll('adapter_key')).toEqual(['gene'])
-    expect(params.getAll('curator_id')).toEqual(['curator-1'])
+    expect(params.has('curator_id')).toBe(false)
     expect(params.getAll('tag')).toEqual(['priority'])
     expect(params.get('flow_run_id')).toBe('flow-1')
     expect(params.get('origin_session_id')).toBe('chat-session-1')
@@ -70,10 +68,8 @@ describe('curationInventoryService', () => {
   it('serializes stats filters without list-only params', () => {
     const params = buildCurationSessionStatsQueryParams({
       filters: {
-        inventory_scope: 'my_inventory',
         statuses: ['submitted'],
         adapter_keys: ['gene'],
-        curator_ids: [],
         tags: [],
         flow_run_id: null,
         origin_session_id: null,
@@ -85,7 +81,7 @@ describe('curationInventoryService', () => {
       },
     })
 
-    expect(params.get('inventory_scope')).toBe('my_inventory')
+    expect(params.has('inventory_scope')).toBe(false)
     expect(params.getAll('status')).toEqual(['submitted'])
     expect(params.getAll('adapter_key')).toEqual(['gene'])
     expect(params.get('search')).toBe('pmid')
@@ -97,10 +93,8 @@ describe('curationInventoryService', () => {
   it('serializes flow-run list filters into query params', () => {
     const params = buildCurationFlowRunListQueryParams({
       filters: {
-        inventory_scope: 'my_inventory',
         statuses: ['submitted'],
         adapter_keys: ['gene'],
-        curator_ids: [],
         tags: [],
         flow_run_id: 'flow-1',
         origin_session_id: 'chat-session-7',
@@ -112,7 +106,7 @@ describe('curationInventoryService', () => {
       },
     })
 
-    expect(params.get('inventory_scope')).toBe('my_inventory')
+    expect(params.has('inventory_scope')).toBe(false)
     expect(params.getAll('status')).toEqual(['submitted'])
     expect(params.getAll('adapter_key')).toEqual(['gene'])
     expect(params.get('flow_run_id')).toBe('flow-1')
@@ -125,10 +119,8 @@ describe('curationInventoryService', () => {
     const params = buildCurationFlowRunSessionsQueryParams({
       flow_run_id: 'flow alpha',
       filters: {
-        inventory_scope: 'show_all',
         statuses: ['in_progress'],
         adapter_keys: [],
-        curator_ids: [],
         tags: [],
         flow_run_id: null,
         origin_session_id: 'chat-session-9',
@@ -142,7 +134,7 @@ describe('curationInventoryService', () => {
       page_size: 10,
     })
 
-    expect(params.get('inventory_scope')).toBe('show_all')
+    expect(params.has('inventory_scope')).toBe(false)
     expect(params.getAll('status')).toEqual(['in_progress'])
     expect(params.get('origin_session_id')).toBe('chat-session-9')
     expect(params.get('saved_view_id')).toBe('saved-view-4')
@@ -190,7 +182,6 @@ describe('curationInventoryService', () => {
       filters: {
         statuses: [],
         adapter_keys: [],
-        curator_ids: [],
         tags: [],
         flow_run_id: null,
         origin_session_id: null,
@@ -263,10 +254,8 @@ describe('curationInventoryService', () => {
               name: 'My pending sessions',
               description: null,
               filters: {
-                inventory_scope: 'show_all',
                 statuses: ['in_progress'],
                 adapter_keys: ['gene'],
-                curator_ids: [],
                 tags: [],
                 flow_run_id: null,
                 origin_session_id: null,
@@ -298,10 +287,8 @@ describe('curationInventoryService', () => {
       name: 'My pending sessions',
       description: 'Only my active work',
       filters: {
-        inventory_scope: 'show_all',
         statuses: ['in_progress'],
         adapter_keys: ['gene'],
-        curator_ids: [],
         tags: [],
         flow_run_id: null,
         origin_session_id: null,
@@ -327,10 +314,8 @@ describe('curationInventoryService', () => {
         name: 'My pending sessions',
         description: 'Only my active work',
         filters: {
-          inventory_scope: 'show_all',
           statuses: ['in_progress'],
           adapter_keys: ['gene'],
-          curator_ids: [],
           tags: [],
           flow_run_id: null,
           origin_session_id: null,

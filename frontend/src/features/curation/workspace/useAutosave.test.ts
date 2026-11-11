@@ -1767,6 +1767,34 @@ describe('useAutosave', () => {
     expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
   })
 
+  it('drops an edit whose envelope reads as missing (404) instead of requeuing it', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    serviceMocks.patchCurationEnvelopeField.mockRejectedValue(Object.assign(
+      new Error('Domain envelope envelope-1 not found'),
+      { status: 404 },
+    ))
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(envelopeWorkspace)
+
+    const { result } = renderHook(
+      () => useAutosave({ debounceMs: 60_000 }),
+      { wrapper: createWrapper(envelopeWorkspace) },
+    )
+
+    act(() => {
+      result.current.queueFieldChange({ field_key: 'gene_symbol', value: 'BRCA2' })
+    })
+    await act(async () => {
+      expect(await result.current.flush()).toBe(false)
+    })
+    expect(result.current.warning).toBe(
+      'This change was not saved. The record or session is no longer available; refresh the page to see the current state.',
+    )
+    await act(async () => {
+      expect(await result.current.flush()).toBe(true)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+  })
+
   it('reports a saved direct edit as saved when only the reload after it fails', async () => {
     const envelopeWorkspace = buildEnvelopeWorkspace()
     serviceMocks.patchCurationEnvelopeField.mockResolvedValue(buildEnvelopePatchResponse({

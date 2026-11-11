@@ -102,6 +102,7 @@ def _session(document_id) -> str:
                 status=CurationSessionStatus.NEW,
                 adapter_key="generic",
                 document_id=document_id,
+                created_by_id=CLAIMS["sub"],
                 session_version=1,
                 prepared_at=datetime.now(timezone.utc),
             )
@@ -244,7 +245,7 @@ async def test_link_saves_the_servers_answer_and_every_session_sees_it(scope, mi
 
     with SessionLocal() as db:
         for session_id in (earlier_session, later_session):
-            ref = get_session_detail(db, session_id).document
+            ref = get_session_detail(db, session_id, owner_sub=CLAIMS["sub"]).document
             assert ref.reference_curie == CURIE
             assert ref.reference_source is CurationDocumentReferenceSource.CURATOR_LINK
 
@@ -338,7 +339,7 @@ async def test_a_linked_document_must_be_unlinked_before_linking_again(scope, mi
     assert document.linked_reference_provider is None
     assert document.linked_reference_at is None
     with SessionLocal() as db:
-        assert get_session_detail(db, session_id).document.reference_curie is None
+        assert get_session_detail(db, session_id, owner_sub=CLAIMS["sub"]).document.reference_curie is None
     assert [entry.action_type for entry in _log_entries(session_id)].count(
         CurationActionType.DOCUMENT_REFERENCE_UNLINKED
     ) == 1
@@ -352,7 +353,7 @@ async def test_an_imported_reference_cannot_be_linked_over_or_unlinked(scope, mi
     _set_imported(scope)
 
     with SessionLocal() as db:
-        ref = get_session_detail(db, session_id).document
+        ref = get_session_detail(db, session_id, owner_sub=CLAIMS["sub"]).document
     assert ref.reference_curie == "SOURCE:IMPORTED"
     assert ref.reference_source is CurationDocumentReferenceSource.IMPORTED
 

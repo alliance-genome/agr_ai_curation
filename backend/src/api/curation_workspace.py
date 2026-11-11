@@ -12,6 +12,22 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
+from src.api.curation_workspace_access import (
+    owned_benchmark_session_in_path,
+    owned_candidate_in_path,
+    owned_document_in_path,
+    owned_document_in_session_create,
+    owned_operation_in_path,
+    owned_session_in_candidate_decision,
+    owned_session_in_evidence_recompute,
+    owned_session_in_evidence_resolve,
+    owned_session_in_manual_evidence,
+    owned_session_in_path,
+    owned_snapshot_in_path,
+    owned_submission_in_path,
+    visible_envelope_in_path,
+    require_current_user_id as _require_current_user_id,
+)
 from src.lib.curation_workspace.bootstrap_service import (
     bootstrap_document_session,
     create_manual_session,
@@ -110,7 +126,6 @@ from src.schemas.curation_workspace import (
     CurationFlowRunListResponse,
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
-    CurationInventoryScope,
     CurationManualCandidateCreateRequest,
     CurationManualCandidateCreateResponse,
     CurationNextSessionRequest,
@@ -221,13 +236,8 @@ def _date_range(from_at: datetime | None, to_at: datetime | None) -> CurationDat
 
 
 def _session_filters_from_query(
-    inventory_scope: CurationInventoryScope = Query(
-        default=CurationInventoryScope.MY_INVENTORY,
-        alias="inventory_scope",
-    ),
     statuses: Annotated[list[CurationSessionStatus] | None, Query(alias="status")] = None,
     adapter_keys: Annotated[list[str] | None, Query(alias="adapter_key")] = None,
-    curator_ids: Annotated[list[str] | None, Query(alias="curator_id")] = None,
     tags: Annotated[list[str] | None, Query(alias="tag")] = None,
     flow_run_id: str | None = Query(default=None),
     origin_session_id: str | None = Query(default=None),
@@ -240,10 +250,8 @@ def _session_filters_from_query(
     last_worked_to: datetime | None = Query(default=None, alias="last_worked_to"),
 ) -> CurationSessionFilters:
     return CurationSessionFilters(
-        inventory_scope=inventory_scope,
         statuses=statuses or [],
         adapter_keys=adapter_keys or [],
-        curator_ids=curator_ids or [],
         tags=tags or [],
         flow_run_id=flow_run_id,
         origin_session_id=origin_session_id,
@@ -329,10 +337,6 @@ def _build_next_request(
     )
 
 
-def _current_user_id(user: dict) -> str | None:
-    return user.get("sub") or user.get("uid")
-
-
 def _authenticated_active_groups(user: dict) -> list[str]:
     raw_groups = user.get("groups")
     if raw_groups is None:
@@ -340,13 +344,6 @@ def _authenticated_active_groups(user: dict) -> list[str]:
     if not isinstance(raw_groups, list):
         raw_groups = [str(raw_groups)] if raw_groups else []
     return get_groups_from_provider_groups(raw_groups)
-
-
-def _require_current_user_id(user: dict) -> str:
-    user_id = _current_user_id(user)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
-    return user_id
 
 
 def _sanitized_benchmark_error(
@@ -417,6 +414,7 @@ async def get_benchmark_destinations(
 
 @router.post(
     "/sessions/{session_id}/envelopes/{envelope_id}/benchmark-snapshots",
+    dependencies=[Depends(owned_benchmark_session_in_path)],
     response_model=CurationBenchmarkSnapshotCreateResponse,
     responses=_BENCHMARK_ERROR_RESPONSES,
 )
@@ -459,6 +457,7 @@ async def post_benchmark_snapshot(
 
 @router.get(
     "/benchmark-snapshots/{snapshot_id}/download",
+    dependencies=[Depends(owned_snapshot_in_path)],
     response_class=Response,
     responses={
         200: {"model": CurationBenchmarkSnapshotBundleV1},
@@ -486,6 +485,7 @@ async def download_benchmark_snapshot(
 
 @router.post(
     "/benchmark-snapshots/{snapshot_id}/handoffs",
+    dependencies=[Depends(owned_snapshot_in_path)],
     response_model=CurationBenchmarkHandoffResponse,
     response_model_exclude_none=True,
     responses=_BENCHMARK_ERROR_RESPONSES,
@@ -514,6 +514,7 @@ async def post_benchmark_snapshot_handoff(
 
 @router.post(
     "/benchmark-snapshots/{snapshot_id}/handoffs/retry",
+    dependencies=[Depends(owned_snapshot_in_path)],
     response_model=CurationBenchmarkHandoffResponse,
     response_model_exclude_none=True,
     responses=_BENCHMARK_ERROR_RESPONSES,
@@ -549,7 +550,7 @@ async def list_review_sessions(
     return list_sessions(db, request, current_user_id=_require_current_user_id(user))
 
 
-@router.post("/sessions", response_model=CurationSessionCreateResponse)
+@router.post("/sessions", dependencies=[Depends(owned_document_in_session_create)], response_model=CurationSessionCreateResponse)
 async def post_review_session(
     request: CurationSessionCreateRequest,
     user: dict = get_auth_dependency(),
@@ -649,7 +650,7 @@ async def get_next_review_session(
     return get_next_session(db, request, current_user_id=_require_current_user_id(user))
 
 
-@router.get("/sessions/{session_id}", response_model=None)
+@router.get("/sessions/{session_id}", dependencies=[Depends(owned_session_in_path)], response_model=None)
 async def get_review_session(
     session_id: UUID,
     include_workspace: bool = Query(default=False),
@@ -660,9 +661,10 @@ async def get_review_session(
     # The database reads and model building run in the thread pool so the
     # single worker's event loop keeps serving other users. Response encoding
     # still happens on the loop after this returns.
+    owner_sub = _require_current_user_id(user)
     if include_workspace:
-        return await run_in_threadpool(get_session_workspace, db, session_id)
-    return await run_in_threadpool(get_session_detail, db, session_id)
+        return await run_in_threadpool(get_session_workspace, db, session_id, owner_sub=owner_sub)
+    return await run_in_threadpool(get_session_detail, db, session_id, owner_sub=owner_sub)
 
 
 def _require_document_source_import() -> None:
@@ -675,6 +677,7 @@ def _require_document_source_import() -> None:
 
 @router.post(
     "/sessions/{session_id}/document-reference/find",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationDocumentReferenceResult,
 )
 async def find_session_document_reference(
@@ -687,7 +690,7 @@ async def find_session_document_reference(
     """Look up the paper an identifier names, without saving anything."""
     _require_document_source_import()
     await provision_user_async(principal_from_claims(user))
-    require_document_can_be_linked(db, session_id)
+    require_document_can_be_linked(db, session_id, owner_sub=_require_current_user_id(user))
     db.rollback()
     return await find_document_reference(
         payload.identifier,
@@ -698,6 +701,7 @@ async def find_session_document_reference(
 
 @router.put(
     "/sessions/{session_id}/document-reference",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationDocumentReferenceResult,
 )
 async def link_session_document_reference(
@@ -710,7 +714,7 @@ async def link_session_document_reference(
     """Resolve the identifier again on the server and save what it names."""
     _require_document_source_import()
     await provision_user_async(principal_from_claims(user))
-    require_document_can_be_linked(db, session_id)
+    require_document_can_be_linked(db, session_id, owner_sub=_require_current_user_id(user))
     db.rollback()
     found = await find_document_reference(
         payload.identifier,
@@ -727,6 +731,7 @@ async def link_session_document_reference(
 
 @router.delete(
     "/sessions/{session_id}/document-reference",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationDocumentReferenceResult,
 )
 async def unlink_session_document_reference(
@@ -745,6 +750,7 @@ async def unlink_session_document_reference(
 
 @router.get(
     "/domain-envelopes/{envelope_id}/review-rows",
+    dependencies=[Depends(visible_envelope_in_path)],
     response_model=DomainEnvelopeReviewRowsResponse,
 )
 async def get_domain_envelope_review_rows(
@@ -781,7 +787,7 @@ async def get_domain_envelope_review_rows(
         )
 
 
-@router.patch("/sessions/{session_id}", response_model=CurationSessionUpdateResponse)
+@router.patch("/sessions/{session_id}", dependencies=[Depends(owned_session_in_path)], response_model=CurationSessionUpdateResponse)
 async def patch_review_session(
     session_id: UUID,
     request: CurationSessionUpdateRequest,
@@ -795,7 +801,7 @@ async def patch_review_session(
     )
 
 
-@router.post("/evidence/recompute", response_model=CurationEvidenceRecomputeResponse)
+@router.post("/evidence/recompute", dependencies=[Depends(owned_session_in_evidence_recompute)], response_model=CurationEvidenceRecomputeResponse)
 async def post_evidence_recompute(
     request: CurationEvidenceRecomputeRequest,
     user: dict = get_auth_dependency(),
@@ -814,7 +820,7 @@ async def post_evidence_recompute(
     )
 
 
-@router.post("/evidence/manual", response_model=CurationManualEvidenceCreateResponse)
+@router.post("/evidence/manual", dependencies=[Depends(owned_session_in_manual_evidence)], response_model=CurationManualEvidenceCreateResponse)
 async def post_manual_evidence(
     request: CurationManualEvidenceCreateRequest,
     user: dict = get_auth_dependency(),
@@ -832,7 +838,7 @@ async def post_manual_evidence(
     )
 
 
-@router.post("/evidence/resolve", response_model=CurationEvidenceResolveResponse)
+@router.post("/evidence/resolve", dependencies=[Depends(owned_session_in_evidence_resolve)], response_model=CurationEvidenceResolveResponse)
 async def post_evidence_resolve(
     request: CurationEvidenceResolveRequest,
     user: dict = get_auth_dependency(),
@@ -852,6 +858,7 @@ async def post_evidence_resolve(
 
 @router.post(
     "/documents/{document_id}/bootstrap",
+    dependencies=[Depends(owned_document_in_path)],
     response_model=CurationDocumentBootstrapResponse,
 )
 async def post_document_bootstrap(
@@ -873,6 +880,7 @@ async def post_document_bootstrap(
 
 @router.get(
     "/documents/{document_id}/bootstrap-availability",
+    dependencies=[Depends(owned_document_in_path)],
     response_model=CurationDocumentBootstrapAvailabilityResponse,
 )
 async def get_document_bootstrap_status(
@@ -946,6 +954,7 @@ async def trigger_chat_prep(
 
 @router.post(
     "/sessions/{session_id}/candidates",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationManualCandidateCreateResponse,
 )
 async def post_manual_candidate(
@@ -969,6 +978,7 @@ async def post_manual_candidate(
 
 @router.patch(
     "/sessions/{session_id}/candidates/{candidate_id}/draft",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationCandidateDraftUpdateResponse,
 )
 async def patch_review_candidate_draft(
@@ -993,6 +1003,7 @@ async def patch_review_candidate_draft(
 
 @router.patch(
     "/sessions/{session_id}/envelopes/{envelope_id}/field",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationEnvelopeFieldPatchResponse,
 )
 async def patch_review_envelope_field(
@@ -1021,6 +1032,7 @@ async def patch_review_envelope_field(
 
 @router.post(
     "/sessions/{session_id}/envelopes/{envelope_id}/validation-findings/{finding_id}/waive",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationValidationFindingWaiveResponse,
 )
 async def post_review_validation_finding_waiver(
@@ -1055,6 +1067,7 @@ async def post_review_validation_finding_waiver(
 
 @router.delete(
     "/sessions/{session_id}/candidates/{candidate_id}",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationCandidateDeleteResponse,
 )
 async def delete_review_candidate(
@@ -1078,6 +1091,7 @@ async def delete_review_candidate(
 
 @router.post(
     "/candidates/{candidate_id}/decision",
+    dependencies=[Depends(owned_session_in_candidate_decision)],
     response_model=CurationCandidateDecisionResponse,
 )
 async def post_candidate_decision(
@@ -1105,6 +1119,7 @@ async def post_candidate_decision(
 
 @router.post(
     "/sessions/{session_id}/submission-preview",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationSubmissionPreviewResponse,
 )
 async def post_submission_preview(
@@ -1122,6 +1137,7 @@ async def post_submission_preview(
 
 @router.post(
     "/sessions/{session_id}/submit",
+    dependencies=[Depends(owned_session_in_path)],
     response_model=CurationSubmissionExecuteResponse,
 )
 async def post_submission_execute(
@@ -1145,6 +1161,7 @@ async def post_submission_execute(
 
 @router.post(
     "/sessions/{session_id}/submissions/{submission_id}/retry",
+    dependencies=[Depends(owned_submission_in_path)],
     response_model=CurationSubmissionRetryResponse,
 )
 async def post_submission_retry(
@@ -1170,6 +1187,7 @@ async def post_submission_retry(
 
 @router.get(
     "/sessions/{session_id}/submissions/{submission_id}",
+    dependencies=[Depends(owned_submission_in_path)],
     response_model=CurationSubmissionHistoryResponse,
 )
 async def get_submission_history(
@@ -1179,13 +1197,13 @@ async def get_submission_history(
     db: Session = Depends(get_db),
 ) -> CurationSubmissionHistoryResponse:
     await provision_user_async(principal_from_claims(user))
-    return get_submission(db, session_id, submission_id)
+    return get_submission(db, session_id, submission_id, owner_sub=_require_current_user_id(user))
 
 
 __all__ = ["router"]
 
 
-@router.get("/candidates/{candidate_id}/validation-history")
+@router.get("/candidates/{candidate_id}/validation-history", dependencies=[Depends(owned_candidate_in_path)])
 async def get_candidate_validation_history(
     candidate_id: UUID,
     after: Annotated[int, Query(ge=0)] = 0,
@@ -1201,7 +1219,7 @@ async def get_candidate_validation_history(
         raise HTTPException(403, "Validation history unavailable") from exc
 
 
-@router.get("/candidates/{candidate_id}/validation-history/{fact_id}")
+@router.get("/candidates/{candidate_id}/validation-history/{fact_id}", dependencies=[Depends(owned_candidate_in_path)])
 async def get_candidate_validation_history_detail(
     candidate_id: UUID,
     fact_id: str,
@@ -1245,7 +1263,7 @@ def _workspace_review_error(error):
     raise error
 
 
-@router.post('/sessions/{session_id}/review-operations', status_code=202)
+@router.post('/sessions/{session_id}/review-operations', dependencies=[Depends(owned_session_in_path)], status_code=202)
 async def post_workspace_review_operation(
     session_id: UUID, request: WorkspaceReviewRequest,
     user: dict = get_auth_dependency(), db: Session = Depends(get_db),
@@ -1261,7 +1279,7 @@ async def post_workspace_review_operation(
         _workspace_review_error(error)
 
 
-@router.get('/sessions/{session_id}/review-operation')
+@router.get('/sessions/{session_id}/review-operation', dependencies=[Depends(owned_session_in_path)])
 async def get_session_review_operation(
     session_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
 ) -> dict | None:
@@ -1272,7 +1290,7 @@ async def get_session_review_operation(
         _workspace_review_error(error)
 
 
-@router.get('/candidates/{candidate_id}/review-operation')
+@router.get('/candidates/{candidate_id}/review-operation', dependencies=[Depends(owned_candidate_in_path)])
 async def get_candidate_review_operation(
     candidate_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
 ) -> dict | None:
@@ -1284,7 +1302,7 @@ async def get_candidate_review_operation(
         _workspace_review_error(error)
 
 
-@router.get('/review-operations/{operation_id}')
+@router.get('/review-operations/{operation_id}', dependencies=[Depends(owned_operation_in_path)])
 async def get_workspace_review_operation(
     operation_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
 ) -> dict:
@@ -1296,7 +1314,7 @@ async def get_workspace_review_operation(
         _workspace_review_error(error)
 
 
-@router.post('/review-operations/{operation_id}/cancel')
+@router.post('/review-operations/{operation_id}/cancel', dependencies=[Depends(owned_operation_in_path)])
 async def cancel_workspace_review_operation(operation_id: UUID, user: dict = get_auth_dependency()) -> dict:
     from src.lib.curation_workspace import review_operations
     import asyncio
@@ -1307,7 +1325,7 @@ async def cancel_workspace_review_operation(operation_id: UUID, user: dict = get
         _workspace_review_error(error)
 
 
-@router.post('/review-operations/{operation_id}/resume')
+@router.post('/review-operations/{operation_id}/resume', dependencies=[Depends(owned_operation_in_path)])
 async def resume_workspace_review_operation(
     operation_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
 ) -> dict:
@@ -1320,7 +1338,7 @@ async def resume_workspace_review_operation(
         _workspace_review_error(error)
 
 
-@router.post('/candidates/{candidate_id}/validation-decisions')
+@router.post('/candidates/{candidate_id}/validation-decisions', dependencies=[Depends(owned_candidate_in_path)])
 async def post_workspace_validation_decision(
     candidate_id: UUID, request: WorkspaceReviewDecisionRequest,
     user: dict = get_auth_dependency(),
@@ -1336,7 +1354,7 @@ async def post_workspace_validation_decision(
         _workspace_review_error(error)
 
 
-@router.get('/sessions/{session_id}/review-operations')
+@router.get('/sessions/{session_id}/review-operations', dependencies=[Depends(owned_session_in_path)])
 async def get_active_workspace_review_operations(
     session_id: UUID, user: dict = get_auth_dependency(), db: Session = Depends(get_db),
 ) -> list[dict]:
@@ -1347,7 +1365,7 @@ async def get_active_workspace_review_operations(
         _workspace_review_error(error)
 
 
-@router.post('/envelopes/{envelope_id}/restore-record')
+@router.post('/envelopes/{envelope_id}/restore-record', dependencies=[Depends(visible_envelope_in_path)])
 async def restore_workspace_record(envelope_id: str, request: WorkspaceRecordRestoreRequest,
                                    user: dict = get_auth_dependency()) -> dict:
     import asyncio
@@ -1360,7 +1378,7 @@ async def restore_workspace_record(envelope_id: str, request: WorkspaceRecordRes
         _workspace_review_error(error)
 
 
-@router.get('/envelopes/{envelope_id}/record-history/{fact_id}')
+@router.get('/envelopes/{envelope_id}/record-history/{fact_id}', dependencies=[Depends(visible_envelope_in_path)])
 async def read_workspace_record_history(envelope_id: str, fact_id: str, sha256: str, offset: int = 0,
         user: dict = get_auth_dependency(), db: Session = Depends(get_db)) -> dict:
     from src.lib.curation_workspace.record_retirement_service import detail

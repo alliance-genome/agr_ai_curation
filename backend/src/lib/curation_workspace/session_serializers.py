@@ -597,7 +597,6 @@ def _session_summary(
         validation=_latest_validation_summary(session),
         evidence=_evidence_summary(session),
         current_candidate_id=str(session.current_candidate_id) if session.current_candidate_id else None,
-        assigned_curator=_actor_ref(user_map, session.assigned_curator_id),
         created_by=_actor_ref(user_map, session.created_by_id),
         prepared_at=session.prepared_at,
         last_worked_at=session.last_worked_at,

@@ -25,6 +25,7 @@ from src.lib.curation_workspace.models import (
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
 )
+from src.lib.curation_workspace.session_ownership import is_owned_by
 from src.lib.openai_agents.config import (
     get_benchmark_handoff_max_identity_bytes,
     get_benchmark_handoff_timeout_seconds,
@@ -146,11 +147,7 @@ def _require_session_access(
     session_row = db.get(CurationReviewSession, session_id)
     if session_row is None:
         raise CurationBenchmarkSnapshotError(404, "snapshot_not_found", "Snapshot was not found")
-    permitted = session_row.assigned_curator_id == current_user_id or (
-        session_row.assigned_curator_id is None
-        and session_row.created_by_id == current_user_id
-    )
-    if not permitted:
+    if not is_owned_by(session_row, current_user_id):
         raise CurationBenchmarkSnapshotError(404, "snapshot_not_found", "Snapshot was not found")
     return session_row
 

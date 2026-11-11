@@ -27,6 +27,7 @@ from src.lib.curation_workspace.models import (
     CurationValidationSnapshot as ValidationSnapshotModel,
 )
 from src.models.sql.database import Base
+from src.models.sql.user import User
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.schemas.curation_workspace import (
     CurationActionType,
@@ -56,6 +57,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 
 TEST_TABLES = [
+    User.__table__,
     PDFDocument.__table__,
     DocumentReferenceLink.__table__,
     ReviewSessionModel.__table__,
@@ -196,6 +198,7 @@ def _create_session(
         profile_key="primary",
         document_id=document_id,
         flow_run_id="flow-1",
+        created_by_id="curator-1",
         session_version=1,
         notes="Evidence review in progress.",
         tags=[],
@@ -353,7 +356,7 @@ def test_create_manual_evidence_flushes_record_updates_draft_and_logs_action(
             anchor=_anchor(snippet_text="Manual curator quote."),
             is_primary=True,
         ),
-        actor_claims={"sub": "user-1", "email": "user-1@example.org"},
+        actor_claims={"sub": "curator-1", "email": "curator-1@example.org"},
         db=db_session,
     )
 

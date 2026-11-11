@@ -19,7 +19,6 @@ const theme = createTheme()
 const defaultFilters: CurationSessionFilters = {
   statuses: [],
   adapter_keys: [],
-  curator_ids: [],
   tags: [],
   flow_run_id: null,
   document_id: null,
@@ -71,7 +70,6 @@ function buildSession(sessionId: string, title: string): CurationSessionSummary 
     validation: null,
     evidence: null,
     current_candidate_id: null,
-    assigned_curator: null,
     created_by: null,
     prepared_at: '2026-03-21T18:00:00Z',
     last_worked_at: '2026-03-21T19:00:00Z',

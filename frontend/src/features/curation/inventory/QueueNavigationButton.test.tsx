@@ -12,10 +12,8 @@ import QueueNavigationButton from './QueueNavigationButton'
 const theme = createTheme()
 
 const queueFilters: CurationSessionFilters = {
-  inventory_scope: 'my_inventory',
   statuses: ['in_progress'],
   adapter_keys: ['gene'],
-  curator_ids: [],
   tags: [],
   flow_run_id: null,
   document_id: null,
@@ -63,7 +61,6 @@ function buildSessionSummary(sessionId: string): CurationSessionSummary {
     validation: null,
     evidence: null,
     current_candidate_id: null,
-    assigned_curator: null,
     created_by: null,
     prepared_at: '2026-03-20T12:00:00Z',
     last_worked_at: '2026-03-21T12:00:00Z',

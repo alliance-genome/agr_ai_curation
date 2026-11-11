@@ -136,7 +136,6 @@ async def test_run_flow_curation_handoff_creates_one_session_per_distinct_adapte
     ]
     assert [call[1].adapter_key for call in bootstrap_calls] == ["gene", "gene_expression"]
     assert all(call[0] == "doc-1" for call in bootstrap_calls)
-    assert all(call[1].curator_id == "runner-sub" for call in bootstrap_calls)
     assert all(call[1].flow_run_id == "run-1" for call in bootstrap_calls)
     assert all(call[2] == "runner-sub" for call in bootstrap_calls)
     assert all(call[3] is False for call in bootstrap_calls)

@@ -43,7 +43,7 @@ class _SnapshotDb:
 
     def get(self, model, _identity):
         assert model is module.CurationReviewSession
-        return SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1")
+        return SimpleNamespace(created_by_id="curator-1")
 
     def scalars(self, _statement):
         self.envelope_statement = _statement
@@ -207,15 +207,31 @@ def test_snapshot_allows_pending_objects_and_validation_warnings(monkeypatch):
 def test_snapshot_access_fails_closed_for_another_curator():
     class _UnauthorizedDb(_SnapshotDb):
         def get(self, model, _identity):
-            return SimpleNamespace(
-                assigned_curator_id="curator-2", created_by_id="curator-2"
-            )
+            return SimpleNamespace(created_by_id="curator-2")
 
     db = _UnauthorizedDb(envelope=_envelope_row())
 
     with pytest.raises(module.CurationBenchmarkSnapshotError) as exc_info:
         module.create_benchmark_snapshot(
             db,
+            session_id=uuid4(),
+            envelope_id="env-1",
+            expected_revision=7,
+            current_user_id="curator-1",
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.error) == (404, "snapshot_not_found")
+
+
+@pytest.mark.parametrize("created_by_id", ["curator-2", None])
+def test_snapshot_access_requires_the_session_creator(created_by_id):
+    class _OtherCreatorDb(_SnapshotDb):
+        def get(self, model, _identity):
+            return SimpleNamespace(created_by_id=created_by_id)
+
+    with pytest.raises(module.CurationBenchmarkSnapshotError) as exc_info:
+        module.create_benchmark_snapshot(
+            _OtherCreatorDb(envelope=_envelope_row()),
             session_id=uuid4(),
             envelope_id="env-1",
             expected_revision=7,
@@ -345,7 +361,7 @@ async def test_exact_handoff_replay_returns_receipt_and_conflict_fails_closed(mo
     )
     db = _HandoffDb(
         snapshot,
-        SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"),
+        SimpleNamespace(created_by_id="curator-1"),
         prior=prior,
     )
     monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
@@ -420,7 +436,7 @@ async def test_reservation_race_checks_sender_without_resending(monkeypatch, ide
             assert self.rolled_back
             return reserved
 
-    db = RaceDb(snapshot, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"))
+    db = RaceDb(snapshot, SimpleNamespace(created_by_id="curator-1"))
     monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
     monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
     monkeypatch.setattr(module.httpx, "AsyncClient", lambda **kwargs: pytest.fail("must not resend"))
@@ -445,7 +461,7 @@ async def test_reservation_race_checks_sender_without_resending(monkeypatch, ide
 @pytest.mark.parametrize("retry", [False, True])
 async def test_handoff_denial_precedes_reservation_and_network(monkeypatch, failure, retry):
     snapshot = SimpleNamespace(id=uuid4(), session_id=uuid4(), created_by_id="curator-1")
-    session = SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1")
+    session = SimpleNamespace(created_by_id="curator-1")
     sender: dict[str, Any] = dict(SENDER)
     if failure == "missing_identity":
         sender["sender_issuer"] = None
@@ -509,7 +525,7 @@ async def test_handoff_uses_server_credentials_exact_bytes_and_opaque_redirect(m
     )
     db = _HandoffDb(
         snapshot,
-        SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"),
+        SimpleNamespace(created_by_id="curator-1"),
     )
     calls = []
 
@@ -568,7 +584,7 @@ async def test_ambiguous_sink_timeout_is_persisted_unknown_without_retry(monkeyp
         envelope_digest="sha256:" + "b" * 64, created_by_id="curator-1",
         bundle_json='{"exact":true}',
     )
-    db = _HandoffDb(snapshot, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"))
+    db = _HandoffDb(snapshot, SimpleNamespace(created_by_id="curator-1"))
     call_count = 0
     reported = []
 
@@ -662,7 +678,7 @@ async def test_explicit_retry_preserves_original_delivery_and_success_never_rese
         idempotency_key=module._identity_digest("portal", "env-1", "7", original.envelope_digest, "1", *SENDER_PARTS),
         sender_version="1", receipt_id=None, redirect_path=None, **SENDER,
     )
-    db = _HandoffDb(original, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"), prior=attempt)
+    db = _HandoffDb(original, SimpleNamespace(created_by_id="curator-1"), prior=attempt)
     calls = []
 
     class Client:
@@ -701,7 +717,7 @@ async def test_failed_retry_does_not_erase_prior_delivery_uncertainty(monkeypatc
         replay_key=module._identity_digest("portal", "env", "1"),
         idempotency_key=module._identity_digest("portal", "env", "1", snapshot.envelope_digest, "1", *SENDER_PARTS),
         sender_version="1", receipt_id=None, redirect_path=None, **SENDER)
-    db = _HandoffDb(snapshot, SimpleNamespace(created_by_id="curator-1", assigned_curator_id=None), prior=attempt)
+    db = _HandoffDb(snapshot, SimpleNamespace(created_by_id="curator-1"), prior=attempt)
     monkeypatch.setattr(module, "get_benchmark_snapshot_handoff_enabled", lambda: True)
     monkeypatch.setattr(module, "_destination_registry", lambda: {"portal": _destination()})
     monkeypatch.delenv("PORTAL_CLIENT_SECRET", raising=False)
@@ -718,7 +734,7 @@ async def test_token_failure_is_sanitized_and_persisted_failed(monkeypatch, capl
         envelope_digest="sha256:" + "c" * 64, created_by_id="curator-1",
         bundle_json='{"exact":true}',
     )
-    db = _HandoffDb(snapshot, SimpleNamespace(assigned_curator_id=None, created_by_id="curator-1"))
+    db = _HandoffDb(snapshot, SimpleNamespace(created_by_id="curator-1"))
     reported = []
 
     class _Client:

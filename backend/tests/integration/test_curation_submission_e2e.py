@@ -502,6 +502,8 @@ def _run_prep_and_bootstrap_domain_envelope(
     assert prep_output.review_row_count > 0
     assert prep_output.envelope_refs[0].envelope_id == envelope.envelope_id
 
+    # A request reads committed state; route guards end their own read.
+    test_db.commit()
     bootstrap_response = client.post(
         (
             "/api/curation-workspace/documents/"
@@ -1028,7 +1030,11 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
     assert bootstrap_response.session.adapter.adapter_key == "gene"
     assert bootstrap_response.session.progress.total_candidates == 1
 
-    workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
+    workspace = get_session_workspace(
+        test_db,
+        bootstrap_response.session.session_id,
+        owner_sub=submission_e2e_context["current_user_auth_sub"],
+    )
     candidate = workspace.workspace.candidates[0]
     assert candidate.adapter_key == "gene"
     assert candidate.projection_ref.envelope_id == envelope_id

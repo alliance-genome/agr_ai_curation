@@ -40,6 +40,7 @@ from src.lib.curation_workspace.session_common import (
     actor_user_id,
 )
 from src.lib.curation_workspace.session_queries import get_session_detail
+from src.lib.curation_workspace.session_ownership import owned_by, submission_not_found
 from src.lib.curation_workspace.session_serializers import (
     _action_log_entry,
     _candidate_payload,
@@ -170,22 +171,19 @@ def _load_submission_record(
     *,
     session_id: str | UUID,
     submission_id: str | UUID,
+    owner_sub: str | None,
 ) -> SubmissionModel:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_submission_id = _normalize_uuid(submission_id, field_name="submission_id")
     submission_row = db.scalars(
         select(SubmissionModel)
+        .join(ReviewSessionModel, ReviewSessionModel.id == SubmissionModel.session_id)
         .where(SubmissionModel.id == normalized_submission_id)
         .where(SubmissionModel.session_id == normalized_session_id)
+        .where(owned_by(owner_sub))
     ).first()
     if submission_row is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Curation submission {normalized_submission_id} not found in session "
-                f"{normalized_session_id}"
-            ),
-        )
+        raise submission_not_found(normalized_submission_id, normalized_session_id)
     return submission_row
 
 def _submission_validation_blocking_reason(
@@ -2530,7 +2528,9 @@ def submission_preview(
         active_groups=active_groups_from_actor_claims(actor_claims),
     )
 
-    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    session_row = _load_session_for_validation(
+        db, session_id=normalized_session_id, owner_sub=actor_user_id(actor_claims)
+    )
     submission_adapter = None
     if request.mode == SubmissionMode.EXPORT:
         _, target_key = _resolve_export_preview_target_key(
@@ -2662,7 +2662,9 @@ def execute_submission(
         active_groups=active_groups_from_actor_claims(actor_claims),
     )
 
-    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    session_row = _load_session_for_validation(
+        db, session_id=normalized_session_id, owner_sub=actor_user_id(actor_claims)
+    )
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     target_candidate_ids = request.candidate_ids or [
         candidate_id for candidate_id, candidate in candidate_map.items()
@@ -2737,7 +2739,9 @@ def execute_submission(
     )
     db.expire_all()
 
-    response_session = get_session_detail(db, normalized_session_id)
+    response_session = get_session_detail(
+        db, normalized_session_id, owner_sub=actor_user_id(actor_claims)
+    )
     if (
         response_session.latest_submission is not None
         and response_session.latest_submission.submission_id == response_submission.submission_id
@@ -2775,6 +2779,7 @@ def retry_submission(
         db,
         session_id=normalized_session_id,
         submission_id=normalized_submission_id,
+        owner_sub=actor_user_id(actor_claims),
     )
     if original_submission.mode != SubmissionMode.DIRECT_SUBMIT:
         raise HTTPException(
@@ -2810,7 +2815,9 @@ def retry_submission(
         active_groups=active_groups_from_actor_claims(actor_claims),
     )
 
-    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    session_row = _load_session_for_validation(
+        db, session_id=normalized_session_id, owner_sub=actor_user_id(actor_claims)
+    )
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     domain_context = _build_domain_envelope_submission_context(
         db=db, user_id=actor_user_id(actor_claims),
@@ -2891,11 +2898,14 @@ def get_submission(
     db: Session,
     session_id: str | UUID,
     submission_id: str | UUID,
+    *,
+    owner_sub: str | None,
 ) -> CurationSubmissionHistoryResponse:
     submission_row = _load_submission_record(
         db,
         session_id=session_id,
         submission_id=submission_id,
+        owner_sub=owner_sub,
     )
     return CurationSubmissionHistoryResponse(
         submission=_submission_record(submission_row),

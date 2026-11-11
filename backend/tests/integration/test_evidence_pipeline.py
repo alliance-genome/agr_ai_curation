@@ -239,6 +239,8 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
     assert envelope_ref.review_row_count == 1
     assert prep_output.run_metadata.warnings == []
 
+    # A request reads committed state; route guards end their own read.
+    test_db.commit()
     bootstrap_response = client.post(
         (
             "/api/curation-workspace/documents/"
@@ -337,6 +339,8 @@ async def test_fixture_scoped_prep_bootstrap_drops_legacy_profile_scope_from_sha
     assert persisted_prep.payload_json["review_row_count"] == 1
     assert persisted_prep.payload_json["envelope_refs"][0]["review_row_count"] == 1
 
+    # A request reads committed state; route guards end their own read.
+    test_db.commit()
     bootstrap_response = client.post(
         (
             "/api/curation-workspace/documents/"

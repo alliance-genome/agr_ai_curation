@@ -18,6 +18,7 @@ from src.lib.curation_workspace.models import CurationCandidate
 from src.schemas.domain_envelope import DomainEnvelope
 from .review_history_service import candidate_binding
 from .review_authorization import require_current_access
+from .session_ownership import is_owned_by
 
 
 def response(row):
@@ -93,7 +94,7 @@ def submit(
         candidate = db.get(CurationCandidate, UUID(candidate_id))
         if candidate is not None and candidate.envelope_id is None:
             if (
-                candidate.session.created_by_id != owner_id
+                not is_owned_by(candidate.session, owner_id)
                 or str(candidate.session_id) != session_id
             ):
                 raise store.HistoryAccessError(
@@ -124,7 +125,7 @@ def submit(
                 raise
             if (
                 candidate is None
-                or candidate.session.created_by_id != owner_id
+                or not is_owned_by(candidate.session, owner_id)
                 or str(candidate.session_id) != session_id
             ):
                 raise store.HistoryAccessError("Workspace record unavailable") from None
@@ -211,7 +212,7 @@ def latest_for_candidate(db, candidate_id, *, owner_id):
     # A manual record has no captured source until the explicit submit action.
     # Observing an absent command must not require or create that source.
     if candidate.envelope_id is None:
-        if candidate.session.created_by_id != owner_id:
+        if not is_owned_by(candidate.session, owner_id):
             raise store.HistoryAccessError("Workspace record unavailable")
         return None
     candidate, _, _, _, artifact_id = candidate_binding(

@@ -104,7 +104,6 @@ class CurationReviewSession(Base):
         PostgresUUID(as_uuid=True),
         nullable=True,
     )
-    assigned_curator_id: Mapped[str | None] = mapped_column(String(), nullable=True)
     created_by_id: Mapped[str | None] = mapped_column(String(), nullable=True)
     session_version: Mapped[int] = mapped_column(
         Integer,
@@ -228,7 +227,6 @@ class CurationReviewSession(Base):
             "flow_run_id",
             postgresql_where=text("flow_run_id IS NOT NULL"),
         ),
-        Index("ix_curation_sessions_assigned_curator", "assigned_curator_id"),
         Index("ix_curation_sessions_prepared_at", text("prepared_at DESC")),
         Index("ix_curation_sessions_last_worked", text("last_worked_at DESC NULLS LAST")),
         Index("ix_curation_sessions_document", "document_id"),

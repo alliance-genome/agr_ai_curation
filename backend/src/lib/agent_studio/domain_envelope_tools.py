@@ -10,13 +10,12 @@ from typing import Any, Callable, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.orm import Session, load_only
 from src.lib.domain_packs.capabilities import registry_object_capabilities
 
 from src.lib.curation_workspace.models import (
     CurationCandidate,
-    CurationReviewSession,
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
     DomainEnvelopeObject,
@@ -24,6 +23,11 @@ from src.lib.curation_workspace.models import (
     DomainValidationFinding,
 )
 from src.lib.curation_workspace.session_common import _latest_snapshot_record
+from src.lib.curation_workspace.session_ownership import (
+    envelope_visible_clause,
+    envelope_visible_to,
+    session_is_owned,
+)
 from src.lib.curation_workspace.session_serializers import _validation_snapshot
 from src.lib.curation_workspace.session_submission_service import (
     _build_domain_envelope_submission_context,
@@ -153,44 +157,13 @@ def list_domain_envelopes(
     resolved_limit = _bounded_limit(limit)
     db = session_factory()
     try:
-        if session_id is not None and not _session_visible_to_user(
-            db,
-            session_id=session_id,
-            user_auth_sub=user_auth_sub,
+        if session_id is not None and not session_is_owned(
+            db, session_id, _optional_text(user_auth_sub)
         ):
             return _error(f"Curation review session {session_id} was not found.")
 
-        normalized_user_auth_sub = _optional_text(user_auth_sub)
-        visible_session_conditions = [
-            and_(
-                CurationReviewSession.created_by_id.is_(None),
-                CurationReviewSession.assigned_curator_id.is_(None),
-            )
-        ]
-        if normalized_user_auth_sub is not None:
-            visible_session_conditions.extend(
-                (
-                    CurationReviewSession.created_by_id == normalized_user_auth_sub,
-                    CurationReviewSession.assigned_curator_id == normalized_user_auth_sub,
-                )
-            )
-        visible_session_ids = select(CurationReviewSession.id).where(
-            or_(*visible_session_conditions)
-        )
-        visible_candidate_envelopes = (
-            select(CurationCandidate.envelope_id)
-            .where(CurationCandidate.session_id.in_(visible_session_ids))
-            .where(CurationCandidate.envelope_id.is_not(None))
-        )
-        from src.lib.curation_workspace.envelope_visibility import linked_or_non_prepared_envelope
-        query = select(DomainEnvelopeModel).where(linked_or_non_prepared_envelope()).where(
-            or_(
-                DomainEnvelopeModel.session_id.in_(visible_session_ids),
-                and_(
-                    DomainEnvelopeModel.session_id.is_(None),
-                    DomainEnvelopeModel.envelope_id.in_(visible_candidate_envelopes),
-                ),
-            )
+        query = select(DomainEnvelopeModel).where(
+            envelope_visible_clause(_optional_text(user_auth_sub))
         )
         if session_id:
             normalized_session_id = _uuid(session_id, "session_id")
@@ -306,7 +279,9 @@ def get_domain_envelope_state(
     try:
         normalized_envelope_id = _required_text(envelope_id, "envelope_id")
         row = db.get(DomainEnvelopeModel, normalized_envelope_id)
-        if row is None or not _envelope_visible_to_user(db, row=row, user_auth_sub=user_auth_sub):
+        if row is None or not envelope_visible_to(
+            db, normalized_envelope_id, _optional_text(user_auth_sub)
+        ):
             return _error(f"Domain envelope {normalized_envelope_id} was not found.")
         _require_current_revision(row=row, revision=revision)
 
@@ -591,7 +566,9 @@ def get_domain_envelope_review_rows(
     try:
         normalized_envelope_id = _required_text(envelope_id, "envelope_id")
         row = db.get(DomainEnvelopeModel, normalized_envelope_id)
-        if row is None or not _envelope_visible_to_user(db, row=row, user_auth_sub=user_auth_sub):
+        if row is None or not envelope_visible_to(
+            db, normalized_envelope_id, _optional_text(user_auth_sub)
+        ):
             return _error(f"Domain envelope {normalized_envelope_id} was not found.")
 
         response = materialize_persisted_envelope_review_rows(
@@ -1283,14 +1260,12 @@ def get_export_submission_readiness(
     db = session_factory()
     try:
         normalized_session_id = _required_text(session_id, "session_id")
-        if not _session_visible_to_user(
-            db,
-            session_id=normalized_session_id,
-            user_auth_sub=user_auth_sub,
-        ):
+        if not session_is_owned(db, normalized_session_id, _optional_text(user_auth_sub)):
             return _error(f"Curation review session {normalized_session_id} was not found.")
 
-        session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+        session_row = _load_session_for_validation(
+            db, session_id=normalized_session_id, owner_sub=_optional_text(user_auth_sub)
+        )
         candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
         all_candidate_ids = list(candidate_map)
         if readiness_token is not None:
@@ -1544,74 +1519,6 @@ def _latest_candidate_validation_snapshot(candidate: CurationCandidate) -> Any |
     if latest_snapshot is None:
         return None
     return _validation_snapshot(latest_snapshot)
-
-
-def _session_visible_to_user(
-    db: Session,
-    *,
-    session_id: str | UUID,
-    user_auth_sub: str,
-) -> bool:
-    try:
-        normalized_session_id = _uuid(session_id, "session_id")
-    except ValueError:
-        return False
-    session_row = db.get(CurationReviewSession, normalized_session_id)
-    if session_row is None:
-        return False
-
-    owner_values = {
-        _optional_text(session_row.created_by_id),
-        _optional_text(session_row.assigned_curator_id),
-    }
-    owner_values.discard(None)
-    if not owner_values:
-        return True
-    return _optional_text(user_auth_sub) in owner_values
-
-
-def _envelope_visible_to_user(
-    db: Session,
-    *,
-    row: DomainEnvelopeModel,
-    user_auth_sub: str,
-) -> bool:
-    if row.envelope_json.get("metadata", {}).get("manual_preparation") is not None:
-        if row.session_id not in _candidate_session_ids_for_envelope(db, row.envelope_id):
-            return False
-    if row.session_id is not None:
-        return _session_visible_to_user(
-            db,
-            session_id=row.session_id,
-            user_auth_sub=user_auth_sub,
-        )
-
-    return any(
-        _session_visible_to_user(
-            db,
-            session_id=session_id,
-            user_auth_sub=user_auth_sub,
-        )
-        for session_id in _candidate_session_ids_for_envelope(db, row.envelope_id)
-    )
-
-
-def _candidate_session_ids_for_envelope(
-    db: Session,
-    envelope_id: str | None,
-) -> list[UUID]:
-    normalized_envelope_id = _optional_text(envelope_id)
-    if normalized_envelope_id is None:
-        return []
-    return [
-        session_id
-        for session_id in db.scalars(
-            select(CurationCandidate.session_id)
-            .where(CurationCandidate.envelope_id == normalized_envelope_id)
-            .distinct()
-        ).all()
-        if session_id is not None
-    ]
 
 
 def _bounded_limit(value: int | None, *, default: int = _DEFAULT_LIMIT) -> int:

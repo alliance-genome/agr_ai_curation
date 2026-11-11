@@ -228,7 +228,7 @@ def _create_user(db, suffix: str):
     return user
 
 
-def _create_document(db, user, suffix: str):
+def _create_document(db, user, suffix: str, *, viewer_mode: str | None = None):
     from src.models.sql.pdf_document import PDFDocument
 
     document = PDFDocument(
@@ -241,6 +241,7 @@ def _create_document(db, user, suffix: str):
         page_count=3,
         status="processed",
         user_id=user.id,
+        viewer_mode=viewer_mode,
     )
     db.add(document)
     db.flush()
@@ -611,7 +612,6 @@ def test_batch_flow_ending_in_curation_handoff_creates_owned_sessions(handoff_db
     assert len(sessions) == 1
     assert sessions[0].adapter_key == "gene"
     assert sessions[0].created_by_id == user.auth_sub
-    assert sessions[0].assigned_curator_id == user.auth_sub
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) > 0
 
     source_row = handoff_db.scalars(
@@ -693,7 +693,6 @@ def test_multi_adapter_flow_creates_one_session_per_adapter(handoff_db):
 
     sessions = _review_sessions(handoff_db, batch_doc.review_session_ids)
     assert {session.adapter_key for session in sessions} == {"gene", "gene_expression"}
-    assert {session.assigned_curator_id for session in sessions} == {user.auth_sub}
     assert _candidate_count(handoff_db, batch_doc.review_session_ids) >= 2
 
     batch_service = BatchService(handoff_db)
@@ -817,6 +816,179 @@ async def test_canonical_handoff_retry_reuses_all_persisted_state(handoff_db):
     assert envelope_row.envelope_json["metadata"][
         "source_extraction_result_id"
     ] == str(source_row.id)
+
+
+def test_sessionless_envelope_is_visible_only_to_its_source_user_on_postgres(handoff_db):
+    """The extraction-result branch of envelope visibility, through real persistence.
+
+    A flow extraction persists its source row and a session-less envelope; the
+    envelope names its source by the row's text id, which Postgres must match.
+    """
+    from src.lib.agent_studio import domain_envelope_tools
+    from src.lib.curation_workspace.domain_envelope_normalization import (
+        domain_envelope_from_extraction_result,
+    )
+    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+    from src.lib.curation_workspace.models import (
+        CurationExtractionResultRecord,
+        DomainEnvelopeModel,
+    )
+    from fastapi import HTTPException
+
+    from src.lib.curation_workspace.session_ownership import (
+        envelope_visible_to,
+        require_visible_envelope,
+    )
+    from src.lib.flows.executor import _persist_flow_extraction_candidates
+    from src.models.sql.database import SessionLocal
+
+    suffix = uuid4().hex[:10]
+    runner = _create_user(handoff_db, suffix)
+    other = _create_user(handoff_db, f"{suffix}_other")
+    document = _create_document(handoff_db, runner, suffix)
+    handoff_db.commit()
+    flow_run_id = f"{TEST_PREFIX}_sessionless_{suffix}"
+    fixture = _extraction_record(
+        adapter_key="gene",
+        document_id=str(document.id),
+        user_id=runner.auth_sub,
+        session_id=f"{TEST_PREFIX}_sessionless_chat_{suffix}",
+        flow_run_id=flow_run_id,
+    )
+    _persist_flow_extraction_candidates(
+        candidates=[
+            ExtractionEnvelopeCandidate(
+                agent_key=fixture.agent_key,
+                adapter_key=fixture.adapter_key,
+                payload_json=domain_envelope_from_extraction_result(fixture, stored=True).model_dump(
+                    mode="json"
+                ),
+                candidate_count=fixture.candidate_count,
+                conversation_summary=fixture.conversation_summary,
+                metadata=dict(fixture.metadata),
+            )
+        ],
+        document_id=str(document.id),
+        user_id=runner.auth_sub,
+        session_id=fixture.origin_session_id,
+        trace_id="trace-sessionless",
+        flow_run_id=flow_run_id,
+    )
+
+    handoff_db.expire_all()
+    source_row = handoff_db.scalars(
+        select(CurationExtractionResultRecord).where(
+            CurationExtractionResultRecord.document_id == document.id,
+            CurationExtractionResultRecord.agent_key == fixture.agent_key,
+        )
+    ).one()
+    envelope_row = handoff_db.scalars(
+        select(DomainEnvelopeModel).where(
+            DomainEnvelopeModel.source_extraction_result_id == str(source_row.id)
+        )
+    ).one()
+    assert envelope_row.session_id is None
+    envelope_id = envelope_row.envelope_id
+
+    assert envelope_visible_to(handoff_db, envelope_id, runner.auth_sub) is True
+    assert envelope_visible_to(handoff_db, envelope_id, other.auth_sub) is False
+    with pytest.raises(HTTPException) as hidden:
+        require_visible_envelope(handoff_db, envelope_id, other.auth_sub)
+    assert hidden.value.status_code == 404
+
+    def listed(user_sub):
+        result = domain_envelope_tools.list_domain_envelopes(
+            session_factory=SessionLocal, user_auth_sub=user_sub, document_id=str(document.id), limit=10,
+        )
+        assert result["success"] is True
+        return [row["envelope_id"] for row in result["envelopes"]]
+
+    assert listed(runner.auth_sub) == [envelope_id]
+    assert listed(other.auth_sub) == []
+    assert domain_envelope_tools.get_domain_envelope_state(
+        session_factory=SessionLocal, user_auth_sub=other.auth_sub, envelope_id=envelope_id,
+    ) == {"success": False, "error": f"Domain envelope {envelope_id} was not found."}
+
+
+async def test_benchmark_frozen_copy_handoff_creates_the_runners_session(handoff_db):
+    """Benchmark runs hand off on frozen copies through the internal flow path.
+
+    Curator-facing create and bootstrap routes refuse frozen copies (ALL-1547);
+    the flow ``curation_handoff`` path must still create the runner's session.
+    """
+    from fastapi import HTTPException
+
+    from src.lib.curation_workspace.bootstrap_service import run_flow_curation_handoff
+    from src.lib.curation_workspace.domain_envelope_normalization import (
+        domain_envelope_from_extraction_result,
+    )
+    from src.lib.curation_workspace.extraction_results import ExtractionEnvelopeCandidate
+    from src.lib.curation_workspace.session_ownership import (
+        require_owned_document,
+        require_owned_session,
+    )
+    from src.lib.flows.executor import _persist_flow_extraction_candidates
+
+    suffix = uuid4().hex[:10]
+    runner = _create_user(handoff_db, suffix)
+    other = _create_user(handoff_db, f"{suffix}_other")
+    document = _create_document(handoff_db, runner, suffix, viewer_mode="benchmark_frozen")
+    handoff_db.commit()
+
+    flow_run_id = f"{TEST_PREFIX}_frozen_{suffix}"
+    origin_session_id = f"{TEST_PREFIX}_frozen_session_{suffix}"
+    fixture = _extraction_record(
+        adapter_key="gene",
+        document_id=str(document.id),
+        user_id=runner.auth_sub,
+        session_id=origin_session_id,
+        flow_run_id=flow_run_id,
+    )
+    canonical_payload = domain_envelope_from_extraction_result(fixture, stored=True).model_dump(
+        mode="json"
+    )
+    source_records = _persist_flow_extraction_candidates(
+        candidates=[
+            ExtractionEnvelopeCandidate(
+                agent_key=fixture.agent_key,
+                adapter_key=fixture.adapter_key,
+                payload_json=canonical_payload,
+                candidate_count=fixture.candidate_count,
+                conversation_summary=fixture.conversation_summary,
+                metadata=dict(fixture.metadata),
+            )
+        ],
+        document_id=str(document.id),
+        user_id=runner.auth_sub,
+        session_id=origin_session_id,
+        trace_id="trace-frozen",
+        flow_run_id=flow_run_id,
+    )
+    _assert_sources_committed(source_records)
+
+    handoff = await run_flow_curation_handoff(
+        extraction_results=source_records,
+        document_id=str(document.id),
+        runner_user_id=runner.auth_sub,
+        flow_run_id=flow_run_id,
+        origin_session_id=origin_session_id,
+        conversation_summary="Frozen benchmark copy fixture.",
+        db=handoff_db,
+    )
+
+    handoff_db.expire_all()
+    assert len(handoff.review_session_ids) == 1
+    sessions = _review_sessions(handoff_db, handoff.review_session_ids)
+    assert sessions[0].created_by_id == runner.auth_sub
+    assert _candidate_count(handoff_db, handoff.review_session_ids) > 0
+    assert require_owned_session(handoff_db, handoff.review_session_ids[0], runner.auth_sub)
+    with pytest.raises(HTTPException) as hidden:
+        require_owned_session(handoff_db, handoff.review_session_ids[0], other.auth_sub)
+    assert hidden.value.status_code == 404
+    # The curator-facing document check refuses the same frozen copy.
+    with pytest.raises(HTTPException) as refused:
+        require_owned_document(handoff_db, document.id, runner.auth_sub)
+    assert refused.value.status_code == 404
 
 
 @pytest.mark.parametrize(

@@ -67,7 +67,6 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
     CurationFlowRunListRequest,
     CurationFlowRunSessionsRequest,
-    CurationInventoryScope,
     CurationManualCandidateCreateRequest,
     CurationSessionFilters,
     CurationSessionListRequest,
@@ -103,6 +102,10 @@ from src.schemas.domain_envelope import (
 from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
 
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
+
+# Every fixture session is created by this curator, the actor most tests use;
+# sessions are private to their creator (ALL-1547).
+SESSION_OWNER = "user-1"
 
 
 
@@ -190,7 +193,7 @@ def authenticated_submission_preview_actor(monkeypatch):
             session_id,
             request,
             actor_claims={
-                "sub": "preview-curator",
+                "sub": SESSION_OWNER,
                 "cognito:groups": ["zfin-curators"],
             },
         )
@@ -380,6 +383,7 @@ def _create_session_for_extraction(
         profile_key="primary",
         document_id=UUID(document_id),
         flow_run_id=flow_run_id,
+        created_by_id=SESSION_OWNER,
         session_version=1,
         notes="Prepared session.",
         tags=["triage"],
@@ -427,8 +431,7 @@ def _create_review_session(
     last_worked_at: datetime | None,
     reviewed_candidates: int,
     pending_candidates: int,
-    assigned_curator_id: str | None = None,
-    created_by_id: str | None = None,
+    created_by_id: str | None = SESSION_OWNER,
 ) -> ReviewSessionModel:
     session_row = ReviewSessionModel(
         id=uuid4(),
@@ -437,7 +440,6 @@ def _create_review_session(
         profile_key="primary",
         document_id=UUID(document_id),
         flow_run_id=flow_run_id,
-        assigned_curator_id=assigned_curator_id,
         created_by_id=created_by_id,
         session_version=1,
         notes="Prepared session.",
@@ -559,6 +561,7 @@ def _create_decision_session(
     document = _create_document(db_session)
     now = _now()
     session_row = ReviewSessionModel(
+        created_by_id=SESSION_OWNER,
         id=uuid4(),
         status=CurationSessionStatus.NEW,
         adapter_key="reference_adapter",
@@ -831,6 +834,7 @@ def _create_domain_envelope_submission_session(
     document = _create_document(db_session)
     now = _now()
     session_row = ReviewSessionModel(
+        created_by_id=SESSION_OWNER,
         id=uuid4(),
         status=CurationSessionStatus.NEW,
         adapter_key=REFERENCE_ADAPTER_KEY,
@@ -1036,6 +1040,7 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
         adapter_key="reference_adapter",
         flow_run_id=None,
         prep_extraction_result_id=str(extraction_beta.id),
+        owner_id=SESSION_OWNER,
     )
 
     assert reusable is None
@@ -1046,6 +1051,7 @@ def test_find_reusable_prepared_session_returns_only_matching_extraction_result(
         adapter_key="reference_adapter",
         flow_run_id=None,
         prep_extraction_result_id=str(extraction_alpha.id),
+        owner_id=SESSION_OWNER,
     )
 
     assert matching is not None
@@ -1082,6 +1088,7 @@ def test_find_reusable_prepared_session_reuses_flow_run_session_for_newer_prep_r
         adapter_key="reference_adapter",
         flow_run_id="flow-1",
         prep_extraction_result_id=str(extraction_beta.id),
+        owner_id=SESSION_OWNER,
     )
 
     assert reusable is not None
@@ -1208,6 +1215,7 @@ def test_get_session_workspace_includes_backend_entity_tags(db_session):
     document = _create_document(db_session)
     now = _now()
     session_row = ReviewSessionModel(
+        created_by_id=SESSION_OWNER,
         id=uuid4(),
         status=CurationSessionStatus.IN_PROGRESS,
         adapter_key="reference_adapter",
@@ -1329,7 +1337,7 @@ def test_get_session_workspace_includes_backend_entity_tags(db_session):
     session_row.current_candidate_id = candidate.id
     db_session.commit()
 
-    response = module.get_session_workspace(db_session, str(session_row.id))
+    response = module.get_session_workspace(db_session, str(session_row.id), owner_sub=SESSION_OWNER)
 
     assert response.workspace.entity_tags[0].tag_id == str(candidate.id)
     assert response.workspace.entity_tags[0].entity_name == "APOE"
@@ -1345,6 +1353,7 @@ def test_get_session_workspace_rejects_entity_tag_candidates_missing_entity_type
     document = _create_document(db_session)
     now = _now()
     session_row = ReviewSessionModel(
+        created_by_id=SESSION_OWNER,
         id=uuid4(),
         status=CurationSessionStatus.IN_PROGRESS,
         adapter_key="reference_adapter",
@@ -1430,7 +1439,7 @@ def test_get_session_workspace_rejects_entity_tag_candidates_missing_entity_type
     db_session.commit()
 
     with pytest.raises(HTTPException) as exc:
-        module.get_session_workspace(db_session, str(session_row.id))
+        module.get_session_workspace(db_session, str(session_row.id), owner_sub=SESSION_OWNER)
 
     assert exc.value.status_code == 500
     assert "missing an entity type" in exc.value.detail
@@ -1445,6 +1454,7 @@ def test_get_session_detail_returns_empty_adapter_metadata_for_zero_candidate_se
         candidate_count=0,
     )
     session_row = ReviewSessionModel(
+        created_by_id=SESSION_OWNER,
         id=uuid4(),
         status=CurationSessionStatus.NEW,
         adapter_key="reference_adapter",
@@ -1468,7 +1478,7 @@ def test_get_session_detail_returns_empty_adapter_metadata_for_zero_candidate_se
     db_session.add(session_row)
     db_session.commit()
 
-    response = module.get_session_detail(db_session, str(session_row.id))
+    response = module.get_session_detail(db_session, str(session_row.id), owner_sub=SESSION_OWNER)
 
     assert response.progress.total_candidates == 0
     assert response.adapter.metadata == {}
@@ -1504,7 +1514,6 @@ def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db
         db_session,
         CurationSessionListRequest(
             filters=CurationSessionFilters(
-                inventory_scope=CurationInventoryScope.SHOW_ALL,
                 origin_session_id="chat-session-1",
             ),
             sort_by=CurationSessionSortField.PREPARED_AT,
@@ -1512,12 +1521,13 @@ def test_list_sessions_filters_by_origin_session_id_via_candidate_extractions(db
             page=1,
             page_size=25,
         ),
+        current_user_id=SESSION_OWNER,
     )
 
     assert [session.session_id for session in response.sessions] == [str(session_one.id)]
 
 
-def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_session):
+def test_inventory_lists_only_sessions_the_caller_created_with_pagination(db_session):
     document = _create_document(db_session)
     document_id = str(document.id)
     now = _now()
@@ -1546,7 +1556,7 @@ def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_se
     )
     db_session.commit()
 
-    assigned_to_current = _create_review_session(
+    _create_review_session(
         db_session,
         document_id=document_id,
         flow_run_id="flow-alpha",
@@ -1555,10 +1565,9 @@ def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_se
         last_worked_at=now.replace(hour=10),
         reviewed_candidates=0,
         pending_candidates=1,
-        assigned_curator_id=current_user_id,
         created_by_id=other_user_id,
     )
-    unassigned_created_by_current = _create_review_session(
+    first_created_by_current = _create_review_session(
         db_session,
         document_id=document_id,
         flow_run_id="flow-alpha",
@@ -1567,10 +1576,9 @@ def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_se
         last_worked_at=now.replace(hour=11),
         reviewed_candidates=1,
         pending_candidates=0,
-        assigned_curator_id=None,
         created_by_id=current_user_id,
     )
-    _create_review_session(
+    second_created_by_current = _create_review_session(
         db_session,
         document_id=document_id,
         flow_run_id="flow-beta",
@@ -1579,7 +1587,6 @@ def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_se
         last_worked_at=now.replace(hour=12),
         reviewed_candidates=0,
         pending_candidates=1,
-        assigned_curator_id=other_user_id,
         created_by_id=current_user_id,
     )
     _create_review_session(
@@ -1591,7 +1598,6 @@ def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_se
         last_worked_at=now.replace(hour=13),
         reviewed_candidates=1,
         pending_candidates=0,
-        assigned_curator_id=None,
         created_by_id=other_user_id,
     )
 
@@ -1601,11 +1607,11 @@ def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_se
         current_user_id=current_user_id,
     )
 
-    assert my_inventory_response.applied_filters.inventory_scope == CurationInventoryScope.MY_INVENTORY
+    # Only the creator sees a session (ALL-1547).
     assert my_inventory_response.page_info.total_items == 2
     assert my_inventory_response.page_info.total_pages == 2
     assert [session.session_id for session in my_inventory_response.sessions] == [
-        str(unassigned_created_by_current.id)
+        str(second_created_by_current.id)
     ]
 
     second_page = module.list_sessions(
@@ -1614,78 +1620,8 @@ def test_inventory_scope_filters_my_inventory_and_show_all_with_pagination(db_se
         current_user_id=current_user_id,
     )
     assert [session.session_id for session in second_page.sessions] == [
-        str(assigned_to_current.id)
+        str(first_created_by_current.id)
     ]
-
-    show_all_response = module.list_sessions(
-        db_session,
-        CurationSessionListRequest(
-            filters=CurationSessionFilters(
-                inventory_scope=CurationInventoryScope.SHOW_ALL,
-            ),
-            page=1,
-            page_size=10,
-        ),
-        current_user_id=current_user_id,
-    )
-    assert show_all_response.page_info.total_items == 4
-
-
-def test_explicit_curator_filter_composes_with_inventory_scope(db_session):
-    document = _create_document(db_session)
-    document_id = str(document.id)
-    now = _now()
-
-    _create_review_session(
-        db_session,
-        document_id=document_id,
-        flow_run_id=None,
-        status=CurationSessionStatus.NEW,
-        prepared_at=now,
-        last_worked_at=now,
-        reviewed_candidates=0,
-        pending_candidates=1,
-        assigned_curator_id="curator-1",
-        created_by_id="creator-1",
-    )
-    _create_review_session(
-        db_session,
-        document_id=document_id,
-        flow_run_id=None,
-        status=CurationSessionStatus.NEW,
-        prepared_at=now.replace(hour=16),
-        last_worked_at=now.replace(hour=16),
-        reviewed_candidates=0,
-        pending_candidates=1,
-        assigned_curator_id="curator-2",
-        created_by_id="curator-1",
-    )
-
-    response = module.list_sessions(
-        db_session,
-        CurationSessionListRequest(
-            filters=CurationSessionFilters(curator_ids=["curator-2"]),
-        ),
-        current_user_id="curator-1",
-    )
-
-    assert response.page_info.total_items == 0
-
-
-def test_my_organization_scope_fails_without_persisted_session_group_source(db_session):
-    with pytest.raises(HTTPException) as exc:
-        module.list_sessions(
-            db_session,
-            CurationSessionListRequest(
-                filters=CurationSessionFilters(
-                    inventory_scope=CurationInventoryScope.MY_ORGANIZATION,
-                )
-            ),
-            current_user_id="curator-1",
-        )
-
-    assert exc.value.status_code == 400
-    assert "organization or group metadata" in exc.value.detail
 
 
 def test_list_flow_runs_returns_aggregated_summaries(db_session):
@@ -1736,11 +1672,8 @@ def test_list_flow_runs_returns_aggregated_summaries(db_session):
 
     response = module.list_flow_runs(
         db_session,
-        CurationFlowRunListRequest(
-            filters=CurationSessionFilters(
-                inventory_scope=CurationInventoryScope.SHOW_ALL,
-            )
-        ),
+        CurationFlowRunListRequest(filters=CurationSessionFilters()),
+        current_user_id=SESSION_OWNER,
     )
 
     assert [flow_run.flow_run_id for flow_run in response.flow_runs] == [
@@ -1794,12 +1727,11 @@ def test_list_flow_run_sessions_returns_paginated_summaries(db_session):
         db_session,
         CurationFlowRunSessionsRequest(
             flow_run_id="flow-alpha",
-            filters=CurationSessionFilters(
-                inventory_scope=CurationInventoryScope.SHOW_ALL,
-            ),
+            filters=CurationSessionFilters(),
             page=1,
             page_size=1,
         ),
+        current_user_id=SESSION_OWNER,
     )
 
     assert response.flow_run.flow_run_id == "flow-alpha"
@@ -1858,12 +1790,11 @@ def test_list_flow_run_sessions_reuses_flow_run_summary_count_for_page_info(
         db_session,
         CurationFlowRunSessionsRequest(
             flow_run_id="flow-alpha",
-            filters=CurationSessionFilters(
-                inventory_scope=CurationInventoryScope.SHOW_ALL,
-            ),
+            filters=CurationSessionFilters(),
             page=1,
             page_size=1,
         ),
+        current_user_id=SESSION_OWNER,
     )
 
     assert captured_total_items == [response.flow_run.session_count]
@@ -1892,10 +1823,9 @@ def test_list_flow_run_sessions_raises_not_found_for_unknown_group(db_session):
             db_session,
             CurationFlowRunSessionsRequest(
                 flow_run_id="flow-missing",
-                filters=CurationSessionFilters(
-                    inventory_scope=CurationInventoryScope.SHOW_ALL,
-                ),
+                filters=CurationSessionFilters(),
             ),
+            current_user_id=SESSION_OWNER,
         )
 
     assert exc.value.status_code == 404
@@ -2194,6 +2124,7 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session, mo
             candidate_id=str(candidate.id),
             field_keys=["field_a"],
         ),
+        user_id=SESSION_OWNER,
     )
 
     fields_by_key = {
@@ -2361,6 +2292,7 @@ def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(
             candidate_id=str(candidate.id),
             force=True,
         ),
+        user_id=SESSION_OWNER,
     )
 
     fields_by_key = {field.field_key: field for field in response.candidate.draft.fields}
@@ -2470,6 +2402,7 @@ def test_workspace_validation_skips_envelope_dispatch_for_non_envelope_candidate
             candidate_id=str(candidate.id),
             force=True,
         ),
+        user_id=SESSION_OWNER,
     )
 
     assert response.validation_snapshot.envelope_id is None
@@ -2530,7 +2463,7 @@ def test_submission_preview_builds_preview_payload_and_candidate_readiness(
         seeded["first_candidate_id"]
     )
     assert captured_context == {
-        "user_id": "preview-curator",
+        "user_id": SESSION_OWNER,
         "active_groups": ["ZFIN"],
     }
     assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
@@ -3596,7 +3529,7 @@ def test_submission_export_blocks_open_blocking_validation_findings(
                 idempotency_key=str(uuid4()),
                 target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
             ),
-            actor_claims={"sub": "curator-1"},
+            actor_claims={"sub": SESSION_OWNER},
         )
 
     assert exc.value.status_code == 400
@@ -4189,7 +4122,7 @@ def test_waive_validation_finding_records_audit_action(
             expected_revision=1,
             finding_id="finding-envelope",
         ),
-        {"sub": "curator-42", "email": "curator@example.org"},
+        {"sub": SESSION_OWNER, "email": "curator@example.org"},
     )
 
     envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
@@ -4235,7 +4168,7 @@ def test_waive_validation_finding_records_audit_action(
     }
     assert review_action["actor"] == {
         "actor_type": "human",
-        "actor_id": "curator-42",
+        "actor_id": SESSION_OWNER,
     }
     assert review_action["comment"] is None
     assert review_action["input_fingerprint"].startswith("sha256:")
@@ -4286,7 +4219,7 @@ def test_waive_validation_finding_accepts_projected_id_for_idless_finding(
             )
         ],
     )
-    workspace = module.get_session_workspace(db_session, seeded["session_id"]).workspace
+    workspace = module.get_session_workspace(db_session, seeded["session_id"], owner_sub=SESSION_OWNER).workspace
     envelope_summary = next(
         summary
         for summary in workspace.validation_summary_projections
@@ -4303,7 +4236,7 @@ def test_waive_validation_finding_accepts_projected_id_for_idless_finding(
             expected_revision=1,
             finding_id=projected_finding_id,
         ),
-        {"sub": "curator-42"},
+        {"sub": SESSION_OWNER},
     )
 
     envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
@@ -4362,7 +4295,7 @@ def test_waive_validation_finding_rejects_top_level_override_policy(
                 expected_revision=1,
                 finding_id="finding-envelope",
             ),
-            {"sub": "curator-42"},
+            {"sub": SESSION_OWNER},
         )
 
     assert exc.value.status_code == 403
@@ -4420,7 +4353,7 @@ def test_waive_validation_finding_rejects_alias_policy(
                 expected_revision=1,
                 finding_id="finding-title",
             ),
-            {"sub": "curator-42"},
+            {"sub": SESSION_OWNER},
         )
 
     envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
@@ -4716,7 +4649,7 @@ def test_execute_submission_stages_submission_updates_session_and_logs_action(
     assert refreshed_session.status == CurationSessionStatus.SUBMITTED
     assert refreshed_session.submitted_at is not None
 
-    session_detail = module.get_session_detail(db_session, seeded["session_id"])
+    session_detail = module.get_session_detail(db_session, seeded["session_id"], owner_sub=SESSION_OWNER)
     assert session_detail.latest_submission is not None
     assert session_detail.latest_submission.payload is not None
     assert session_detail.latest_submission.payload.candidate_ids == [seeded["first_candidate_id"]]
@@ -5329,7 +5262,7 @@ def test_execute_submission_preserves_payload_warnings_across_reload(db_session,
     assert reloaded_submission.payload.warnings == [payload_warning]
     assert reloaded_submission.warnings == [payload_warning, transport_warning]
 
-    session_detail = module.get_session_detail(db_session, seeded["session_id"])
+    session_detail = module.get_session_detail(db_session, seeded["session_id"], owner_sub=SESSION_OWNER)
     assert session_detail.latest_submission is not None
     assert session_detail.latest_submission.payload is not None
     assert session_detail.latest_submission.payload.warnings == [payload_warning]
@@ -5792,6 +5725,7 @@ def test_get_submission_returns_single_submission_history_record(db_session):
         db_session,
         seeded["session_id"],
         str(submission_row.id),
+        owner_sub=SESSION_OWNER,
     )
 
     assert response.submission.submission_id == str(submission_row.id)

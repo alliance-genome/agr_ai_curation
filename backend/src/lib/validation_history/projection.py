@@ -647,8 +647,9 @@ def refresh_workspace_projection(db, envelope, revision):
             changed_field_path=tuple(changed_fields), updated_at=now,
         )
     from src.lib.curation_workspace.session_persistence import _apply_candidate_progress_counts
-    from src.lib.curation_workspace.models import CurationReviewSession, CurationCandidate
-    session = db.get(CurationReviewSession, row.session_id)
+    from src.lib.curation_workspace.models import CurationCandidate
+    from src.lib.curation_workspace.session_ownership import load_session_for_system
+    session = load_session_for_system(db, row.session_id)
     candidates = list(db.scalars(select(CurationCandidate).where(CurationCandidate.session_id == row.session_id)))
     _apply_candidate_progress_counts(session, [item for item in candidates
         if not item.candidate_metadata.get("record_retired", False)])

@@ -136,11 +136,6 @@ describe('CurationInventoryPage', () => {
           warnings: [],
         },
         current_candidate_id: 'candidate-1',
-        assigned_curator: {
-          actor_id: 'curator-1',
-          display_name: 'Alex Curator',
-          email: 'alex@example.org',
-        },
         created_by: {
           actor_id: 'curator-2',
           display_name: 'Jamie Creator',
@@ -162,10 +157,8 @@ describe('CurationInventoryPage', () => {
       has_previous_page: false,
     },
     applied_filters: {
-      inventory_scope: 'my_inventory',
       statuses: [],
       adapter_keys: [],
-      curator_ids: [],
       tags: [],
       flow_run_id: null,
       origin_session_id: null,
@@ -190,8 +183,6 @@ describe('CurationInventoryPage', () => {
       paused_sessions: 1,
       submitted_sessions: 1,
       rejected_sessions: 1,
-      assigned_to_current_user: 2,
-      assigned_to_others: 4,
       submitted_last_7_days: 1,
     },
     applied_filters: listResponse.applied_filters,
@@ -206,7 +197,6 @@ describe('CurationInventoryPage', () => {
         filters: {
           statuses: ['new'],
           adapter_keys: ['gene'],
-          curator_ids: [],
           tags: [],
           flow_run_id: null,
           origin_session_id: 'chat-session-7',
@@ -310,7 +300,7 @@ describe('CurationInventoryPage', () => {
     expect(screen.getByText('across 2 adapters')).toBeInTheDocument()
     expect(await screen.findByText('Alpha paper')).toBeInTheDocument()
     expect(screen.getAllByText('Gene Adapter').length).toBeGreaterThan(0)
-    expect(screen.getByText('Alex Curator')).toBeInTheDocument()
+    expect(screen.queryByText('Alex Curator')).not.toBeInTheDocument()
     expect(screen.getByText('8 / 10 resolved')).toBeInTheDocument()
 
     await user.click(screen.getByText('Alpha paper'))
@@ -324,8 +314,6 @@ describe('CurationInventoryPage', () => {
     renderPage()
 
     await screen.findByText('Alpha paper')
-    expect(screen.getByRole('button', { name: 'My inventory' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.queryByRole('button', { name: 'My organization' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /New 4/i }))
     await waitFor(() => {
@@ -365,51 +353,25 @@ describe('CurationInventoryPage', () => {
     expect(screen.getAllByText('All').length).toBeGreaterThanOrEqual(1)
   }, 25000) // Filter-driven refetches plus MUI interactions can exceed 15s under full-suite load on slower dev hosts.
 
-  it('defaults to my inventory, changes scope, and clears back to my inventory', async () => {
-    const user = userEvent.setup()
+  it('offers no scope toggle or curator filter, and never sends them', async () => {
     renderPage()
 
     await screen.findByText('Alpha paper')
 
-    await waitFor(() => {
-      const sessionListCalls = vi
-        .mocked(global.fetch)
-        .mock.calls
-        .map(([url]) => String(url))
-        .filter((url) => url.startsWith('/api/curation-workspace/sessions?'))
-
-      expect(sessionListCalls.some((url) => url.includes('inventory_scope=my_inventory'))).toBe(true)
-    })
-
-    await user.click(screen.getByRole('button', { name: 'Show all' }))
-
-    await waitFor(() => {
-      const sessionListCalls = vi
-        .mocked(global.fetch)
-        .mock.calls
-        .map(([url]) => String(url))
-        .filter((url) => url.startsWith('/api/curation-workspace/sessions?'))
-
-      expect(
-        sessionListCalls.some((url) =>
-          url.includes('inventory_scope=show_all') &&
-          url.includes('page=1')
-        )
-      ).toBe(true)
-    })
-
-    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
-
-    await waitFor(() => {
-      const sessionListCalls = vi
-        .mocked(global.fetch)
-        .mock.calls
-        .map(([url]) => String(url))
-        .filter((url) => url.startsWith('/api/curation-workspace/sessions?'))
-
-      expect(sessionListCalls.at(-1)).toContain('inventory_scope=my_inventory')
-    })
-  }, 15000)
+    expect(screen.queryByRole('button', { name: 'Show all' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'My inventory' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Curator' })).not.toBeInTheDocument()
+    const sessionListCalls = vi
+      .mocked(global.fetch)
+      .mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/curation-workspace/sessions?'))
+    expect(sessionListCalls.length).toBeGreaterThan(0)
+    for (const url of sessionListCalls) {
+      expect(url).not.toContain('inventory_scope=')
+      expect(url).not.toContain('curator_id=')
+    }
+  })
 
   it('applies a saved view through the inventory hook and re-queries the session list', async () => {
     const user = userEvent.setup()
@@ -433,7 +395,6 @@ describe('CurationInventoryPage', () => {
         sessionListCalls.some((url) =>
           url.includes('status=new') &&
           url.includes('adapter_key=gene') &&
-          url.includes('inventory_scope=my_inventory') &&
           url.includes('search=pending') &&
           url.includes('sort_by=adapter') &&
           url.includes('sort_direction=asc') &&

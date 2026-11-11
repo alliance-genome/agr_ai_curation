@@ -179,11 +179,21 @@ function upsertPendingEnvelope(
 }
 
 // The backend rejected an edit (e.g. a resolvable value edited as plain data,
-// 400, or a saved profile's conformance rule, 422): retrying the same edit can
+// 400, a saved profile's conformance rule, 422, or a session or envelope that
+// is not the curator's or no longer exists, 404): retrying the same edit can
 // never succeed.
 function isRejectedEdit(error: unknown): error is Error & { status: number } {
-  return error instanceof Error && 'status' in error && (error.status === 400 || error.status === 422)
+  return (
+    error instanceof Error
+    && 'status' in error
+    && (error.status === 400 || error.status === 404 || error.status === 422)
+  )
 }
+
+// A 404 means the session or envelope is gone or is not the curator's; the
+// server's wording names internal identifiers, so the curator sees this line.
+const UNAVAILABLE_RECORD_WARNING =
+  'This change was not saved. The record or session is no longer available; refresh the page to see the current state.'
 
 function isVersionConflict(error: unknown): boolean {
   return Boolean(
@@ -864,7 +874,11 @@ export function useAutosave(
             options,
           )
           if (options?.updateState !== false && mountedRef.current) {
-            setWarning(`This change was not saved: ${error.message}`)
+            setWarning(
+              error.status === 404
+                ? UNAVAILABLE_RECORD_WARNING
+                : `This change was not saved: ${error.message}`,
+            )
           }
           return false
         }

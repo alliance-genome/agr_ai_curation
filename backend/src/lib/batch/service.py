@@ -13,8 +13,8 @@ from src.models.sql.pdf_document import PDFDocument
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord,
-    CurationReviewSession,
 )
+from src.lib.curation_workspace.session_ownership import load_session_adapter_keys_for_system
 from src.schemas.batch import BatchResponse, BatchDocumentResponse, BatchListResponse
 from .result_files import canonical_result_files
 from .summaries import BatchFilter, list_summaries
@@ -544,31 +544,22 @@ class BatchService:
             dict.fromkeys(s for ids in session_ids_by_document.values() for s in ids)
         )
         size = get_batch_metadata_chunk_size()
-        sessions_by_id = {}
+        adapter_key_by_session_id: dict[UUID, str] = {}
         for offset in range(0, len(all_session_ids), size):
-            sessions_by_id.update(
-                {
-                    row.id: row
-                    for row in self.db.execute(
-                        select(
-                            CurationReviewSession.id, CurationReviewSession.adapter_key
-                        ).where(
-                            CurationReviewSession.id.in_(
-                                all_session_ids[offset : offset + size]
-                            )
-                        )
-                    ).all()
-                }
+            adapter_key_by_session_id.update(
+                load_session_adapter_keys_for_system(
+                    self.db, all_session_ids[offset : offset + size]
+                )
             )
         for document in completed:
             ids = session_ids_by_document[document.id]
-            missing = [str(i) for i in ids if i not in sessions_by_id]
+            missing = [str(i) for i in ids if i not in adapter_key_by_session_id]
             if missing:
                 raise ValueError(
                     f"Batch document {document.id} references missing authoritative review sessions: {', '.join(missing)}"
                 )
             metadata[document.id]["adapter_keys"] = [
-                sessions_by_id[i].adapter_key for i in ids
+                adapter_key_by_session_id[i] for i in ids
             ]
 
         by_document = {d.document_id: d.id for d in completed}

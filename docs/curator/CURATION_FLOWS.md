@@ -163,7 +163,7 @@ Download files from their cards in the chat. Keep copies of results you need for
 
 An extraction that explicitly finalizes with zero objects is saved as a **no-results outcome**, not a missing-output failure. Chat retains the explanation, and successful results from other steps remain available. A completed formatter whose selected sources are all empty may return a no-results message instead of a file. This does not accept any annotation, perform writeback, or prove that the paper contains no relevant findings; missing, invalid, or unfinished extraction output still fails.
 
-Packaged extraction may also provide a curation review session. Its tables display saved records with evidence and validation findings. Export or submission previews check the current records, required fields, findings, and the data type's readiness rules. Resolve the stated blockers before final actions. Overrides are available only where the relevant policy allows them.
+Packaged extraction may also provide a curation review session. A review session belongs to the curator who created it: only you see your sessions in the Curation Inventory, and other curators cannot open them. Its tables display saved records with evidence and validation findings. Export or submission previews check the current records, required fields, findings, and the data type's readiness rules. Resolve the stated blockers before final actions. Overrides are available only where the relevant policy allows them.
 
 Neither a downloaded spreadsheet nor a confirmed identifier establishes submission readiness. Custom output records are not automatically Alliance submission objects.
 

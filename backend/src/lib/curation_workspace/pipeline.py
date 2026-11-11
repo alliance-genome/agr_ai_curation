@@ -108,7 +108,6 @@ class PostCurationPipelineRequest:
     user_id: str | None = None
     active_groups: tuple[str, ...] | None = None
     created_by_id: str | None = None
-    assigned_curator_id: str | None = None
     notes: str | None = None
     tags: tuple[str, ...] = ()
     prepared_at: datetime | None = None
@@ -355,7 +354,6 @@ def _execute_pipeline_steps(
             review_session_id=request.review_session_id,
             flow_run_id=request.flow_run_id,
             created_by_id=request.created_by_id,
-            assigned_curator_id=request.assigned_curator_id,
             notes=request.notes,
             tags=list(request.tags),
             warnings=session_warnings,

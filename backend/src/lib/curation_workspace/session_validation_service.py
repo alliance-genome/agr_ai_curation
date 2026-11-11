@@ -23,6 +23,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.curation_workspace.session_common import _latest_snapshot_record, _normalize_uuid
 from src.lib.curation_workspace.session_loading import DETAIL_LOAD_OPTIONS
+from src.lib.curation_workspace.session_ownership import owned_by
 from src.lib.curation_workspace.session_persistence import _validation_snapshot_row
 from src.lib.curation_workspace.session_queries import _session_context_maps
 from src.lib.curation_workspace.session_serializers import (
@@ -67,13 +68,16 @@ def _load_candidate_for_write(
     *,
     session_id: str | UUID,
     candidate_id: str | UUID,
+    owner_sub: str | None,
 ) -> CurationCandidate:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
     candidate = db.scalars(
         select(CurationCandidate)
+        .join(ReviewSessionModel, ReviewSessionModel.id == CurationCandidate.session_id)
         .where(CurationCandidate.id == normalized_candidate_id)
         .where(CurationCandidate.session_id == normalized_session_id)
+        .where(owned_by(owner_sub))
         .options(
             selectinload(CurationCandidate.session).selectinload(
                 ReviewSessionModel.validation_snapshots
@@ -106,11 +110,13 @@ def _load_session_for_validation(
     db: Session,
     *,
     session_id: str | UUID,
+    owner_sub: str | None,
 ) -> ReviewSessionModel:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
     session_row = db.scalars(
         select(ReviewSessionModel)
         .where(ReviewSessionModel.id == normalized_session_id)
+        .where(owned_by(owner_sub))
         .options(*DETAIL_LOAD_OPTIONS)
     ).first()
     if session_row is None:
@@ -622,7 +628,7 @@ def validate_candidate(
     candidate_id: str | UUID,
     request: CurationCandidateValidationRequest,
     *,
-    user_id: str | None = None,
+    user_id: str,
     active_groups: Sequence[str] | None = None,
 ) -> CurationCandidateValidationResponse:
     """Validate a candidate within the transaction owned by the caller.
@@ -642,6 +648,7 @@ def validate_candidate(
         db,
         session_id=request.session_id,
         candidate_id=normalized_candidate_id,
+        owner_sub=user_id,
     )
     available_field_keys = {
         field_payload.get("field_key")
@@ -684,6 +691,7 @@ def validate_candidate(
         db,
         session_id=request.session_id,
         candidate_id=normalized_candidate_id,
+        owner_sub=user_id,
     )
     return CurationCandidateValidationResponse(
         candidate=_candidate_payload(updated_candidate),
@@ -696,7 +704,7 @@ def validate_session(
     session_id: str | UUID,
     request: CurationSessionValidationRequest,
     *,
-    user_id: str | None = None,
+    user_id: str,
     active_groups: Sequence[str] | None = None,
 ) -> CurationSessionValidationResponse:
     """Validate a review session within the transaction owned by the caller.
@@ -711,7 +719,7 @@ def validate_session(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Path session_id does not match request body session_id",
         )
-    session_row = _load_session_for_validation(db, session_id=normalized_session_id)
+    session_row = _load_session_for_validation(db, session_id=normalized_session_id, owner_sub=user_id)
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}
     target_candidate_ids = request.candidate_ids or [
         candidate_id for candidate_id, candidate in candidate_map.items()
@@ -775,7 +783,7 @@ def validate_session(
             snapshot=session_snapshot_input,
         )
 
-    updated_session = _load_session_for_validation(db, session_id=normalized_session_id)
+    updated_session = _load_session_for_validation(db, session_id=normalized_session_id, owner_sub=user_id)
     document_map, user_map = _session_context_maps(db, [updated_session])
     return CurationSessionValidationResponse(
         session=_session_detail(db, updated_session, document_map, user_map),

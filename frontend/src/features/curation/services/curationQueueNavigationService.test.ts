@@ -15,10 +15,8 @@ describe('curationQueueNavigationService', () => {
       current_session_id: 'session-2',
       direction: 'previous',
       filters: {
-        inventory_scope: 'show_all',
         statuses: ['in_progress'],
         adapter_keys: ['gene'],
-        curator_ids: ['curator-1'],
         tags: ['priority'],
         flow_run_id: 'flow-1',
         document_id: 'doc-1',
@@ -39,10 +37,10 @@ describe('curationQueueNavigationService', () => {
 
     expect(params.get('current_session_id')).toBe('session-2')
     expect(params.get('direction')).toBe('previous')
-    expect(params.get('inventory_scope')).toBe('show_all')
+    expect(params.has('inventory_scope')).toBe(false)
     expect(params.getAll('status')).toEqual(['in_progress'])
     expect(params.getAll('adapter_key')).toEqual(['gene'])
-    expect(params.getAll('curator_id')).toEqual(['curator-1'])
+    expect(params.has('curator_id')).toBe(false)
     expect(params.getAll('tag')).toEqual(['priority'])
     expect(params.get('flow_run_id')).toBe('flow-1')
     expect(params.get('document_id')).toBe('doc-1')

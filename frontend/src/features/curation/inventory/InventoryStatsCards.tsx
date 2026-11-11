@@ -44,8 +44,7 @@ const CARD_DEFINITIONS: StatCardDefinition[] = [
     id: 'in-progress',
     label: 'In Progress',
     value: (stats) => stats.in_progress_sessions,
-    subtitle: (stats) =>
-      `${formatNumber(stats.assigned_to_current_user)} by you, ${formatNumber(stats.assigned_to_others)} by others`,
+    subtitle: () => 'being worked on now',
     accent: '#f59e0b',
   },
   {

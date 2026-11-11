@@ -37,6 +37,7 @@ from src.lib.domain_packs.materialization import (
     project_validation_summary_projections,
 )
 from src.models.sql.database import Base
+from src.models.sql.user import User
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -68,6 +69,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 
 TEST_TABLES = [
+    User.__table__,
     PDFDocument.__table__,
     DocumentReferenceLink.__table__,
     ReviewSessionModel.__table__,
@@ -642,6 +644,7 @@ def test_workspace_response_includes_domain_envelope_projections():
             status=CurationSessionStatus.NEW,
             adapter_key="gene",
             document_id=document.id,
+            created_by_id="curator-1",
             total_candidates=1,
             pending_candidates=1,
             prepared_at=now,
@@ -693,7 +696,7 @@ def test_workspace_response_includes_domain_envelope_projections():
         db_session.add_all([document, review_session, envelope_row, candidate, draft])
         db_session.commit()
 
-        response = session_service.get_session_workspace(db_session, str(review_session.id))
+        response = session_service.get_session_workspace(db_session, str(review_session.id), owner_sub="curator-1")
 
         workspace = response.workspace
         candidate_payload = workspace.candidates[0]
@@ -734,7 +737,7 @@ def test_workspace_response_includes_domain_envelope_projections():
         candidate.envelope_revision = 4
         db_session.commit()
         with pytest.raises(HTTPException, match="does not match domain envelope revision"):
-            session_service.get_session_workspace(db_session, str(review_session.id))
+            session_service.get_session_workspace(db_session, str(review_session.id), owner_sub="curator-1")
     finally:
         try:
             next(session_iter)

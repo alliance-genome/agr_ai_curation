@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import String, and_, case, exists, func, or_, select
+from sqlalchemy import String, case, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
@@ -25,6 +25,7 @@ from src.lib.curation_workspace.session_common import (
     _normalize_uuid,
     _ordered_clause,
 )
+from src.lib.curation_workspace.session_ownership import owned_by
 from src.lib.curation_workspace.session_loading import (
     CANDIDATE_DETAIL_LOAD_OPTIONS,
     DETAIL_LOAD_OPTIONS,
@@ -52,7 +53,6 @@ from src.schemas.curation_workspace import (
     CurationFlowRunSessionsRequest,
     CurationFlowRunSessionsResponse,
     CurationFlowRunSummary,
-    CurationInventoryScope,
     CurationNextSessionRequest,
     CurationNextSessionResponse,
     CurationPageInfo,
@@ -116,39 +116,18 @@ EVIDENCE_COUNT_SORT_ORDER = (
     .scalar_subquery()
 )
 
-def _apply_inventory_scope(
+def _apply_owner_scope(
     statement: Any,
-    filters: CurationSessionFilters,
     *,
     current_user_id: str | None,
 ) -> Any:
-    if filters.inventory_scope == CurationInventoryScope.SHOW_ALL:
-        return statement
-
-    if filters.inventory_scope == CurationInventoryScope.MY_ORGANIZATION:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "The my_organization inventory scope is not available until "
-                "review sessions persist organization or group metadata."
-            ),
-        )
-
+    # Inventory is always the caller's own sessions (ALL-1547).
     if not current_user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User identifier is required for my_inventory scope",
+            detail="User identifier is required to list review sessions",
         )
-
-    return statement.where(
-        or_(
-            ReviewSessionModel.assigned_curator_id == current_user_id,
-            and_(
-                ReviewSessionModel.assigned_curator_id.is_(None),
-                ReviewSessionModel.created_by_id == current_user_id,
-            ),
-        )
-    )
+    return statement.where(owned_by(current_user_id))
 
 
 def _apply_filters(
@@ -157,20 +136,13 @@ def _apply_filters(
     *,
     current_user_id: str | None,
 ) -> Any:
-    statement = _apply_inventory_scope(
-        statement,
-        filters,
-        current_user_id=current_user_id,
-    )
+    statement = _apply_owner_scope(statement, current_user_id=current_user_id)
 
     if filters.statuses:
         statement = statement.where(ReviewSessionModel.status.in_(filters.statuses))
 
     if filters.adapter_keys:
         statement = statement.where(ReviewSessionModel.adapter_key.in_(filters.adapter_keys))
-
-    if filters.curator_ids:
-        statement = statement.where(ReviewSessionModel.assigned_curator_id.in_(filters.curator_ids))
 
     if filters.flow_run_id:
         statement = statement.where(ReviewSessionModel.flow_run_id == filters.flow_run_id)
@@ -302,15 +274,6 @@ def _sort_order_clauses(
             ReviewSessionModel.prepared_at.desc(),
             ReviewSessionModel.id.asc(),
         )
-    if sort_by == CurationSessionSortField.CURATOR:
-        return (
-            _ordered_clause(
-                func.lower(func.coalesce(ReviewSessionModel.assigned_curator_id, "")),
-                sort_direction,
-            ),
-            ReviewSessionModel.prepared_at.desc(),
-            ReviewSessionModel.id.asc(),
-        )
     return (ReviewSessionModel.prepared_at.desc(), ReviewSessionModel.id.asc())
 
 
@@ -384,7 +347,10 @@ def _load_sessions_by_ids(
     session_ids: Sequence[UUID],
     *,
     detailed: bool,
+    owner_sub: str | None,
 ) -> list[ReviewSessionModel]:
+    """Load the caller's sessions among ``session_ids``; others are absent."""
+
     if not session_ids:
         return []
 
@@ -392,6 +358,7 @@ def _load_sessions_by_ids(
     sessions = db.scalars(
         select(ReviewSessionModel)
         .where(ReviewSessionModel.id.in_(session_ids))
+        .where(owned_by(owner_sub))
         .options(*load_options)
     ).all()
     session_map = {session.id: session for session in sessions}
@@ -408,7 +375,7 @@ def _session_context_maps(
         [
             actor_id
             for session in sessions
-            for actor_id in (session.assigned_curator_id, session.created_by_id)
+            for actor_id in (session.created_by_id,)
         ],
     )
     return document_map, user_map
@@ -538,7 +505,7 @@ def _list_session_summaries(
     )
     offset = (page - 1) * page_size
     session_ids = list(db.scalars(ordered_id_select.offset(offset).limit(page_size)).all())
-    sessions = _load_sessions_by_ids(db, session_ids, detailed=False)
+    sessions = _load_sessions_by_ids(db, session_ids, detailed=False, owner_sub=current_user_id)
     document_map, user_map = _session_context_maps(db, sessions)
     summaries = [_session_summary(session, document_map, user_map) for session in sessions]
     return summaries, _page_info(page=page, page_size=page_size, total_items=total_items)
@@ -626,9 +593,14 @@ def list_flow_run_sessions(
     )
 
 
-def get_session_detail(db: Session, session_id: str | UUID) -> CurationReviewSession:
+def get_session_detail(
+    db: Session,
+    session_id: str | UUID,
+    *,
+    owner_sub: str | None,
+) -> CurationReviewSession:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True, owner_sub=owner_sub)
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -639,9 +611,14 @@ def get_session_detail(db: Session, session_id: str | UUID) -> CurationReviewSes
     return _session_detail(db, session, document_map, user_map)
 
 
-def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorkspaceResponse:
+def get_session_workspace(
+    db: Session,
+    session_id: str | UUID,
+    *,
+    owner_sub: str | None,
+) -> CurationWorkspaceResponse:
     normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
-    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True, owner_sub=owner_sub)
     if not sessions:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -860,13 +837,6 @@ def get_session_stats(
                 ReviewSessionModel.status == CurationSessionStatus.REJECTED
             ),
             func.count(ReviewSessionModel.id).filter(
-                ReviewSessionModel.assigned_curator_id == current_user_id
-            ),
-            func.count(ReviewSessionModel.id).filter(
-                ReviewSessionModel.assigned_curator_id.is_not(None)
-                & (ReviewSessionModel.assigned_curator_id != current_user_id)
-            ),
-            func.count(ReviewSessionModel.id).filter(
                 ReviewSessionModel.submitted_at >= datetime.now(timezone.utc) - timedelta(days=7)
             ),
         )
@@ -889,9 +859,7 @@ def get_session_stats(
             paused_sessions=count_row[4],
             submitted_sessions=count_row[5],
             rejected_sessions=count_row[6],
-            assigned_to_current_user=count_row[7],
-            assigned_to_others=count_row[8],
-            submitted_last_7_days=count_row[9],
+            submitted_last_7_days=count_row[7],
         ),
         applied_filters=request.filters,
     )
@@ -977,7 +945,9 @@ def get_next_session(
         )
 
     target_session_id = _normalize_uuid(target_row["id"], field_name="session_id")
-    session = _load_sessions_by_ids(db, [target_session_id], detailed=False)[0]
+    session = _load_sessions_by_ids(
+        db, [target_session_id], detailed=False, owner_sub=current_user_id
+    )[0]
     document_map, user_map = _session_context_maps(db, [session])
     return CurationNextSessionResponse(
         session=_session_summary(session, document_map, user_map),
