@@ -256,11 +256,7 @@ def _fake_is_reference_source_artifact(
 ) -> bool:
     if provider_id != "abc_literature":
         return True
-    return (
-        artifact.metadata.get("file_class") == "main"
-        and artifact.metadata.get("file_publication_status") == "final"
-        and artifact.metadata.get("pdf_type") == "pdf"
-    )
+    return artifact.metadata.get("file_class") == "main"
 
 
 def _fake_reference_source_artifact_sort_key(
@@ -271,6 +267,11 @@ def _fake_reference_source_artifact_sort_key(
 ) -> tuple[int, ...]:
     if provider_id != "abc_literature":
         return (0,)
+    if not (
+        artifact.metadata.get("file_publication_status") == "final"
+        and artifact.metadata.get("pdf_type") == "pdf"
+    ):
+        return (20,)
     authorized = {str(group_id).strip().casefold() for group_id in authorized_group_ids}
     artifact_mods = {mod.strip().casefold() for mod in artifact.access_policy.group_ids}
     if (

@@ -351,18 +351,30 @@ Null-MOD access decision (aligned with ABC's `download_file` in ALL-1543):
   serves it. A listing made from a bare curie or id (conversion follow-up and
   figure-metadata re-listings) has no reference record, so it applies the MOD
   rows alone; none of those listings authorizes a source PDF.
-- Identifier imports consider only the provider's canonical main PDFs (for
-  ABC: `file_class` `main`, `file_publication_status` `final`, `pdf_type`
-  `pdf`, the files ABC's own main-PDF lookup considers). A supplement or a
-  non-final PDF is never imported as the paper, even when it is the only
-  accessible PDF. Checksum imports still match any source PDF by its bytes.
-- Source-PDF ranking for identifier imports:
-  1. A PDF with an entry for the curator's MOD, whatever its scope. This is
+- Identifier imports consider only the provider's main documents (for ABC:
+  `file_class` `main` with file extension `pdf`, whatever the publication
+  status or `pdf_type`). A supplement or any other file class is never
+  imported as the paper, even when it is the only accessible PDF. Checksum
+  imports still match any source PDF by its bytes.
+- Source-PDF ranking for identifier imports, among the accessible main PDFs:
+  1. A standard final PDF (`file_publication_status` `final`, `pdf_type`
+     `pdf`) with an entry for the curator's MOD, whatever its scope. This is
      ABC's main-PDF lookup precedence.
-  2. A `global` or `any_group` PDF with no named MOD entries (the general
-     no-MOD copy).
-  3. A `global` or `any_group` PDF that also names another MOD (for example
-     no-MOD + WB for a non-WB curator, or an open-access WB-only PDF).
+  2. A standard final `global` or `any_group` PDF with no named MOD entries
+     (the general no-MOD copy).
+  3. A standard final `global` or `any_group` PDF that also names another MOD
+     (for example no-MOD + WB for a non-WB curator, or an open-access WB-only
+     PDF).
+  4. Any other main PDF (OCR or TIF scans, `temp` files and other PDF
+     types). These come after every standard final PDF and tie with each
+     other.
+
+  ABC's own main-PDF lookup (`get_main_pdf_referencefile_id` in
+  `referencefile_crud.py`) considers only final main PDFs whose `pdf_type` is
+  `pdf`, so it never returns an OCR, TIF or temporary main. AI Curation keeps
+  step 4 because those scans are the only text some older papers have and they
+  were importable before ALL-1543; `download_file` serves them under the same
+  access rule.
 
   Step 1 before steps 2 and 3 is ABC's rule. Splitting steps 2 and 3 is AI
   Curation's own tie-break; ABC has none and takes whichever no-MOD PDF it

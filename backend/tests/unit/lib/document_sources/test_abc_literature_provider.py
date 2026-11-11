@@ -1796,15 +1796,9 @@ async def test_lone_accessible_supplement_is_never_imported_as_the_paper() -> No
 
 
 @pytest.mark.asyncio
-async def test_lone_non_final_main_pdf_is_never_imported_as_the_paper() -> None:
+async def test_lone_accessible_supplement_alone_is_not_a_candidate() -> None:
     decision = await _identifier_decision(
-        [
-            {
-                **_abc_show_all_main_pdf(5001, None),
-                "file_publication_status": "temp",
-            },
-            _abc_show_all_supplement_pdf(5002, None),
-        ],
+        [_abc_show_all_supplement_pdf(5002, None)],
         ("FB",),
     )
 
@@ -1812,7 +1806,41 @@ async def test_lone_non_final_main_pdf_is_never_imported_as_the_paper() -> None:
     assert decision.selected is None
 
 
-def test_reference_source_artifact_contract_accepts_only_final_main_pdfs() -> None:
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [{"pdf_type": "ocr"}, {"pdf_type": "tif"}, {"file_publication_status": "temp"}],
+)
+async def test_lone_non_standard_main_pdf_still_imports(overrides: dict[str, str]) -> None:
+    decision = await _identifier_decision(
+        [
+            {**_abc_show_all_main_pdf(5001, None), **overrides},
+            _abc_show_all_supplement_pdf(5002, None),
+        ],
+        ("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+
+
+@pytest.mark.asyncio
+async def test_standard_final_pdf_main_wins_over_an_ocr_main() -> None:
+    decision = await _identifier_decision(
+        [
+            {**_abc_show_all_main_pdf(5001, None), "pdf_type": "ocr"},
+            _abc_show_all_main_pdf(5003, None, display_name="PMC12000001"),
+        ],
+        ("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5003"
+
+
+def test_reference_source_artifact_contract_accepts_any_main_class_pdf() -> None:
     provider = provider_from_fake(FakeABCLiteratureClient())
 
     def _pdf(**metadata: str) -> SourceArtifact:
@@ -1823,6 +1851,7 @@ def test_reference_source_artifact_contract_accepts_only_final_main_pdfs() -> No
             artifact_format=SourceArtifactFormat.PDF,
             metadata={
                 "file_class": "main",
+                "file_extension": "pdf",
                 "file_publication_status": "final",
                 "pdf_type": "pdf",
                 **metadata,
@@ -1830,6 +1859,7 @@ def test_reference_source_artifact_contract_accepts_only_final_main_pdfs() -> No
         )
 
     assert provider.is_reference_source_artifact(_pdf()) is True
+    assert provider.is_reference_source_artifact(_pdf(pdf_type="ocr")) is True
+    assert provider.is_reference_source_artifact(_pdf(file_publication_status="temp")) is True
     assert provider.is_reference_source_artifact(_pdf(file_class="supplement")) is False
-    assert provider.is_reference_source_artifact(_pdf(file_publication_status="temp")) is False
-    assert provider.is_reference_source_artifact(_pdf(pdf_type="ocr")) is False
+    assert provider.is_reference_source_artifact(_pdf(file_extension="html")) is False

@@ -194,19 +194,18 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         return (0,) if "_nxml" in display_name else (1,)
 
     def is_reference_source_artifact(self, artifact: SourceArtifact) -> bool:
-        """Accept only ABC's canonical main PDF: final, ``main`` class, type ``pdf``.
+        """Accept any ``main``-class PDF file as a candidate for the paper.
 
-        These are the candidates ABC's own main-PDF lookup considers.
-        Supplements and non-final or non-``pdf`` main files are never the
-        paper an identifier import brings in.
+        Supplements and every other file class are never the paper an
+        identifier import brings in. Main PDFs of any publication status or
+        PDF type stay candidates: some older papers hold only an OCR or TIF
+        scan, and the ranking puts ABC's standard final PDF first.
         """
 
         metadata = artifact.metadata
         return (
             str(metadata.get("file_class") or "").strip().casefold() == "main"
-            and str(metadata.get("file_publication_status") or "").strip().casefold()
-            == "final"
-            and str(metadata.get("pdf_type") or "").strip().casefold() == "pdf"
+            and str(metadata.get("file_extension") or "").strip().casefold() == "pdf"
         )
 
     def reference_source_artifact_sort_key(
@@ -216,11 +215,14 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
     ) -> tuple[int, ...]:
         """Prefer a curator's MOD PDF over ABC's shared PMC fallback.
 
-        Callers rank only canonical main PDFs (``is_reference_source_artifact``).
-        ABC intentionally keeps one final main PDF per MOD plus at most one
-        shared/null-MOD PMC PDF. Its own main-PDF lookup applies this
-        precedence for a requested MOD: a PDF with an entry for that MOD, then
-        a PDF with a no-MOD entry. The MOD tier reads the file's own MOD
+        Callers rank only main PDFs (``is_reference_source_artifact``). ABC
+        intentionally keeps one final main PDF per MOD plus at most one
+        shared/null-MOD PMC PDF. Its own main-PDF lookup considers only final
+        main PDFs whose PDF type is ``pdf`` and applies this precedence for a
+        requested MOD: a PDF with an entry for that MOD, then a PDF with a
+        no-MOD entry. Other main PDFs (OCR or TIF scans, temporary files) rank
+        after every standard final PDF, so they are imported only when the
+        reference has no standard final PDF the curator may use. The MOD tier reads the file's own MOD
         entries, so a PDF tagged both no-MOD and with the curator's MOD still
         ranks first.
 
@@ -233,6 +235,13 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         ranks stay tied so callers do not guess, for example when a curator
         spans several MODs or two PDFs are both no-MOD only.
         """
+
+        publication_status = str(
+            artifact.metadata.get("file_publication_status") or ""
+        ).strip().casefold()
+        pdf_type = str(artifact.metadata.get("pdf_type") or "").strip().casefold()
+        if not (publication_status == "final" and pdf_type == "pdf"):
+            return (20,)
 
         authorized = {
             str(group_id).strip().casefold()
