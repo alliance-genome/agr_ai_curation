@@ -204,7 +204,7 @@ class DocumentSourceProvider(Protocol):
         raise NotImplementedError
 
     def is_reference_source_artifact(self, artifact: SourceArtifact) -> bool:
-        """Return whether a source PDF is the provider's canonical document for its reference.
+        """Return whether a source PDF is a candidate main document for its reference.
 
         Identifier imports consider only these PDFs as the paper; other source
         PDFs (for example supplements or superseded files) are never imported

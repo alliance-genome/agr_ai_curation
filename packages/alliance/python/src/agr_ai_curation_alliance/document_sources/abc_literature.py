@@ -202,10 +202,9 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         scan, and the ranking puts ABC's standard final PDF first.
         """
 
-        metadata = artifact.metadata
         return (
-            str(metadata.get("file_class") or "").strip().casefold() == "main"
-            and str(metadata.get("file_extension") or "").strip().casefold() == "pdf"
+            str(artifact.metadata.get("file_class") or "").strip().casefold() == "main"
+            and artifact.artifact_format is SourceArtifactFormat.PDF
         )
 
     def reference_source_artifact_sort_key(
@@ -220,9 +219,10 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         shared/null-MOD PMC PDF. Its own main-PDF lookup considers only final
         main PDFs whose PDF type is ``pdf`` and applies this precedence for a
         requested MOD: a PDF with an entry for that MOD, then a PDF with a
-        no-MOD entry. Other main PDFs (OCR or TIF scans, temporary files) rank
-        after every standard final PDF, so they are imported only when the
-        reference has no standard final PDF the curator may use. The MOD tier reads the file's own MOD
+        no-MOD entry. Other main PDFs (OCR or TIF scans, temporary files, a
+        null ``pdf_type``) rank after every standard final PDF, so they are
+        imported only when the reference has no standard final PDF the curator
+        may use; among them the same MOD order applies. The MOD tier reads the file's own MOD
         entries, so a PDF tagged both no-MOD and with the curator's MOD still
         ranks first.
 
@@ -240,8 +240,9 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             artifact.metadata.get("file_publication_status") or ""
         ).strip().casefold()
         pdf_type = str(artifact.metadata.get("pdf_type") or "").strip().casefold()
-        if not (publication_status == "final" and pdf_type == "pdf"):
-            return (20,)
+        # Every standard final PDF (ABC's own main-PDF candidates) before any
+        # other main PDF; the MOD order below applies within each tier.
+        tier = 0 if publication_status == "final" and pdf_type == "pdf" else 1
 
         authorized = {
             str(group_id).strip().casefold()
@@ -254,15 +255,15 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             if str(mod).strip()
         }
         if authorized.intersection(artifact_mods):
-            return (0,)
+            return (tier, 0)
         if artifact.access_policy.scope in {
             SourceAccessScope.GLOBAL,
             SourceAccessScope.ANY_GROUP,
         }:
             # AI Curation's own tie-break (not ABC's): the general copy, with no
             # named MOD entries, before a shared PDF that names another MOD.
-            return (1,) if not artifact_mods else (2,)
-        return (10,)
+            return (tier, 1) if not artifact_mods else (tier, 2)
+        return (tier, 10)
 
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
         if "converted_merged_main" in result.converted_classes:

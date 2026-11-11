@@ -1843,15 +1843,17 @@ async def test_standard_final_pdf_main_wins_over_an_ocr_main() -> None:
 def test_reference_source_artifact_contract_accepts_any_main_class_pdf() -> None:
     provider = provider_from_fake(FakeABCLiteratureClient())
 
-    def _pdf(**metadata: str) -> SourceArtifact:
+    def _pdf(
+        artifact_format: SourceArtifactFormat = SourceArtifactFormat.PDF,
+        **metadata: str,
+    ) -> SourceArtifact:
         return SourceArtifact(
             provider="abc_literature",
             artifact_id="pdf",
             role=SourceArtifactRole.SOURCE_PDF,
-            artifact_format=SourceArtifactFormat.PDF,
+            artifact_format=artifact_format,
             metadata={
                 "file_class": "main",
-                "file_extension": "pdf",
                 "file_publication_status": "final",
                 "pdf_type": "pdf",
                 **metadata,
@@ -1862,4 +1864,70 @@ def test_reference_source_artifact_contract_accepts_any_main_class_pdf() -> None
     assert provider.is_reference_source_artifact(_pdf(pdf_type="ocr")) is True
     assert provider.is_reference_source_artifact(_pdf(file_publication_status="temp")) is True
     assert provider.is_reference_source_artifact(_pdf(file_class="supplement")) is False
-    assert provider.is_reference_source_artifact(_pdf(file_extension="html")) is False
+    assert (
+        provider.is_reference_source_artifact(_pdf(SourceArtifactFormat.UNKNOWN)) is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_listed_main_html_row_is_not_a_candidate() -> None:
+    decision = await _identifier_decision(
+        [{**_abc_show_all_main_pdf(5001, None), "file_extension": "html"}],
+        ("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.NO_SOURCE_ARTIFACT
+
+
+def _ocr_main(referencefile_id: int, *mods: str | None) -> dict[str, Any]:
+    return {
+        **_abc_show_all_main_pdf(referencefile_id, *mods, display_name=f"scan{referencefile_id}"),
+        "pdf_type": "ocr",
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_standard_mains_prefer_the_curators_mod() -> None:
+    decision = await _identifier_decision(
+        [_ocr_main(5001, "WB"), _ocr_main(5002, None)],
+        ("WB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5001"
+
+
+@pytest.mark.asyncio
+async def test_non_standard_mains_prefer_the_no_mod_only_copy() -> None:
+    decision = await _identifier_decision(
+        [_ocr_main(5001, None, "WB"), _ocr_main(5002, None)],
+        ("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5002"
+
+
+@pytest.mark.asyncio
+async def test_two_no_mod_only_non_standard_mains_remain_ambiguous() -> None:
+    decision = await _identifier_decision(
+        [_ocr_main(5001, None), _ocr_main(5002, None)],
+        ("FB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.AMBIGUOUS_MATCH
+    assert decision.metadata == {"match_count": 2}
+
+
+@pytest.mark.asyncio
+async def test_standard_no_mod_pdf_beats_the_curators_mod_ocr_main() -> None:
+    decision = await _identifier_decision(
+        [_ocr_main(5001, "WB"), _abc_show_all_main_pdf(5002, None)],
+        ("WB",),
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "5002"

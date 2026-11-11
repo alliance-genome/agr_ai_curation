@@ -267,21 +267,22 @@ def _fake_reference_source_artifact_sort_key(
 ) -> tuple[int, ...]:
     if provider_id != "abc_literature":
         return (0,)
-    if not (
-        artifact.metadata.get("file_publication_status") == "final"
+    tier = (
+        0
+        if artifact.metadata.get("file_publication_status") == "final"
         and artifact.metadata.get("pdf_type") == "pdf"
-    ):
-        return (20,)
+        else 1
+    )
     authorized = {str(group_id).strip().casefold() for group_id in authorized_group_ids}
     artifact_mods = {mod.strip().casefold() for mod in artifact.access_policy.group_ids}
     if (
         artifact.access_policy.scope is SourceAccessScope.RESTRICTED
         and authorized.intersection(artifact_mods)
     ):
-        return (0,)
+        return (tier, 0)
     if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
-        return (1,)
-    return (10,)
+        return (tier, 1)
+    return (tier, 10)
 
 
 def _fake_conversion_exposes_main_text(
