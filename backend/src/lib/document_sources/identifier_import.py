@@ -306,7 +306,10 @@ async def select_reference_import_candidate(
         request_bearer_token=request_bearer_token,
     )
     source_artifacts: tuple[SourceArtifact, ...] = tuple(
-        artifact for artifact in artifacts if artifact.role is SourceArtifactRole.SOURCE_PDF
+        artifact
+        for artifact in artifacts
+        if artifact.role is SourceArtifactRole.SOURCE_PDF
+        and provider.is_reference_source_artifact(artifact)
     )
     if not source_artifacts:
         return _reference_decision(

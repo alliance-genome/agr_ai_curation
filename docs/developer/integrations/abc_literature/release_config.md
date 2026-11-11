@@ -108,11 +108,13 @@ Curator access is based on identity-provider group claims mapped through
 `cognito:groups` and `groups`.
 
 Source/main PDF metadata is the entitlement source for ABC-backed imports. It
-follows ABC's `download_file` rule: a source PDF is open to every curator when
-its reference is open access or when any of its `referencefile_mods` rows has a
-null MOD (even if other rows name MODs); otherwise it is open only to curators
-of the MODs its rows name; with no usable rows it is denied. Converted Markdown
-rows may have null MOD metadata and must not grant access by themselves. See
+follows ABC's `download_file` rule: a source PDF is open to every caller when
+its reference is open access; to any caller with at least one authorized group
+when any of its `referencefile_mods` rows has a null MOD (even if other rows
+name MODs); otherwise only to callers in the MODs its rows name. A file with no
+usable rows, or whose reference record shows a license with an unset
+open-access flag, is denied. Converted Markdown rows may have null MOD
+metadata and must not grant access by themselves. See
 `api_contract_verification.md` for the full table.
 
 This cutover does not add a separate "all MOD" or full-access provider-group
@@ -120,8 +122,15 @@ allowlist. A machine reader sees every ABC file, so AI Curation applies
 source-PDF-derived access from the requesting user's groups (for login-free
 development, `DEV_USER_GROUPS`) before it downloads or ingests a source PDF:
 identifier imports, checksum imports, and benchmark conversions select only a
-source PDF the user's groups authorize, and a user with none of the paper's
-groups gets an access-denied result with nothing downloaded.
+source PDF the user's groups authorize under the rule above, and a user it does
+not authorize gets an access-denied result with nothing downloaded.
+
+The default login-free identity (`DEV_USER_GROUPS` empty) carries only the
+`developers` claim, which maps to no configured group, so like an ABC caller
+with no MOD access it can import open-access papers only. Set
+`DEV_USER_GROUPS` (for example `DEV_USER_GROUPS=WB`) to a group ID from
+`config/groups.yaml` to import no-MOD papers and that group's restricted
+papers.
 
 Derived artifacts follow the bearer that reads them. Every request records its
 bearer kind explicitly: a logged-in curator's own token is `curator`; the

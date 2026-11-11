@@ -99,10 +99,11 @@ Converted rows in the `by_md5` response do not carry MOD metadata. AI Curation
 must continue inheriting access from the matched source/main PDF row.
 
 `ReferencefileModSchemaRelated.mod_abbreviation` can be `null`. A null MOD row
-on the source/main PDF grants global access, even when the same file also has
-named MOD rows; a null MOD row on a converted Markdown artifact must not be
-used as an entitlement source. `open_access` is the reference's copyright
-license flag, the same one ABC's `download_file` checks.
+on the source/main PDF opens the file to any caller with at least one
+authorized group, even when the same file also has named MOD rows; a null MOD
+row on a converted Markdown artifact must not be used as an entitlement source.
+`open_access` is `bool(license and license.open_access)` for the reference's
+copyright license, so on `by_md5` an unset flag reads as `false`.
 
 `show_all` returns file rows as `ReferencefileSchemaRelated`. These rows can
 include `referencefile_mods` but never `open_access`. The first-cut import path
@@ -111,9 +112,11 @@ source relationship is known.
 
 `GET /reference/{curie}`, `/reference/by_cross_reference/{id}` and the PMID path
 (`external_lookup` followed by `GET /reference/{curie}`) return
-`ReferenceSchemaShow`, which carries `copyright_license_open_access`. Identifier
-imports already hold this record when they list the reference's files, so the
-listing reads the flag from it without another ABC request.
+`ReferenceSchemaShow`, which carries `copyright_license_name` (non-null in ABC
+whenever a license is set) and the raw `copyright_license_open_access`
+(`true`, `false` or `null`). Identifier imports already hold this record when
+they list the reference's files, so the listing reads both from it without
+another ABC request.
 
 The allowlisted endpoints have `HTTPBearer` security in OpenAPI. Treat a live
 `403` from `download_file` as authoritative. Do not persist, log, return, or
@@ -316,43 +319,62 @@ Fixture and test evidence:
   `referencefile_mods`, converted child rows with null MOD metadata, authorized
   `download_file`, unauthorized `download_file` `403`, and the absence of
   create/upload client methods.
-- Provider unit tests cover source-PDF null MOD rows mapping to global access
-  and malformed/empty MOD payloads not being inferred as global.
+- Provider unit tests cover source-PDF null MOD rows mapping to any-group
+  access and malformed/empty MOD payloads not being inferred as accessible.
 
-Null-MOD/global decision (aligned with ABC's `download_file` in ALL-1543):
+Null-MOD access decision (aligned with ABC's `download_file` in ALL-1543):
 
-- ABC serves a file when the reference's copyright license is open access, when
-  any `referencefile_mods` row has no MOD, or when a row names the caller's
-  MOD. AI Curation maps each source/main PDF row the same way:
+- ABC's `download_file` first reads the reference's copyright license: open
+  access serves the file to every caller, even one with no MOD access; a
+  license whose `open_access` is unset (`null`) refuses every caller and skips
+  the MOD checks. Otherwise (no license, or `open_access` false) a caller with
+  some MOD access gets the file when any `referencefile_mods` row has no MOD,
+  or when a row names the caller's MOD. AI Curation maps each source/main PDF
+  row the same way. "Authorized groups" are the caller's identity-provider
+  groups mapped through `config/groups.yaml`; a group that maps to no
+  configured group does not count.
 
-  | Source PDF row | Access policy |
-  | --- | --- |
-  | Open-access reference (`open_access` on `by_md5`, or the reference record's `copyright_license_open_access`) | global |
-  | Has a null MOD row, with or without named MOD rows | global |
-  | Named MOD rows only | restricted to those MODs |
-  | No usable MOD rows and not open access | unknown (denied) |
+  | Source PDF row | Access scope | Who may import it |
+  | --- | --- | --- |
+  | Open-access reference (`open_access` on `by_md5`, or the reference record's `copyright_license_open_access` true) | `global` | every caller |
+  | Reference record shows a license (`copyright_license_name`) with `copyright_license_open_access` null | `unknown` | nobody |
+  | Has a null MOD row, with or without named MOD rows | `any_group` | any caller with at least one authorized group |
+  | Named MOD rows only | `restricted` | callers in one of those MODs |
+  | No usable MOD rows and not open access | `unknown` | nobody |
 
 - A null MOD on a converted Markdown row is not an access grant. Converted
   Markdown inherits access from the matched source/main PDF.
-- Open access is read only from those structured ABC fields. A listing made
-  from a bare curie or id (conversion follow-up and figure-metadata
-  re-listings) has no reference record, so it applies the MOD rows alone; none
-  of those listings authorizes a source PDF.
-- Source-PDF ranking for identifier imports (final main PDFs only):
-  1. A PDF with an entry for the curator's MOD, even if it is global. This is
+- Open access and the unset-license refusal are read only from those
+  structured ABC fields. `by_md5` cannot tell an unset flag from `false`, so a
+  checksum match under such a license applies the MOD rows; under a curator
+  bearer ABC then refuses the download with `403`, under the service bearer it
+  serves it. A listing made from a bare curie or id (conversion follow-up and
+  figure-metadata re-listings) has no reference record, so it applies the MOD
+  rows alone; none of those listings authorizes a source PDF.
+- Identifier imports consider only the provider's canonical main PDFs (for
+  ABC: `file_class` `main`, `file_publication_status` `final`, `pdf_type`
+  `pdf`, the files ABC's own main-PDF lookup considers). A supplement or a
+  non-final PDF is never imported as the paper, even when it is the only
+  accessible PDF. Checksum imports still match any source PDF by its bytes.
+- Source-PDF ranking for identifier imports:
+  1. A PDF with an entry for the curator's MOD, whatever its scope. This is
      ABC's main-PDF lookup precedence.
-  2. A global PDF with no named MOD entries (the general no-MOD copy).
-  3. A global PDF that also names another MOD (for example no-MOD + WB for a
-     non-WB curator, or an open-access WB-only PDF).
+  2. A `global` or `any_group` PDF with no named MOD entries (the general
+     no-MOD copy).
+  3. A `global` or `any_group` PDF that also names another MOD (for example
+     no-MOD + WB for a non-WB curator, or an open-access WB-only PDF).
 
   Step 1 before steps 2 and 3 is ABC's rule. Splitting steps 2 and 3 is AI
   Curation's own tie-break; ABC has none and takes whichever no-MOD PDF it
   reads first. It keeps the general copy and avoids an ambiguous-match error
   when a reference holds both kinds. Any remaining tie, such as two no-MOD-only
   PDFs, stays an ambiguous match; AI Curation does not guess further.
-- AI Curation grants global access to any signed-in curator. ABC additionally
-  requires the caller to have some MOD access for the null-MOD grant; under a
-  curator bearer, ABC's `download_file` still enforces that on download.
+- AI Curation is the only access gate whenever the provider bearer is the
+  service reader: login-free development and benchmark conversions, which
+  authorize against the requesting curator's active groups. Under a curator
+  bearer ABC's `download_file` also enforces its own rule on download. Because
+  the mapping above matches that rule, both bearers reach the same decision,
+  except for the `by_md5` unset-license case noted above.
 - A live restricted fixture plus fake/unit coverage is enough for cutover; no
   additional live global fixture is required before ALL-354 closure.
 

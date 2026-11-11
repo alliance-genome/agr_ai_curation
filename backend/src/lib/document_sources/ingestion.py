@@ -377,9 +377,10 @@ def _require_ingestable_provenance(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise DocumentSourceIngestionError(
             "Provider Markdown ingestion requires source access scope"
         )
-    if access_scope not in {"global", "restricted"}:
+    if access_scope not in {"global", "any_group", "restricted"}:
         raise DocumentSourceIngestionError(
-            "Provider Markdown ingestion requires source access scope to be global or restricted"
+            "Provider Markdown ingestion requires source access scope to be "
+            "global, any_group or restricted"
         )
     provenance["access_scope"] = access_scope
     if access_scope == "restricted":
