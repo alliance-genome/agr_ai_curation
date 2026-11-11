@@ -192,7 +192,7 @@ async def test_negated_proposal_opens_as_a_curation_session_and_can_be_signed_of
 
         from src.lib.curation_workspace.session_queries import get_session_workspace
 
-        workspace_payload = get_session_workspace(db, session_id)
+        workspace_payload = get_session_workspace(db, session_id, owner_sub=scope.owner_id)
         assert workspace_payload.workspace.candidates[0].has_active_validators is False
 
         decision = decide_candidate(
@@ -307,7 +307,7 @@ async def test_accepting_a_record_with_no_validators_does_not_skip_the_review_ex
         accepted, pending = candidates
         accepted_id, pending_id = str(accepted.id), str(pending.id)
 
-        payload = get_session_workspace(db, session_id)
+        payload = get_session_workspace(db, session_id, owner_sub=scope.owner_id)
         assert {item.has_active_validators for item in payload.workspace.candidates} == {False}
 
         decide_candidate(

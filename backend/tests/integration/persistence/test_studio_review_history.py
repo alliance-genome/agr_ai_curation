@@ -11,7 +11,20 @@ from tests.integration.persistence.test_validation_history import scope as scope
 from tests.integration.persistence.test_curator_selected_authority import scenario as scenario
 
 
+def _owned_source(scope, source_id):
+    """The source extraction row that makes a session-less envelope the owner's (ALL-1547)."""
+    from uuid import UUID
+    from src.lib.curation_workspace.models import CurationExtractionResultRecord
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
+    with h.SessionLocal.begin() as db:
+        db.add(CurationExtractionResultRecord(
+            id=UUID(str(source_id)), document_id=UUID(scope.document_id), adapter_key="fixture",
+            agent_key="fixture_extractor", source_kind=CurationExtractionSourceKind.FLOW,
+            user_id=scope.owner_id, candidate_count=0, payload_json={}, extraction_metadata={}))
+
+
 def test_studio_history_without_candidate_is_owned_exact_and_read_only(scope, scenario, monkeypatch):
+    _owned_source(scope, scenario.source)
     monkeypatch.setenv("VALIDATION_HISTORY_PAGE_SIZE", "2")
     monkeypatch.setenv("VALIDATION_REVIEW_PACKET_BYTES", "512")
     args = dict(session_factory=h.SessionLocal, user_auth_sub=scope.owner_id,
@@ -58,6 +71,7 @@ def test_studio_history_without_candidate_is_owned_exact_and_read_only(scope, sc
 
 
 def test_studio_history_filter_and_empty_page(scope, scenario):
+    _owned_source(scope, scenario.source)
     args = dict(session_factory=h.SessionLocal, user_auth_sub=scope.owner_id, envelope_id=scenario.env.envelope_id)
     summary = inspect_history(**args)
     kind = next(iter(summary["kind_counts"]))
@@ -72,13 +86,15 @@ def test_imported_baseline_is_not_claimed_as_original(scope):
     from src.schemas.domain_envelope import DomainEnvelope, CuratableObjectEnvelope
     from src.lib.domain_envelopes.persistence import DomainEnvelopeCheckpointRequest, write_domain_envelope_checkpoint
     from src.lib.validation_history.migration import import_historical_envelope
+    source_id = uuid4()
+    _owned_source(scope, source_id)
     envelope = DomainEnvelope(envelope_id="studio-historical-" + uuid4().hex, domain_pack_id="fixture",
         extracted_objects=[CuratableObjectEnvelope(object_id="one", object_type="gene",
                                                    payload={"name": "already validated"})])
     with h.SessionLocal.begin() as db:
         write_domain_envelope_checkpoint(db, DomainEnvelopeCheckpointRequest(
             project_key="fixture", envelope=envelope, expected_revision=0,
-            document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=str(uuid4())))
+            document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=str(source_id)))
     assert import_historical_envelope(envelope.envelope_id)
     summary = inspect_history(session_factory=h.SessionLocal, user_auth_sub=scope.owner_id,
                               envelope_id=envelope.envelope_id)

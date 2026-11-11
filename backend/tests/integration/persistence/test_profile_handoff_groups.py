@@ -115,7 +115,7 @@ async def test_saved_profile_35_records_handoff_and_replay(
     session_id = result.review_session_ids[0]
     review = db.get(CurationReviewSession, session_id)
     assert review.created_by_id == owner
-    assert review.assigned_curator_id == owner
+    assert review.assigned_curator_id is None  # owner is the creator (ALL-1547)
     candidates = list(
         db.scalars(
             select(CurationCandidate).where(CurationCandidate.session_id == session_id)
