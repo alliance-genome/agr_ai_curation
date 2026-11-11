@@ -190,6 +190,11 @@ function isRejectedEdit(error: unknown): error is Error & { status: number } {
   )
 }
 
+// A 404 means the session or envelope is gone or is not the curator's; the
+// server's wording names internal identifiers, so the curator sees this line.
+const UNAVAILABLE_RECORD_WARNING =
+  'This change was not saved. The record or session is no longer available; refresh the page to see the current state.'
+
 function isVersionConflict(error: unknown): boolean {
   return Boolean(
     error
@@ -869,7 +874,11 @@ export function useAutosave(
             options,
           )
           if (options?.updateState !== false && mountedRef.current) {
-            setWarning(`This change was not saved: ${error.message}`)
+            setWarning(
+              error.status === 404
+                ? UNAVAILABLE_RECORD_WARNING
+                : `This change was not saved: ${error.message}`,
+            )
           }
           return false
         }

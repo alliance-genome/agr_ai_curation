@@ -1786,7 +1786,9 @@ describe('useAutosave', () => {
     await act(async () => {
       expect(await result.current.flush()).toBe(false)
     })
-    expect(result.current.warning).toBe('This change was not saved: Domain envelope envelope-1 not found')
+    expect(result.current.warning).toBe(
+      'This change was not saved. The record or session is no longer available; refresh the page to see the current state.',
+    )
     await act(async () => {
       expect(await result.current.flush()).toBe(true)
     })

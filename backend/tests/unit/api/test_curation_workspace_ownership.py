@@ -382,3 +382,12 @@ def test_removed_assignment_and_scope_inputs_are_rejected(world, method, path_te
 def test_removed_curator_sort_is_rejected(world):
     response = world["client"].get("/api/curation-workspace/sessions", params={"sort_by": "curator"})
     assert response.status_code == 422, response.text
+
+
+def test_stale_scope_query_params_still_list_only_the_callers_sessions(world):
+    response = world["client"].get(
+        "/api/curation-workspace/sessions",
+        params={"inventory_scope": "show_all", "curator_id": OTHER},
+    )
+    assert response.status_code == 200, response.text
+    assert [item["session_id"] for item in response.json()["sessions"]] == [str(world["mine"].id)]

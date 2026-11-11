@@ -114,6 +114,8 @@ export type CurationValidationScope = (typeof CURATION_VALIDATION_SCOPES)[number
 export const CURATION_ACTION_TYPES = [
   'session_created',
   'session_status_updated',
+  // Nothing writes this since sessions became private to their creator
+  // (ALL-1547); it stays so action-log entries written before then still load.
   'session_assigned',
   'candidate_created',
   'candidate_deleted',

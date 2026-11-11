@@ -48,7 +48,7 @@ describe('InventoryStatsCards', () => {
 
     expect(screen.getByText('In Progress')).toBeInTheDocument()
     expect(screen.getByText('41')).toBeInTheDocument()
-    expect(screen.getByText('started, not yet submitted')).toBeInTheDocument()
+    expect(screen.getByText('being worked on now')).toBeInTheDocument()
     expect(screen.queryByText(/by others/)).not.toBeInTheDocument()
 
     expect(screen.getByText('Submitted')).toBeInTheDocument()

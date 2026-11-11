@@ -520,3 +520,21 @@ def test_studio_history_applies_envelope_visibility_on_both_branches(
         "code": "history_access_denied",
         "error": "History source unavailable",
     }
+
+
+def test_manual_session_records_the_caller_as_creator(world):
+    from src.lib.curation_workspace.bootstrap_service import create_manual_session
+    from src.schemas.curation_workspace import CurationSessionCreateRequest
+
+    db = world["db"]
+    response = create_manual_session(
+        CurationSessionCreateRequest(document_id=str(world["document"].id), adapter_key="fixture"),
+        current_user_id=OWNER,
+        actor_claims={"sub": OWNER},
+        db=db,
+    )
+    db.commit()
+
+    created = ownership.load_session_for_system(db, response.session.session_id)
+    assert created.created_by_id == OWNER
+    assert ownership.session_is_owned(db, created.id, OTHER) is False
