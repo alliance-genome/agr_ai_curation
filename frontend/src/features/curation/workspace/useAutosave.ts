@@ -179,10 +179,15 @@ function upsertPendingEnvelope(
 }
 
 // The backend rejected an edit (e.g. a resolvable value edited as plain data,
-// 400, or a saved profile's conformance rule, 422): retrying the same edit can
+// 400, a saved profile's conformance rule, 422, or a session or envelope that
+// is not the curator's or no longer exists, 404): retrying the same edit can
 // never succeed.
 function isRejectedEdit(error: unknown): error is Error & { status: number } {
-  return error instanceof Error && 'status' in error && (error.status === 400 || error.status === 422)
+  return (
+    error instanceof Error
+    && 'status' in error
+    && (error.status === 400 || error.status === 404 || error.status === 422)
+  )
 }
 
 function isVersionConflict(error: unknown): boolean {

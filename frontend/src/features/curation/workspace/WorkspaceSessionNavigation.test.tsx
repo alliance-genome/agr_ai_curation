@@ -6,24 +6,25 @@ import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-route
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurationQueueNavigationRequest, CurationQueueNavigationState } from '../services/curationQueueNavigationService'
-import type { CurationNextSessionResponse, CurationSessionSummary } from '../types'
+import type { CurationNextSessionResponse, CurationSessionFilters, CurationSessionSummary } from '../types'
 import WorkspaceSessionNavigation from './WorkspaceSessionNavigation'
 
 const theme = createTheme()
 
+const queueFilters: CurationSessionFilters = {
+  statuses: ['in_progress'],
+  adapter_keys: ['gene'],
+  tags: [],
+  flow_run_id: null,
+  document_id: null,
+  search: 'APOE',
+  prepared_between: null,
+  last_worked_between: null,
+  saved_view_id: null,
+}
+
 const queueRequest: CurationQueueNavigationRequest = {
-  filters: {
-    statuses: ['in_progress'],
-    adapter_keys: ['gene'],
-    curator_ids: [],
-    tags: [],
-    flow_run_id: null,
-    document_id: null,
-    search: 'APOE',
-    prepared_between: null,
-    last_worked_between: null,
-    saved_view_id: null,
-  },
+  filters: queueFilters,
   sort_by: 'prepared_at',
   sort_direction: 'desc',
 }
@@ -60,7 +61,6 @@ function buildSessionSummary(sessionId: string): CurationSessionSummary {
     validation: null,
     evidence: null,
     current_candidate_id: null,
-    assigned_curator: null,
     created_by: null,
     prepared_at: '2026-03-20T12:00:00Z',
     last_worked_at: '2026-03-21T12:00:00Z',
@@ -145,7 +145,7 @@ describe('WorkspaceSessionNavigation', () => {
         const response: CurationNextSessionResponse = {
           session: buildSessionSummary('session-1'),
           queue_context: {
-            filters: queueRequest.filters ?? undefined,
+            filters: queueFilters,
             sort_by: 'prepared_at',
             sort_direction: 'desc',
             position: 1,
@@ -162,7 +162,7 @@ describe('WorkspaceSessionNavigation', () => {
         const response: CurationNextSessionResponse = {
           session: buildSessionSummary('session-3'),
           queue_context: {
-            filters: queueRequest.filters ?? undefined,
+            filters: queueFilters,
             sort_by: 'prepared_at',
             sort_direction: 'desc',
             position: 3,

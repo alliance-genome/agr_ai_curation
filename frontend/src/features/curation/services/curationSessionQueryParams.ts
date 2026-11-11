@@ -10,13 +10,8 @@ export function appendCurationSessionFilters(
   params: URLSearchParams,
   filters?: CurationSessionFilters,
 ) {
-  if (filters?.inventory_scope) {
-    params.set('inventory_scope', filters.inventory_scope)
-  }
-
   appendStringList(params, 'status', filters?.statuses)
   appendStringList(params, 'adapter_key', filters?.adapter_keys)
-  appendStringList(params, 'curator_id', filters?.curator_ids)
   appendStringList(params, 'tag', filters?.tags)
 
   if (filters?.flow_run_id) {

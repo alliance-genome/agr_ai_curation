@@ -43,7 +43,6 @@ function buildSaveRequestFilters(filters: CurationSessionFilters): CurationSessi
     ...filters,
     statuses: [...(filters.statuses ?? [])],
     adapter_keys: [...(filters.adapter_keys ?? [])],
-    curator_ids: [...(filters.curator_ids ?? [])],
     tags: [...(filters.tags ?? [])],
     origin_session_id: null,
     saved_view_id: null,

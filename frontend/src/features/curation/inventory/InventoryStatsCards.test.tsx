@@ -18,8 +18,6 @@ const stats: CurationSessionStats = {
   paused_sessions: 6,
   submitted_sessions: 33,
   rejected_sessions: 5,
-  assigned_to_current_user: 9,
-  assigned_to_others: 14,
   submitted_last_7_days: 11,
 }
 
@@ -50,7 +48,8 @@ describe('InventoryStatsCards', () => {
 
     expect(screen.getByText('In Progress')).toBeInTheDocument()
     expect(screen.getByText('41')).toBeInTheDocument()
-    expect(screen.getByText('9 by you, 14 by others')).toBeInTheDocument()
+    expect(screen.getByText('started, not yet submitted')).toBeInTheDocument()
+    expect(screen.queryByText(/by others/)).not.toBeInTheDocument()
 
     expect(screen.getByText('Submitted')).toBeInTheDocument()
     expect(screen.getByText('33')).toBeInTheDocument()

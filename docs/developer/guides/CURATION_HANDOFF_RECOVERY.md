@@ -28,7 +28,8 @@ Bootstrap replays the matching persisted prep result. If only canonical flow
 extraction results exist, it performs deterministic prep first. It then refreshes
 validation/materialization with the current caller's trusted user/group context
 and reuses the prepared session instead of duplicating it. Verify the returned
-session ID, candidate count, assigned curator, and validation findings.
+session ID, candidate count, owner (the session is private to the curator
+who bootstraps it), and validation findings.
 
 This does not rerun the extraction model. It can run validators when saved
 envelopes have not already completed inline validation. Missing group context

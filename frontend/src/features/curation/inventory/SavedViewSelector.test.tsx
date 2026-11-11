@@ -16,10 +16,8 @@ function buildSavedView(overrides: Partial<CurationSavedView> = {}): CurationSav
     name: 'My pending sessions',
     description: 'Only active sessions assigned to me.',
     filters: {
-      inventory_scope: 'show_all',
       statuses: ['in_progress'],
       adapter_keys: ['gene'],
-      curator_ids: ['user-1'],
       tags: [],
       flow_run_id: null,
       origin_session_id: null,
@@ -64,10 +62,8 @@ function renderSelector(props: Partial<ComponentProps<typeof SavedViewSelector>>
       <ThemeProvider theme={theme}>
         <SavedViewSelector
           filters={{
-            inventory_scope: 'my_inventory',
             statuses: [],
             adapter_keys: ['gene'],
-            curator_ids: [],
             tags: [],
             flow_run_id: null,
             origin_session_id: null,
@@ -183,10 +179,8 @@ describe('SavedViewSelector', () => {
     const user = userEvent.setup()
     const { onApplyView } = renderSelector({
       filters: {
-        inventory_scope: 'show_all',
         statuses: ['in_progress'],
         adapter_keys: ['gene'],
-        curator_ids: [],
         tags: [],
         flow_run_id: null,
         origin_session_id: 'chat-session-12',
@@ -231,7 +225,8 @@ describe('SavedViewSelector', () => {
     })
     expect(requestBody.filters.origin_session_id).toBeNull()
     expect(requestBody.filters.saved_view_id).toBeNull()
-    expect(requestBody.filters.inventory_scope).toBe('show_all')
+    expect(requestBody.filters).not.toHaveProperty('inventory_scope')
+    expect(requestBody.filters).not.toHaveProperty('curator_ids')
     expect(requestBody.filters.statuses).toEqual(['in_progress'])
   }, 20_000)
 

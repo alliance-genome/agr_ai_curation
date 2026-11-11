@@ -161,7 +161,6 @@ export const CURATION_SESSION_SORT_FIELDS = [
   'candidate_count',
   'validation',
   'evidence',
-  'curator',
 ] as const
 
 export type CurationSessionSortField = (typeof CURATION_SESSION_SORT_FIELDS)[number]
@@ -476,15 +475,9 @@ export interface CurationActionLogEntry {
   metadata: Record<string, unknown>
 }
 
-export const CURATION_INVENTORY_SCOPES = ['my_inventory', 'my_organization', 'show_all'] as const
-export type CurationInventoryScope = (typeof CURATION_INVENTORY_SCOPES)[number]
-export const DEFAULT_CURATION_INVENTORY_SCOPE: CurationInventoryScope = 'my_inventory'
-
 export interface CurationSessionFilters {
-  inventory_scope?: CurationInventoryScope
   statuses?: CurationSessionStatus[]
   adapter_keys?: string[]
-  curator_ids?: string[]
   tags?: string[]
   flow_run_id?: string | null
   origin_session_id?: string | null
@@ -588,7 +581,6 @@ export interface CurationSessionSummary {
   validation?: CurationValidationSummary | null
   evidence?: CurationEvidenceSummary | null
   current_candidate_id?: string | null
-  assigned_curator?: CurationActorRef | null
   created_by?: CurationActorRef | null
   prepared_at: string
   last_worked_at?: string | null
@@ -641,8 +633,6 @@ export interface CurationSessionStats {
   paused_sessions: number
   submitted_sessions: number
   rejected_sessions: number
-  assigned_to_current_user: number
-  assigned_to_others: number
   submitted_last_7_days: number
 }
 
@@ -777,7 +767,6 @@ export interface CurationBenchmarkHandoffResponse {
 export interface CurationSessionCreateRequest {
   document_id: string
   adapter_key: string
-  curator_id?: string | null
   seed_extraction_result_ids?: string[]
   notes?: string | null
 }
@@ -791,7 +780,6 @@ export interface CurationDocumentBootstrapRequest {
   adapter_key?: string | null
   flow_run_id?: string | null
   origin_session_id?: string | null
-  curator_id?: string | null
 }
 
 export interface CurationDocumentBootstrapResponse {
@@ -810,7 +798,6 @@ export interface CurationSessionUpdateRequest {
   intent_generation?: number | null
   status?: CurationSessionStatus | null
   notes?: string | null
-  curator_id?: string | null
   current_candidate_id?: string | null
 }
 
