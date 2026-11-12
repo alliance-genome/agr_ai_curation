@@ -368,3 +368,48 @@ async def test_curator_bearer_checksum_match_keeps_reference_level_text():
 
     assert decision.status is ChecksumImportDecisionStatus.READY
     assert decision.selected.converted_artifact.artifact_id == "30"
+
+
+def _no_mod_abc() -> _AllAccessABC:
+    abc = _AllAccessABC("FB")
+    abc.files[0]["referencefile_mods"] = [{"mod_abbreviation": None}]
+    return abc
+
+
+@pytest.mark.asyncio
+async def test_dev_user_without_groups_cannot_import_a_no_mod_paper(monkeypatch):
+    # ABC grants a no-MOD file only to a caller with some MOD access; the
+    # default dev identity maps to no configured group.
+    context = await _dev_context(monkeypatch, "")
+    assert context.authorized_group_ids == ()
+    abc = _no_mod_abc()
+
+    decision = await select_reference_import_candidate(
+        provider=abc.provider(),
+        identifier="AGRKB:101",
+        authorized_group_ids=context.authorized_group_ids,
+        bearer_kind=context.bearer_kind,
+        request_bearer_token=context.curator_token,
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.ACCESS_DENIED
+    assert abc.downloads() == []
+
+
+@pytest.mark.asyncio
+async def test_dev_user_with_any_group_can_import_a_no_mod_paper(monkeypatch):
+    context = await _dev_context(monkeypatch, "SGD")
+    abc = _no_mod_abc()
+
+    decision = await select_reference_import_candidate(
+        provider=abc.provider(),
+        identifier="AGRKB:101",
+        authorized_group_ids=context.authorized_group_ids,
+        bearer_kind=context.bearer_kind,
+        request_bearer_token=context.curator_token,
+        allow_conversion_request=False,
+    )
+
+    assert decision.status is ReferenceImportDecisionStatus.READY
+    assert decision.selected is not None

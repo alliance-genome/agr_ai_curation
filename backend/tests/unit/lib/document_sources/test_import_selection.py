@@ -1121,3 +1121,132 @@ async def test_select_checksum_import_candidate_requires_checksum():
             checksum=" ",
             authorized_group_ids=(),
         )
+
+
+class _ABCByMd5Client:
+    """ABC client double serving only ``by_md5`` (``ReferencefileByMd5MatchSchema``)."""
+
+    def __init__(self, payload: list[dict[str, object]]):
+        self.payload = payload
+
+    async def lookup_referencefile_by_md5(
+        self,
+        md5sum: str,
+        *,
+        request_bearer_token: str | None = None,
+    ) -> list[dict[str, object]]:
+        return self.payload
+
+
+def _abc_by_md5_source(
+    *mods: str | None,
+    open_access: bool = False,
+) -> dict[str, object]:
+    return {
+        "referencefile_id": 10,
+        "reference_id": 101,
+        "reference_curie": "AGRKB:101",
+        "display_name": "WBPaper00067001",
+        "file_class": "main",
+        "file_publication_status": "final",
+        "file_extension": "pdf",
+        "pdf_type": "pdf",
+        "md5sum": "abc123",
+        "is_annotation": False,
+        "open_access": open_access,
+        "copyright_license_name": None,
+        "referencefile_mods": [
+            {"referencefile_mod_id": 7000 + index, "mod_abbreviation": mod}
+            for index, mod in enumerate(mods)
+        ],
+        "converted_referencefiles": [
+            {
+                "referencefile_id": 11,
+                "display_name": "WBPaper00067001_nxml",
+                "file_class": "converted_merged_main",
+                "file_extension": "md",
+            }
+        ],
+    }
+
+
+async def _abc_checksum_decision(
+    payload: dict[str, object],
+    authorized_group_ids: tuple[str, ...],
+):
+    provider = ABCLiteratureDocumentSourceProvider(
+        client=_ABCByMd5Client([payload])  # type: ignore[arg-type]
+    )
+    return await select_checksum_import_candidate(
+        bearer_kind=ProviderBearerKind.CURATOR,
+        provider=provider,
+        checksum="abc123",
+        authorized_group_ids=authorized_group_ids,
+        allow_conversion_request=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_null_and_wb_source_is_importable_by_non_wb_curator():
+    decision = await _abc_checksum_decision(_abc_by_md5_source(None, "WB"), ("FB",))
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+    assert decision.selected is not None
+    assert decision.selected.source_artifact.artifact_id == "10"
+    assert decision.selected.converted_artifact is not None
+    assert decision.selected.converted_artifact.artifact_id == "11"
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_open_access_wb_source_is_importable_by_non_wb_curator():
+    decision = await _abc_checksum_decision(
+        _abc_by_md5_source("WB", open_access=True), ("FB",)
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_wb_only_source_stays_denied_for_non_wb_curator():
+    decision = await _abc_checksum_decision(_abc_by_md5_source("WB"), ("FB",))
+
+    assert decision.status is ChecksumImportDecisionStatus.ACCESS_DENIED
+    assert decision.selected is None
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_source_without_mod_entries_stays_denied():
+    decision = await _abc_checksum_decision(_abc_by_md5_source(), ("WB",))
+
+    assert decision.status is ChecksumImportDecisionStatus.ACCESS_DENIED
+    assert decision.selected is None
+
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_no_mod_source_is_denied_to_a_caller_without_groups():
+    decision = await _abc_checksum_decision(_abc_by_md5_source(None, "WB"), ())
+
+    assert decision.status is ChecksumImportDecisionStatus.ACCESS_DENIED
+
+
+@pytest.mark.asyncio
+async def test_abc_checksum_open_access_source_is_allowed_to_a_caller_without_groups():
+    decision = await _abc_checksum_decision(
+        _abc_by_md5_source("WB", open_access=True), ()
+    )
+
+    assert decision.status is ChecksumImportDecisionStatus.READY
+
+
+@pytest.mark.parametrize(
+    ("authorized_group_ids", "expected"),
+    [((), False), (("anything",), True)],
+)
+def test_any_group_scope_needs_at_least_one_authorized_group(authorized_group_ids, expected):
+    artifact = _source("source-1", scope=SourceAccessScope.ANY_GROUP)
+
+    assert (
+        source_artifact_is_authorized(artifact, authorized_group_ids=authorized_group_ids)
+        is expected
+    )

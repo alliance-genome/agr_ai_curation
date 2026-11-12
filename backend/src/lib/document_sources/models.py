@@ -25,8 +25,17 @@ class DocumentSourceAccessDenied(DocumentSourceError):
 
 
 class SourceAccessScope(str, Enum):
+    """Who may import a provider artifact.
+
+    ``GLOBAL``: any caller, including one with no authorized group.
+    ``ANY_GROUP``: any caller with at least one authorized group.
+    ``RESTRICTED``: a caller with one of the policy's ``group_ids``.
+    ``UNKNOWN``: nobody.
+    """
+
     UNKNOWN = "unknown"
     GLOBAL = "global"
+    ANY_GROUP = "any_group"
     RESTRICTED = "restricted"
 
 
@@ -192,6 +201,15 @@ class DocumentSourceProvider(Protocol):
 
     def is_main_text_artifact(self, artifact: SourceArtifact) -> bool:
         """Return whether a converted text artifact is provider-designated main text."""
+        raise NotImplementedError
+
+    def is_reference_source_artifact(self, artifact: SourceArtifact) -> bool:
+        """Return whether a source PDF is a candidate main document for its reference.
+
+        Identifier imports consider only these PDFs as the paper; other source
+        PDFs (for example supplements or superseded files) are never imported
+        as the paper, even when they are the only accessible one.
+        """
         raise NotImplementedError
 
     def checksum_match_uses_local_pdf(self, source_artifact: SourceArtifact) -> bool:

@@ -480,6 +480,9 @@ class _FakeSourceProvider:
     def main_text_artifact_sort_key(self, artifact):
         return (0,)
 
+    def is_reference_source_artifact(self, artifact):
+        return True
+
     def reference_source_artifact_sort_key(self, artifact, authorized_group_ids):
         return (0,)
 

@@ -438,10 +438,12 @@ def _access_policy_is_authorized(
 ) -> bool:
     if access_policy.scope is SourceAccessScope.GLOBAL:
         return True
+    authorized = _normalize_group_ids(authorized_group_ids)
+    if access_policy.scope is SourceAccessScope.ANY_GROUP:
+        return bool(authorized)
     if access_policy.scope is not SourceAccessScope.RESTRICTED:
         return False
 
-    authorized = _normalize_group_ids(authorized_group_ids)
     required = _normalize_group_ids(access_policy.group_ids)
     return bool(authorized.intersection(required))
 

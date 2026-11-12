@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from enum import Enum
 import logging
 import re
 from typing import Any, Self, TypeGuard
@@ -49,6 +50,11 @@ _CROSS_REFERENCE_PREFIX_KEYS = {
     "DOI": "doi",
     "PMCID": "pmcid",
 }
+
+# Artifact metadata key holding a file's named MODs from ``referencefile_mods``.
+# Source-PDF ranking reads it; the access policy records named MODs only when
+# they restrict the file.
+_MOD_ABBREVIATIONS_METADATA_KEY = "mod_abbreviations"
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +193,20 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         display_name = str(artifact.display_name or "").strip().lower()
         return (0,) if "_nxml" in display_name else (1,)
 
+    def is_reference_source_artifact(self, artifact: SourceArtifact) -> bool:
+        """Accept any ``main``-class PDF file as a candidate for the paper.
+
+        Supplements and every other file class are never the paper an
+        identifier import brings in. Main PDFs of any publication status or
+        PDF type stay candidates: some older papers hold only an OCR or TIF
+        scan, and the ranking puts ABC's standard final PDF first.
+        """
+
+        return (
+            str(artifact.metadata.get("file_class") or "").strip().casefold() == "main"
+            and artifact.artifact_format is SourceArtifactFormat.PDF
+        )
+
     def reference_source_artifact_sort_key(
         self,
         artifact: SourceArtifact,
@@ -194,44 +214,56 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
     ) -> tuple[int, ...]:
         """Prefer a curator's MOD PDF over ABC's shared PMC fallback.
 
-        ABC intentionally keeps one final main PDF per MOD plus at most one
-        shared/null-MOD PMC PDF. Its own main-PDF lookup first restricts the
-        candidates to final main PDFs whose PDF type is ``pdf``, then applies
-        this precedence for a requested MOD. Equal MOD-specific ranks remain
-        tied so callers do not guess when a curator genuinely spans multiple
-        MODs. Supplements and non-final PDFs never outrank a canonical main.
+        Callers rank only main PDFs (``is_reference_source_artifact``). ABC
+        intentionally keeps one final main PDF per MOD plus at most one
+        shared/null-MOD PMC PDF. Its own main-PDF lookup considers only final
+        main PDFs whose PDF type is ``pdf`` and applies this precedence for a
+        requested MOD: a PDF with an entry for that MOD, then a PDF with a
+        no-MOD entry. Other main PDFs (OCR or TIF scans, temporary files, a
+        null ``pdf_type``) rank after every standard final PDF, so they are
+        imported only when the reference has no standard final PDF the curator
+        may use; among them the same MOD order applies. The MOD tier reads the file's own MOD
+        entries, so a PDF tagged both no-MOD and with the curator's MOD still
+        ranks first.
+
+        Below ABC's precedence, AI Curation adds its own tie-break, which ABC
+        does not have (ABC takes whichever no-MOD PDF it reads first): among
+        PDFs open beyond the curator's MOD (``GLOBAL`` or ``ANY_GROUP``), one
+        with no named MOD entries (the general copy) outranks one that also
+        names another MOD. This keeps the general copy and avoids an
+        ambiguous-match error when a reference holds both. Any remaining equal
+        ranks stay tied so callers do not guess, for example when a curator
+        spans several MODs or two PDFs are both no-MOD only.
         """
 
-        file_class = str(artifact.metadata.get("file_class") or "").strip().casefold()
         publication_status = str(
             artifact.metadata.get("file_publication_status") or ""
         ).strip().casefold()
         pdf_type = str(artifact.metadata.get("pdf_type") or "").strip().casefold()
-        if not (
-            file_class == "main"
-            and publication_status == "final"
-            and pdf_type == "pdf"
-        ):
-            return (20,)
+        # Every standard final PDF (ABC's own main-PDF candidates) before any
+        # other main PDF; the MOD order below applies within each tier.
+        tier = 0 if publication_status == "final" and pdf_type == "pdf" else 1
 
         authorized = {
             str(group_id).strip().casefold()
             for group_id in authorized_group_ids
             if str(group_id).strip()
         }
-        artifact_group_ids = {
-            group_id.strip().casefold()
-            for group_id in artifact.access_policy.group_ids
-            if group_id.strip()
+        artifact_mods = {
+            str(mod).strip().casefold()
+            for mod in artifact.metadata.get(_MOD_ABBREVIATIONS_METADATA_KEY) or ()
+            if str(mod).strip()
         }
-        if (
-            artifact.access_policy.scope is SourceAccessScope.RESTRICTED
-            and authorized.intersection(artifact_group_ids)
-        ):
-            return (0,)
-        if artifact.access_policy.scope is SourceAccessScope.GLOBAL:
-            return (1,)
-        return (10,)
+        if authorized.intersection(artifact_mods):
+            return (tier, 0)
+        if artifact.access_policy.scope in {
+            SourceAccessScope.GLOBAL,
+            SourceAccessScope.ANY_GROUP,
+        }:
+            # AI Curation's own tie-break (not ABC's): the general copy, with no
+            # named MOD entries, before a shared PDF that names another MOD.
+            return (tier, 1) if not artifact_mods else (tier, 2)
+        return (tier, 10)
 
     def conversion_exposes_main_text(self, result: SourceConversionResult) -> bool:
         if "converted_merged_main" in result.converted_classes:
@@ -549,10 +581,21 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             and not _has_artifact_status_signal(payload)
         ):
             status = SourceArtifactStatus.AVAILABLE
+        mod_abbreviations = _extract_access_group_ids(payload)
         access_policy = inherited_access_policy or _map_access_policy(
             payload,
-            source_pdf_null_mods_are_global=role is SourceArtifactRole.SOURCE_PDF,
+            mod_abbreviations=mod_abbreviations,
+            source_pdf_null_mods_grant_any_group=role is SourceArtifactRole.SOURCE_PDF,
+            license_access=_license_access(payload, reference),
         )
+        metadata = dict(
+            _compact_metadata(
+                payload,
+                exclude={"converted_referencefiles", "referencefile_mods"},
+            )
+        )
+        if mod_abbreviations:
+            metadata[_MOD_ABBREVIATIONS_METADATA_KEY] = tuple(sorted(mod_abbreviations))
 
         return SourceArtifact(
             provider=self.provider_id,
@@ -566,10 +609,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             md5sum=_first_string(payload, "md5sum", "md5"),
             parent_artifact_id=parent_artifact_id,
             access_policy=access_policy,
-            metadata=_compact_metadata(
-                payload,
-                exclude={"converted_referencefiles", "referencefile_mods"},
-            ),
+            metadata=metadata,
         )
 
 
@@ -773,21 +813,71 @@ def _extract_external_ids(
     return external_ids
 
 
+class _LicenseAccess(Enum):
+    """What a reference's copyright license decides in ABC's ``download_file``."""
+
+    OPEN = "open"  # open_access true: every caller, even one with no MOD access
+    REFUSED = "refused"  # license with open_access unset: no caller at all
+    MOD_RULE = "mod_rule"  # no license, or open_access false: the MOD rows decide
+
+
+def _license_access(
+    payload: Mapping[str, Any],
+    reference: SourceReference | str | None,
+) -> _LicenseAccess:
+    """Read the license decision from the structured ABC fields in hand.
+
+    ``by_md5`` rows send ``open_access`` as ``bool(license and
+    license.open_access)``, so there an unset flag cannot be told from
+    ``false`` and applies the MOD rule. The reference record
+    (``ReferenceSchemaShow``, held when listing an identifier import's files)
+    sends ``copyright_license_name`` (non-null in ABC whenever a license is
+    set) and the raw ``copyright_license_open_access``, so a license whose flag
+    is unset is recognized and, as in ABC, refused. A bare curie or id carries
+    no record and applies the MOD rule.
+    """
+
+    if payload.get("open_access") is True:
+        return _LicenseAccess.OPEN
+    if not isinstance(reference, SourceReference):
+        return _LicenseAccess.MOD_RULE
+    open_access = reference.metadata.get("copyright_license_open_access")
+    if open_access is True:
+        return _LicenseAccess.OPEN
+    if open_access is None and reference.metadata.get("copyright_license_name"):
+        return _LicenseAccess.REFUSED
+    return _LicenseAccess.MOD_RULE
+
+
 def _map_access_policy(
     payload: Mapping[str, Any],
     *,
-    source_pdf_null_mods_are_global: bool,
+    mod_abbreviations: set[str],
+    source_pdf_null_mods_grant_any_group: bool,
+    license_access: _LicenseAccess,
 ) -> SourceAccessPolicy:
-    group_ids = _extract_access_group_ids(payload)
-    if group_ids:
+    """Map one ABC file row to the access ABC's ``download_file`` grants.
+
+    ABC serves a file when its reference's copyright license is open access
+    (any caller); otherwise, unless the license's flag is unset (no caller),
+    to a caller with some MOD access when any ``referencefile_mods`` row has
+    no MOD, or to a caller whose MOD a row names. The no-MOD grant is honored
+    only on source PDFs: converted rows inherit their source PDF's policy, and
+    a no-MOD row on a converted row alone grants nothing. A file with no
+    usable MOD rows and no open-access signal stays ``UNKNOWN`` and is denied.
+    """
+
+    if license_access is _LicenseAccess.OPEN:
+        return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
+    if license_access is _LicenseAccess.REFUSED:
+        return SourceAccessPolicy(scope=SourceAccessScope.UNKNOWN)
+    if source_pdf_null_mods_grant_any_group and _has_null_mod_entry(payload):
+        return SourceAccessPolicy(scope=SourceAccessScope.ANY_GROUP)
+    if mod_abbreviations:
         return SourceAccessPolicy(
             scope=SourceAccessScope.RESTRICTED,
-            group_ids=tuple(sorted(group_ids)),
+            group_ids=tuple(sorted(mod_abbreviations)),
         )
-    if source_pdf_null_mods_are_global and _has_null_mod_entry(payload):
-        return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
-    if payload.get("open_access") is True:
-        return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
     return SourceAccessPolicy(scope=SourceAccessScope.UNKNOWN)
 
 
