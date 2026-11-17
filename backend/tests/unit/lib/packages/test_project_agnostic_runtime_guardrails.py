@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest  # type: ignore[reportMissingImports]
 import yaml
+import src.config as app_config
 import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 import src.lib.domain_packs.registry as domain_pack_registry_module
 from src.lib.agent_studio import flow_tools, runtime_validation
@@ -605,6 +606,9 @@ async def test_core_plus_org_custom_runtime_loads_without_alliance_package(monke
     assert callback_calls == {"factory": 0, "development_reader_resolver": 0}
     from src.lib.document_sources import access, dev_reader_auth
 
+    # On an EC2 host (including AWS-hosted CI runners) the real EC2 check
+    # blocks DEV_MODE; this test covers a local development run.
+    monkeypatch.setattr(app_config, "_ec2_detection_cache", False)
     monkeypatch.setenv("DEV_MODE", "true")
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_ENABLED", "true")
     monkeypatch.setenv("DOCUMENT_SOURCE_PROVIDER", "example_literature")

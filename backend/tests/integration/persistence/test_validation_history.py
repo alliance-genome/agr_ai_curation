@@ -1967,3 +1967,84 @@ def test_history_import_and_exclusions_reject_missing_or_wrong_source_owner(scop
     function = import_historical_extraction if operation == "import" else retained_extraction_reason
     with pytest.raises(ValueError, match="matching authorized owner"):
         function(str(source_id))
+
+
+_NUL_SENTENCE = "Synthetic marker +/\x00 sentence for a null-character regression."
+_NUL_STRIPPED = "Synthetic marker +/ sentence for a null-character regression."
+
+
+def test_null_character_content_is_stored_once_under_one_identity(scope):
+    """PostgreSQL JSONB rejects U+0000; history stores and hashes the stripped text.
+
+    Every write is repeated with the original (unstripped) value to prove that
+    idempotent re-records and expected-digest checks still agree with the
+    stored body instead of raising a content-identity conflict.
+    """
+    import json
+    from copy import deepcopy
+    from src.lib.validation_history.checkpoints import (
+        read_checkpoint_body,
+        write_checkpoint_body,
+    )
+    from src.models.sql.validation_history import ValidationBody
+
+    normalized = {
+        "envelope_id": "nul-" + uuid4().hex,
+        "metadata": {"evidence_records": [{"verified_quote": _NUL_SENTENCE}]},
+        "extracted_objects": [{"payload": {"mention": _NUL_SENTENCE, "nested": [_NUL_SENTENCE]}}],
+        "key\x00with_nul": _NUL_SENTENCE,
+    }
+    capture = dict(
+        producer_id="nul-producer",
+        subject_kind="extracted",
+        typed={"quote": _NUL_SENTENCE},
+        normalized=deepcopy(normalized),
+        provenance={"note": _NUL_SENTENCE},
+    )
+    aid = h.capture_baseline(scope, **deepcopy(capture))
+    assert h.capture_baseline(scope, **deepcopy(capture)) == aid
+
+    baseline = h.read_baseline(scope, aid)
+    saved = baseline["normalized"]
+    assert saved["metadata"]["evidence_records"][0]["verified_quote"] == _NUL_STRIPPED
+    assert saved["extracted_objects"][0]["payload"] == {
+        "mention": _NUL_STRIPPED, "nested": [_NUL_STRIPPED],
+    }
+    assert saved["keywith_nul"] == _NUL_STRIPPED
+    assert baseline["typed"] == {"quote": _NUL_STRIPPED}
+    assert baseline["provenance"]["note"] == _NUL_STRIPPED
+    assert baseline["sha256"] == h.canonical({"typed": capture["typed"], "normalized": normalized})[0]
+    assert "\\u0000" not in json.dumps(baseline)
+
+    tid = h.register_target(scope, aid, identity="nul", original={"value": _NUL_SENTENCE})
+    assert h.register_target(scope, aid, identity="nul", original={"value": _NUL_SENTENCE}) == tid
+    request = {"evidence": [{"quote": _NUL_SENTENCE}]}
+    att = attempt(scope, aid, tid, key="nul-run", request=deepcopy(request))
+    # Redelivery of the same operation compares the stored input with the unstripped request.
+    assert attempt(scope, aid, tid, key="nul-run", request=deepcopy(request)) == att
+    assert h.read_fact(scope, aid, att)["content"]["input"]["request"] == {
+        "evidence": [{"quote": _NUL_STRIPPED}]
+    }
+    result = {"explanation": _NUL_SENTENCE}
+    completion = h.complete_attempt(
+        scope, aid, att, state="completed", result=result, diagnostics={"raw": _NUL_SENTENCE}
+    )
+    assert h.complete_attempt(
+        scope, aid, att, state="completed", result=result, diagnostics={"raw": _NUL_SENTENCE}
+    ) == completion
+    assert h.read_fact(scope, aid, completion)["content"]["result"] == {"explanation": _NUL_STRIPPED}
+
+    first = {"quote": _NUL_SENTENCE, "items": [{"value": 1}]}
+    second = {"quote": _NUL_SENTENCE + " later", "items": [{"value": 1}, {"text": _NUL_SENTENCE}]}
+    with SessionLocal.begin() as db:
+        first_sha = write_checkpoint_body(db, first, previous_payload=None, previous_sha=None)
+        # The in-memory predecessor still holds NUL; its digest matches the stored body.
+        second_sha = write_checkpoint_body(
+            db, second, previous_payload=first, previous_sha=first_sha
+        )
+        assert read_checkpoint_body(db, first_sha) == {"quote": _NUL_STRIPPED, "items": [{"value": 1}]}
+        assert read_checkpoint_body(db, second_sha) == {
+            "quote": _NUL_STRIPPED + " later",
+            "items": [{"value": 1}, {"text": _NUL_STRIPPED}],
+        }
+        assert "\\u0000" not in json.dumps(db.get(ValidationBody, second_sha).content)

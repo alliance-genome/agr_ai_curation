@@ -620,3 +620,68 @@ def test_inline_persistence_rejects_legacy_row_source(db_session, document_id):
             payload=legacy_payload,
             origin_session_id=f"inline-legacy-session-{uuid4()}",
         )
+
+
+def test_null_character_quote_is_saved_identically_in_history_and_extraction_result(
+    db_session, document_id
+):
+    """Production regression (v0.11.8): a quoted sentence holding U+0000.
+
+    The specialist's envelope is captured into validation history (JSONB
+    ``validation_bodies``) and then persisted as the extraction result, in the
+    same order as the inline chat/flow path. Both stores must accept it and hold
+    the same stripped text; a retried capture of the same output must reuse the
+    saved baseline instead of reporting a content-identity conflict.
+    """
+    from src.lib.validation_history import store as history_store
+    from src.lib.validation_history.runtime import capture_extraction
+    from src.schemas.domain_envelope import DomainEnvelope
+
+    sentence = "Synthetic marker +/\x00 sentence for a null-character regression."
+    stripped = "Synthetic marker +/ sentence for a null-character regression."
+    session_id = f"inline-nul-session-{uuid4()}"
+    payload = _canonical_gene_envelope()
+    payload["extracted_objects"][0]["payload"]["mention"] = sentence
+    payload["metadata"]["evidence_records"][0]["verified_quote"] = sentence
+    scope = history_store.HistoryScope(
+        "test_pdf_owner_inline_extraction", str(document_id), session_id
+    )
+
+    def capture():
+        return capture_extraction(
+            scope=scope, producer_id=payload["envelope_id"], typed=copy.deepcopy(payload),
+            envelope=DomainEnvelope.model_validate(copy.deepcopy(payload)),
+            provenance={"test": "inline-nul"},
+        )
+
+    captured = capture()
+    retried = capture()
+    reference = captured.metadata["validation_history"]
+    assert retried.metadata["validation_history"] == reference
+
+    result = persist_inline_validated_extraction_result(
+        payload_json=captured.model_dump(mode="json"),
+        document_id=document_id,
+        agent_key="gene",
+        adapter_key="gene",
+        tool_name="ask_gene_specialist",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        origin_session_id=session_id,
+        trace_id="trace-inline-nul",
+        user_id="test_pdf_owner_inline_extraction",
+        builder_finalization=dict(_BUILDER_FINALIZATION),
+        db=db_session,
+    )
+    db_session.commit()
+    db_session.expire_all()
+    row = db_session.get(ExtractionResultModel, result.extraction_result_id)
+
+    baseline = history_store.read_baseline(scope, reference["artifact_id"])
+    saved = baseline["normalized"]
+    assert baseline["typed"]["metadata"]["evidence_records"][0]["verified_quote"] == stripped
+    for stored in (saved, row.payload_json):
+        assert stored["metadata"]["evidence_records"][0]["verified_quote"] == stripped
+        assert stored["extracted_objects"][0]["payload"]["mention"] == stripped
+    assert row.payload_json["extracted_objects"][0]["payload"] == saved["extracted_objects"][0]["payload"]
+    # Both stores name the same stripped content with the same canonical encoding.
+    assert row.payload_hash == history_store.canonical(row.payload_json)[0]

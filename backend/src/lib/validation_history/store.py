@@ -17,6 +17,7 @@ from sqlalchemy import event, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from src.lib.persistence_sanitization import sanitize_persisted_json_value
 from src.models.sql.database import SessionLocal
 from src.models.sql.validation_history import (
     ValidationArtifact,
@@ -67,8 +68,14 @@ class HistoryScope:
 
 
 def canonical(value: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    # PostgreSQL JSONB cannot store NUL, so identity is computed over the form
+    # that is saved. Extraction results strip NUL the same way.
     encoded = json.dumps(
-        value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+        sanitize_persisted_json_value(value),
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        allow_nan=False,
     )
     return sha256(encoded.encode()).hexdigest(), json.loads(encoded)
 
