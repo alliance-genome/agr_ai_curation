@@ -22,6 +22,7 @@ from agr_ai_curation_alliance.literature.client import (
     ABCLiteratureClient,
     ABCLiteratureClientConfig,
 )
+import src.config as app_config
 from src.api import auth as api_auth
 from src.lib.document_sources import access
 from src.lib.document_sources.identifier_import import (
@@ -111,6 +112,9 @@ class _AllAccessABC:
 async def _dev_context(monkeypatch, dev_user_groups: str):
     """Build the real login-free development identity and request context."""
 
+    # On an EC2 host (including AWS-hosted CI runners) the real EC2 check
+    # blocks DEV_MODE; these tests cover a local development run.
+    monkeypatch.setattr(app_config, "_ec2_detection_cache", False)
     monkeypatch.setenv("DEV_MODE", "true")
     monkeypatch.setenv("DOCUMENT_SOURCE_IMPORT_ENABLED", "true")
     monkeypatch.setenv("DOCUMENT_SOURCE_PROVIDER", "abc_literature")
