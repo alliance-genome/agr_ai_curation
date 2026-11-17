@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from src.lib.persistence_sanitization import sanitize_persisted_json_value
+
 from . import store
 
 
@@ -28,15 +30,22 @@ def capture_extraction(
         "validation_history" in obj.metadata for obj in envelope.extracted_objects
     ):
         raise store.HistoryConflict("New extraction already carries a history identity")
+    normalized = envelope.model_dump(mode="json")
+    stored = sanitize_persisted_json_value(normalized)
     artifact_id = store.capture_baseline(
         scope,
         producer_id=producer_id,
         subject_kind=subject_kind,
         typed=typed,
-        normalized=envelope.model_dump(mode="json"),
+        normalized=normalized,
         provenance=provenance,
     )
-    updated = envelope.model_copy(deep=True)
+    # One rule: continue with the stored form when it differs (NUL removed, see store.canonical).
+    updated = (
+        envelope.model_copy(deep=True)
+        if stored == normalized
+        else type(envelope).model_validate(stored)
+    )
     root_target = store.register_target(
         scope,
         artifact_id,
