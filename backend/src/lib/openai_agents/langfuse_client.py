@@ -18,7 +18,22 @@ import logging
 from contextvars import ContextVar
 from typing import List, Dict, Any, Optional
 
+from src.lib.observability.langfuse import report_langfuse_failure
+
 logger = logging.getLogger(__name__)
+
+# Langfuse logs rejected credentials before raising or returning False. The
+# caller owns that report. Keep unrelated SDK activity eligible for promotion.
+_auth_check_active = ContextVar("langfuse_auth_check_active", default=False)
+
+
+def _mark_auth_check_log(record: logging.LogRecord) -> bool:
+    if _auth_check_active.get():
+        record.sentry_skip_event = True
+    return True
+
+
+logging.getLogger("langfuse").addFilter(_mark_auth_check_log)
 
 # Flag to track if we've logged the observe decorator fallback warning
 _observe_fallback_warned = False
@@ -85,10 +100,7 @@ def initialize_langfuse():
     global _langfuse_client
 
     if not is_langfuse_configured():
-        logger.warning(
-            "Langfuse not configured. Set LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, "
-            "and LANGFUSE_SECRET_KEY environment variables."
-        )
+        logger.info("Langfuse not configured")
         return None
 
     try:
@@ -115,27 +127,27 @@ def initialize_langfuse():
             public_key=public_key,
             secret_key=secret_key,
         )
-        if not _instrument_openai_agents_tracing():
-            logger.warning(
-                "OpenAI Agents SDK tracing was not instrumented; Langfuse will only "
-                "receive manually-created application observations."
-            )
-
-        # Test connection
-        try:
-            auth_result = _langfuse_client.auth_check()
-            logger.info("Initialized and authenticated: %s", auth_result)
-        except Exception as auth_error:
-            logger.warning("Auth check failed (server may be starting): %s", auth_error)
-
-        return _langfuse_client
-
-    except ImportError:
-        logger.error("langfuse package not installed. Run: pip install langfuse")
+    except Exception as exc:
+        report_langfuse_failure("initialization_failed", exc)
         return None
-    except Exception as e:
-        logger.error("Failed to initialize Langfuse: %s", e)
+
+    if _langfuse_client is None:
+        report_langfuse_failure("initialization_failed")
         return None
+
+    _instrument_openai_agents_tracing()
+    auth_token = _auth_check_active.set(True)
+    try:
+        if _langfuse_client.auth_check():
+            logger.info("Langfuse initialized and authenticated")
+        else:
+            report_langfuse_failure("authentication_failed")
+    except Exception as exc:
+        report_langfuse_failure("authentication_failed", exc)
+    finally:
+        _auth_check_active.reset(auth_token)
+
+    return _langfuse_client
 
 
 def get_langfuse():
@@ -148,12 +160,12 @@ def get_langfuse():
     return _langfuse_client
 
 
-def _instrument_openai_agents_tracing() -> bool:
+def _instrument_openai_agents_tracing() -> None:
     """Install the OpenInference processor that exports Agents SDK traces to Langfuse."""
     global _openai_agents_instrumented
 
     if _openai_agents_instrumented:
-        return True
+        return
 
     try:
         from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
@@ -163,16 +175,8 @@ def _instrument_openai_agents_tracing() -> bool:
         install_cost_tracing()
         _openai_agents_instrumented = True
         logger.info("OpenAI Agents SDK tracing instrumented via OpenInference")
-        return True
-    except ImportError:
-        logger.error(
-            "openinference-instrumentation-openai-agents package not installed. "
-            "Install backend requirements to enable complete Langfuse agent tracing."
-        )
-        return False
-    except Exception as e:
-        logger.warning("Failed to instrument OpenAI Agents SDK tracing: %s", e)
-        return False
+    except Exception as exc:
+        report_langfuse_failure("instrumentation_failed", exc)
 
 
 def is_openai_agents_tracing_enabled() -> bool:
@@ -189,8 +193,8 @@ def flush_langfuse():
     if _langfuse_client is not None:
         try:
             _langfuse_client.flush()
-        except Exception as e:
-            logger.warning("Failed to flush Langfuse: %s", e)
+        except Exception as exc:
+            report_langfuse_failure("flush_failed", exc)
 
 
 def create_trace(

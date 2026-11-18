@@ -394,6 +394,15 @@ Both processes use the SDK's default atexit integration to flush pending Sentry
 events on process exit; the worker also retains its explicit Langfuse flush after
 claim tasks stop.
 
+Configured Langfuse failures report under component `langfuse` and group by
+operation (`initialization_failed`, `instrumentation_failed`,
+`authentication_failed`, or `flush_failed`). A configured initialization that
+returns no client reports once at the client boundary. Authentication and
+instrumentation failures retain the client for best-effort tracing. Reports
+carry the exception class when available. Application companion warnings and
+Langfuse SDK logs emitted during the authentication check skip event promotion.
+Workers continue claiming work even when tracing or reporting is unavailable.
+
 The worker uses the same Sentry configuration as its backend counterpart:
 development overrides `SENTRY_DSN` with `SENTRY_DEV_DSN` and reads release,
 environment and other settings from the shared dev env file; production passes

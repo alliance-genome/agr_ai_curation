@@ -2,11 +2,12 @@
 
 import asyncio
 import logging
+import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.persistence import BenchmarkLeaseLostError
@@ -192,7 +193,8 @@ def startup_runtime(monkeypatch):
     session.__exit__.side_effect = lambda *args: calls.append("close")
     prompts = MagicMock(side_effect=lambda db: calls.append("prompts"))
     groups = MagicMock(side_effect=lambda: calls.append("groups"))
-    tracing = MagicMock(side_effect=lambda: calls.append("tracing"))
+    real_initialize = langfuse_client.initialize_langfuse
+    tracing = MagicMock(side_effect=lambda: calls.append("tracing") or object())
     flush = MagicMock(side_effect=lambda: calls.append("flush"))
     monkeypatch.setattr(worker, "SessionLocal", factory)
     monkeypatch.setattr(cache, "initialize", prompts)
@@ -205,7 +207,7 @@ def startup_runtime(monkeypatch):
     monkeypatch.setattr(worker, "get_benchmark_worker_concurrency", lambda: 2)
     return SimpleNamespace(
         worker=worker, calls=calls, factory=factory, session=session, sentry_init=sentry_init,
-        prompts=prompts, groups=groups, tracing=tracing, flush=flush,
+        prompts=prompts, groups=groups, tracing=tracing, flush=flush, real_initialize=real_initialize,
     )
 
 
@@ -268,6 +270,8 @@ async def test_optional_tracing_never_blocks_claim_loops(
     from src.lib.openai_agents import langfuse_client
 
     state = startup_runtime
+    report = MagicMock()
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
     if tracing_outcome == "unconfigured":
         monkeypatch.setattr(langfuse_client, "is_langfuse_configured", lambda: False)
     elif tracing_outcome == "unavailable":
@@ -275,16 +279,26 @@ async def test_optional_tracing_never_blocks_claim_loops(
     elif tracing_outcome == "failed":
         state.tracing.side_effect = RuntimeError("private connection")
     else:
-        state.tracing.side_effect = None
-        state.tracing.return_value = None
+        # Exercise the real configured None path across both reporting boundaries.
+        monkeypatch.setattr(langfuse_client, "initialize_langfuse", state.real_initialize)
+        monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(Langfuse=MagicMock(return_value=None)))
+        monkeypatch.setattr(langfuse_client, "_langfuse_client", None)
     run = AsyncMock()
     monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
-    await state.worker._main()
+    with patch.dict("os.environ"):
+        await state.worker._main()
     assert run.await_count == 2
     assert "private connection" not in caplog.text
     state.flush.assert_called_once()
     if tracing_outcome == "unconfigured":
         state.tracing.assert_not_called()
+        report.assert_not_called()
+    else:
+        report.assert_called_once()
+        assert report.call_args.kwargs["operation"] == "initialization_failed"
+        assert "private connection" not in repr(report.call_args)
+        assert report.call_args.args[0].__context__ is None
+        assert all(record.sentry_skip_event for record in caplog.records if record.levelno >= logging.WARNING)
 
 
 @pytest.mark.asyncio
@@ -317,6 +331,8 @@ async def test_main_stops_siblings_before_best_effort_flush(
         state.calls.append("flush")
         raise RuntimeError("private tracing connection")
 
+    report = MagicMock(side_effect=RuntimeError("synthetic-private reporter error"))
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
     state.flush.side_effect = failing_flush
     monkeypatch.setattr(BenchmarkWorker, "run_forever", run)
     task = asyncio.create_task(state.worker._main())
@@ -327,6 +343,11 @@ async def test_main_stops_siblings_before_best_effort_flush(
         await task
     assert state.calls[-2:] == ["stopped", "flush"]
     assert "private tracing connection" not in caplog.text
+    assert "synthetic-private" not in caplog.text
+    report.assert_called_once()
+    assert report.call_args.kwargs["operation"] == "flush_failed"
+    assert report.call_args.args[0].__context__ is None
+    assert "private tracing connection" not in repr(report.call_args)
 
 
 @pytest.mark.asyncio
@@ -599,7 +620,6 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
     import json
     import os
     import subprocess
-    import sys
     import textwrap
 
     script = textwrap.dedent('''
@@ -608,6 +628,7 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
         from uuid import UUID
 
         import sentry_sdk
+        from langfuse import Langfuse
         from sentry_sdk.transport import Transport
         from src.lib.benchmarks import worker
         from src.lib.observability import sentry
@@ -624,6 +645,17 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
 
             def flush(self, timeout, callback=None):
                 print("SENTRY_EXIT_FLUSH=" + json.dumps(self.events))
+
+        class TestClient:
+            # Exercise the SDK's own logged auth failure and False outcome.
+            auth_check = Langfuse.auth_check
+
+            @property
+            def api(self):
+                raise AttributeError("synthetic-private-auth")
+
+            def flush(self):
+                raise ConnectionError("synthetic-private-trace")
 
         sdk_init = sentry_sdk.init
         def initialize(**kwargs):
@@ -642,8 +674,8 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
             patch.object(worker, "SessionLocal", MagicMock()),
             patch("src.lib.prompts.cache.initialize"),
             patch("src.lib.config.groups_loader.load_groups"),
-            patch("src.lib.openai_agents.langfuse_client.is_langfuse_configured", return_value=False),
-            patch("src.lib.openai_agents.langfuse_client.flush_langfuse"),
+            patch("langfuse.Langfuse", return_value=TestClient()),
+            patch("src.lib.openai_agents.langfuse_client._instrument_openai_agents_tracing"),
             patch.object(worker.BenchmarkWorker, "run_forever", AsyncMock(side_effect=run)),
         ):
             worker.main()
@@ -655,7 +687,10 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
         SENTRY_DSN="https://public@example.invalid/1",
         SENTRY_ENVIRONMENT="worker-test",
         SENTRY_RELEASE="synthetic-worker-release",
-        SENTRY_LOG_EVENT_LEVEL="ERROR",
+        SENTRY_LOG_EVENT_LEVEL="WARNING",
+        LANGFUSE_HOST="http://example.invalid",
+        LANGFUSE_PUBLIC_KEY="synthetic-private-public-key",
+        LANGFUSE_SECRET_KEY="synthetic-private-secret-key",
         BENCHMARK_WORKER_ENABLED="true",
         BENCHMARK_EXECUTION_ENABLED="true",
         BENCHMARK_WORKER_CONCURRENCY="1",
@@ -669,15 +704,20 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
         for line in completed.stdout.splitlines() if line.startswith("SENTRY_EXIT_FLUSH=")
     ]
     assert len(flushes) == 1
-    assert len(flushes[0]) == 1
-    event = flushes[0][0]
+    auth, event, flush = flushes[0]
+    for tracing_event, operation in ((auth, "authentication_failed"), (flush, "flush_failed")):
+        assert tracing_event["tags"]["runtime_component"] == "langfuse"
+        assert tracing_event["tags"]["operation"] == operation
+        assert tracing_event["fingerprint"] == ["langfuse", operation]
+        assert [value["type"] for value in tracing_event["exception"]["values"]] == ["RuntimeError"]
+    assert flush["contexts"]["runtime_exception"]["type"] == "ConnectionError"
     assert event["event_id"]
     assert event["release"] == "synthetic-worker-release"
     assert event["environment"] == "worker-test"
     assert event["tags"]["runtime_component"] == "benchmark_worker"
     assert event["tags"]["operation"] == "cell_execution_failed"
-    serialized = json.dumps(event)
-    assert "synthetic-private-value" not in serialized
+    serialized = json.dumps(flushes[0])
+    assert "synthetic-private" not in serialized
     assert "00000000-0000-0000-0000-000000000001" not in serialized
     assert [value["type"] for value in event["exception"]["values"]] == ["_BenchmarkWorkerError"]
 

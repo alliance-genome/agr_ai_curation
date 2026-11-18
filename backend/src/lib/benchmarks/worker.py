@@ -26,6 +26,7 @@ from src.lib.benchmarks.runtime import (
 )
 from src.lib.benchmarks.preparation_service import prepare_job_document
 from src.lib.benchmarks.stage_measurements import StageStart, StageFinish, observe_stages
+from src.lib.observability.langfuse import report_langfuse_failure
 from src.lib.openai_agents.config import (
     get_benchmark_cell_timeout_seconds,
     get_benchmark_execution_enabled,
@@ -634,15 +635,12 @@ def initialize_worker_runtime() -> None:
         )
 
         if is_langfuse_configured():
+            # The client reports configured failures before returning None.
             initialize_langfuse()
         else:
             logger.info("Langfuse not configured - benchmark worker tracing disabled")
     except Exception as exc:
-        logger.warning(
-            "Benchmark worker tracing initialization failed (non-fatal): %s",
-            type(exc).__name__,
-            exc_info=False,
-        )
+        report_langfuse_failure("initialization_failed", exc)
 
 
 def shutdown_worker_runtime() -> None:
@@ -652,11 +650,7 @@ def shutdown_worker_runtime() -> None:
 
         flush_langfuse()
     except Exception as exc:
-        logger.warning(
-            "Benchmark worker tracing flush failed (non-fatal): %s",
-            type(exc).__name__,
-            exc_info=False,
-        )
+        report_langfuse_failure("flush_failed", exc)
 
 
 async def _main() -> None:
