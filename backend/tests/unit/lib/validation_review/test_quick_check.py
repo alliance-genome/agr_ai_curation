@@ -106,6 +106,15 @@ def captured(monkeypatch):
     return sink
 
 
+def _assert_failure_report(captured, error_type):
+    [(exc, kwargs)] = captured.reports
+    assert str(exc) == "Validation review quick check failed"
+    assert exc.__traceback__ is not None
+    assert exc.__cause__ is None and exc.__context__ is None
+    assert kwargs == {"component": "validation_review", "operation": "quick_check_failed", "level": "warning",
+                      "context": {"exception_type": error_type}}
+
+
 async def _check(fake, packet, *, cache_key="p"):
     prepared = quick_check.prepare_check(packet, request=QUESTION)
     async with fake.client() as client:
@@ -343,7 +352,7 @@ async def test_more_than_400_questions_are_split_within_each_order(decisions):
 
 
 @pytest.mark.asyncio
-async def test_refused_questions_leave_the_record_with_the_supervisor(decisions):
+async def test_refused_questions_leave_the_record_with_the_supervisor(decisions, captured, monkeypatch):
     def respond(body):
         answers = _answers(body["questions"])
         if body["prompt_cache_key"].endswith(":reversed"):
@@ -352,7 +361,14 @@ async def test_refused_questions_leave_the_record_with_the_supervisor(decisions)
         return {"answers": answers, "usage": {"input_tokens": 10}}
 
     decisions.respond = respond
-    result = await _check(decisions, _packet())
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    with quick_check.review_scope(QUESTION, _source()):
+        quick_check.packet_pinned(_context(), PAGE)
+        await _drain()
+    [event] = captured.events
+    result = event["output_summary"]
+    assert captured.reports == []
     assert result["status"] == "partial"
     assert result["refused"] == [{"order": "reversed", "record": "R1", "question": "sup_neg", "validator": None}]
     assert result["missing"] == []
@@ -388,7 +404,7 @@ async def test_one_failed_order_fails_the_check_and_keeps_the_other_order(decisi
 
 
 @pytest.mark.asyncio
-async def test_missing_answers_name_the_packet_record_and_question(decisions):
+async def test_missing_answers_name_the_packet_record_and_question(decisions, captured, monkeypatch):
     def respond(body):
         answers = _answers(body["questions"])
         if body["prompt_cache_key"].endswith(":reversed"):  # packet R1 is R6 in this order
@@ -396,7 +412,14 @@ async def test_missing_answers_name_the_packet_record_and_question(decisions):
         return {"answers": answers, "usage": {"input_tokens": 10}}
 
     decisions.respond = respond
-    result = await _check(decisions, _packet())
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    with quick_check.review_scope(QUESTION, _source()):
+        quick_check.packet_pinned(_context(), PAGE)
+        await _drain()
+    [event] = captured.events
+    result = event["output_summary"]
+    assert captured.reports == []
     assert result["status"] == "partial"
     assert result["missing"] == [{"order": "reversed", "record": "R1", "question": "val_entity", "validator": 2}]
     r1 = result["records"][0]
@@ -423,8 +446,7 @@ async def test_a_defect_in_one_order_is_reported_and_the_other_kept(decisions, c
     payload = event["output_summary"]
     assert payload["status"] == "failed" and payload["error"] == {"type": "TypeError"}
     assert [call.get("error") for call in payload["calls"]] == [None, {"type": "TypeError"}]
-    [(exc, _)] = captured.reports
-    assert str(exc) == "Validation review quick check failed (TypeError)"
+    _assert_failure_report(captured, "TypeError")
 
 
 @pytest.mark.asyncio
@@ -513,11 +535,11 @@ async def test_review_without_a_bound_scope_is_not_checked(decisions, captured, 
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_is_logged_without_effect(decisions, captured, monkeypatch, caplog):
+async def test_provider_failure_reports_once_for_both_orders(decisions, captured, monkeypatch, caplog):
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
     monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
     decisions.respond = lambda body: httpx.Response(
-        503, json={"error": {"message": "overloaded", "type": "server_error", "code": "server_overloaded"}})
+        503, json={"error": {"message": "fake sensitive provider text", "type": "server_error", "code": "server_overloaded"}})
     with quick_check.review_scope(QUESTION, _source()):
         quick_check.packet_pinned(_context(), PAGE)
         await _drain()
@@ -530,8 +552,46 @@ async def test_provider_failure_is_logged_without_effect(decisions, captured, mo
     assert payload["usage"] is None
     assert all(set(row) & {"forward", "reversed", "average"} == set() for row in payload["records"])
     assert payload["routes"]["balanced"] == {"skip": 0, "remove": 0, "sol": 6}
-    assert captured.reports == []
-    assert any(record.message == "Validation review quick check failed" for record in caplog.records)
+    _assert_failure_report(captured, "InternalServerError")
+    assert "fake sensitive" not in repr(captured.reports)
+    warnings = [record for record in caplog.records if record.name == quick_check.__name__]
+    assert warnings and all(record.sentry_skip_event for record in warnings)
+    assert "fake sensitive" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", [{"bad": "fake sensitive body"}, {"answers": [{"name": 42}]}])
+async def test_malformed_response_reports_once(decisions, captured, monkeypatch, response):
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    decisions.respond = lambda body: response
+    with quick_check.review_scope(QUESTION, _source()):
+        quick_check.packet_pinned(_context(), PAGE)
+        await _drain()
+    [event] = captured.events
+    assert event["output_summary"]["status"] == "failed"
+    _assert_failure_report(captured, "QuickCheckResponseError")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture_fails", [False, True])
+async def test_missing_credentials_preserve_failed_diagnostic(captured, monkeypatch, capture_fails):
+    monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
+    monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
+    monkeypatch.setattr("src.lib.openai_agents.config.get_api_key", lambda provider: None)
+    if capture_fails:
+        capture = Mock(side_effect=RuntimeError("capture unavailable"))
+        monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", capture)
+    with quick_check.review_scope(QUESTION, _source()):
+        assert quick_check.packet_pinned(_context(), PAGE) is None
+        await _drain()
+    [event] = captured.events
+    assert event["output_summary"]["status"] == "failed"
+    assert event["output_summary"]["error"] == {"type": "QuickCheckUnavailable"}
+    if capture_fails:
+        capture.assert_called_once()
+    else:
+        _assert_failure_report(captured, "QuickCheckUnavailable")
 
 
 @pytest.mark.asyncio
@@ -548,10 +608,7 @@ async def test_unexpected_failure_reports_without_content_and_without_effect(cap
     [event] = captured.events
     assert event["output_summary"]["status"] == "failed"
     assert event["output_summary"]["error"] == {"type": "KeyError"}
-    [(exc, kwargs)] = captured.reports
-    assert str(exc) == "Validation review quick check failed (KeyError)"
-    assert exc.__cause__ is None and exc.__context__ is None
-    assert kwargs == {"component": "validation_review", "operation": "quick_check_failed", "level": "warning"}
+    _assert_failure_report(captured, "KeyError")
     assert "fake sensitive" not in repr(captured)
 
 
@@ -560,8 +617,7 @@ async def test_invalid_mode_is_reported_and_never_raised(captured, monkeypatch):
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "on")
     with quick_check.review_scope(QUESTION, _source()):
         assert quick_check.packet_pinned(_context(), PAGE) is None
-    [(exc, _)] = captured.reports
-    assert str(exc) == "Validation review quick check failed (ValueError)"
+    _assert_failure_report(captured, "ValueError")
 
 
 def _read_tool(context):
@@ -672,8 +728,7 @@ async def test_a_page_without_a_packet_id_is_reported_and_never_raised(captured,
     with quick_check.review_scope(QUESTION, _source()):
         assert quick_check.packet_pinned(_context(), {}) is None
         await _drain()
-    [(exc, _)] = captured.reports
-    assert str(exc) == "Validation review quick check failed (KeyError)"
+    _assert_failure_report(captured, "KeyError")
     assert captured.events == []
 
 

@@ -12,7 +12,7 @@ later calibration.
 
 This is an observer. It changes no review state, packet content, reviewer
 prompt or curator-visible result, and review never waits for it or depends on
-it. A failed or refused check is logged and nothing else happens.
+it. Operational failures are reported to Sentry. Refusals stay in diagnostics.
 
 The model owns every judgment of meaning. Code only builds the input from the
 pinned packet, averages and compares returned probabilities with fixed
@@ -185,7 +185,7 @@ def packet_pinned(context, page):
         _RUNNING.add(task)
         task.add_done_callback(_RUNNING.discard)
     except Exception as error:
-        _report_unexpected(error)
+        _report_failure(type(error).__name__)
 
 
 def review_request(curator_request, execution_context, definition=DEFINITION):
@@ -672,12 +672,6 @@ def _load_packet(history_scope, episode_id, packet_id):
         return store._content(db, fact)
 
 
-def _is_provider_failure(error):
-    from openai import APIError
-
-    return isinstance(error, (APIError, QuickCheckUnavailable, QuickCheckResponseError))
-
-
 def _error_summary(error):
     summary = {"type": type(error).__name__}
     status_code = getattr(error, "status_code", None)
@@ -689,23 +683,19 @@ def _error_summary(error):
     return summary
 
 
-def _report_unexpected(error):
-    """A defect in this observer is reported once, without content, and never raised."""
+def _report_failure(error_type):
+    """Report a shadow failure without exposing the original exception or packet."""
     try:
-        from src.lib.observability.runtime import report_runtime_exception
+        from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 
-        try:
-            raise RuntimeError(
-                "Validation review quick check failed (" + type(error).__name__ + ")"
-            ) from None
-        except RuntimeError as safe:
-            safe.__context__ = None
-            report_runtime_exception(
-                safe, component="validation_review", operation="quick_check_failed", level="warning"
-            )
+        report_runtime_exception(
+            sanitized_runtime_error("Validation review quick check failed"),
+            component="validation_review", operation="quick_check_failed", level="warning",
+            context={"exception_type": error_type},
+        )
         logger.warning(
             "Validation review quick check failed",
-            extra={"event": "review_quick_check_failed", "error_type": type(error).__name__,
+            extra={"event": "review_quick_check_failed", "error_type": error_type,
                    "sentry_skip_event": True},
         )
     except Exception:
@@ -771,17 +761,14 @@ async def _observe(context, packet_id, scope):
                 async with client:
                     outcomes = await run_check(prepared, client, cache_key=packet_id)
                 payload.update(await asyncio.to_thread(summarize, prepared, outcomes))
-                for outcome in outcomes:
-                    if isinstance(outcome, Exception) and not _is_provider_failure(outcome):
-                        _report_unexpected(outcome)
         except Exception as error:
             payload.update(status="failed", error=_error_summary(error))
-            if not _is_provider_failure(error):
-                _report_unexpected(error)
+        if payload["status"] == "failed":
+            _report_failure(payload["error"]["type"])
         payload["latency_ms"] = round((perf_counter() - started) * 1000)
         await asyncio.to_thread(_emit, payload)
     except asyncio.CancelledError:
         _log_cancelled(packet_id)
         raise
     except Exception as error:
-        _report_unexpected(error)
+        _report_failure(type(error).__name__)

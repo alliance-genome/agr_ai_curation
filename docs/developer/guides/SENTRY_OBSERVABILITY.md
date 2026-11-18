@@ -596,6 +596,13 @@ Identifier-like runtime context is hashed by the global Sentry hook when it uses
 recognized keys such as `artifact_id`, `batch_id`, `document_id`, `episode_id`,
 `flow_id`, `flow_run_id`, `job_id`, `run_id`, `session_id`, `trace_id`, or `turn_id`.
 
+A failed shadow quick check reports once with component `validation_review` and
+operation `quick_check_failed`, even when both order requests fail. Provider,
+credential and response-format failures use a fixed, chain-free exception with
+the first failure's exception type in bounded runtime context. Refusals, missing
+answers and cancellation stay quiet. Companion logs skip event promotion, and
+the observer keeps its trace diagnostics even if capture fails.
+
 A validation review source that fails envelope validation
 (`source_projection_invalid`, v0.11.6) reports one event with component
 `validation_review`, operation `source_projection_invalid`, tag `phase` naming the
