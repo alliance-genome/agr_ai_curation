@@ -345,6 +345,27 @@ def read_published_projection_in_transaction(db, scope, reference, *, current=Fa
     return projection, deepcopy(manifest)
 
 
+def standing_decision_reasons(scope, artifact_id, manifest):
+    """The reason of the decision each selected unit stands on, by unit target.
+
+    A unit's ``selection_id`` is the accepting selection fact its current
+    selection rests on (``selections._selected_unit``). A later decision that
+    selects again moves it, so a replaced decision is never read; a decision
+    that selects nothing (defer, reject of another answer) leaves it in place.
+    A unit with no current selection has no standing decision. The reason is
+    the stored text, copied as is.
+    """
+    with store.SessionLocal.begin() as db:
+        selections._lock_artifact(db, scope, artifact_id)
+        return {
+            unit["target_id"]: store._content(
+                db, store._fact(db, artifact_id, unit["selection_id"], kind="selection"),
+            )["reason"]
+            for unit in manifest["units"]
+            if unit["selection_id"] is not None
+        }
+
+
 def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, domain_pack, profile_context=None,
                               apply_curator=True, history):
     """Replay exact selected recipes onto immutable source values.

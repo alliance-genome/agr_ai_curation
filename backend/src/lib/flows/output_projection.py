@@ -33,12 +33,8 @@ from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
 from src.lib.domain_packs.resolvable_values import has_resolution_state, without_overruled
-from src.lib.flows.value_display import (
-    LIST_SEPARATOR,
-    display_text,
-    path_tokens,
-    relative_finding_path,
-)
+from src.lib.flows.export_fields import REVIEW_REASON_REF, REVIEW_UNCERTAINTY_REF
+from src.lib.flows.value_display import LIST_SEPARATOR, RECORD_SEPARATOR, display_text
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
 SOURCE_LINKED_EVIDENCE_GUIDANCE = (
@@ -178,6 +174,8 @@ _FIELD_LABEL_OVERRIDES = {
     "object.supporting_evidence": "Supporting evidence (saved quotes and locations)",
     "object.evidence_link_issues": "Evidence linkage issues",
     "object.validation_status": "Validation Status",
+    "object.review_uncertainty": "Review uncertainty",
+    "object.review_reason": "Review reason",
     "evidence.evidence_record_id": "Evidence ID",
     "evidence.quote": "Quote",
     "evidence.verified_quote": "Verified Quote",
@@ -407,15 +405,6 @@ class FlowOutputArtifact(BaseModel):
     # Object types a default plan lists as rows (the pack's curatable units);
     # empty lists every object. Supporting objects stay selectable on request.
     default_object_types: list[str] = Field(default_factory=list)
-    # Per object key ("object_id:<id>" / "pending_ref_id:<id>"): each declared
-    # object_ref field path and the keys of the objects it references, in the
-    # object's object_refs order, so a cell carries its referenced objects'
-    # open findings.
-    object_ref_links: dict[str, dict[str, list[str]]] = Field(default_factory=dict)
-    # Per object key: the payload paths a declared resolvable value covers (a
-    # field value's path; each identity and contract key of an object-root
-    # value). Its cells read the value's own state, never a finding marker.
-    resolvable_value_paths: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -607,45 +596,6 @@ def _scalar_payload_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in without_overruled(payload).items()
         if isinstance(value, (str, int, float, bool)) or value is None
     }
-
-
-def _resolvable_value_paths(payload: Mapping[str, Any], resolvable_fields: Mapping[str, Any]) -> list[str]:
-    """The payload paths the object's declared resolvable values cover.
-
-    A field value covers its own path (list elements each theirs); an
-    object-root value covers its identity and contract keys.
-    """
-
-    from src.lib.domain_packs.resolvable_values import CONTRACT_KEYS, MENTION_KEY
-
-    covered: list[str] = []
-    for declared, spec in resolvable_fields.items():
-        if not declared:
-            # The value's own paper-wording key, whatever the pack names it.
-            covered.extend((
-                *spec.identity_keys, spec.mention_key, *(key for key in CONTRACT_KEYS if key != MENTION_KEY),
-            ))
-            continue
-        tokens = path_tokens(declared)
-        if tokens is not None:
-            covered.extend(_concrete_paths(payload, tokens, ""))
-    return list(dict.fromkeys(covered))
-
-
-def _concrete_paths(node: Any, tokens: Sequence[Any], walked: str) -> list[str]:
-    """Concrete paths of a declared path in one payload; an unindexed list fans out."""
-
-    if isinstance(node, list):
-        if tokens and isinstance(tokens[0], int):
-            index = tokens[0]
-            return _concrete_paths(node[index], tokens[1:], f"{walked}[{index}]") if index < len(node) else []
-        return [path for index, item in enumerate(node) for path in _concrete_paths(item, tokens, f"{walked}[{index}]")]
-    if not tokens:
-        return [walked] if isinstance(node, Mapping) else []
-    if not isinstance(node, Mapping) or tokens[0] not in node:
-        return []
-    key = str(tokens[0])
-    return _concrete_paths(node[key], tokens[1:], f"{walked}.{key}" if walked else key)
 
 
 def _read_payload_refs_effectively(
@@ -1594,6 +1544,7 @@ def _build_artifact_from_step(
     selected_reference = None
     record_counts = None
     review_session_id = None
+    decision_reasons: dict[str, str] = {}
     if isinstance(payload, Mapping):
         source_metadata = payload.get("metadata") or {}
         selected_reference = source_metadata.get("selected_projection")
@@ -1619,12 +1570,14 @@ def _build_artifact_from_step(
         if selected_reference is not None:
             if not user_id or not review_session_id:
                 raise ValueError("Selected output requires authenticated source scope")
-            from src.lib.validation_history.projection import read_published_projection
+            from src.lib.validation_history.projection import (
+                read_published_projection, standing_decision_reasons,
+            )
             from src.lib.validation_history.store import HistoryScope, SelectionNotReady
+            scope = HistoryScope(user_id, source_document_id, review_session_id)
             try:
-                selected_envelope, _ = read_published_projection(
-                    HistoryScope(user_id, source_document_id, review_session_id),
-                    selected_reference, current=True,
+                selected_envelope, manifest = read_published_projection(
+                    scope, selected_reference, current=True,
                 )
             except SelectionNotReady as exc:
                 # Expose pending readiness without presenting stale payload as
@@ -1640,6 +1593,7 @@ def _build_artifact_from_step(
                 )
             payload = selected_envelope.model_dump(mode="json")
             record_counts = selected_envelope.metadata.get("record_counts")
+            decision_reasons = standing_decision_reasons(scope, selected_reference["artifact_id"], manifest)
     raw_receipt = _candidate_attr(candidate, "execution_receipt")
     receipt = AgentExecutionReceipt.model_validate(raw_receipt) if raw_receipt is not None else None
     profile_fields = None
@@ -1845,6 +1799,8 @@ def _build_artifact_from_step(
                 "be associated with a unique output object; explicit source references were retained."
             )
 
+    _attach_review_fields(object_rows, object_items, rows_by_source["validation_finding"], decision_reasons)
+
     artifact_row["artifact.evidence_count"] = _step_evidence_count(
         step,
         evidence_rows=rows_by_source["evidence"],
@@ -1863,8 +1819,6 @@ def _build_artifact_from_step(
     display_specs: dict[str, dict[str, Any]] = {}
     default_object_refs: list[str] = []
     default_object_types: list[str] = []
-    object_ref_links: dict[str, dict[str, list[str]]] = {}
-    resolvable_value_paths: dict[str, list[str]] = {}
     # Object labels are the declared label only (Chris, Sep 22). The legacy
     # label stays on the rows until here so record matching is unchanged.
     declared_labels: list[Any] = [_declared_payload_label(item) for item in object_items]
@@ -1893,12 +1847,6 @@ def _build_artifact_from_step(
                 sorted({str(item.get("object_type") or "") for item in object_items}),
             )
             default_object_types = list(source.curatable_unit_types)
-            for row, item in zip(rows_by_source["object"], object_items):
-                links = _object_ref_links(
-                    item, source.object_ref_fields.get(str(item.get("object_type") or ""), {}),
-                )
-                if links:
-                    object_ref_links.update({key: links for key in _object_keys(row)})
         if domain_pack_id and domain_pack_id != "generic":
             label_paths = source.object_label_paths if source is not None else {}
             resolvable = source.resolvable_fields if source is not None else {}
@@ -1913,11 +1861,6 @@ def _build_artifact_from_step(
         for row, item in zip(rows_by_source["object"], object_items):
             effective = source.effective_item(item) if source is not None else item
             if source is not None:
-                value_paths = _resolvable_value_paths(
-                    _object_payload(effective), source.resolvable_fields.get(str(item.get("object_type") or ""), {}),
-                )
-                if value_paths:
-                    resolvable_value_paths.update({key: value_paths for key in _object_keys(row)})
                 _read_payload_refs_effectively(
                     row, effective, source.resolvable_fields.get(str(item.get("object_type") or ""), {}),
                 )
@@ -1977,8 +1920,6 @@ def _build_artifact_from_step(
         rows_by_source=rows_by_source,
         default_object_refs=default_object_refs,
         default_object_types=default_object_types,
-        object_ref_links=object_ref_links,
-        resolvable_value_paths=resolvable_value_paths,
     )
 
 
@@ -3357,13 +3298,10 @@ def _project_row(
             )
         else:
             value = row.get(column.field_ref or "")
-            # Empty fields with explicit findings still carry uncertainty. Keep
-            # unmarked numbers/booleans typed; marked cells need display text.
-            if render is not None:
+            # Numbers and booleans stay typed unless their display spec relabels them.
+            if render is not None and not _is_empty(value):
                 rendered = render(column.field_ref or "", value, None)
-                if (rendered or not _is_empty(value)) and (
-                    not isinstance(value, (int, float, bool)) or rendered != display_text(value)
-                ):
+                if not isinstance(value, (int, float, bool)) or rendered != display_text(value):
                     value = rendered
         if render is not None and value is not None and not isinstance(value, (str, int, float, bool)):
             value = display_text(value)
@@ -3373,17 +3311,41 @@ def _project_row(
     return output
 
 
-def _payload_path_for_ref(field_ref: str) -> str | None:
-    """The object payload path a projection field reads, when it has one."""
+def _attach_review_fields(
+    object_rows: Sequence[dict[str, Any]],
+    object_items: Sequence[Mapping[str, Any]],
+    finding_rows: Sequence[Mapping[str, Any]],
+    decision_reasons: Mapping[str, str],
+) -> None:
+    """Copy each record's review text onto its row; nothing is summarised or judged.
 
-    if field_ref.startswith("object.pack."):
-        _, _, rest = field_ref.removeprefix("object.pack.").partition(".")
-        return rest or None
-    if field_ref.startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX):
-        return "attributes." + field_ref.removeprefix(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
-    if field_ref.startswith("object.payload."):
-        return field_ref.removeprefix("object.payload.")
-    return None
+    ``object.review_uncertainty`` joins the record's open review-uncertainty
+    findings as "field: explanation" in finding order (a finding without a
+    field reads as its explanation). ``object.review_reason`` is the reason of
+    the decision the record's own review unit stands on, keyed by the record's
+    history target; decisions on its validated fields are other units.
+    """
+
+    from src.lib.validation_history.assessments import FINDING_CODE
+
+    uncertainty: dict[str, dict[str, str]] = defaultdict(dict)
+    for finding in finding_rows:
+        if finding.get("validation.code") != FINDING_CODE or finding.get("validation.status") != "open":
+            continue
+        field_path = str(finding.get("validation.field_path") or "")
+        explanation = str(finding.get("validation.message") or "")
+        text = f"{field_path}: {explanation}" if field_path else explanation
+        for key in _object_keys(finding):
+            uncertainty[key][str(finding.get("validation.finding_id"))] = text
+    for row, item in zip(object_rows, object_items):
+        texts: dict[str, str] = {}
+        for key in _object_keys(row):
+            texts.update(uncertainty.get(key, {}))
+        row[REVIEW_UNCERTAINTY_REF] = RECORD_SEPARATOR.join(texts.values()) or None
+        metadata = item.get("metadata")
+        history = metadata.get("validation_history") if isinstance(metadata, Mapping) else None
+        target_id = history.get("target_id") if isinstance(history, Mapping) else None
+        row[REVIEW_REASON_REF] = decision_reasons.get(target_id) if target_id else None
 
 
 def _object_keys(row: Mapping[str, Any]) -> list[str]:
@@ -3396,173 +3358,11 @@ def _object_keys(row: Mapping[str, Any]) -> list[str]:
     ]
 
 
-def _ref_key(object_ref: Mapping[str, Any]) -> str | None:
-    for kind in ("object_id", "pending_ref_id"):
-        reference = _string_value(object_ref.get(kind))
-        if reference:
-            return f"{kind}:{reference}"
-    return None
+def _display_renderer(specs: Mapping[str, Any]) -> ValueRenderer:
+    """Each cell reads its stored value through its field's display spec."""
 
-
-def _object_ref_links(
-    item: Mapping[str, Any], ref_fields: Mapping[str, str],
-) -> dict[str, list[str]]:
-    """Referenced object keys per object_ref field path, in object_refs order."""
-
-    object_refs = [ref for ref in item.get("object_refs") or [] if isinstance(ref, Mapping)]
-    links: dict[str, list[str]] = {}
-    for field_path, object_type in ref_fields.items():
-        keys = [
-            key
-            for ref in object_refs
-            if ref.get("object_type") == object_type and (key := _ref_key(ref))
-        ]
-        if keys:
-            links[field_path] = keys
-    return links
-
-
-def _open_finding_paths(bundle: FlowOutputArtifactBundle, *, code: str | None = None) -> dict[int, list[tuple[Any, ...]]]:
-    """Open validation finding paths per object row (keyed by ``id(row)``).
-
-    Pending ref ids restart in every envelope, so findings match objects only
-    within their own artifact. An object_ref field also carries the open
-    findings of the object it references: the n-th referenced object of the
-    field's type is the n-th element of a list field.
-    """
-
-    by_row: dict[int, list[tuple[Any, ...]]] = {}
-    for artifact in bundle.artifacts:
-        direct: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
-        for row in artifact.rows_by_source.get("validation_finding") or []:
-            if code is not None and row.get("validation.code") != code:
-                continue
-            if str(row.get("validation.status") or "").strip().lower() != "open":
-                continue
-            field_path = _string_value(row.get("validation.field_path")).removeprefix("payload.")
-            tokens = path_tokens(field_path) if field_path else None
-            if tokens is None:
-                continue
-            for key in _object_keys(row):
-                direct[key].append(tokens)
-        # A referenced object flags a referencing cell only by findings on its plain
-        # fields; its resolvable values read their own state (ALL-1283 contract section 3).
-        plain = {
-            key: [
-                finding for finding in findings
-                if not _covered_relatives((finding,), _covered_paths(artifact, key), ())
-            ]
-            for key, findings in direct.items()
-        }
-        for row in artifact.rows_by_source.get("object") or []:
-            paths: list[tuple[Any, ...]] = []
-            for key in _object_keys(row):
-                paths.extend(direct.get(key, []))
-                for field_path, ref_keys in artifact.object_ref_links.get(key, {}).items():
-                    tokens = path_tokens(field_path)
-                    flagged = [position for position, ref in enumerate(ref_keys) if plain.get(ref)]
-                    if tokens is None or not flagged:
-                        continue
-                    if isinstance(tokens[-1], int):
-                        # An indexed field is the referenced object at that position.
-                        if tokens[-1] in flagged:
-                            paths.append(tokens)
-                    elif len(ref_keys) == 1:
-                        paths.append(tokens)
-                    else:
-                        paths.extend((*tokens, position) for position in flagged)
-            if paths:
-                by_row[id(row)] = list(dict.fromkeys(paths))
-    return by_row
-
-
-def _resolvable_paths_by_row(bundle: FlowOutputArtifactBundle) -> dict[int, list[tuple[Any, ...]]]:
-    """Payload paths each object row's declared resolvable values cover (keyed by ``id(row)``)."""
-
-    by_row: dict[int, list[tuple[Any, ...]]] = {}
-    for artifact in bundle.artifacts:
-        for row in artifact.rows_by_source.get("object") or []:
-            covered = [path for key in _object_keys(row) for path in _covered_paths(artifact, key)]
-            if covered:
-                by_row[id(row)] = covered
-    return by_row
-
-
-def _covered_paths(artifact: FlowOutputArtifact, object_key: str) -> list[tuple[Any, ...]]:
-    return [
-        tokens for path in artifact.resolvable_value_paths.get(object_key, [])
-        if (tokens := path_tokens(path)) is not None
-    ]
-
-
-def _covered_relatives(
-    finding_paths: Sequence[tuple[Any, ...]], covered: Sequence[tuple[Any, ...]], target: tuple[Any, ...],
-) -> list[tuple[Any, ...]]:
-    """The finding paths (relative to ``target``) that touch a declared resolvable value.
-
-    A finding touches a value when it names the value, a part of it, or an
-    ancestor (a whole list of values, a parent object).
-    """
-
-    covered_relative = [
-        relative for path in covered if (relative := relative_finding_path(path, target)) is not None
-    ]
-    touched = []
-    for finding in finding_paths:
-        relative = relative_finding_path(finding, target)
-        if relative is not None and any(
-            relative[: len(value)] == value or value[: len(relative)] == relative for value in covered_relative
-        ):
-            touched.append(relative)
-    return touched
-
-
-def _unresolved_for(
-    finding_paths: Sequence[tuple[Any, ...]], payload_path: str | None,
-    covered: Sequence[tuple[Any, ...]] = (),
-) -> frozenset[tuple[Any, ...]]:
-    """Open finding paths relative to the value a column reads.
-
-    Indexed findings map onto fanned-out columns by position, so the marker
-    lands on the unresolved element. A finding touching a declared resolvable
-    value (``covered``) marks none of its cells: the value reads its own
-    state (ALL-1283 contract section 3).
-    """
-
-    target = path_tokens(payload_path) if payload_path else None
-    if target is None:
-        return frozenset()
-    touched = set(_covered_relatives(finding_paths, covered, target))
-    return frozenset(
-        relative
-        for finding in finding_paths
-        if (relative := relative_finding_path(finding, target)) is not None and relative not in touched
-    )
-
-
-def _display_renderer(
-    specs: Mapping[str, Any],
-    finding_paths: Sequence[tuple[Any, ...]],
-    covered: Sequence[tuple[Any, ...]] = (),
-    assessment_paths: Sequence[tuple[Any, ...]] = (),
-) -> ValueRenderer:
     def render(field_ref: str, value: Any, index: int | None, *, nested: bool = False) -> str:
-        unresolved = _unresolved_for(finding_paths, _payload_path_for_ref(field_ref), covered)
-        empty_unresolved = _unresolved_for(assessment_paths, _payload_path_for_ref(field_ref), covered)
-        if index is not None:
-            # One split_list item: the findings on that position, or on every position.
-            unresolved = frozenset(
-                path[1:] if path and path[0] == index else path
-                for path in unresolved
-                if not path or not isinstance(path[0], int) or path[0] == index
-            )
-            empty_unresolved = frozenset(
-                path[1:] if path and path[0] == index else path
-                for path in empty_unresolved
-                if not path or not isinstance(path[0], int) or path[0] == index
-            )
-        return display_text(value, specs.get(field_ref), unresolved=unresolved,
-                            empty_unresolved=empty_unresolved, nested=nested)
+        return display_text(value, specs.get(field_ref), nested=nested)
 
     return render
 
@@ -3660,10 +3460,7 @@ def apply_projection_plan(
     def value_key(field_ref: str, value: Any, *, nested: bool = False) -> str:
         return display_text(value, specs.get(field_ref), marked=False, nested=nested)
 
-    open_paths = _open_finding_paths(bundle) if display and plan.row_source == "object" else {}
-    from src.lib.validation_history.assessments import FINDING_CODE
-    assessment_paths = _open_finding_paths(bundle, code=FINDING_CODE) if open_paths else {}
-    covered_paths = _resolvable_paths_by_row(bundle) if open_paths else {}
+    render = _display_renderer(specs) if display else None
     # Split lists are sized by the longest list across all filtered rows.
     output_columns, split_items = (
         _expand_split_columns(columns, rows)
@@ -3674,12 +3471,6 @@ def apply_projection_plan(
     preserve_empty = plan.selection_mode == "selected_fields"
     projected_rows = []
     for row in limited_rows:
-        render = (
-            _display_renderer(specs, open_paths.get(id(row), []), covered_paths.get(id(row), []),
-                              assessment_paths.get(id(row), []))
-            if display
-            else None
-        )
         base = _project_row(
             row,
             base_columns,

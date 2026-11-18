@@ -95,17 +95,17 @@ def test_display_text_renders_production_shapes(value, spec, expected):
     _no_object_text(text.replace("Alzheimer's", "Alzheimers"))
 
 
-def test_display_text_composite_and_unresolved_rules():
+def test_display_text_composite_and_declared_state_rules():
     where = {"anatomical_structure": {"curie": "WBbt:0005733", "name": "hypodermis"},
              "cellular_component": {"curie": "GO:0005634", "name": "nucleus"}}
     compose = {"compose": [{"path": "anatomical_structure", "display": TERM},
                            {"path": "cellular_component", "display": TERM}], "separator": "; "}
     assert display_text(where, compose) == "hypodermis (WBbt:0005733); nucleus (GO:0005634)"
-    # Open finding: a paper CURIE alone is not proof of resolution.
-    assert display_text({"curie": "WBbt:1", "name": "sperm"}, TERM, unresolved=True) == "sperm (WBbt:1, unresolved)"
-    assert display_text("L4 larval stage", None, unresolved=True) == "L4 larval stage (unresolved)"
+    # The value's own declared roles decide: an empty declared id beside a label
+    # marks the proposal; marked=False leaves the marker out (a lookup key).
     terms = [{"curie": "A:1", "name": "a"}, {"name": "b"}, {"curie": "C:3", "name": "c"}]
-    assert display_text(terms, TERM, unresolved=[(2,)]) == "a (A:1) | b (unresolved) | c (C:3, unresolved)"
+    assert display_text(terms, TERM) == "a (A:1) | b (unresolved) | c (C:3)"
+    assert display_text(terms, TERM, marked=False) == "a (A:1) | b | c (C:3)"
 
 
 def _bundle(rows, catalog, findings=()):
@@ -175,12 +175,12 @@ def test_every_non_json_rendering_path_uses_display_text(output_format):
     assert first["anatomy"] == "hypodermis (WBbt:0005733)"
     assert first["pair"] == "hypodermis (WBbt:0005733) | detected in hypodermis"
     assert first["concat"] == "Y71G12B.17 (WB:WBGene00022155) in hypodermis (WBbt:0005733)"
-    assert first["stages"] == "adult (UBERON:1) / L4 (UBERON:2, unresolved)"
-    assert first["elements"] == "[adult (UBERON:1)], [L4 (UBERON:2, unresolved)]"
+    # Open findings never change a cell: the stored values read as they are.
+    assert first["stages"] == "adult (UBERON:1) / L4 (UBERON:2)"
+    assert first["elements"] == "[adult (UBERON:1)], [L4 (UBERON:2)]"
     # Declared id role missing while a label is present marks the proposal.
     assert second["anatomy"] == "residual body (unresolved)"
-    # An open finding referenced by pending_ref_id marks that object's field.
-    assert second["pair"] == "residual body (unresolved) | near the residual body (unresolved)"
+    assert second["pair"] == "residual body (unresolved) | near the residual body"
     assert second["stages"] == "—"
     for row in result.rows:
         for value in row.values():
@@ -740,11 +740,10 @@ def _object_plan(output_format, columns):
     })
 
 
-def test_open_findings_only_mark_objects_in_their_own_envelope():
-    """Pending ref ids restart per envelope; step 1's finding never marks step 2's row.
+def test_review_uncertainty_reads_only_its_own_envelopes_findings():
+    """Pending ref ids restart per envelope; step 1's finding never reaches step 2's row.
 
-    A resolvable value's cell reads its own stored state, so the marker is shown on a
-    plain field.
+    The stored value is unchanged on both rows; the doubt is its own field.
     """
 
     def annotation():
@@ -755,6 +754,7 @@ def test_open_findings_only_mark_objects_in_their_own_envelope():
 
     finding = _open_finding("where_expressed_statement", pending_ref_id="gene-expression-annotation-1",
                             object_type="GeneExpressionAnnotation")
+    finding.update(code="validation_review.assessment_unresolved", message="Which cell is meant is unclear.")
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[
             _envelope_step("gene_expression", "agr.alliance.gene_expression", [annotation()], [finding]),
@@ -766,114 +766,63 @@ def test_open_findings_only_mark_objects_in_their_own_envelope():
     result = apply_projection_plan(bundle, _object_plan("csv", [
         ("node", "artifact.node_id"),
         ("statement", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
+        ("doubt", "object.review_uncertainty"),
     ]))
-    marked = {row["node"]: "unresolved" in row["statement"] for row in result.rows}
-    assert marked == {"node_1": True, "node_2": False}
+    assert result.rows == [
+        {"node": "node_1", "statement": "hyp",
+         "doubt": "where_expressed_statement: Which cell is meant is unclear."},
+        {"node": "node_2", "statement": "hyp", "doubt": "-"},
+    ]
 
 
-def test_composite_marker_lands_on_the_unresolved_part():
-    where = {"anatomical_structure": {"curie": "WBbt:1", "name": "hyp"},
-             "cellular_component": {"curie": "GO:1", "name": "nucleus"}}
-    compose = {"compose": [{"path": "anatomical_structure", "display": TERM},
-                           {"path": "cellular_component", "display": TERM}], "separator": "; "}
-    assert display_text(where, compose, unresolved=[("anatomical_structure",)]) == (
-        "hyp (WBbt:1, unresolved); nucleus (GO:1)"
-    )
-    assert display_text(where, compose, unresolved=[("cellular_component", "curie")]) == (
-        "hyp (WBbt:1); nucleus (GO:1, unresolved)"
-    )
-    # A finding on the composite itself, or on a part it does not display,
-    # still marks the composite as a whole.
-    assert display_text(where, compose, unresolved=True) == "hyp (WBbt:1); nucleus (GO:1) (unresolved)"
-    assert display_text(where, compose, unresolved=[("subcellular_structure",)]) == (
-        "hyp (WBbt:1); nucleus (GO:1) (unresolved)"
-    )
+def test_open_findings_never_change_a_cell():
+    """Composite, list, fanned-out and split cells read the stored values whatever the findings."""
 
     pattern_ref = "object.pack.GeneExpressionAnnotation.expression_pattern"
     pattern_spec = {"compose": [
         {"path": "where_expressed.anatomical_structure", "display": TERM},
         {"path": "when_expressed.developmental_stage_start", "display": TERM},
     ], "separator": "; "}
-    row = {"object.object_id": "g1", pattern_ref: {
-        "where_expressed": {"anatomical_structure": {"curie": "WBbt:1", "name": "hyp"}},
-        "when_expressed": {"developmental_stage_start": {"curie": "WBls:1", "name": "L4"}},
-    }}
-    finding = {"object.object_id": "g1", "validation.status": "open",
-               "validation.field_path": "expression_pattern.where_expressed.anatomical_structure"}
-    bundle = _bundle([row], [FlowOutputField(ref=pattern_ref, label="Pattern", value_type="object",
-                                             row_source="object", display=pattern_spec)], [finding])
-    result = apply_projection_plan(bundle, _object_plan("csv", [("pattern", pattern_ref)]))
-    assert result.rows[0]["pattern"] == "hyp (WBbt:1, unresolved); L4 (WBls:1)"
-
-
-def test_composite_list_marker_lands_on_the_indexed_child():
-    """A compose spec over a list places an indexed finding on the named child only."""
-
-    relations = "object.pack.PhenotypeAnnotation.condition_relations"
-    spec = {"compose": [
-        {"path": "condition_relation_type.name", "display": None},
-        {"path": "conditions", "display": {"label": "condition_summary", "id": "condition_class.curie"}},
-    ], "separator": ": "}
-    value = [
-        {"condition_relation_type": {"name": "induced_by"}, "conditions": [
-            {"condition_class": {"curie": "ZECO:1"}, "condition_summary": "heat"},
-            {"condition_class": {"curie": "ZECO:2"}, "condition_summary": "diet"},
-        ]},
-        {"condition_relation_type": {"name": "has_condition"}, "conditions": [
-            {"condition_class": {"curie": "ZECO:3"}, "condition_summary": "cold"},
-        ]},
-    ]
-    catalog = [FlowOutputField(ref=relations, label="Relations", value_type="list",
-                               row_source="object", display=spec)]
-
-    def cell(field_path):
-        finding = {"object.object_id": "p1", "validation.status": "open", "validation.field_path": field_path}
-        bundle = _bundle([{"object.object_id": "p1", relations: deepcopy(value)}], catalog, [finding])
-        return apply_projection_plan(bundle, _object_plan("csv", [("relations", relations)])).rows[0]["relations"]
-
-    assert cell("condition_relations[0].conditions[1]") == (
-        "induced_by: heat (ZECO:1), diet (ZECO:2, unresolved) | has_condition: cold (ZECO:3)"
-    )
-    assert cell("condition_relations[1].conditions[0].condition_class") == (
-        "induced_by: heat (ZECO:1), diet (ZECO:2) | has_condition: cold (ZECO:3, unresolved)"
-    )
-    assert cell("condition_relations[0].condition_relation_type") == (
-        "induced_by (unresolved): heat (ZECO:1), diet (ZECO:2) | has_condition: cold (ZECO:3)"
-    )
-
-
-def test_indexed_findings_mark_the_matching_fanned_out_position():
     relations = "object.pack.DiseaseAnnotation.condition_relations"
     summaries = f"{relations}.conditions.condition_summary"
     classes = f"{relations}.conditions.condition_class"
-    relation_value = [{"condition_relation_type": {"name": "induced_by"}, "conditions": [
-        {"condition_class": {"curie": "ZECO:1"}, "condition_summary": "heat"},
-        {"condition_class": {"curie": "ZECO:2"}, "condition_summary": "diet"},
-    ]}]
-    row = {"object.object_id": "d1", relations: relation_value, summaries: [["heat", "diet"]],
-           classes: [[{"curie": "ZECO:1"}, {"curie": "ZECO:2"}]]}
-    finding = {"object.object_id": "d1", "validation.status": "open",
-               "validation.field_path": "condition_relations[0].conditions[1]"}
-    catalog = [FlowOutputField(ref=ref, label=ref, value_type="list", row_source="object")
-               for ref in (relations, summaries, classes)]
-    bundle = _bundle([row], catalog, [finding])
-    result = apply_projection_plan(bundle, _object_plan("csv", [
-        ("relations", relations), ("summaries", summaries), ("classes", classes),
-    ]))
-    cells = result.rows[0]
-    assert cells["summaries"] == "heat, diet (unresolved)"
-    assert cells["classes"] == "ZECO:1, ZECO:2 (unresolved)"
-    assert cells["relations"] == (
-        "condition_relation_type: induced_by; conditions: condition_class: ZECO:1; condition_summary: heat"
-        ", condition_class: ZECO:2; condition_summary: diet (unresolved)"
-    )
-    # Split columns carry the marker only on the unresolved item.
+    row = {
+        "object.object_id": "d1",
+        pattern_ref: {"where_expressed": {"anatomical_structure": {"curie": "WBbt:1", "name": "hyp"}},
+                      "when_expressed": {"developmental_stage_start": {"curie": "WBls:1", "name": "L4"}}},
+        relations: [{"condition_relation_type": {"name": "induced_by"}, "conditions": [
+            {"condition_class": {"curie": "ZECO:1"}, "condition_summary": "heat"},
+            {"condition_class": {"curie": "ZECO:2"}, "condition_summary": "diet"},
+        ]}],
+        summaries: [["heat", "diet"]],
+        classes: [[{"curie": "ZECO:1"}, {"curie": "ZECO:2"}]],
+    }
+    findings = [
+        {"object.object_id": "d1", "validation.status": "open", "validation.field_path": path}
+        for path in ("expression_pattern.where_expressed.anatomical_structure", "expression_pattern",
+                     "condition_relations[0].conditions[1]", "condition_relations")
+    ]
+    catalog = [FlowOutputField(ref=pattern_ref, label="Pattern", value_type="object",
+                               row_source="object", display=pattern_spec)]
+    catalog += [FlowOutputField(ref=ref, label=ref, value_type="list", row_source="object")
+                for ref in (relations, summaries, classes)]
+    bundle = _bundle([row], catalog, findings)
+    cells = apply_projection_plan(bundle, _object_plan("csv", [
+        ("pattern", pattern_ref), ("relations", relations), ("summaries", summaries), ("classes", classes),
+    ])).rows[0]
+    assert cells == {
+        "pattern": "hyp (WBbt:1); L4 (WBls:1)",
+        "relations": "condition_relation_type: induced_by; conditions: condition_class: ZECO:1; "
+                     "condition_summary: heat, condition_class: ZECO:2; condition_summary: diet",
+        "summaries": "heat, diet",
+        "classes": "ZECO:1, ZECO:2",
+    }
     split = FlowOutputProjectionPlan.model_validate({
         "format": "csv", "row_source": "object", "missing_value": "-",
         "columns": [{"key": "cls", "field_ref": classes, "split_list": {"header_template": "Class {n}"}}],
     })
     # A split item that is itself a list joins like the whole cell (ALL-1290).
-    assert apply_projection_plan(bundle, split).rows[0] == {"cls_1": "ZECO:1, ZECO:2 (unresolved)"}
+    assert apply_projection_plan(bundle, split).rows[0] == {"cls_1": "ZECO:1, ZECO:2"}
     json_rows = apply_projection_plan(bundle, _object_plan("json", [("summaries", summaries)])).rows
     assert json_rows == [{"summaries": [["heat", "diet"]]}]
 
@@ -935,7 +884,7 @@ def _phenotype_objects(term_count=1):
     return [annotation, *support]
 
 
-def test_object_ref_cells_carry_open_findings_on_the_referenced_object():
+def test_object_ref_cells_read_the_referenced_values_own_state():
     findings = [
         {"finding_id": "f1", "status": "resolved", "severity": "info", "field_path": "subject_identifier",
          "field_ref": {"object_ref": {"pending_ref_id": "subj-1", "object_type": "PhenotypeSubject"},
@@ -964,7 +913,7 @@ def test_object_ref_cells_carry_open_findings_on_the_referenced_object():
     assert json_term["mention"] == "term 0 (WBPhenotype:0) (legacy, unverified)"
 
 
-def test_indexed_object_ref_field_maps_to_the_referenced_object_at_that_position():
+def test_a_referenced_objects_finding_never_marks_a_referencing_cell():
     finding = _open_finding("curie", pending_ref_id="term-1", object_type="PhenotypeTerm")
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_envelope_step("phenotype", PHENOTYPE_PACK, _phenotype_objects(2), [finding])],
@@ -1028,7 +977,6 @@ def test_resolvable_values_read_label_id_or_the_literal_unresolved():
     assert display_text(unresolved, RESOLVABLE_TERM) == "UNRESOLVED"
     assert display_text(None, RESOLVABLE_TERM) == ""
     # The state decides; findings do not add markers to a resolvable value.
-    assert display_text(resolved, RESOLVABLE_TERM, unresolved=True) == "hypodermis (WBbt:0005733)"
     assert display_text(unresolved, RESOLVABLE_TERM, marked=False) == "UNRESOLVED"
     # A legacy value the caller did not verify reads as unresolved.
     assert display_text({"curie": "WBbt:1", "name": "hyp"}, RESOLVABLE_TERM) == "UNRESOLVED"
@@ -1073,10 +1021,10 @@ def test_vocabulary_leaves_read_in_plain_words():
     assert display_text("something else", spec) == "Invalid value (something else)"
 
 
-def test_open_findings_never_relabel_a_resolvable_values_cells():
+def test_open_findings_never_relabel_a_resolvable_value_or_a_plain_field():
     """ALL-1283 contract section 3: a resolvable value's cells read its own state; an open
-    (non-decisive) finding on a resolved stage, or on an unresolved value's paper wording,
-    adds no "(unresolved)" marker. A plain field keeps its finding marker."""
+    (non-decisive) finding on a resolved stage, on its paper wording, or on a plain field
+    adds no marker to any cell."""
 
     stage_ref = "object.pack.GeneExpressionAnnotation.expression_pattern.when_expressed.developmental_stage_start"
     annotation = {
@@ -1110,7 +1058,7 @@ def test_open_findings_never_relabel_a_resolvable_values_cells():
         "stage": "gastrulation stage (WBls:0000814)",
         "stage_curie": "WBls:0000814",
         "stage_wording": "end of gastrulation",
-        "statement": "AWC neurons (unresolved)",
+        "statement": "AWC neurons",
     }
 
 
@@ -1144,40 +1092,23 @@ def test_ancestor_and_whole_list_findings_never_relabel_resolvable_cells():
     assert row == {"stage_curie": "WBls:1", "stage_wording": "end of gastrulation", "slim_name": "embryo stage"}
 
 
-def test_a_referenced_objects_resolvable_value_finding_flags_no_referencing_cell():
-    """Fix4 N3: an object_ref cell carries its referenced object's findings on plain fields
-    only; the referenced term's own resolvable identity reads its state."""
+def test_review_uncertain_empty_field_exports_blank():
+    """A doubtful empty value is exported as stored (blank); the doubt is its own field."""
 
-    from src.lib.flows.output_projection import _open_finding_paths
-
-    objects = _phenotype_objects()
-    term = next(obj for obj in objects if obj["object_type"] == "PhenotypeTerm")
-    term["payload"] = _validated_value("term 0", curie="WBPhenotype:0", label="term 0")
-    bundle = build_flow_output_artifact_bundle(
-        completed_steps=[_envelope_step("phenotype", PHENOTYPE_PACK, objects,
-                                        [_open_finding("curie", pending_ref_id="term-0", object_type="PhenotypeTerm")])],
-        flow_name="P", output_format="csv",
-    )
-    annotation_row = next(row for row in bundle.rows_for_source("object")
-                          if row["object.object_type"] == "PhenotypeAnnotation")
-    assert _open_finding_paths(bundle).get(id(annotation_row), []) == []
-
-
-def test_explicit_uncertain_empty_field_is_not_an_intentional_blank():
-    assert display_text(None, empty_unresolved=True) == "UNRESOLVED"
-    assert display_text("", empty_unresolved=True) == "UNRESOLVED"
     assert display_text(None) == ""
     objects = [{"object_type": "GeneExpressionAnnotation", "pending_ref_id": key,
         "payload": {"where_expressed_statement": None}} for key in ("uncertain", "blank")]
     finding = _open_finding("where_expressed_statement", pending_ref_id="uncertain", object_type="GeneExpressionAnnotation")
-    finding["code"] = "validation_review.assessment_unresolved"
+    finding.update(code="validation_review.assessment_unresolved", message="The paper names no place.")
     bundle = build_flow_output_artifact_bundle(
         completed_steps=[_envelope_step("gene_expression", "agr.alliance.gene_expression", objects, [finding])],
         flow_name="Unresolved export", output_format="tsv")
     rows = apply_projection_plan(bundle, _object_plan("tsv", [
         ("where", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
+        ("doubt", "object.review_uncertainty"),
     ])).rows
-    assert rows == [{"where": "UNRESOLVED"}, {"where": "-"}]
+    assert rows == [{"where": "-", "doubt": "where_expressed_statement: The paper names no place."},
+                    {"where": "-", "doubt": "-"}]
 
 
 def test_missing_required_empty_field_keeps_missing_marker():
@@ -1191,8 +1122,7 @@ def test_missing_required_empty_field_keeps_missing_marker():
     assert apply_projection_plan(bundle, _object_plan("tsv", [
         ("where", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
     ])).rows == [{"where": "-"}]
-    assert display_text([None, "present"], unresolved=[(0,)]) == "present"
-    assert display_text([None, "present"], empty_unresolved=[(0,)]) == "UNRESOLVED; present"
+    assert display_text([None, "present"]) == "present"
 
 
 def test_selected_field_null_keeps_custom_missing_display():
@@ -1200,7 +1130,7 @@ def test_selected_field_null_keeps_custom_missing_display():
     assert _project_row({"object.payload.statement": None},
         [FlowOutputColumnSpec(key="statement", field_ref="object.payload.statement")],
         missing_value="NA", preserve_empty=True,
-        render=_display_renderer({}, [])) == {"statement": "NA"}
+        render=_display_renderer({})) == {"statement": "NA"}
 
 
 @pytest.mark.parametrize("payload", [{}, {"expression_pattern": {"where_expressed": {"cellular_component": None}}}])
@@ -1218,5 +1148,5 @@ def test_unresolved_optional_absence_exports_without_fabricating_a_term(payload)
     rows = apply_projection_plan(bundle, _object_plan("tsv", [
         ("component", "object.pack.GeneExpressionAnnotation." + path),
     ])).rows
-    assert rows == [{"component": "UNRESOLVED"}, {"component": "-"}]
+    assert rows == [{"component": "-"}, {"component": "-"}]
     assert objects == original

@@ -108,7 +108,94 @@ async def test_review_crosses_old_call_and_tool_ceilings_and_exports_uncertain_t
         "columns": [{"key": "statement", "field_ref": "object.pack.Annotation.statement"}]})
     projected = finalize_output_projection(bundle, plan)
     assert len(projected.rows) == record_count
-    assert projected.rows[0]["statement"] == "UNRESOLVED"
+    # The doubtful empty value exports as stored: blank, never a placeholder.
+    assert projected.rows[0]["statement"] == ""
     assert projected.rows[-1]["statement"] == f"Original {record_count - 1}"
     content = _projection_content_for_file_type(projection=projected, output_format="tsv")
-    assert "UNRESOLVED" in content and f"Original {record_count - 1}" in content
+    assert "UNRESOLVED" not in content and "unresolved" not in content
+    assert f"Original {record_count - 1}" in content
+    # The reviewer's doubt and reason are their own, optional fields.
+    review = finalize_output_projection(bundle, FlowOutputProjectionPlan.model_validate({
+        "format": "tsv", "row_source": "object", "columns": [
+            {"key": "statement", "field_ref": "object.pack.Annotation.statement"},
+            {"key": "doubt", "field_ref": "object.review_uncertainty"},
+            {"key": "reason", "field_ref": "object.review_reason"}]}))
+    assert review.rows[0] == {"statement": "", "doubt": "statement: Use not established",
+                              "reason": "Assessment complete"}
+    assert review.rows[-1] == {"statement": f"Original {record_count - 1}", "doubt": "",
+                               "reason": "Assessment complete"}
+
+
+def _captured(scope, tmp_path, monkeypatch, payloads):
+    """Extraction-only records captured for review, with the checkpoint the reviewer saves to."""
+    pack = _multivalued_dispatch_pack(tmp_path)
+    definition = pack.metadata.object_definitions[0].model_copy(update={"fields": [*pack.metadata.object_definitions[0].fields,
+        DomainPackFieldDefinition(field_path="statement", field_type=DomainPackFieldType.STRING, metadata={"editable": True})]})
+    pack = replace(pack, metadata=pack.metadata.model_copy(update={"object_definitions": [definition]}))
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda _: pack)
+    monkeypatch.setattr("src.lib.flows.export_fields.packaged_domain_pack", lambda *args, **kwargs: pack)
+    env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=pack.pack_id,
+        extracted_objects=[CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=f"row-{i}", payload=payload)
+                           for i, payload in enumerate(payloads)])
+    env = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex, envelope=env,
+        typed=env.model_dump(mode="json"), provenance={})
+    aid = env.metadata["validation_history"]["artifact_id"]
+    env = selections.declare_envelope_episode(runtime.CapturedArtifact(scope, aid), env, [])
+    ep = env.metadata["review_episode_id"]
+    sid = admission.create_scope(scope, operation_id=uuid4().hex, kind="document_run", targets=len(payloads), episodes=1)
+    admission.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
+    with store.SessionLocal() as db:
+        baseline = store._artifact(db, aid, scope).baseline_sha
+    request = DomainEnvelopeCheckpointRequest(project_key="fixture", envelope=env, expected_revision=0,
+        document_id=scope.document_id, adapter_key="fixture", source_extraction_result_id=uuid4())
+
+    def checkpoint():
+        with store.SessionLocal() as db:
+            row = db.get(DomainEnvelopeModel, env.envelope_id)
+            return request if row is None else replace(request,
+                envelope=load_domain_envelope(db, env.envelope_id), expected_revision=row.revision)
+
+    targets = [obj.metadata["validation_history"]["target_id"] for obj in env.extracted_objects]
+    return SimpleNamespace(context=ReviewContext(scope, ep, "fixture-reviewer"), checkpoint=checkpoint,
+                           baseline=baseline, targets=targets)
+
+
+def _review_export(scope, envelope, columns):
+    from src.lib.flows.output_projection import build_flow_output_artifact_bundle, FlowOutputProjectionPlan, finalize_output_projection
+    bundle = build_flow_output_artifact_bundle(user_id=scope.owner_id, document_id=scope.document_id,
+        completed_steps=[{"step": 1, "node_id": "source", "agent_id": "fixture", "agent_name": "Fixture",
+            "candidate": SimpleNamespace(payload_json=envelope.model_dump(mode="json"), agent_key="fixture",
+                adapter_key="fixture", candidate_count=len(envelope.extracted_objects), conversation_summary="x")}],
+        flow_name="Review reasons", output_format="tsv")
+    return bundle, finalize_output_projection(bundle, FlowOutputProjectionPlan.model_validate({
+        "format": "tsv", "row_source": "object",
+        "columns": [{"key": key, "field_ref": ref} for key, ref in columns]}))
+
+
+def test_review_reason_is_the_decision_that_stands_never_a_replaced_one(scope, tmp_path, monkeypatch):
+    from src.lib.validation_review.decisions import record_decisions
+
+    item = _captured(scope, tmp_path, monkeypatch, [{"statement": "First"}, {"statement": "Second"}])
+
+    def accept(index, version, reason, operation_id, **extra):
+        return record_decisions(item.context, checkpoint_request=item.checkpoint(), operation_id=operation_id,
+            entries=[{"target_id": item.targets[index], "decision_unit_id": item.targets[index],
+                      "expected_version": version, "action": "accept", "reason": reason,
+                      "extraction_ref": item.baseline, **extra}])
+
+    accept(0, 0, "The first reading of the table.", "first",
+           unresolved_fields=[{"field_path": "statement", "explanation": "The column is unclear."}])
+    # A later acceptance of the same record replaces the first decision and its doubt.
+    accept(0, 1, "The methods name this cohort.", "second")
+    assert accept(1, 0, "Results report it directly.", "third")["ready"] is True
+
+    columns = [("statement", "object.pack.Annotation.statement"),
+               ("doubt", "object.review_uncertainty"), ("reason", "object.review_reason")]
+    bundle, projected = _review_export(scope, item.checkpoint().envelope, columns)
+    assert projected.rows == [
+        {"statement": "First", "doubt": "", "reason": "The methods name this cohort."},
+        {"statement": "Second", "doubt": "", "reason": "Results report it directly."},
+    ]
+    # The review fields are opt-in: the declared default layout never lists them.
+    refs = {ref for artifact in bundle.artifacts for ref in artifact.default_object_refs}
+    assert not refs & {"object.review_uncertainty", "object.review_reason"}

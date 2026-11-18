@@ -18,6 +18,18 @@ COMMON_FIELDS = [
     {"ref": "artifact.agent_name", "label": "Source agent", "value_type": "string"},
 ]
 
+# Text copied from a record's validation review, selectable on every record row
+# and never in a default layout. "Review uncertainty" lists each open
+# review-uncertainty finding as "field: explanation"; "Review reason" is the
+# reason of the review decision the record's current value stands on.
+REVIEW_UNCERTAINTY_REF = "object.review_uncertainty"
+REVIEW_REASON_REF = "object.review_reason"
+REVIEW_FIELDS = [
+    {"ref": REVIEW_UNCERTAINTY_REF, "label": "Review uncertainty", "value_type": "string"},
+    {"ref": REVIEW_REASON_REF, "label": "Review reason", "value_type": "string"},
+]
+_REVIEW_REFS = frozenset(field["ref"] for field in REVIEW_FIELDS)
+
 
 def packaged_domain_pack(agent_id: str, entry: dict | None = None) -> Any:
     """The domain pack behind a packaged export source, or None (generic/unknown)."""
@@ -143,14 +155,20 @@ def _legacy_display_mapper(domain_pack_id: str) -> Any | None:
 
 
 def source_catalog(fields: list[dict], receipt: Any = None) -> dict:
-    declared = [*fields, *deepcopy(COMMON_FIELDS)] if fields else []
+    declared = [*fields, *deepcopy(COMMON_FIELDS), *deepcopy(REVIEW_FIELDS)] if fields else []
     return {"fields": declared, "execution_receipt": receipt,
             "schema_fingerprint": catalog_fingerprint(declared, receipt)}
 
 
 def catalog_fingerprint(declared: list[dict], receipt: Any) -> str:
-    """Identity of a source's declared fields under one execution receipt."""
-    identity = {"fields": declared, "execution_receipt": receipt}
+    """Identity of a source's declared fields under one execution receipt.
+
+    The review fields are read from the record's validation history, not from
+    the source's output, so they are no part of the source's identity: a saved
+    field layout stays current and can add them.
+    """
+    identity = {"fields": [field for field in declared if field["ref"] not in _REVIEW_REFS],
+                "execution_receipt": receipt}
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -185,15 +203,6 @@ class PackagedExportSource:
         ]
         self.display_specs = self._display_specs()
         self.resolvable_fields = self._resolvable_fields()
-        self.object_ref_fields = {
-            obj.object_type: fields
-            for obj in metadata.object_definitions
-            if (fields := {
-                field.field_path: field.object_type_ref
-                for field in obj.fields
-                if getattr(field, "object_type_ref", None)
-            })
-        }
         self.object_label_paths = self._object_label_paths()
         self.legacy_display_mapper = _legacy_display_mapper(metadata.pack_id)
 

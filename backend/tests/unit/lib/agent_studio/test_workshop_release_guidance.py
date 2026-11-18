@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[5]
 
 @pytest.mark.parametrize("query,topic,requirements", [
     ("split", "output_values_and_columns", ["header_template", "{n}", "NOT JSON", "never extra rows", "not permission to discard"]),
-    ("UNRESOLVED", "output_values_and_columns", ["paper wording is a separate", "not every cell", "declared label path"]),
+    ("UNRESOLVED", "output_values_and_columns", ["paper wording is a separate", "An open finding never changes a cell", "declared label path"]),
     ("inspect_results", "bounded_results_and_contracts", ["NOT a callable Studio tool", "get_domain_envelope_state", "next_request/next_call", "not a free run"]),
     ("ca_", "bounded_results_and_contracts", ["exact revision", "output_profile", "prompt_manifest", "Do not invent a Studio get_agent_contract"]),
     ("namespace", "tool_discovery_and_limits", ["studio_saved_work", "flow_authoring", "different catalogs", "do not grant permission"]),

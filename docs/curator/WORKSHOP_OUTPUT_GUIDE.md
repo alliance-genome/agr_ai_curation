@@ -15,18 +15,33 @@ Species must be supported by the paper; your selected group does not establish i
 In CSV, TSV and chat, a resolved value normally appears as **label (ID)**. A value
 that has not been resolved appears as **UNRESOLVED**. Ask for paper wording in a
 separate column if you need to compare it with the checked answer. The application
-does not fill a missing checked value with a different field. An unresolved marker
-on one part of a compound answer does not mean every part failed.
+does not fill a missing checked value with a different field. Other values appear
+exactly as they were saved, with nothing added to them.
+
+## Why a record looks the way it does
+
+Three optional columns hold the reasons that were saved with each record. None of
+them is added unless you choose it.
+
+- **Rationale**: why the extractor picked the item.
+- **Review reason**: why the reviewer accepted the record, in its own words. If the
+  reviewer decided again later, only the later reason is shown.
+- **Review uncertainty**: the fields the reviewer accepted but still had doubts
+  about, each with the reviewer's explanation, for example
+  "attributes.organ: The table does not show which column this belongs to." It is
+  blank when the reviewer had no doubt. Confirming the field in the curation
+  workspace settles the doubt, and it no longer appears.
 
 Useful requests:
 
 - “Show the paper's wording beside the resolved term and its validation result.”
 - “Explain why this term is unresolved, using this run's evidence.”
 - “Show the stored reason this item was selected.”
+- “Add the review reason and the review uncertainty as the last two columns.”
 
-The **Rationale** is the extractor's stored explanation, not a new explanation
-written by the output agent or proof that validation passed. Older results may not
-have a recorded rationale. Review the evidence separately. A curator validation
+These reasons are stored text, not new explanations written by the output agent,
+and not proof that validation passed. Older results may not have a recorded
+rationale. Review the evidence separately. A curator validation
 override records your deliberate decision; it is not a fresh database confirmation.
 
 ## One cell or several columns

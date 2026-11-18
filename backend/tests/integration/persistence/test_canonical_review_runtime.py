@@ -252,7 +252,7 @@ async def _canonical_producer_scenario(
     import json
 
     canonical_models.flags.unresolved_b = unresolved_b
-    selected_values = ["FIRST_A", "eco:B (unresolved)" if unresolved_b else "FIRST_B", "SECOND_C"]
+    selected_values = ["FIRST_A", "eco:B" if unresolved_b else "FIRST_B", "SECOND_C"]
 
     class ChatModel(CanonicalReviewer):
         def __init__(self):

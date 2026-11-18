@@ -789,10 +789,33 @@ Missing executions, unreviewed records and pending investigation remain incomple
 The immutable accepting decision owns the assessment. Its current selected
 projection derives `validation_review.assessment_unresolved` findings, preserving
 actor, decision, selection and source provenance without changing extracted data.
-Review may complete and export its requested TSV columns: nonempty plain cells use
-`value (unresolved)`, explicitly uncertain empty cells use `UNRESOLVED`, and unflagged
-blanks and ordinary structural missing-field findings retain the requested missing-value display. Unsettled findings block external
-submission. They do not create a new automatic-retry or unfinished-flow recovery UI.
+Review may complete and export its requested TSV columns. CSV and TSV cells hold
+each value exactly as stored: an open finding of any kind never adds a mark to a
+value, and a flagged empty value shows the requested missing-value display like any
+other blank. (A declared resolvable identity still reads `UNRESOLVED` from its own
+stored state, and a stored word outside its vocabulary still reads
+`Invalid value (word)`; neither comes from a finding.) Unsettled findings block external
+submission.
+
+Two optional record-row export fields carry the review's own text; neither is in any
+default layout, and they are offered for pack, generic and custom-profile records
+(`export_fields.REVIEW_FIELDS`):
+
+- **Review uncertainty** (`object.review_uncertainty`) joins the record's open
+  `validation_review.assessment_unresolved` findings in finding order, each as
+  `field_path: explanation`, separated by ` | `. Empty when there are none.
+- **Review reason** (`object.review_reason`) copies the `reason` of the decision the
+  record stands on: the accepting selection fact that the record's own review unit's
+  manifest entry names (`selection_id`, see `selections._selected_unit` and
+  `projection.standing_decision_reasons`). A later accept of the same unit replaces it;
+  a later decision that selects nothing (defer, reject of another answer) leaves it.
+  Decisions on a record's validated fields are other units and are not shown. Empty
+  when the record has no standing decision.
+
+Both are copied text only. Packaged and custom-profile sources declare them in the
+selected-fields catalog; generic sources have no declared catalog, so guided output
+reads them as row fields, like `object.payload.rationale`. They are left out of a
+source's `schema_fingerprint`, so saved field layouts stay current. They do not create a new automatic-retry or unfinished-flow recovery UI.
 
 In the existing curator field editor, **Save and confirm** explicitly acknowledges
 an uncertain field even when its value is unchanged. Changed values or explicit

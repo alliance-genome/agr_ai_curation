@@ -188,7 +188,8 @@ def test_format_elements_renders_every_element_with_its_one_template():
         "type": "format_elements", "field_refs": [TERMS_REF], "default": "[{1}]", "separator": " ",
     }}])
     [row] = apply_projection_plan(_status_template_bundle([finding]), plan).rows
-    assert row["terms"] == "[slow (WBPhenotype:1)] [small (WBPhenotype:2, unresolved)]"
+    # An open finding never changes an element's text.
+    assert row["terms"] == "[slow (WBPhenotype:1)] [small (WBPhenotype:2)]"
 
 
 def test_list_elements_join_their_items_like_the_whole_cell():
@@ -208,21 +209,12 @@ def test_list_elements_join_their_items_like_the_whole_cell():
                    "elements": "[heat, diet] [cold]", "joined": "heat, diet / cold"}
 
 
-def test_self_part_marks_only_the_leaves_it_displays():
+def test_self_part_renders_only_the_leaves_it_displays():
     spec = {"compose": [{"display": CONDITION}, {"path": "condition_chemical", "display": None}],
             "separator": " with "}
     condition = {"condition_class": {"curie": "ZECO:1"}, "condition_summary": "heat",
                  "condition_chemical": {"curie": "CHEBI:1"}, "condition_taxon": {"curie": "NCBITaxon:1"}}
-    assert display_text(condition, spec, unresolved=[("condition_summary",)]) == (
-        "heat (ZECO:1, unresolved) with CHEBI:1"
-    )
-    assert display_text(condition, spec, unresolved=[("condition_class",)]) == (
-        "heat (ZECO:1, unresolved) with CHEBI:1"
-    )
-    # A finding on an undisplayed field marks the whole composite, not the summary part.
-    assert display_text(condition, spec, unresolved=[("condition_taxon", "curie")]) == (
-        "heat (ZECO:1) with CHEBI:1 (unresolved)"
-    )
+    assert display_text(condition, spec) == "heat (ZECO:1) with CHEBI:1"
 
 
 # --- map_value keys structured values by display text --------------------------------------
