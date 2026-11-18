@@ -700,6 +700,14 @@ The event uses a fixed, chain-free message and only the exception class as conte
 The curator receives `token_unavailable` even if reporting fails. Ordinary missing
 curator tokens stay quiet.
 
+Under the same `document_reference` component, provider lookup failures report
+as errors with operation `find_document_reference`. Provider cleanup failures
+report as warnings with operation `provider_cleanup_failed`. Both use fixed,
+chain-free exceptions and the runtime facade bounds the exception class in
+context. Companion warnings skip log-event promotion. Cleanup and reporting
+failures preserve the lookup result. Not-found and access-denied outcomes
+produce no lookup event.
+
 Upload intake reports checksum provider failures under component `upload_intake`
 and operation `checksum_lookup_failed`. The report carries a fixed, chain-free
 error and the exception class. Intake removes the staged upload and returns the
