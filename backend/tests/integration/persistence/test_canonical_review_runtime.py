@@ -553,6 +553,12 @@ async def _canonical_producer_scenario(
             key="validated", field_ref="object.pack.Annotation.evidence_code_curies")]))
     assert projection.selection_manifests
     assert projection.rows == [{"validated": value} for value in selected_values]
+    # Every record had a validator, so the reviewer decided its checked values, not the
+    # record as a whole: Review reason stays blank (field-level reasons are not shown).
+    reasons = finalize_output_projection(bundle, FlowOutputProjectionPlan(
+        format="csv", row_source="object", columns=[FlowOutputColumnSpec(
+            key="reason", field_ref="object.review_reason")]))
+    assert reasons.rows == [{"reason": ""}] * len(selected_values)
     monkeypatch.setattr("src.lib.file_outputs.storage.get_file_output_storage_path", lambda: tmp_path)
     with agent_request_scope(user_id=item.scope.owner_id,
                              session_id=item.scope.session_id, trace_id=uuid4().hex):

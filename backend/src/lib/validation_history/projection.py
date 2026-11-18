@@ -345,25 +345,39 @@ def read_published_projection_in_transaction(db, scope, reference, *, current=Fa
     return projection, deepcopy(manifest)
 
 
-def standing_decision_reasons(scope, artifact_id, manifest):
-    """The reason of the decision each selected unit stands on, by unit target.
+def read_current_projection_with_reasons(scope, reference):
+    """The current published projection and the standing decision reason of each record.
+
+    One read under the projection's own lock: the reasons come from the same
+    manifest snapshot as the values. Reasons are keyed by the target id of each
+    record the projection holds (``metadata.validation_history.target_id``).
+    """
+    with store.SessionLocal.begin() as db:
+        projection, manifest = read_published_projection_in_transaction(db, scope, reference, current=True)
+        records = {obj.metadata.get("validation_history", {}).get("target_id")
+                   for obj in projection.extracted_objects} - {None}
+        return projection, manifest, standing_decision_reasons_in_transaction(
+            db, reference["artifact_id"], manifest, records)
+
+
+def standing_decision_reasons_in_transaction(db, artifact_id, manifest, target_ids):
+    """The reason of the decision each named unit stands on, by unit target.
 
     A unit's ``selection_id`` is the accepting selection fact its current
     selection rests on (``selections._selected_unit``). A later decision that
     selects again moves it, so a replaced decision is never read; a decision
     that selects nothing (defer, reject of another answer) leaves it in place.
-    A unit with no current selection has no standing decision. The reason is
-    the stored text, copied as is.
+    A unit with no current selection has no standing decision. Only the units
+    in ``target_ids`` are read; the reason is the stored text, copied as is.
+    Selection facts are immutable, so the caller's read lock is enough.
     """
-    with store.SessionLocal.begin() as db:
-        selections._lock_artifact(db, scope, artifact_id)
-        return {
-            unit["target_id"]: store._content(
-                db, store._fact(db, artifact_id, unit["selection_id"], kind="selection"),
-            )["reason"]
-            for unit in manifest["units"]
-            if unit["selection_id"] is not None
-        }
+    return {
+        unit["target_id"]: store._content(
+            db, store._fact(db, artifact_id, unit["selection_id"], kind="selection"),
+        )["reason"]
+        for unit in manifest["units"]
+        if unit["target_id"] in target_ids and unit["selection_id"] is not None
+    }
 
 
 def rebuild_selected_envelope(db, scope, artifact_id, *, envelope, manifest, domain_pack, profile_context=None,

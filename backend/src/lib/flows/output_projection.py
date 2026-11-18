@@ -1570,14 +1570,11 @@ def _build_artifact_from_step(
         if selected_reference is not None:
             if not user_id or not review_session_id:
                 raise ValueError("Selected output requires authenticated source scope")
-            from src.lib.validation_history.projection import (
-                read_published_projection, standing_decision_reasons,
-            )
+            from src.lib.validation_history.projection import read_current_projection_with_reasons
             from src.lib.validation_history.store import HistoryScope, SelectionNotReady
-            scope = HistoryScope(user_id, source_document_id, review_session_id)
             try:
-                selected_envelope, manifest = read_published_projection(
-                    scope, selected_reference, current=True,
+                selected_envelope, _, decision_reasons = read_current_projection_with_reasons(
+                    HistoryScope(user_id, source_document_id, review_session_id), selected_reference,
                 )
             except SelectionNotReady as exc:
                 # Expose pending readiness without presenting stale payload as
@@ -1593,7 +1590,6 @@ def _build_artifact_from_step(
                 )
             payload = selected_envelope.model_dump(mode="json")
             record_counts = selected_envelope.metadata.get("record_counts")
-            decision_reasons = standing_decision_reasons(scope, selected_reference["artifact_id"], manifest)
     raw_receipt = _candidate_attr(candidate, "execution_receipt")
     receipt = AgentExecutionReceipt.model_validate(raw_receipt) if raw_receipt is not None else None
     profile_fields = None
@@ -1799,8 +1795,6 @@ def _build_artifact_from_step(
                 "be associated with a unique output object; explicit source references were retained."
             )
 
-    _attach_review_fields(object_rows, object_items, rows_by_source["validation_finding"], decision_reasons)
-
     artifact_row["artifact.evidence_count"] = _step_evidence_count(
         step,
         evidence_rows=rows_by_source["evidence"],
@@ -1880,6 +1874,16 @@ def _build_artifact_from_step(
             _declared_label_fields_text(_object_payload(item), label_fields) or None
             for item in object_items
         ]
+    # Review text uses the record's declared column labels, looked up by exact stored path.
+    if profile_fields is not None:
+        profile_labels = {field.profile_path: field.label for field in profile_fields}
+        declared_field_labels = {(str(item.get("object_type") or ""), path): label
+                                 for item in object_items for path, label in profile_labels.items()}
+    else:
+        declared_field_labels = {(field["object_type"], field["payload_path"]): field["label"]
+                                 for field in export_fields if "payload_path" in field}
+    _attach_review_fields(object_rows, object_items, rows_by_source["validation_finding"], decision_reasons,
+                          declared_field_labels)
     for row, label in zip(rows_by_source["object"], declared_labels):
         row["object.label"] = label
     catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
@@ -3316,32 +3320,40 @@ def _attach_review_fields(
     object_items: Sequence[Mapping[str, Any]],
     finding_rows: Sequence[Mapping[str, Any]],
     decision_reasons: Mapping[str, str],
+    field_labels: Mapping[tuple[str, str], str],
 ) -> None:
     """Copy each record's review text onto its row; nothing is summarised or judged.
 
     ``object.review_uncertainty`` joins the record's open review-uncertainty
-    findings as "field: explanation" in finding order (a finding without a
-    field reads as its explanation). ``object.review_reason`` is the reason of
-    the decision the record's own review unit stands on, keyed by the record's
-    history target; decisions on its validated fields are other units.
+    findings as "field: explanation" in finding order. The field is the column
+    label the record's source declares for exactly that stored path, else the
+    stored path (generic records, list elements); a finding without a field
+    reads as its explanation. ``object.review_reason`` is the reason of the
+    decision the record's own review unit stands on, keyed by the record's
+    history target; decisions on its validated fields are other units. Like a
+    declared pack field (for example Rationale), both are set on every row, None
+    when empty.
     """
 
     from src.lib.validation_history.assessments import FINDING_CODE
 
-    uncertainty: dict[str, dict[str, str]] = defaultdict(dict)
+    uncertainty: dict[str, dict[str, tuple[str, str]]] = defaultdict(dict)
     for finding in finding_rows:
         if finding.get("validation.code") != FINDING_CODE or finding.get("validation.status") != "open":
             continue
-        field_path = str(finding.get("validation.field_path") or "")
-        explanation = str(finding.get("validation.message") or "")
-        text = f"{field_path}: {explanation}" if field_path else explanation
+        entry = (str(finding.get("validation.field_path") or ""), str(finding.get("validation.message") or ""))
         for key in _object_keys(finding):
-            uncertainty[key][str(finding.get("validation.finding_id"))] = text
+            uncertainty[key][str(finding.get("validation.finding_id"))] = entry
     for row, item in zip(object_rows, object_items):
-        texts: dict[str, str] = {}
+        object_type = str(item.get("object_type") or "")
+        doubts: dict[str, tuple[str, str]] = {}
         for key in _object_keys(row):
-            texts.update(uncertainty.get(key, {}))
-        row[REVIEW_UNCERTAINTY_REF] = RECORD_SEPARATOR.join(texts.values()) or None
+            doubts.update(uncertainty.get(key, {}))
+        texts = [
+            f"{field_labels.get((object_type, path)) or path}: {explanation}" if path else explanation
+            for path, explanation in doubts.values()
+        ]
+        row[REVIEW_UNCERTAINTY_REF] = RECORD_SEPARATOR.join(texts) or None
         metadata = item.get("metadata")
         history = metadata.get("validation_history") if isinstance(metadata, Mapping) else None
         target_id = history.get("target_id") if isinstance(history, Mapping) else None

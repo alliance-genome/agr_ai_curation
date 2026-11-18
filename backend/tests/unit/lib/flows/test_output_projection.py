@@ -2715,7 +2715,7 @@ def test_stale_selected_artifact_exposes_pending_without_leaking_old_rows(monkey
     monkeypatch.setattr("src.lib.validation_history.projection.latest_publication_reference", lambda *args: {"fact_id": "old"})
     def pending(*args, **kwargs):
         raise SelectionNotReady("Published projection is no longer current")
-    monkeypatch.setattr("src.lib.validation_history.projection.read_published_projection", pending)
+    monkeypatch.setattr("src.lib.validation_history.projection.read_current_projection_with_reasons", pending)
     artifact = output_projection_module._build_artifact_from_step(step, user_id="owner")
     assert artifact.is_canonical_curation_data
     assert artifact.node_id == "pending-node"

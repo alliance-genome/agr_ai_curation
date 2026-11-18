@@ -770,7 +770,7 @@ def test_review_uncertainty_reads_only_its_own_envelopes_findings():
     ]))
     assert result.rows == [
         {"node": "node_1", "statement": "hyp",
-         "doubt": "where_expressed_statement: Which cell is meant is unclear."},
+         "doubt": "Where expressed statement: Which cell is meant is unclear."},
         {"node": "node_2", "statement": "hyp", "doubt": "-"},
     ]
 
@@ -1107,7 +1107,7 @@ def test_review_uncertain_empty_field_exports_blank():
         ("where", "object.pack.GeneExpressionAnnotation.where_expressed_statement"),
         ("doubt", "object.review_uncertainty"),
     ])).rows
-    assert rows == [{"where": "-", "doubt": "where_expressed_statement: The paper names no place."},
+    assert rows == [{"where": "-", "doubt": "Where expressed statement: The paper names no place."},
                     {"where": "-", "doubt": "-"}]
 
 

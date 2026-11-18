@@ -13,10 +13,12 @@ A name or identifier printed in the paper is not automatically a confirmed match
 Species must be supported by the paper; your selected group does not establish it.
 
 In CSV, TSV and chat, a resolved value normally appears as **label (ID)**. A value
-that has not been resolved appears as **UNRESOLVED**. Ask for paper wording in a
+the validator could not resolve appears as **UNRESOLVED**, or as its name followed
+by **(unresolved)**. That is the only mark added to a value, and it comes from what
+was saved for that value, not from the reviewer's doubts. Ask for paper wording in a
 separate column if you need to compare it with the checked answer. The application
-does not fill a missing checked value with a different field. Other values appear
-exactly as they were saved, with nothing added to them.
+does not fill a missing checked value with a different field. All other values
+appear exactly as they were saved.
 
 ## Why a record looks the way it does
 
@@ -24,12 +26,15 @@ Three optional columns hold the reasons that were saved with each record. None o
 them is added unless you choose it.
 
 - **Rationale**: why the extractor picked the item.
-- **Review reason**: why the reviewer accepted the record, in its own words. If the
-  reviewer decided again later, only the later reason is shown.
+- **Review reason**: why the reviewer, or you, accepted the record as a whole, in
+  their own words. If the record was decided again later, only the later reason is
+  shown. It is blank when nobody accepted the record as a whole: it was set aside
+  for later, its acceptance was withdrawn, or a validator checked its values (the
+  reviewer then decides those checked values, and their reasons are not shown here).
 - **Review uncertainty**: the fields the reviewer accepted but still had doubts
   about, each with the reviewer's explanation, for example
-  "attributes.organ: The table does not show which column this belongs to." It is
-  blank when the reviewer had no doubt. Confirming the field in the curation
+  "Organ: The table does not show which column this belongs to." It is blank when
+  the reviewer had no doubt. Confirming the field in the curation
   workspace settles the doubt, and it no longer appears.
 
 Useful requests:

@@ -92,8 +92,8 @@ def test_pack_records_declare_the_review_fields_outside_the_default_layout():
     # Each open review doubt, in finding order; resolved and other findings are not doubts.
     assert rows == [
         {"statement": "near the gut",
-         "doubt": "where_expressed_statement: The figure legend names a different tissue. | "
-                  "expression_pattern.where_expressed.cellular_component: No compartment is named.",
+         "doubt": "Where expressed statement: The figure legend names a different tissue. | "
+                  "Cellular component: No compartment is named.",
          "reason": "-"},
         {"statement": "in the hypodermis", "doubt": "-", "reason": "-"},
     ]
@@ -165,6 +165,47 @@ def test_profile_records_select_the_review_fields_and_a_layout_without_them_is_u
                    ("Review uncertainty", export_fields.REVIEW_UNCERTAINTY_REF),
                    ("Review reason", export_fields.REVIEW_REASON_REF)]) == [
         ["count", "Review uncertainty", "Review reason"],
-        ["0", "attributes.count: The table total and the text disagree.", ""],
+        ["0", "Count: The table total and the text disagree.", ""],
         ["0", "", ""],
     ]
+
+
+def test_review_uncertainty_copies_each_doubt_and_labels_only_exact_declared_paths():
+    """Two doubts on one field stay two entries; an indexed list element, a path the pack
+    does not declare and an absence doubt without a field keep their stored form."""
+
+    def doubt(finding_id, field_path, message):
+        finding = _doubt(field_path, message, pending_ref_id="doubtful", object_type="GeneExpressionAnnotation")
+        finding["finding_id"] = finding_id
+        return finding
+
+    absence = {"finding_id": "review-absence:d1:u1", "status": "open", "severity": "warning",
+               "code": FINDING_CODE, "message": "The paper does not say whether a compartment was examined.",
+               "object_ref": {"pending_ref_id": "doubtful", "object_type": "GeneExpressionAnnotation"},
+               "field_ref": None, "details": {"review_assessment": {"absence_assessment": "unresolved"}}}
+    findings = [
+        doubt("a", "where_expressed_statement", "The legend names another tissue."),
+        doubt("b", "where_expressed_statement", "The text and the figure disagree."),
+        doubt("c", "classification_notes[1]", "This note restates the title."),
+        absence,
+    ]
+    rows = apply_projection_plan(_pack_bundle(findings), _object_plan("csv", [
+        ("doubt", export_fields.REVIEW_UNCERTAINTY_REF)])).rows
+    assert rows[0]["doubt"] == (
+        "Where expressed statement: The legend names another tissue. | "
+        "Where expressed statement: The text and the figure disagree. | "
+        "classification_notes[1]: This note restates the title. | "
+        "The paper does not say whether a compartment was examined."
+    )
+
+
+def test_review_fields_enter_the_bundle_catalog_like_a_declared_rationale():
+    """Like a pack's declared Rationale, the review fields are on every row (None when
+    empty), so the catalog lists them, with examples only of stored text."""
+
+    bundle = _pack_bundle([])
+    rationale = "object.pack.GeneExpressionAnnotation.rationale"
+    catalog = {field.ref: field for field in bundle.field_catalog if field.row_source == "object"}
+    assert all(rationale in row and REVIEW_REFS <= set(row) for row in bundle.rows_for_source("object"))
+    for ref in (rationale, *REVIEW_REFS):
+        assert catalog[ref].non_empty_count == 0 and catalog[ref].examples == [], ref

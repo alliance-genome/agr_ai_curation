@@ -160,14 +160,17 @@ def _captured(scope, tmp_path, monkeypatch, payloads):
                            baseline=baseline, targets=targets)
 
 
-def _review_export(scope, envelope, columns):
-    from src.lib.flows.output_projection import build_flow_output_artifact_bundle, FlowOutputProjectionPlan, finalize_output_projection
+def _review_export(scope, envelope, columns, *, finalized=True):
+    from src.lib.flows.output_projection import (
+        build_flow_output_artifact_bundle, FlowOutputProjectionPlan, apply_projection_plan, finalize_output_projection,
+    )
     bundle = build_flow_output_artifact_bundle(user_id=scope.owner_id, document_id=scope.document_id,
         completed_steps=[{"step": 1, "node_id": "source", "agent_id": "fixture", "agent_name": "Fixture",
             "candidate": SimpleNamespace(payload_json=envelope.model_dump(mode="json"), agent_key="fixture",
                 adapter_key="fixture", candidate_count=len(envelope.extracted_objects), conversation_summary="x")}],
         flow_name="Review reasons", output_format="tsv")
-    return bundle, finalize_output_projection(bundle, FlowOutputProjectionPlan.model_validate({
+    project = finalize_output_projection if finalized else apply_projection_plan
+    return bundle, project(bundle, FlowOutputProjectionPlan.model_validate({
         "format": "tsv", "row_source": "object",
         "columns": [{"key": key, "field_ref": ref} for key, ref in columns]}))
 
@@ -199,3 +202,35 @@ def test_review_reason_is_the_decision_that_stands_never_a_replaced_one(scope, t
     # The review fields are opt-in: the declared default layout never lists them.
     refs = {ref for artifact in bundle.artifacts for ref in artifact.default_object_refs}
     assert not refs & {"object.review_uncertainty", "object.review_reason"}
+
+
+def test_review_reason_after_reject_defer_revoke_and_a_curator_accept(scope, tmp_path, monkeypatch):
+    """Reject of a later answer keeps the accept; defer and revoke leave no standing
+    decision; a curator's own accept is the decision that stands."""
+    from dataclasses import replace as replaced
+    from src.lib.validation_review.decisions import record_decisions
+
+    item = _captured(scope, tmp_path, monkeypatch, [{"statement": f"S{i}"} for i in range(4)])
+
+    def decide(index, version, action, reason, operation_id, context=None, **refs):
+        return record_decisions(context or item.context, checkpoint_request=item.checkpoint(),
+            operation_id=operation_id, entries=[{"target_id": item.targets[index], "decision_unit_id": item.targets[index],
+                "expected_version": version, "action": action, "reason": reason, **refs}])
+
+    baseline = {"extraction_ref": item.baseline}
+    decide(0, 0, "accept", "Table 1 lists it for this cohort.", "accept-0", **baseline)
+    decide(0, 1, "reject", "A second reading did not hold up.", "reject-0", **baseline)
+    decide(1, 0, "defer", "Needs a look at the supplement.", "defer-1", **baseline)
+    decide(2, 0, "accept", "The methods name it.", "accept-2", **baseline)
+    decide(2, 1, "revoke", "Accepted too early.", "revoke-2")
+    curator = replaced(item.context, actor_id=scope.owner_id, actor_type="curator")
+    decide(3, 0, "accept", "Confirmed against Figure 2.", "curator-3", context=curator, **baseline)
+
+    _, projected = _review_export(scope, item.checkpoint().envelope, [
+        ("statement", "object.pack.Annotation.statement"), ("reason", "object.review_reason")], finalized=False)
+    assert projected.rows == [
+        {"statement": "S0", "reason": "Table 1 lists it for this cohort."},
+        {"statement": "S1", "reason": ""},
+        {"statement": "S2", "reason": ""},
+        {"statement": "S3", "reason": "Confirmed against Figure 2."},
+    ]
