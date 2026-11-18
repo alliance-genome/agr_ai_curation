@@ -415,6 +415,9 @@ async def test_large_thought_and_unknown_metadata_are_bounded_and_exactly_recons
 @pytest.mark.asyncio
 async def test_trace_and_tool_summaries_project_large_collections_to_exact_views():
     analyzed = _large_analysis(call_count=2)
+    retained_edits = [
+        {"envelope_id": "env-1", "record_object_id": "record-1", "object_id": "ref-1", "value_path": "name"},
+    ]
     analyzed["analysis"]["summary"] = {
         "trace_id": TRACE_ID,
         "trace_name": "large summary",
@@ -423,6 +426,7 @@ async def test_trace_and_tool_summaries_project_large_collections_to_exact_views
             "summary": {"object_count": 500, "finding_count": 500, "blocker_count": 250},
             "object_ids": [f"object-{index}-" + "x" * 100 for index in range(500)],
             "finding_ids": [f"finding-{index}-" + "y" * 100 for index in range(500)],
+            "curator_edits_not_applied": retained_edits,
         },
     }
     analyzed["analysis"]["domain_envelope"] = analyzed["analysis"]["summary"]["domain_envelope"]
@@ -433,6 +437,9 @@ async def test_trace_and_tool_summaries_project_large_collections_to_exact_views
 
     with patch("src.api.claude._ensure_trace_analyzed", new=AsyncMock(return_value=analyzed)):
         trace_summary = await claude.get_trace_summary(TRACE_ID, Mock(), source="local")
+        next_call = trace_summary.data["domain_envelope"]["collections"]["curator_edits_not_applied"]["next_call"]
+        retained_page = await claude.get_trace_view(request=Mock(), source="local", **next_call)
+        assert retained_page.data["page"]["items"] == retained_edits
         tool_summary = await claude.get_tool_calls_summary(
             TRACE_ID, Mock(), page=1, page_size=2, source="local"
         )

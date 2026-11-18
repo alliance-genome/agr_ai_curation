@@ -138,6 +138,7 @@ class DomainEnvelopeTraceAnalyzer:
             "pending_ref_ids": list(summary.get("pending_ref_ids") or []),
             "finding_ids": list(summary.get("finding_ids") or []),
             "field_paths": list(summary.get("field_paths") or []),
+            "curator_edits_not_applied": list(summary.get("curator_edits_not_applied") or []),
             "readiness_statuses": list(summary.get("readiness_statuses") or []),
             "validator_group_scope_audits": list(
                 summary.get("validator_group_scope_audits") or []
@@ -185,6 +186,7 @@ class DomainEnvelopeTraceAnalyzer:
             "definition_state_flags": [],
             "blockers": [],
             "curator_edits": [],
+            "curator_edits_not_applied": [],
             "projections": [],
             "submission_states": [],
             "_seen": {},
@@ -526,6 +528,17 @@ class DomainEnvelopeTraceAnalyzer:
         }
         history = list(_iter_mappings(envelope.get("history")))
         metadata = envelope.get("metadata")
+        if isinstance(metadata, Mapping):
+            for edit in _iter_mappings(metadata.get("curator_edits_not_applied")):
+                accumulator["curator_edits_not_applied"].append({
+                    "envelope_id": envelope_id,
+                    "source_path": source_path,
+                    **{
+                        key: edit[key]
+                        for key in ("record_object_id", "object_id", "value_path")
+                        if key in edit
+                    },
+                })
         binding_audit = (
             metadata.get("validator_binding_audit")
             if isinstance(metadata, Mapping)
