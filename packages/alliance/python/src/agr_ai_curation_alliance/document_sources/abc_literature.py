@@ -447,8 +447,29 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         except ABCLiteratureClientError as exc:
             raise DocumentSourceError("ABC Literature checksum lookup failed") from exc
         artifacts: list[SourceArtifact] = []
+        references: dict[str, SourceReference] = {}
         for payload in payloads:
-            source_artifact = self._map_referencefile(payload)
+            curie = _first_string(payload, "reference_curie")
+            reference = None
+            if payload.get("open_access") is not True and curie is not None:
+                # by_md5 collapses an unset license flag to false. Applying MOD
+                # rules here without the reference could authorize a refused file.
+                if curie not in references:
+                    references[curie] = await self.resolve_reference(
+                        curie, request_bearer_token=request_bearer_token
+                    )
+                reference = references[curie]
+                reference_id = _first_string(payload, "reference_id")
+                if reference.reference_curie != curie or (
+                    reference_id is not None and reference.reference_id != reference_id
+                ):
+                    raise DocumentSourceError("ABC Literature checksum reference mismatch")
+                if (
+                    "copyright_license_name" not in reference.metadata
+                    or "copyright_license_open_access" not in reference.metadata
+                ):
+                    raise DocumentSourceError("ABC Literature checksum reference lacks license metadata")
+            source_artifact = self._map_referencefile(payload, reference=reference)
             artifacts.append(source_artifact)
             for converted in _extract_converted_referencefiles(payload):
                 artifacts.append(
@@ -825,28 +846,23 @@ def _license_access(
     payload: Mapping[str, Any],
     reference: SourceReference | str | None,
 ) -> _LicenseAccess:
-    """Read the license decision from the structured ABC fields in hand.
-
-    ``by_md5`` rows send ``open_access`` as ``bool(license and
-    license.open_access)``, so there an unset flag cannot be told from
-    ``false`` and applies the MOD rule. The reference record
-    (``ReferenceSchemaShow``, held when listing an identifier import's files)
-    sends ``copyright_license_name`` (non-null in ABC whenever a license is
-    set) and the raw ``copyright_license_open_access``, so a license whose flag
-    is unset is recognized and, as in ABC, refused. A bare curie or id carries
-    no record and applies the MOD rule.
-    """
+    """Read the license decision from the structured ABC fields in hand."""
 
     if payload.get("open_access") is True:
         return _LicenseAccess.OPEN
-    if not isinstance(reference, SourceReference):
+    if isinstance(reference, str):
+        # Conversion and figure re-listings use an already authorized source.
         return _LicenseAccess.MOD_RULE
+    if reference is None:
+        return _LicenseAccess.REFUSED
     open_access = reference.metadata.get("copyright_license_open_access")
     if open_access is True:
         return _LicenseAccess.OPEN
-    if open_access is None and reference.metadata.get("copyright_license_name"):
-        return _LicenseAccess.REFUSED
-    return _LicenseAccess.MOD_RULE
+    if open_access is False or (
+        open_access is None and reference.metadata.get("copyright_license_name") is None
+    ):
+        return _LicenseAccess.MOD_RULE
+    return _LicenseAccess.REFUSED
 
 
 def _map_access_policy(

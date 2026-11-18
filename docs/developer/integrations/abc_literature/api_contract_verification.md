@@ -344,13 +344,13 @@ Null-MOD access decision (aligned with ABC's `download_file` in ALL-1543):
 
 - A null MOD on a converted Markdown row is not an access grant. Converted
   Markdown inherits access from the matched source/main PDF.
-- Open access and the unset-license refusal are read only from those
-  structured ABC fields. `by_md5` cannot tell an unset flag from `false`, so a
-  checksum match under such a license applies the MOD rows; under a curator
-  bearer ABC then refuses the download with `403`, under the service bearer it
-  serves it. A listing made from a bare curie or id (conversion follow-up and
-  figure-metadata re-listings) has no reference record, so it applies the MOD
-  rows alone; none of those listings authorizes a source PDF.
+- A checksum match with `open_access: true` grants global access directly.
+  For other checksum rows, AI Curation fetches the matched reference with the
+  request bearer before applying MOD rules. A named license with an unset flag
+  denies the import before provider download or ingestion, including under
+  the service reader. Conversion follow-up and figure-metadata listings made
+  from a bare curie or id apply MOD rows to files for an already authorized
+  source PDF.
 - Identifier imports consider only the provider's main documents (for ABC:
   `file_class` `main` with file extension `pdf`, whatever the publication
   status or `pdf_type`). A supplement or any other file class is never
@@ -391,8 +391,7 @@ Null-MOD access decision (aligned with ABC's `download_file` in ALL-1543):
   service reader: login-free development and benchmark conversions, which
   authorize against the requesting curator's active groups. Under a curator
   bearer ABC's `download_file` also enforces its own rule on download. Because
-  the mapping above matches that rule, both bearers reach the same decision,
-  except for the `by_md5` unset-license case noted above.
+  the mapping above matches that rule, both bearers reach the same decision.
 - A live restricted fixture plus fake/unit coverage is enough for cutover; no
   additional live global fixture is required before ALL-354 closure.
 

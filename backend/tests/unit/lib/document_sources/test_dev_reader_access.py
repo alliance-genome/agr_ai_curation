@@ -8,10 +8,16 @@ context, ABC client and provider against a fake ABC that hides nothing.
 
 from __future__ import annotations
 
+import hashlib
+from io import BytesIO
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from fastapi import BackgroundTasks, UploadFile
+from pypdf import PdfWriter
 from starlette.requests import Request
 
 from agr_ai_curation_alliance.document_sources.abc_literature import (
@@ -34,9 +40,11 @@ from src.lib.document_sources.import_selection import (
     select_checksum_import_candidate,
 )
 from src.lib.document_sources.models import ProviderBearerKind
+from src.lib.observability import runtime
 from src.lib.packages.document_source_provider_models import (
     DevelopmentReaderCredentials,
 )
+from src.lib.pdf_jobs.upload_intake_service import UploadIntakeProviderDecisionError, UploadIntakeService
 
 READER_BEARER = "synthetic-reader-bearer"
 CHECKSUM = "0123456789abcdef0123456789abcdef"
@@ -75,15 +83,21 @@ class _AllAccessABC:
     def __init__(self, mod: str):
         self.files = [_source_pdf(10, mod)]
         self.requests: list[httpx.Request] = []
+        self.reference = {
+            "reference_id": 101,
+            "reference_curie": "AGRKB:101",
+            "copyright_license_name": None,
+            "copyright_license_open_access": None,
+        }
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         path = request.url.path.removeprefix("/api")
         if path == "/reference/AGRKB:101":
-            return httpx.Response(200, json={"reference_id": 101, "reference_curie": "AGRKB:101"})
+            return httpx.Response(200, json=self.reference)
         if path == "/reference/referencefile/show_all/AGRKB:101":
             return httpx.Response(200, json=self.files)
-        if path == f"/reference/referencefile/by_md5/{CHECKSUM}":
+        if path == f"/reference/referencefile/by_md5/{self.files[0].get('md5sum')}":
             return httpx.Response(200, json=self.files)
         if path.startswith("/reference/referencefile/download_file/"):
             return httpx.Response(200, content=b"%PDF-1.7 restricted bytes")
@@ -177,6 +191,56 @@ async def test_fb_only_dev_user_cannot_import_a_wb_only_paper_by_checksum(monkey
 
 
 @pytest.mark.asyncio
+async def test_service_reader_checksum_upload_refuses_unset_license_before_ingestion(monkeypatch, tmp_path):
+    report = Mock()
+    monkeypatch.setattr(runtime, "report_runtime_exception", report)
+    context = await _dev_context(monkeypatch, "FB")
+    assert context.bearer_kind is ProviderBearerKind.SERVICE
+    abc = _AllAccessABC("FB")
+    abc.reference["copyright_license_name"] = "Named license"
+    pdf = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.write(pdf)
+    pdf.seek(0)
+    checksum = hashlib.md5(pdf.getvalue(), usedforsecurity=False).hexdigest()
+    abc.files[0].update(md5sum=checksum, open_access=False, copyright_license_name="Named license")
+
+    session = Mock()
+    session.execute.return_value.scalars.return_value.first.return_value = None
+    dispatch = AsyncMock()
+    create_document = AsyncMock()
+    intake = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        create_document_fn=create_document,
+        document_source_provider_factory=abc.provider,
+    )
+    tasks = BackgroundTasks()
+    with pytest.raises(UploadIntakeProviderDecisionError) as denied:
+        await intake.intake_upload(
+            background_tasks=tasks,
+            file=UploadFile(filename="paper.pdf", file=pdf),
+            user={"sub": "dev-user"},
+            document_source_context=context,
+        )
+
+    assert denied.value.status_code == 403
+    assert denied.value.detail["error"] == "document_source_access_denied"
+    report.assert_not_called()
+    assert [request.url.path for request in abc.requests] == [
+        f"/api/reference/referencefile/by_md5/{checksum}",
+        "/api/reference/AGRKB:101",
+    ]
+    assert all(request.headers["Authorization"] == f"Bearer {READER_BEARER}" for request in abc.requests)
+    create_document.assert_not_awaited()
+    assert dispatch.mock_calls == []
+    assert tasks.tasks == []
+
+
+@pytest.mark.asyncio
 async def test_dev_user_without_groups_cannot_import_restricted_papers(monkeypatch):
     context = await _dev_context(monkeypatch, "")
     assert context.authorized_group_ids == ()
@@ -237,7 +301,7 @@ class _MixedReferenceABC(_AllAccessABC):
     """
 
     def __init__(self, *, bound: bool):
-        self.requests = []
+        super().__init__("FB")
         pmc_pdf = _row(40, "main", "pdf", "PMC123", None, pdf_type="pdf", md5sum=CHECKSUM)
         if bound:
             pmc_pdf["converted_referencefiles"] = [
@@ -329,7 +393,7 @@ class _MixedChecksumABC(_AllAccessABC):
     """by_md5 returns the GLOBAL PMC PDF plus unparented reference-level text."""
 
     def __init__(self):
-        self.requests = []
+        super().__init__("FB")
         self.files = [
             _row(40, "main", "pdf", "PMC123", None, pdf_type="pdf", md5sum=CHECKSUM),
             _row(30, "converted_merged_main", "md", "fb-main_nxml", None),

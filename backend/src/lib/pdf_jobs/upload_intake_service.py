@@ -53,6 +53,7 @@ from src.lib.document_sources.registry import (
     get_configured_document_source_provider,
     get_document_source_provider_metadata,
 )
+from src.lib.observability import runtime
 from src.lib.openai_agents.config import (
     get_document_source_import_enabled,
     get_document_source_provider,
@@ -583,6 +584,15 @@ class UploadIntakeService:
             )
         except (DocumentSourceConfigError, DocumentSourceError) as exc:
             self._cleanup_saved_file_artifacts(saved_path)
+            try:
+                runtime.report_runtime_exception(
+                    runtime.sanitized_runtime_error("Document-source checksum lookup failed"),
+                    component="upload_intake",
+                    operation="checksum_lookup_failed",
+                    context={"exception_type": type(exc).__name__},
+                )
+            except Exception:
+                logger.warning("Failed to report checksum lookup failure", extra={"sentry_skip_event": True})
             raise UploadIntakeProviderDecisionError(
                 status_code=503,
                 detail={

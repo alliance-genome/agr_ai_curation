@@ -699,6 +699,12 @@ The event uses a fixed, chain-free message and only the exception class as conte
 The curator receives `token_unavailable` even if reporting fails. Ordinary missing
 curator tokens stay quiet.
 
+Upload intake reports checksum provider failures under component `upload_intake`
+and operation `checksum_lookup_failed`. The report carries a fixed, chain-free
+error and the exception class. Intake removes the staged upload and returns the
+usual 503 even if reporting fails. An ordinary license denial returns 403 and
+produces no event.
+
 ## Sensitive Database Wrappers
 
 Some exception types should not be logged or captured directly. SQLAlchemy
