@@ -93,7 +93,7 @@ class DevelopmentReaderService:
             except Exception as exc:
                 logger.warning(
                     "Development document-source reader authentication failed",
-                    extra={"failure_type": type(exc).__name__},
+                    extra={"failure_type": type(exc).__name__, "sentry_skip_event": True},
                 )
                 raise DevelopmentReaderUnavailable(
                     "Development document-source reader credentials are unavailable."

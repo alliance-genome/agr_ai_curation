@@ -289,17 +289,42 @@ async def test_a_link_saved_during_the_lookup_wins_and_the_second_is_refused(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("capture_fails", [False, True], ids=["capture", "capture-fails"])
 async def test_an_unavailable_development_reader_is_reported_as_no_token(
-    scope, migrated, wired, monkeypatch
+    scope, migrated, wired, monkeypatch, caplog, capture_fails
 ):
     async def context(*, request, user_claims):
-        raise DevelopmentReaderUnavailable("no reader")
+        raise DevelopmentReaderUnavailable("fake-reader-secret") from ValueError("fake-resolver-secret")
+
+    def report(exc, **kwargs):
+        wired.reports.append((exc, kwargs))
+        if capture_fails:
+            raise RuntimeError("fake-reporting-secret")
+        return True
 
     monkeypatch.setattr(service, "build_document_source_request_context", context)
+    monkeypatch.setattr(service, "report_runtime_exception", report)
 
     result = await _find(_session(scope.document_id))
 
     assert result.status is CurationDocumentReferenceStatus.TOKEN_UNAVAILABLE
+    assert result.message == "Your sign-in could not be used to reach the literature source. Sign in again and retry."
+    assert wired.provider.tokens == []
+    (exc, metadata), = wired.reports
+    assert type(exc) is RuntimeError
+    assert str(exc) == "Development document-source reader unavailable for reference lookup"
+    assert exc.__traceback__ is not None
+    assert exc.__cause__ is None
+    assert exc.__context__ is None
+    assert metadata == {
+        "component": "document_reference",
+        "operation": "development_reader_authentication_failed",
+        "context": {"exception_type": "DevelopmentReaderUnavailable"},
+    }
+    warning, = [record for record in caplog.records if record.name == service.__name__]
+    assert warning.sentry_skip_event is True
+    for secret in ("fake-reader-secret", "fake-resolver-secret", "fake-reporting-secret"):
+        assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
