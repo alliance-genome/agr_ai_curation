@@ -1048,6 +1048,16 @@ def _get_env(key: str, default: str) -> str:
     return os.getenv(key, default)
 
 
+def _get_nonnegative_env_int(key: str, default: int) -> int:
+    try:
+        value = int(_get_env(key, str(default)))
+    except ValueError:
+        raise ValueError(f"{key} must be a nonnegative integer") from None
+    if value < 0:
+        raise ValueError(f"{key} must be a nonnegative integer")
+    return value
+
+
 def _get_env_float(key: str, default: Optional[float]) -> Optional[float]:
     """Get environment variable as float."""
     val = os.getenv(key)
@@ -2215,13 +2225,13 @@ def get_extraction_fanout_max_writers() -> int:
 def get_extraction_fanout_max_plan_reminders() -> int:
     """Maximum reminders after a fan-out planner returns without a plan."""
 
-    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_PLAN_REMINDERS", 1))
+    return _get_nonnegative_env_int("EXTRACTION_FANOUT_MAX_PLAN_REMINDERS", 1)
 
 
 def get_extraction_fanout_max_finalize_corrections() -> int:
     """Maximum planner correction rounds after fan-out finalization fails."""
 
-    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS", 1))
+    return _get_nonnegative_env_int("EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS", 1)
 
 
 def get_layer2_force_tool_finalization_enabled() -> bool:

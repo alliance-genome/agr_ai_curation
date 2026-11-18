@@ -1217,6 +1217,20 @@ FANOUT_CONTRACT = [
         WORKSPACE_ROOT / "scripts/testing/fixtures/extraction_fanout_env.txt"
     ).read_text().splitlines() if line and not line.startswith("#")
 ]
+FANOUT_RECOVERY_BUDGETS = (
+    "EXTRACTION_FANOUT_MAX_PLAN_REMINDERS",
+    "EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS",
+)
+
+
+@pytest.mark.parametrize("key", FANOUT_RECOVERY_BUDGETS)
+@pytest.mark.parametrize("value", ["disabled", "-1", ""])
+def test_extraction_fanout_recovery_budget_rejects_invalid_values(key, value, monkeypatch):
+    from src.lib.openai_agents import config
+
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError, match=key):
+        getattr(config, "get_" + key.lower())()
 
 
 @pytest.mark.parametrize("key,default,override", FANOUT_CONTRACT)
@@ -1226,7 +1240,8 @@ def test_extraction_fanout_settings_reach_every_extraction_consumer(key, default
     getter = getattr(config, "get_" + key.lower())
     monkeypatch.delenv(key, raising=False)
     assert getter() == int(default)
-    expected = "${" + key + ":-" + default + "}"
+    default_operator = "-" if key in FANOUT_RECOVERY_BUDGETS else ":-"
+    expected = "${" + key + default_operator + default + "}"
     for path in (DEV_COMPOSE_PATH, COMPOSE_PATH):
         services = yaml.safe_load(path.read_text())["services"]
         for name in ("backend", "benchmark_worker"):
