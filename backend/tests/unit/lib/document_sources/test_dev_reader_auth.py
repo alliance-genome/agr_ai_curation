@@ -75,7 +75,7 @@ async def test_cache_reuse_refresh_and_concurrent_callers(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_service_sanitizes_provider_failures(monkeypatch) -> None:
+async def test_service_sanitizes_provider_failures(monkeypatch, caplog) -> None:
     service = auth.DevelopmentReaderService()
     monkeypatch.setattr(auth, "development_reader_required", lambda: True)
 
@@ -92,6 +92,9 @@ async def test_service_sanitizes_provider_failures(monkeypatch) -> None:
     assert "reader-client-id" not in message
     assert "client-secret-value" not in message
     assert "token-endpoint-body" not in message
+    warning, = [record for record in caplog.records if record.name == auth.__name__]
+    assert warning.sentry_skip_event is True
+    assert "client-secret-value" not in caplog.text
 
 
 @pytest.mark.asyncio

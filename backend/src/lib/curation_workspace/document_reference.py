@@ -35,7 +35,7 @@ from src.lib.document_sources.models import (
     DocumentSourceReferenceNotFound,
 )
 from src.lib.document_sources.registry import get_configured_document_source_provider
-from src.lib.observability.runtime import report_runtime_exception
+from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.packages.document_source_provider_models import DevelopmentReaderUnavailable
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
 from src.schemas.curation_workspace import (
@@ -154,8 +154,19 @@ async def find_document_reference(
             request=request,
             user_claims=user_claims,
         )
-    except DevelopmentReaderUnavailable:
-        logger.warning("Development document-source reader unavailable for reference lookup")
+    except DevelopmentReaderUnavailable as exc:
+        message = "Development document-source reader unavailable for reference lookup"
+        logger.warning(message, extra={"sentry_skip_event": True})
+        try:
+            report_runtime_exception(
+                sanitized_runtime_error(message),
+                component="document_reference",
+                operation="development_reader_authentication_failed",
+                context={"exception_type": type(exc).__name__},
+            )
+        except Exception:
+            # Reporting must not interrupt the curator's token-unavailable response.
+            pass
         return _failure(
             CurationDocumentReferenceStatus.TOKEN_UNAVAILABLE,
             _TOKEN_UNAVAILABLE_MESSAGE,
