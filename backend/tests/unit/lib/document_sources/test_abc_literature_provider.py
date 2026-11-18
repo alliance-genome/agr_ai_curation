@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, call
 
 import pytest
 from src.lib.document_sources.identifier_import import (
@@ -872,8 +873,14 @@ async def test_list_artifacts_forwards_request_bearer_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_checksum_lookup_maps_source_and_inherited_converted_access() -> None:
+@pytest.mark.parametrize("license_name, open_access", [(None, None), ("Closed license", False)])
+async def test_checksum_lookup_maps_source_and_inherited_converted_access(
+    license_name: str | None, open_access: bool | None
+) -> None:
     fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record(
+        copyright_license_name=license_name, copyright_license_open_access=open_access
+    )
     fake_client.by_md5_payload = [
         {
             "referencefile_id": 10,
@@ -903,7 +910,8 @@ async def test_checksum_lookup_maps_source_and_inherited_converted_access() -> N
         (
             "lookup_referencefile_by_md5",
             {"md5sum": "abc123", "request_bearer_token": None},
-        )
+        ),
+        ("show_reference", {"reference": "AGRKB:101", "request_bearer_token": None}),
     ]
     assert [artifact.artifact_id for artifact in artifacts] == ["10", "11"]
     source_artifact, converted_artifact = artifacts
@@ -920,8 +928,64 @@ async def test_checksum_lookup_maps_source_and_inherited_converted_access() -> N
 
 
 @pytest.mark.asyncio
+async def test_checksum_without_reference_curie_cannot_grant_mod_access() -> None:
+    fake_client = FakeABCLiteratureClient()
+    row = _abc_by_md5_main_pdf("WB")
+    del row["reference_curie"]
+    fake_client.by_md5_payload = [row]
+
+    source, child = await provider_from_fake(fake_client).find_artifacts_by_checksum("abc123")
+
+    assert source.access_policy.scope is SourceAccessScope.UNKNOWN
+    assert child.access_policy == source.access_policy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reference_fields", "message"),
+    [
+        ({"reference_id": 101, "curie": "AGRKB:101"}, "lacks license metadata"),
+        ({"reference_id": 102, "curie": "AGRKB:101"}, "reference mismatch"),
+    ],
+)
+async def test_incomplete_or_mismatched_checksum_reference_fails_closed(reference_fields, message) -> None:
+    fake_client = FakeABCLiteratureClient()
+    fake_client.by_md5_payload = [_abc_by_md5_main_pdf("WB")]
+    fake_client.show_reference_payload = reference_fields
+
+    with pytest.raises(DocumentSourceError, match=message):
+        await provider_from_fake(fake_client).find_artifacts_by_checksum("abc123")
+
+
+@pytest.mark.asyncio
+async def test_checksum_matches_use_each_references_own_license(monkeypatch) -> None:
+    fake_client = FakeABCLiteratureClient()
+    first = _abc_by_md5_main_pdf("WB") | {"converted_referencefiles": []}
+    second = first | {"referencefile_id": 20, "reference_id": 102, "reference_curie": "AGRKB:102"}
+    fake_client.by_md5_payload = [first, second, first | {"referencefile_id": 30}]
+    lookup = AsyncMock(side_effect=[
+        _abc_reference_record(copyright_license_name="Named license"),
+        _abc_reference_record() | {"reference_id": 102, "curie": "AGRKB:102"},
+    ])
+    monkeypatch.setattr(fake_client, "show_reference", lookup)
+
+    artifacts = await provider_from_fake(fake_client).find_artifacts_by_checksum(
+        "abc123", request_bearer_token="curator-token"
+    )
+
+    assert [artifact.access_policy.scope for artifact in artifacts] == [
+        SourceAccessScope.UNKNOWN, SourceAccessScope.RESTRICTED, SourceAccessScope.UNKNOWN
+    ]
+    assert lookup.await_args_list == [
+        call("AGRKB:101", request_bearer_token="curator-token"),
+        call("AGRKB:102", request_bearer_token="curator-token"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_checksum_lookup_preserves_explicit_unknown_converted_status() -> None:
     fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record()
     fake_client.by_md5_payload = [
         {
             "referencefile_id": 10,
@@ -1234,6 +1298,7 @@ async def test_malformed_referencefile_payload_raises_provider_error() -> None:
 @pytest.mark.asyncio
 async def test_source_pdf_null_mods_map_to_global_for_inheritance() -> None:
     fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record()
     fake_client.by_md5_payload = [
         {
             "referencefile_id": 10,
@@ -1266,9 +1331,11 @@ async def test_source_pdf_null_mods_map_to_global_for_inheritance() -> None:
 @pytest.mark.asyncio
 async def test_empty_mod_payload_does_not_infer_global_access() -> None:
     fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record()
     fake_client.by_md5_payload = [
         {
             "referencefile_id": 10,
+            "reference_curie": "AGRKB:101",
             "display_name": "source.pdf",
             "file_class": "main",
             "file_extension": "pdf",
@@ -1285,9 +1352,11 @@ async def test_empty_mod_payload_does_not_infer_global_access() -> None:
 @pytest.mark.asyncio
 async def test_bare_mod_string_does_not_create_access_entitlement() -> None:
     fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record()
     fake_client.by_md5_payload = [
         {
             "referencefile_id": 10,
+            "reference_curie": "AGRKB:101",
             "display_name": "source.pdf",
             "file_class": "main",
             "file_extension": "pdf",
@@ -1391,6 +1460,7 @@ def _abc_reference_record(
 @pytest.mark.asyncio
 async def test_source_pdf_null_and_named_mod_maps_to_any_group() -> None:
     fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record()
     fake_client.by_md5_payload = [_abc_by_md5_main_pdf(None, "WB")]
     provider = provider_from_fake(fake_client)
 
@@ -1444,6 +1514,7 @@ async def test_source_pdf_with_only_named_mods_stays_restricted_to_them() -> Non
 @pytest.mark.asyncio
 async def test_source_pdf_without_mod_entries_stays_unknown_and_denied() -> None:
     fake_client = FakeABCLiteratureClient()
+    fake_client.show_reference_payload = _abc_reference_record()
     fake_client.by_md5_payload = [_abc_by_md5_main_pdf()]
     provider = provider_from_fake(fake_client)
 

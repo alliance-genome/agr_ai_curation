@@ -1124,7 +1124,7 @@ async def test_select_checksum_import_candidate_requires_checksum():
 
 
 class _ABCByMd5Client:
-    """ABC client double serving only ``by_md5`` (``ReferencefileByMd5MatchSchema``)."""
+    """ABC checksum rows for a reference with no license."""
 
     def __init__(self, payload: list[dict[str, object]]):
         self.payload = payload
@@ -1136,6 +1136,16 @@ class _ABCByMd5Client:
         request_bearer_token: str | None = None,
     ) -> list[dict[str, object]]:
         return self.payload
+
+    async def show_reference(
+        self, reference: str, *, request_bearer_token: str | None = None
+    ) -> dict[str, object]:
+        return {
+            "curie": reference,
+            "reference_id": 101,
+            "copyright_license_name": None,
+            "copyright_license_open_access": None,
+        }
 
 
 def _abc_by_md5_source(
