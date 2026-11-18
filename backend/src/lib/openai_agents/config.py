@@ -1095,6 +1095,13 @@ def provider_allows_parallel_tool_calls(model: str, provider_override: Optional[
     return allowed
 
 
+def provider_is_openai_native(model: str, provider_override: Optional[str] = None) -> bool:
+    """Whether ``model`` resolves to a native OpenAI provider (driver ``openai_native``)."""
+
+    provider = resolve_model_provider(model, provider_override)
+    return _get_provider_definition(provider).driver == "openai_native"
+
+
 @dataclass
 class AgentConfig:
     """Configuration for a single agent."""
@@ -2306,6 +2313,18 @@ def get_extraction_fanout_writer_reruns() -> int:
     extraction. 0 turns re-runs off. Default 1.
     """
     return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_WRITER_RERUNS", 1))
+
+
+def get_extraction_fanout_writer_store_responses() -> bool:
+    """Whether parallel writers keep their responses at OpenAI (EXTRACTION_FANOUT_WRITER_STORE_RESPONSES).
+
+    False (default): each writer on a native OpenAI provider sends ``store=false``,
+    so OpenAI does not keep its responses (they are not in the OpenAI dashboard and
+    cannot be looked up by ID; our own traces are unaffected). True leaves the
+    writer's ``store`` as inherited from the planner. The planner, the check pass
+    and every other agent are unaffected either way.
+    """
+    return _get_env_bool("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", False)
 
 
 def get_layer2_force_tool_finalization_enabled() -> bool:
