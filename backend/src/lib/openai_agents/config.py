@@ -2212,6 +2212,18 @@ def get_extraction_fanout_max_writers() -> int:
     return max(1, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_WRITERS", 8))
 
 
+def get_extraction_fanout_max_plan_reminders() -> int:
+    """Maximum reminders after a fan-out planner returns without a plan."""
+
+    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_PLAN_REMINDERS", 1))
+
+
+def get_extraction_fanout_max_finalize_corrections() -> int:
+    """Maximum planner correction rounds after fan-out finalization fails."""
+
+    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS", 1))
+
+
 def get_layer2_force_tool_finalization_enabled() -> bool:
     """Kill-switch for Layer-2 tool-forced structured finalization (LAYER2_FORCE_TOOL_FINALIZATION_ENABLED).
 

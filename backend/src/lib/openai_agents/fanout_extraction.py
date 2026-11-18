@@ -20,7 +20,7 @@ model (AGENTS.md section 8):
   duplicates and wrong details are the model's call, including for any writer that
   staged fewer records than it was assigned.
 - Code finalizes every retained record through the agent's own finalize tool.
-  Validation problems go back to the planner thread once; if finalization still
+  Validation problems go back to the planner within its correction budget. If finalization still
   fails, the step fails exactly as a single-writer run does.
 """
 
@@ -610,7 +610,9 @@ class FanoutExtraction:
         try:
             async for event in self._run_planner_thread(planning_message(self.catalog_tool_names)):
                 yield event
-            if self.plan is None:
+            for _ in range(config.get_extraction_fanout_max_plan_reminders()):
+                if self.plan is not None:
+                    break
                 async for event in self._run_planner_thread(PLAN_REMINDER_MESSAGE):
                     yield event
         finally:
@@ -1008,22 +1010,24 @@ class FanoutExtraction:
     async def _finalize(self):
         self.phase = "finalizing"
         output = await self._invoke_finalize(attempt=1)
-        if self.workspace.finalization is not None:
-            return
-        self.phase = "correcting"
-        self._progress("Fixing the problems validation found before saving")
-        async for event in self._run_planner_thread(
-            "[Finalize check] The system tried to finalize the staged records, and validation "
-            "reported the problems below. Fix them with your correction tools: patch a record, "
-            "discard one that should not be kept, or stage a missing one. Make every fix in one "
-            "response, calling the tools in parallel. Do not finalize; the "
-            "system finalizes again after you reply. Then reply with your final explanation "
-            "(what was extracted, exclusions and uncertainty), as your instructions describe."
-            f"\n\nValidation result:\n{output}"
-        ):
-            yield event
-        self.phase = "finalizing"
-        await self._invoke_finalize(attempt=2)
+        max_attempts = 1 + config.get_extraction_fanout_max_finalize_corrections()
+        for attempt in range(2, max_attempts + 1):
+            if self.workspace.finalization is not None:
+                return
+            self.phase = "correcting"
+            self._progress("Fixing the problems validation found before saving")
+            async for event in self._run_planner_thread(
+                "[Finalize check] The system tried to finalize the staged records, and validation "
+                "reported the problems below. Fix them with your correction tools: patch a record, "
+                "discard one that should not be kept, or stage a missing one. Make every fix in one "
+                "response, calling the tools in parallel. Do not finalize; the "
+                "system finalizes again after you reply. Then reply with your final explanation "
+                "(what was extracted, exclusions and uncertainty), as your instructions describe."
+                f"\n\nValidation result:\n{output}"
+            ):
+                yield event
+            self.phase = "finalizing"
+            output = await self._invoke_finalize(attempt=attempt)
 
     def _plan_missing_error(self) -> Exception:
         from .streaming_tools import SpecialistOutputError
