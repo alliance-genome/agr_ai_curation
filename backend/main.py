@@ -540,8 +540,6 @@ async def lifespan(app: FastAPI):
                 langfuse_client = initialize_langfuse()
                 if langfuse_client:
                     logger.info("Langfuse observability initialized")
-                else:
-                    logger.warning("Langfuse initialization returned None - tracing may not work")
             else:
                 logger.info("Langfuse not configured - running without observability")
         except ImportError as e:

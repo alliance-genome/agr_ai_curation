@@ -1361,6 +1361,11 @@ def get_app_db_max_overflow() -> int:
 # --- Observability ---
 
 
+def get_langfuse_timeout() -> int:
+    """Use the Langfuse SDK's request timeout for its OTLP exporter as well."""
+    return int(_get_env("LANGFUSE_TIMEOUT", "5"))
+
+
 def get_sentry_content_redaction_enabled() -> bool:
     """Filter curator/document content in Sentry events; credentials are always scrubbed."""
     return _get_env_bool("SENTRY_CONTENT_REDACTION_ENABLED", False)
