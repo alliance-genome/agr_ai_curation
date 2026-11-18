@@ -1237,6 +1237,7 @@ async def test_writer_drain_reports_discarded_failures(harness, monkeypatch, cap
         agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="fake-private-run-id"),
         specialist_name="fake-private-specialist", input_text="fake-private-prompt",
         emit_event=harness.events.append, record_live_evidence=lambda record: None,
+        evidence_records=[],
     )
     ready = asyncio.Event()
     primary = RuntimeError("fake-private-provider-message")
@@ -1249,7 +1250,7 @@ async def test_writer_drain_reports_discarded_failures(harness, monkeypatch, cap
             raise RuntimeError("fake-private-telemetry-message")
         return True
 
-    async def writer(index, count, positions):
+    async def writer(index, count, positions, *, attempt=1):
         if index == count:
             ready.set()
         if not cancel_parent and index in (1, 2):
