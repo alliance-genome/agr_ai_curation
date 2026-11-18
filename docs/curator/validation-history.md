@@ -6,6 +6,8 @@ Open a record's existing **Details** panel and expand **Validation history**. It
 
 A deliberate request authorizes an accepted answer to replace the value that existed when you requested the round. Edits made after that request remain protected. Your manual decisions remain available even if the automatic review reaches its allowance. You can explicitly request another round; reopening, resuming, or retrying the same HTTP request does not grant another allowance. Each record gets one targeted re-check per review round, and a round you request gives each record a fresh one.
 
+If the server rejects your instructions, the panel shows the reason and keeps the text available to edit. Correct the instructions and submit again. If the connection is interrupted and the outcome is unknown, choose **Retry this request** to resend the same instructions under the original request ID.
+
 **Revalidate all records** explicitly selects the workspace's records. Operations are saved before execution, and reopening displays their saved progress. Stop cancels remaining work. Interrupted submissions with an unknown outcome are retained for inspection and are not automatically replayed.
 
 Accepting or rejecting a saved validator answer records your reason and updates the selected value through the shared history. Rejecting a replacement preserves an earlier accepted selection. These scientific decisions are separate from accepting or rejecting an annotation row for submission. Finishing one record's review does not claim that every record is ready to submit.

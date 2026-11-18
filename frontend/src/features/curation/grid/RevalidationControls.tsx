@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Stack, TextField, Typography } from '@mui/material'
+import { CurationWorkspaceRequestError } from '../services/curationWorkspaceService'
 import { controlReview, fetchCandidateReviewOperation, fetchSessionReviewOperation, fetchReviewOperation, requestReview, type ReviewOperation } from '../services/validationHistoryService'
 
 // Plain words for stop reasons whose code name would read as internals. Every other
@@ -69,6 +70,10 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
     timer = setTimeout(() => void poll(), 1000)
     return () => { controller.abort(); clearTimeout(timer) }
   }, [active, operation?.operation_id])
+  function clearPendingRequest() {
+    sessionStorage.removeItem(storageKey)
+    request.current = null
+  }
   async function start() {
     setBusy(true); setError(null)
     try {
@@ -78,10 +83,14 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
       }
       sessionStorage.setItem(storageKey, JSON.stringify(request.current))
       const saved = await requestReview(sessionId, candidateId ? [candidateId] : [], request.current.guidance, request.current.id)
-      sessionStorage.removeItem(storageKey)
-      request.current = null
+      clearPendingRequest()
       setOperation(saved)
-    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Unable to start revalidation') }
+    } catch (failure) {
+      if (request.current && failure instanceof CurationWorkspaceRequestError && failure.status === 422) {
+        clearPendingRequest()
+      }
+      setError(failure instanceof Error ? failure.message : 'Unable to start revalidation')
+    }
     finally { setBusy(false) }
   }
   async function control(action: 'cancel' | 'resume') {

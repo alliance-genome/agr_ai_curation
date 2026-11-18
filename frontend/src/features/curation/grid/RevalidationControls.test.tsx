@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import RevalidationControls from './RevalidationControls'
+import { CurationWorkspaceRequestError } from '../services/curationWorkspaceService'
 import * as service from '../services/validationHistoryService'
 
 vi.mock('../services/validationHistoryService', () => ({
@@ -16,7 +17,14 @@ const stoppedRecord = {
 }
 
 describe('Record revalidation', () => {
-  beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear() })
+  beforeEach(() => {
+    vi.resetAllMocks()
+    sessionStorage.clear()
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000001')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000002')
+  })
+  afterEach(() => { vi.restoreAllMocks() })
   it('reopens an existing round without requesting another validation', async () => {
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(saved)
     render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
@@ -25,14 +33,50 @@ describe('Record revalidation', () => {
     expect(service.requestReview).not.toHaveBeenCalled()
     expect(service.controlReview).not.toHaveBeenCalled()
   })
-  it('submits only B and reuses its command identity after an ambiguous HTTP failure', async () => {
+  it('allows rejected instructions to be corrected and submitted under a fresh request ID', async () => {
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(null)
-    vi.mocked(service.requestReview).mockRejectedValueOnce(new Error('Connection interrupted')).mockResolvedValueOnce(saved)
+    const actual = await vi.importActual<typeof service>('../services/validationHistoryService')
+    vi.mocked(service.requestReview).mockImplementation(actual.requestReview)
+    const message = 'Guidance must be nonempty and within its configured character limit'
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(Response.json({ detail: message }, { status: 422 }))
+      .mockResolvedValueOnce(Response.json(saved, { status: 202 }))
+    const user = userEvent.setup()
+    render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    const submit = screen.getByRole('button', { name: 'Revalidate record' })
+    await waitFor(() => expect(submit).toBeEnabled())
+    const instructions = screen.getByRole('textbox', { name: 'Instructions (optional)' })
+    const original = 'x'.repeat(8001)
+    fireEvent.change(instructions, { target: { value: original } })
+    await user.click(submit)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message)
+    expect(instructions).toBeEnabled()
+    expect(instructions).toHaveValue(original)
+    expect(sessionStorage.getItem('workspace-review-request:session:B')).toBeNull()
+
+    const corrected = 'Check the updated record'
+    await user.clear(instructions)
+    await user.type(instructions, corrected)
+    await user.click(screen.getByRole('button', { name: 'Revalidate record' }))
+    await screen.findByText('Revalidation: running')
+    const [rejected, accepted] = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
+    expect(rejected).toEqual({ request_id: expect.any(String), candidate_ids: ['B'], guidance: original })
+    expect(accepted).toEqual({ request_id: expect.any(String), candidate_ids: ['B'], guidance: corrected })
+    expect(accepted.request_id).not.toBe(rejected.request_id)
+  })
+  it.each([
+    new Error('Connection interrupted'),
+    new CurationWorkspaceRequestError(503, 'Service unavailable'),
+  ])('submits only B and reuses its command identity after %s', async (failure) => {
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(null)
+    vi.mocked(service.requestReview).mockRejectedValueOnce(failure).mockResolvedValueOnce(saved)
     const user = userEvent.setup()
     render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Revalidate record' })).toBeEnabled())
     await user.click(screen.getByRole('button', { name: 'Revalidate record' }))
-    await screen.findByText('Connection interrupted')
+    await screen.findByText(failure.message)
+    expect(screen.getByRole('textbox', { name: 'Instructions (optional)' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Retry this request' }))
     await screen.findByText('Revalidation: running')
     expect(service.requestReview).toHaveBeenCalledTimes(2)
@@ -46,12 +90,17 @@ describe('Record revalidation', () => {
     const user = userEvent.setup()
     const firstPanel = render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Revalidate record' })).toBeEnabled())
+    const guidance = 'Review the saved value'
+    await user.type(screen.getByRole('textbox', { name: 'Instructions (optional)' }), guidance)
     await user.click(screen.getByRole('button', { name: 'Revalidate record' }))
     await screen.findByText('Lost reply')
     const firstRequest = vi.mocked(service.requestReview).mock.calls[0]
     firstPanel.unmount()
     render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Retry this request' })).toBeEnabled())
+    const restored = screen.getByRole('textbox', { name: 'Instructions (optional)' })
+    expect(restored).toHaveValue(guidance)
+    expect(restored).toBeDisabled()
     await user.click(screen.getByRole('button', { name: 'Retry this request' }))
     await screen.findByText('Revalidation: running')
     expect(vi.mocked(service.requestReview).mock.calls[1]).toEqual(firstRequest)
