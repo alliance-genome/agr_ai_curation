@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import RevalidationControls from './RevalidationControls'
@@ -104,6 +104,48 @@ describe('Record revalidation', () => {
     await user.click(screen.getByRole('button', { name: 'Retry this request' }))
     await screen.findByText('Revalidation: running')
     expect(vi.mocked(service.requestReview).mock.calls[1]).toEqual(firstRequest)
+  })
+  it.each(['rejection', 'success'])('keeps the newer pending request after a late %s', async (outcome) => {
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue(null)
+    const originalReply = async () => {
+      if (outcome === 'rejection') throw new CurationWorkspaceRequestError(422, 'Invalid instructions')
+      return { ...saved, state: 'completed' }
+    }
+    let releaseOriginal!: () => void
+    const delayed = new Promise<void>(resolve => { releaseOriginal = resolve })
+    const submit = vi.mocked(service.requestReview)
+      .mockImplementationOnce(() => delayed.then(originalReply))
+      .mockImplementationOnce(originalReply)
+      .mockRejectedValueOnce(new Error('Lost reply'))
+      .mockResolvedValueOnce(saved)
+    const user = userEvent.setup()
+    const panel = <RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />
+    const first = render(panel)
+    const revalidate = () => screen.getByRole('button', { name: 'Revalidate record' })
+    const retry = () => screen.getByRole('button', { name: 'Retry this request' })
+    await waitFor(() => expect(revalidate()).toBeEnabled())
+    await user.click(revalidate())
+    first.unmount()
+
+    const reopened = render(panel)
+    await waitFor(() => expect(retry()).toBeEnabled())
+    await user.click(retry())
+    expect(submit.mock.calls[1]).toEqual(submit.mock.calls[0])
+    await waitFor(() => expect(revalidate()).toBeEnabled())
+    const instructions = 'Check the updated record'
+    await user.type(screen.getByRole('textbox'), instructions)
+    await user.click(revalidate())
+    await screen.findByText('Lost reply')
+    await act(async () => { releaseOriginal() })
+    reopened.unmount()
+
+    render(panel)
+    await waitFor(() => expect(retry()).toBeEnabled())
+    expect(screen.getByRole('textbox')).toHaveValue(instructions)
+    await user.click(retry())
+    await screen.findByText('Revalidation: running')
+    expect(submit.mock.calls[3]).toEqual(submit.mock.calls[2])
+    expect(submit.mock.calls[3][3]).not.toBe(submit.mock.calls[0][3])
   })
   it('names a system-error stop in plain words, not its code', async () => {
     const words = 'a system error stopped a save before it changed anything, and it was reported'

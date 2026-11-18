@@ -97,31 +97,18 @@ def test_history_is_owned_paged_and_read_only(scope, scenario, candidate, monkey
 
 
 def test_submit_is_idempotent_and_freezes_intent_before_worker(
-    scope, scenario, candidate
+    scope, scenario, candidate, monkeypatch
 ):
     sid, cid = candidate
     request_id = str(uuid4())
+    command = dict(owner_id=scope.owner_id, session_id=sid, candidate_ids=[cid], groups=[])
+    guidance = "Check nomenclature"
     with h.SessionLocal.begin() as db:
-        first = operations.submit(
-            db,
-            owner_id=scope.owner_id,
-            session_id=sid,
-            request_id=request_id,
-            candidate_ids=[cid],
-            guidance="Check nomenclature",
-            groups=[],
-        )
+        first = operations.submit(db, **command, request_id=request_id, guidance=guidance)
     scenario.edit("ECO:LATER")
+    monkeypatch.setenv("VALIDATION_REVIEW_INSTRUCTION_CHARS", "8")
     with h.SessionLocal.begin() as db:
-        second = operations.submit(
-            db,
-            owner_id=scope.owner_id,
-            session_id=sid,
-            request_id=request_id,
-            candidate_ids=[cid],
-            guidance="Check nomenclature",
-            groups=[],
-        )
+        second = operations.submit(db, **command, request_id=request_id, guidance=guidance)
         assert first == second
         row = db.get(WorkspaceReviewOperation, first["operation_id"])
         assert row.state == "queued"
@@ -134,15 +121,13 @@ def test_submit_is_idempotent_and_freezes_intent_before_worker(
         assert cutoff < newest
     with h.SessionLocal.begin() as db:
         with pytest.raises(h.HistoryConflict):
-            operations.submit(
-                db,
-                owner_id=scope.owner_id,
-                session_id=sid,
-                request_id=request_id,
-                candidate_ids=[cid],
-                guidance="Different request",
-                groups=[],
-            )
+            operations.submit(db, **command, request_id=request_id, guidance="Different request")
+        new_id = str(uuid4())
+        with pytest.raises(ValueError, match="configured character limit"):
+            operations.submit(db, **command, request_id=new_id, guidance=guidance)
+        assert db.scalar(select(WorkspaceReviewOperation).where(
+            WorkspaceReviewOperation.request_id == new_id
+        )) is None
 
 
 def test_reopening_record_only_reads_its_saved_operation(scope, scenario, candidate):
