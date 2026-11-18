@@ -305,7 +305,9 @@ async def test_an_unavailable_development_reader_is_reported_as_no_token(
     monkeypatch.setattr(service, "build_document_source_request_context", context)
     monkeypatch.setattr(service, "report_runtime_exception", report)
 
-    result = await _find(_session(scope.document_id))
+    session_id = _session(scope.document_id)
+    identifier = "SOURCE:private-lookup"
+    result = await _find(session_id, identifier)
 
     assert result.status is CurationDocumentReferenceStatus.TOKEN_UNAVAILABLE
     assert result.message == "Your sign-in could not be used to reach the literature source. Sign in again and retry."
@@ -319,12 +321,16 @@ async def test_an_unavailable_development_reader_is_reported_as_no_token(
     assert metadata == {
         "component": "document_reference",
         "operation": "development_reader_authentication_failed",
+        "tags": {"failure_category": "development_reader_unavailable"},
         "context": {"exception_type": "DevelopmentReaderUnavailable"},
     }
     warning, = [record for record in caplog.records if record.name == service.__name__]
     assert warning.sentry_skip_event is True
-    for secret in ("fake-reader-secret", "fake-resolver-secret", "fake-reporting-secret"):
-        assert secret not in caplog.text
+    for private_value in (
+        "fake-reader-secret", "fake-resolver-secret", "fake-reporting-secret",
+        identifier, session_id, CLAIMS["sub"], CLAIMS["email"],
+    ):
+        assert private_value not in caplog.text
 
 
 @pytest.mark.asyncio
