@@ -881,6 +881,23 @@ async def test_writer_drain_reports_discarded_failures(harness, monkeypatch, cap
     assert "fake-private" not in caplog.text
 
 
+def test_discarded_writer_sdk_capture_failure_is_private(monkeypatch, caplog):
+    import sentry_sdk
+
+    def fail_capture(exc):
+        raise RuntimeError("fake-private-sdk-detail")
+
+    monkeypatch.setattr(sentry_sdk, "capture_exception", fail_capture)
+    secondary = ValueError("fake-private-writer-detail")
+    fanout._report_discarded_writer_failure(secondary)
+
+    assert not getattr(secondary, "_ai_curation_sentry_captured", False)
+    assert "fake-private" not in caplog.text
+    warning, = caplog.records
+    assert warning.getMessage() == "Failed to capture runtime exception in Sentry"
+    assert warning.sentry_skip_event is True
+
+
 @pytest.mark.asyncio
 async def test_missing_plan_gets_one_reminder_then_fails(harness):
     model = ScriptedFanoutModel({"plan": None})

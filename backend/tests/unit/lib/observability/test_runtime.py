@@ -86,11 +86,11 @@ def test_report_runtime_exception_captures_with_safe_tags_and_context(monkeypatc
     ]
 
 
-def test_report_runtime_exception_is_best_effort_when_sdk_missing(monkeypatch):
+def test_report_runtime_exception_is_best_effort_when_sdk_missing(monkeypatch, caplog):
     monkeypatch.setattr(
         runtime.importlib,
         "import_module",
-        lambda name: (_ for _ in ()).throw(RuntimeError("missing sdk")),
+        lambda name: (_ for _ in ()).throw(ImportError("fake-private-import-detail")),
     )
 
     assert (
@@ -101,3 +101,7 @@ def test_report_runtime_exception_is_best_effort_when_sdk_missing(monkeypatch):
         )
         is False
     )
+    assert "fake-private" not in caplog.text
+    warning, = caplog.records
+    assert warning.getMessage() == "Sentry SDK unavailable for runtime exception capture"
+    assert warning.sentry_skip_event is True
