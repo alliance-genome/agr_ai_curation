@@ -454,10 +454,9 @@ def _finalize_topic_entity_tag_extraction_impl(candidate_ids: List[str]) -> AgrQ
             attempted_query=attempted_query,
         )
 
-    try:
-        evidence_records = get_active_evidence_records_snapshot()
-    except RuntimeError:
-        evidence_records = []
+    # Removed legacy empty-evidence fallback — run binding is required;
+    # an explicitly bound empty registry remains valid.
+    evidence_records = get_active_evidence_records_snapshot()
 
     outcome = finalize_builder_extraction(
         workspace=workspace,

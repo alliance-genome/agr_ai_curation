@@ -8,6 +8,7 @@ writes to ABC; a curator signs off and ALL-1463 owns submission.
 from __future__ import annotations
 
 import sys
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,10 @@ import yaml
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.lib.openai_agents.extraction_builder_workspace import ExtractionBuilderWorkspace
+from src.lib.openai_agents.tools.evidence_workspace import (
+    reset_active_evidence_records,
+    set_active_evidence_records,
+)
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.execution_provenance import (
     ExtractionExecutionContext,
@@ -91,9 +96,12 @@ def _workspace(run_id: str = "topic-tag-run") -> ExtractionBuilderWorkspace:
 def bound_tools(monkeypatch):
     workspace = _workspace()
     monkeypatch.setattr(tools, "get_active_extraction_builder_workspace", lambda: workspace)
-    monkeypatch.setattr(tools, "get_active_evidence_records_snapshot", _evidence_records)
     monkeypatch.setattr(tools, "write_extraction_trace_event", lambda **_event: None)
-    return workspace
+    token = set_active_evidence_records([])
+    try:
+        yield workspace
+    finally:
+        reset_active_evidence_records(token)
 
 
 def _context() -> ExtractionExecutionContext:
@@ -314,6 +322,25 @@ def test_materializer_rejects_unknown_evidence_record():
 
     assert not result.ok
     assert [issue["reason"] for issue in result.issues] == ["unknown_evidence_record_id"]
+
+
+@pytest.mark.parametrize("stage_negated", [False, True], ids=["empty", "negated"])
+def test_unbound_evidence_workspace_prevents_finalization(bound_tools, stage_negated):
+    candidate_ids = []
+    if stage_negated:
+        staged = tools._stage_topic_entity_tag_impl(negated=True, rationale="None.")
+        candidate_ids.append(staged.data["candidate_id"])
+    before = deepcopy(bound_tools.candidates)
+
+    token = set_active_evidence_records(None)
+    try:
+        with pytest.raises(RuntimeError, match="No active evidence workspace is bound to this run"):
+            tools._finalize_topic_entity_tag_extraction_impl(candidate_ids)
+    finally:
+        reset_active_evidence_records(token)
+
+    assert bound_tools.finalization is None
+    assert bound_tools.candidates == before
 
 
 def test_finalize_negated_proposal_without_evidence_succeeds(bound_tools):
