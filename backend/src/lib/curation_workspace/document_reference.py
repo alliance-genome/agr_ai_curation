@@ -162,6 +162,7 @@ async def find_document_reference(
                 sanitized_runtime_error(message),
                 component="document_reference",
                 operation="development_reader_authentication_failed",
+                tags={"failure_category": "development_reader_unavailable"},
                 context={"exception_type": type(exc).__name__},
             )
         except Exception:

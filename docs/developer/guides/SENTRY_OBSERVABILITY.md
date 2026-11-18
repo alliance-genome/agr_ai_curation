@@ -694,7 +694,8 @@ flow-runtime failures retain their existing capture owner; non-stream chat retai
 its HTTP reporting owner. Langfuse and TraceReview contracts are unchanged.
 
 Reference lookup reports configured development-reader authentication failures with
-component `document_reference` and operation `development_reader_authentication_failed`.
+component `document_reference`, operation `development_reader_authentication_failed`,
+and failure category `development_reader_unavailable`.
 The event uses a fixed, chain-free message and only the exception class as context.
 The curator receives `token_unavailable` even if reporting fails. Ordinary missing
 curator tokens stay quiet.
