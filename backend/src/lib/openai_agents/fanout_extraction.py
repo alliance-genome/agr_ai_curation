@@ -16,6 +16,12 @@ model (AGENTS.md section 8):
   chunks prefetched through the agent's own ``read_chunk`` tool.
 - Writers end themselves with a final reply. Code counts what each writer staged;
   it never matches labels or merges records.
+- A writer whose run fails with a failure worth repeating (the typed curator-failure
+  classification marks it retryable) has everything that attempt alone produced
+  removed and runs again from its assignment, ``EXTRACTION_FANOUT_WRITER_RERUNS`` times
+  (default 1), while the other writers keep going. This is ownership bookkeeping: code
+  never judges a record. A failure that is not retryable, a cancelled writer, or a
+  writer with no re-run left fails the step with the writer's first error.
 - The planner thread then checks the staged listing (the tidy pass). Missing records,
   duplicates and wrong details are the model's call, including for any writer that
   staged fewer records than it was assigned.
@@ -37,6 +43,7 @@ from typing import Any, Callable, Sequence
 
 from agents import FunctionTool, ItemHelpers, Runner
 from agents.agent import ToolsToFinalOutputResult
+from agents.models.openai_responses import ResponsesWebSocketError
 from agents.stream_events import RunItemStreamEvent
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseFunctionToolCall
@@ -47,6 +54,7 @@ from src.lib.observability.sentry import exception_chain_already_captured
 from src.lib.packages import tool_roles
 
 from . import config
+from .curator_errors import classify_failure
 from .extraction_builder_workspace import (
     CANDIDATE_STATUS_DISCARDED,
     ExtractionBuilderWorkspace,
@@ -57,6 +65,7 @@ from .evidence_summary import build_record_evidence_summary_record
 from .extraction_trace_events import write_extraction_trace_event
 from .model_request_measurement import install_model_request_measurement
 from .run_history import exact_json
+from .tools.evidence_workspace import find_evidence_record_in_records, remove_evidence_records
 from .tool_surface import (
     ToolSurface,
     _agent_model_and_provider,
@@ -76,6 +85,10 @@ REPLAYED_TOOL_COMPLETED_AT = "fanout_tool_completed_at"
 PREFETCH_TOOL_NAME = "read_chunk"
 # Source tools a writer keeps besides the agent's stage tools.
 WRITER_SOURCE_TOOL_NAMES = frozenset({"read_chunk", "search_document", "record_evidence"})
+# Fixed reason recorded when a failed writer attempt's records are removed (ALL-1558).
+WRITER_RERUN_CLEANUP_REASON = "extraction_fanout_writer_rerun_cleanup"
+# Owner key for evidence already in the run's list before any writer recorded it.
+_EARLIER_EVIDENCE_OWNER = (0, 0)
 
 PLANNING_READ_FIRST = (
     "[Planning phase] Read what you need from the paper first, using the reading and "
@@ -333,6 +346,32 @@ def _replay_event(item: Any, timings: dict[str, tuple[datetime, datetime]]) -> R
     return RunItemStreamEvent(name=name, item=item)
 
 
+def _writer_error_fields(error: BaseException) -> dict[str, Any]:
+    """A writer failure's exception type, typed provider fields and curator-failure category.
+
+    Never the message: only structured fields reach the trace.
+    """
+
+    fields: dict[str, Any] = {"error_type": type(error).__name__,
+                              "provider_error_type": None, "provider_error_code": None}
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ResponsesWebSocketError):
+            fields.update(provider_error_type=current.error_type, provider_error_code=current.code)
+            break
+        current = current.__cause__ or current.__context__
+    fields["failure_category"] = classify_failure(error).category
+    return fields
+
+
+def _staging_owner(index: int, attempt: int) -> str:
+    """One staging owner per writer attempt, so a removed attempt can be closed."""
+
+    return f"writer-{index}/a{attempt}"
+
+
 def prepare_fanout_extraction(
     runtime_agent: Any,
     *,
@@ -341,6 +380,7 @@ def prepare_fanout_extraction(
     input_text: str,
     emit_event: Callable[[dict[str, Any]], None],
     record_live_evidence: Callable[[dict[str, Any]], None],
+    evidence_records: list[dict[str, Any]],
 ) -> "FanoutExtraction | None":
     """Return the fan-out run for a builder agent, or None when it does not apply.
 
@@ -386,8 +426,10 @@ def prepare_fanout_extraction(
         min_items=min_items,
         items_per_writer=config.get_extraction_fanout_items_per_writer(),
         max_writers=config.get_extraction_fanout_max_writers(),
+        writer_reruns=config.get_extraction_fanout_writer_reruns(),
         emit_event=emit_event,
         record_live_evidence=record_live_evidence,
+        evidence_records=evidence_records,
     )
     runtime_agent.tools = [
         fanout.refused_finalize_tool if tool is fanout.finalize_tool else tool for tool in tools
@@ -457,8 +499,10 @@ class FanoutExtraction:
         min_items: int,
         items_per_writer: int,
         max_writers: int,
+        writer_reruns: int,
         emit_event: Callable[[dict[str, Any]], None],
         record_live_evidence: Callable[[dict[str, Any]], None],
+        evidence_records: list[dict[str, Any]],
     ) -> None:
         self.workspace = workspace
         self.document_id = document_id
@@ -472,8 +516,11 @@ class FanoutExtraction:
         self.min_items = min_items
         self.items_per_writer = items_per_writer
         self.max_writers = max_writers
+        self.writer_reruns = writer_reruns
         self.emit_event = emit_event
         self.record_live_evidence = record_live_evidence
+        # The run's evidence list, which record_live_evidence adds to.
+        self.evidence_records = evidence_records
         self.read_tool = next(
             (tool for tool in self.plain_tools if _tool_name(tool) == PREFETCH_TOOL_NAME), None
         )
@@ -486,6 +533,11 @@ class FanoutExtraction:
         self._chunk_views: dict[int, asyncio.Future] = {}
         # Writers' tool start and end times by call ID, for the replayed audit.
         self._tool_timings: dict[str, tuple[datetime, datetime]] = {}
+        # Ownership bookkeeping for writer re-runs, by (writer, attempt): the tool
+        # call IDs of each attempt, and every attempt that recorded each evidence ID
+        # (identical evidence gets the identical ID, so one record can have several).
+        self._attempt_call_ids: dict[tuple[int, int], list[str]] = {}
+        self._evidence_recorders: dict[str, set[tuple[int, int]]] = {}
         self._finalize_created: set[str] = set()
         self.submit_tool = FunctionTool(
             name=SUBMIT_PLAN_TOOL_NAME,
@@ -634,6 +686,7 @@ class FanoutExtraction:
             "min_items": self.min_items,
             "items_per_writer": self.items_per_writer,
             "max_writers": self.max_writers,
+            "writer_reruns": self.writer_reruns,
             "notes": list(self.plan.notes),
             "items": [{"label": item.label, "chunks": list(item.chunks)} for item in self.plan.items],
         })
@@ -748,7 +801,7 @@ class FanoutExtraction:
     async def _run_writers(self, slices: Sequence[tuple[int, ...]]) -> list[WriterOutcome]:
         writer_count = len(slices)
         tasks = [
-            asyncio.create_task(self._run_writer(index, writer_count, positions))
+            asyncio.create_task(self._run_writer_with_reruns(index, writer_count, positions))
             for index, positions in enumerate(slices, start=1)
         ]
         primary = None
@@ -783,10 +836,122 @@ class FanoutExtraction:
                             _report_discarded_writer_failure(error)
         return [task.result() for task in tasks]
 
-    async def _run_writer(self, index: int, writer_count: int, positions: tuple[int, ...]) -> WriterOutcome:
+    async def _run_writer_with_reruns(
+        self, index: int, writer_count: int, positions: tuple[int, ...],
+    ) -> WriterOutcome:
+        """Run one writer; after a failure worth repeating, clear its attempt and run it again.
+
+        Any exception from the writer's run counts, after its model-call retries are
+        used up, when the typed curator-failure classification marks it retryable;
+        an unreadable PDF, a context limit, an invalid result, a configuration or
+        content-policy refusal is raised at once. Cancellation is never re-run, also
+        when the SDK surfaces it as an ordinary tool error (the task is then still
+        being cancelled). Once ``writer_reruns`` re-runs are used up, the writer's
+        first error is raised, and ``_run_writers`` cancels the other writers as before.
+        """
+
+        first_error: Exception | None = None
+        attempt = 1
+        while True:
+            try:
+                outcome = await self._run_writer(index, writer_count, positions, attempt=attempt)
+            except asyncio.CancelledError:
+                if attempt > 1:
+                    self._trace("writer_rerun_finished", {"writer": index, "attempt": attempt, "outcome": "cancelled"})
+                raise
+            except Exception as error:  # noqa: BLE001 - every writer failure is handled below
+                failure = error
+            else:
+                if attempt > 1:
+                    self._trace("writer_rerun_finished", {
+                        "writer": index, "attempt": attempt, "outcome": "succeeded",
+                    })
+                return outcome
+            first_error = first_error or failure
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                if attempt > 1:
+                    self._trace("writer_rerun_finished", {"writer": index, "attempt": attempt, "outcome": "cancelled"})
+                raise first_error
+            fields = _writer_error_fields(failure)
+            rerun = classify_failure(failure).retryable and attempt <= self.writer_reruns
+            self._trace("writer_failed", {
+                "writer": index,
+                "writer_count": writer_count,
+                "attempt": attempt,
+                "assigned_positions": [position + 1 for position in positions],
+                **fields,
+                "rerun": rerun,
+            })
+            if not rerun:
+                break
+            try:
+                self._clear_failed_attempt(index, attempt, positions, fields)
+            except Exception as cleanup_error:
+                # Keep the writer's own error with the clean-up failure.
+                raise cleanup_error from failure
+            attempt += 1
+        if attempt > 1:
+            self._trace("writer_rerun_finished", {"writer": index, "attempt": attempt, "outcome": "failed"})
+        # Raised outside the except block, so the first error keeps its own cause chain.
+        raise first_error
+
+    def _clear_failed_attempt(
+        self, index: int, attempt: int, positions: tuple[int, ...], failure_fields: dict[str, Any],
+    ) -> None:
+        """Remove what one failed writer attempt alone produced, before the writer runs again.
+
+        Removed, not discarded: evidence IDs are content hashes, so the re-run's
+        identical evidence gets the identical ID, and a discarded record is never
+        overwritten by a re-record (KANBAN-1775). Removal leaves a clean slate.
+        - The attempt's staged records leave the workspace (each removal is an
+          emitted candidate mutation) and its staging owner is closed, so a stage
+          call of this attempt that lands later is refused.
+        - Evidence that only this attempt recorded leaves the run's evidence list.
+          Evidence another writer, an earlier attempt or the planner also recorded
+          stays; only this attempt leaves its owner set.
+        - The attempt's tool times are dropped. Its tool items were never replayed
+          or streamed: a failed run returns no items, and writer records reach the
+          UI only with the specialist's summary after every writer has finished.
+        The trace event keeps the history as IDs and counts, never record content.
+        """
+
+        key = (index, attempt)
+        removed_candidates = self.workspace.remove_candidates_staged_by(
+            _staging_owner(index, attempt), reason=WRITER_RERUN_CLEANUP_REASON,
+        )
+        sole: list[str] = []
+        shared = 0
+        for evidence_id, recorders in list(self._evidence_recorders.items()):
+            if key not in recorders:
+                continue
+            if recorders == {key}:
+                sole.append(evidence_id)
+                del self._evidence_recorders[evidence_id]
+            else:
+                recorders.discard(key)
+                shared += 1
+        removed_evidence = remove_evidence_records(self.evidence_records, sole, document_id=self.document_id)
+        for call_id in self._attempt_call_ids.pop(key, ()):
+            self._tool_timings.pop(call_id, None)
+        self._trace("writer_rerun_started", {
+            "writer": index,
+            "attempt": attempt + 1,
+            "assigned_positions": [position + 1 for position in positions],
+            **failure_fields,
+            "removed_candidate_count": len(removed_candidates),
+            "removed_candidate_ids": removed_candidates,
+            "removed_evidence_count": len(removed_evidence),
+            "removed_evidence_ids": removed_evidence,
+            "kept_shared_evidence_count": shared,
+        })
+
+    async def _run_writer(
+        self, index: int, writer_count: int, positions: tuple[int, ...], *, attempt: int = 1,
+    ) -> WriterOutcome:
         plan = self.plan
         assert plan is not None
-        owner = f"writer-{index}"
+        owner = _staging_owner(index, attempt)
         token = set_staging_owner(owner)
         try:
             chunk_indexes = list(dict.fromkeys(
@@ -797,7 +962,7 @@ class FanoutExtraction:
                 if self.read_tool is not None
                 else []
             )
-            writer = self._writer_agent()
+            writer = self._writer_agent((index, attempt))
             run_input = [
                 {"role": "user", "content": self.input_text},
                 {"role": "developer", "content": self._writer_assignment(index, writer_count, positions, views)},
@@ -824,6 +989,7 @@ class FanoutExtraction:
         self._trace("writer_completed", {
             "writer": index,
             "writer_count": writer_count,
+            "attempt": attempt,
             "assigned_positions": [position + 1 for position in positions],
             "assigned_count": len(positions),
             "staged_count": len(staged),
@@ -833,7 +999,7 @@ class FanoutExtraction:
         })
         return outcome
 
-    def _writer_agent(self) -> Any:
+    def _writer_agent(self, attempt_key: tuple[int, int]) -> Any:
         stage_names = {_tool_name(tool) for tool in self.stage_tools}
         tools = [
             tool
@@ -842,20 +1008,21 @@ class FanoutExtraction:
         ]
         writer = self.planner_agent.clone(
             instructions=self.base_instructions,
-            tools=[self._writer_tool(tool) for tool in tools],
+            tools=[self._writer_tool(tool, attempt_key) for tool in tools],
             tool_use_behavior="run_llm_again",
         )
         apply_tool_surface(writer, runtime=self.surface.runtime)
         return writer
 
-    def _writer_tool(self, tool: Any) -> Any:
+    def _writer_tool(self, tool: Any, attempt_key: tuple[int, int]) -> Any:
         """Wrap one writer tool for the run's shared state.
 
         Records the call's real start and end, so its replayed audit keeps them. A
         verified record_evidence result joins the run's live evidence list as soon as
         the call returns, as the stream loop would add it for a single writer, so the
         writer can update that record by ID before the writers finish. The later replay
-        merges the same record by ID.
+        merges the same record by ID. Each call ID and evidence ID is noted under the
+        writer attempt that produced it, for a re-run's clean-up.
         """
 
         wrapped = copy(tool)
@@ -868,15 +1035,32 @@ class FanoutExtraction:
                 output = await invoke(ctx, arguments)
             finally:
                 self._tool_timings[ctx.tool_call_id] = (started, datetime.now(timezone.utc))
+                self._attempt_call_ids.setdefault(attempt_key, []).append(ctx.tool_call_id)
             record = build_record_evidence_summary_record(
                 tool_name=name, tool_input=arguments, tool_output=output,
             )
             if record is not None:
+                self._note_evidence_owner(record, attempt_key)
                 self.record_live_evidence(record)
             return output
 
         wrapped.on_invoke_tool = on_invoke
         return wrapped
+
+    def _note_evidence_owner(self, record: dict[str, Any], attempt_key: tuple[int, int]) -> None:
+        evidence_id = str(record.get("evidence_record_id") or "").strip()
+        if not evidence_id:
+            return
+        recorders = self._evidence_recorders.get(evidence_id)
+        if recorders is None:
+            recorders = self._evidence_recorders[evidence_id] = set()
+            # A record already in the list before any writer recorded it (for example
+            # one the planner recorded) is never a writer attempt's alone.
+            if find_evidence_record_in_records(
+                self.evidence_records, evidence_id, document_id=self.document_id,
+            ) is not None:
+                recorders.add(_EARLIER_EVIDENCE_OWNER)
+        recorders.add(attempt_key)
 
     def _writer_assignment(
         self,

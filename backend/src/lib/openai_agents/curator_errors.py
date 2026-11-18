@@ -9,6 +9,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 
 from agr_ai_curation_runtime.document_errors import document_read_failure
 
+from .config import is_reasoning_input_refusal
 from .provider_errors import PROVIDER_POLICY_CHAT_MESSAGE, provider_policy_error
 
 
@@ -84,7 +85,11 @@ def classify_failure(error: BaseException) -> CuratorFailure:
                 return replace(_FAILURES["context_limit"], provider="openai")
             if current.code in {"server_is_overloaded", "rate_limit_exceeded"} or current.error_type in {"server_error", "service_unavailable_error", "rate_limit_error"}:
                 return replace(_FAILURES["provider_unavailable"], provider="openai")
-            return replace(_FAILURES["provider_configuration"], provider="openai")
+            if is_reasoning_input_refusal(current):
+                # ALL-1558: a refusal of one replayed input position that outlived its
+                # resend; sending the request again later can succeed.
+                return replace(_FAILURES["provider_unavailable"], provider="openai")
+            return replace(_FAILURES["unknown"], provider="openai")
         elif isinstance(current, (APIConnectionError, APITimeoutError, TimeoutError)):
             return _FAILURES["provider_connection"]
         elif isinstance(current, APIStatusError):
