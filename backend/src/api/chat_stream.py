@@ -561,7 +561,7 @@ async def chat_endpoint(
             message="Validation review was stopped. Saved results and history remain available for continued review.",
             partial_response=full_response, trace_id=trace_id, document_id=document_id,
             persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted",
-            recovery_files=flow_outcome.retained_file_events(),
+            recovery_files=flow_outcome.retained_file_events(include_queued=True),
         )
         return ChatResponse(response=notice, session_id=session_id)
     except Exception as e:
@@ -857,7 +857,7 @@ async def chat_stream_endpoint(
         sentry_transaction = sentry_transaction_context_manager.__enter__()
 
         def persist_failure_events(message: str, *, state: str, error_type: str | None = None) -> list[str]:
-            recovery_files = flow_outcome.retained_file_events()
+            recovery_files = flow_outcome.retained_file_events(include_queued=state == "turn_interrupted")
             terminal_type, notice = _persist_failure_notice(
                 session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
                 user_message=prepared_turn.effective_user_message, message=message,

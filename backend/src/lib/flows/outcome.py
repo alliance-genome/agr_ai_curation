@@ -83,6 +83,7 @@ class FlowRunOutcome:
     persistence_status: FlowPersistenceStatus = "pending"
     persistence_result: dict[str, Any] = field(default_factory=dict)
     _success_output_events: list[dict[str, Any]] = field(default_factory=list)
+    _queued_files: dict[tuple[str, str, str], dict[str, Any]] = field(default_factory=dict)
     _run_finished_event: dict[str, Any] | None = None
     _curation_handoff_ready_event: dict[str, Any] | None = None
     _run_error_event: dict[str, Any] | None = None
@@ -101,6 +102,8 @@ class FlowRunOutcome:
         if event_type in _TYPED_SUCCESS_OUTPUT_EVENTS:
             candidate = dict(event)
             identity = self._success_output_identity(candidate)
+            if event_type == "FILE_READY":
+                self._queued_files.pop(identity, None)
             if not any(
                 self._success_output_identity(existing) == identity
                 for existing in self._success_output_events
@@ -221,9 +224,17 @@ class FlowRunOutcome:
     def terminal(self) -> bool:
         return self._flow_finished_event is not None or self._run_error_event is not None
 
-    def retained_file_events(self) -> list[dict[str, Any]]:
-        """File references available for recovery even before FLOW_FINISHED."""
-        return [dict(event) for event in self._success_output_events if event["type"] == "FILE_READY"]
+    def retain_queued_file(self, details: dict[str, Any]) -> None:
+        """Keep a download available if interruption preempts the executor's public yield."""
+        event = {"type": "FILE_READY", "details": dict(details)}
+        self._queued_files[self._success_output_identity(event)] = event
+
+    def retained_file_events(self, *, include_queued: bool = False) -> list[dict[str, Any]]:
+        """Include executor-buffered downloads only when recovering an interrupted turn."""
+        files = [dict(event) for event in self._success_output_events if event["type"] == "FILE_READY"]
+        if include_queued:
+            files.extend(dict(event) for event in self._queued_files.values())
+        return files
 
     def events_for_persistence(self) -> list[dict[str, Any]]:
         """Return the canonical terminal order to store for durable replay."""

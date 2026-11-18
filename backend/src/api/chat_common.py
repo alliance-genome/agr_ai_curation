@@ -1333,6 +1333,7 @@ async def _run_resolved_chat_route(
                 chat_route_mode=route.mode,
                 chat_route_target_id=route.target_id,
                 inspection_context=inspection_context,
+                on_file_queued=outcome.retain_queued_file,
             )
         except Exception as exc:
             # Preserve the original exception for response classification. The

@@ -2544,7 +2544,10 @@ def test_preferred_flow_answer_and_file_live_persisted_and_replayed(monkeypatch,
             assert text == [expected]
 
 
-@pytest.mark.parametrize("interruption", ["task_cancel", "stop_at_handoff", "review_stop", "save_failed"])
+@pytest.mark.parametrize("interruption", [
+    "task_cancel", "stop_at_handoff", "review_stop", "save_failed",
+    "stop_at_tool_complete", "cancel_during_runner_drain",
+])
 def test_preferred_flow_interruption_recovers_file_on_live_stream_and_replay(monkeypatch, interruption):
     flow = SimpleNamespace(id=uuid4(), name="File export")
     request = chat.ChatMessage(message="Export results", session_id="export-session", turn_id="export-turn")
@@ -2556,10 +2559,9 @@ def test_preferred_flow_interruption_recovers_file_on_live_stream_and_replay(mon
     file_rows = []
     completion_db = Mock()
     completion_db.execute.return_value.scalars.return_value.all.return_value = []
-    at_handoff = False
+    stop = asyncio.Event()
 
     async def execute(**_kwargs):
-        nonlocal at_handoff
         executions.append(True)
         yield {"type": "RUN_FINISHED", "data": {"response": "Provisional response"}}
         yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "Provisional answer"}}
@@ -2571,10 +2573,10 @@ def test_preferred_flow_interruption_recovers_file_on_live_stream_and_replay(mon
             asyncio.current_task().cancel()
             await asyncio.sleep(0)
         yield {"type": "FLOW_FINISHED", "data": {"status": "completed"}}
-        at_handoff = True
+        stop.set()
 
     async def stop_requested(*_args):
-        return at_handoff
+        return stop.is_set()
 
     def append_message(**kwargs):
         if kwargs["role"] == "flow":
@@ -2605,7 +2607,39 @@ def test_preferred_flow_interruption_recovers_file_on_live_stream_and_replay(mon
         turn_id=request.turn_id, effective_user_message=request.message, user_turn_created=not saved,
         route=chat.ResolvedChatRoute(mode="flow", target_id=str(flow.id), flow_run_id="export-run"),
         replay_assistant_turn=saved[0] if saved else None))
-    _patch_chat_impl(monkeypatch, "execute_flow", execute)
+    if interruption in {"stop_at_tool_complete", "cancel_during_runner_drain"}:
+        flow.flow_definition = {
+            "version": "1.1", "entry_node_id": "source",
+            "nodes": [
+                {"id": "source", "type": "agent", "data": {"agent_id": "source"}},
+                {"id": "export", "type": "output", "data": {"agent_id": "tsv_formatter"}},
+            ],
+            "edges": [{"id": "attachment", "source": "source", "target": "export", "role": "output_attachment"}],
+        }
+        completed_steps = []
+        tool_name = "ask_tsv_formatter_specialist"
+        supervisor = SimpleNamespace(_flow_execution_state={
+            "ordered_tool_names": [tool_name], "completed_steps": completed_steps,
+            "evidence_registry": SimpleNamespace(records=lambda: []),
+        })
+        monkeypatch.setattr("src.lib.flows.executor.create_flow_supervisor", lambda **_: supervisor)
+        monkeypatch.setattr("src.lib.flows.executor.build_flow_prompt", lambda *_: request.message)
+
+        async def runner(**_kwargs):
+            executions.append(True)
+            yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "Provisional answer"}}
+            yield file_event
+            yield file_event
+            completed_steps.append({"tool_name": tool_name, "node_id": "export"})
+            if interruption == "stop_at_tool_complete":
+                stop.set()
+            yield {"type": "TOOL_COMPLETE", "details": {"toolName": tool_name}}
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+
+        monkeypatch.setattr("src.lib.openai_agents.runner.run_agent_streamed", runner)
+    else:
+        _patch_chat_impl(monkeypatch, "execute_flow", execute)
     _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", _persist_completed_chat_stream_turn)
 
     async def consume():
@@ -2615,6 +2649,12 @@ def test_preferred_flow_interruption_recovers_file_on_live_stream_and_replay(mon
         return await _consume_stream(response)
 
     live = asyncio.run(consume())
+    if interruption == "stop_at_tool_complete":
+        assert stop.is_set()
+        assert not any(event["type"] == "TOOL_COMPLETE" for event in live)
+        assert "stopped" in live[-1]["message"]
+    if interruption == "cancel_during_runner_drain":
+        assert any(event["type"] == "TOOL_COMPLETE" for event in live)
     assert file_rows == [("file_download", file_event)]
     if interruption == "save_failed":
         completion_db.rollback.assert_called()
