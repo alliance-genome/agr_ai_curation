@@ -137,6 +137,17 @@ def test_writer_reruns_default_to_one_and_zero_turns_them_off(monkeypatch):
     assert config.get_extraction_fanout_writer_reruns() == 0
 
 
+def test_writer_store_responses_defaults_off_and_reads_overrides(monkeypatch):
+    from src.lib.openai_agents import config
+
+    monkeypatch.delenv("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", raising=False)
+    assert config.get_extraction_fanout_writer_store_responses() is False
+    monkeypatch.setenv("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", "true")
+    assert config.get_extraction_fanout_writer_store_responses() is True
+    monkeypatch.setenv("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", "false")
+    assert config.get_extraction_fanout_writer_store_responses() is False
+
+
 def test_stage_role_comes_from_package_binding_metadata():
     tool_roles.reset_cache()
     try:
@@ -409,7 +420,8 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
         tool_names = sorted(getattr(tool, "name", "") for tool in kwargs["tools"])
         writer = self._writer_index(items)
         self.requests.append({"writer": writer, "tools": tool_names, "input": items,
-                              "parallel": kwargs["model_settings"].parallel_tool_calls})
+                              "parallel": kwargs["model_settings"].parallel_tool_calls,
+                              "store": kwargs["model_settings"].store})
         if writer is not None:
             return self._writer_reply(writer, items)
         return self._planner_reply(items)
@@ -957,7 +969,7 @@ async def test_a_writer_that_failed_after_staging_is_cleared_and_run_again(harne
     failed, = _fanout_trace(harness, "writer_failed")
     assert failed == {"writer": 2, "writer_count": 3, "attempt": 1, "assigned_positions": [4, 5],
                       "error_type": "RuntimeError", "provider_error_type": None, "provider_error_code": None,
-                      "failure_category": "unknown", "rerun": True}
+                      "failure_category": "unknown", "rerun": True, "store_off": True}
     started, = _fanout_trace(harness, "writer_rerun_started")
     removed_candidates = started.pop("removed_candidate_ids")
     assert sorted(started.pop("removed_evidence_ids")) == ["ev-draft reagent 4", "ev-reagent 4", "ev-reagent 5"]
@@ -1470,6 +1482,70 @@ def test_parallel_tool_calls_follow_the_provider_gate(harness, monkeypatch, prov
                    surface=SimpleNamespace(runtime="specialist"))
 
     assert agent.model_settings.parallel_tool_calls is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_responses,writer_store,store_off", [(None, False, True), ("true", None, False)])
+async def test_writers_send_store_false_unless_the_setting_keeps_responses(
+    harness, monkeypatch, store_responses, writer_store, store_off,
+):
+    if store_responses is None:
+        monkeypatch.delenv("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", raising=False)
+    else:
+        monkeypatch.setenv("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", store_responses)
+    model = ScriptedFanoutModel({"plan": _plan(*_SEVEN), "fail_once": {"writer": 3}})
+
+    await harness.run(model)
+
+    writer_requests = [request for request in model.requests if request["writer"] is not None]
+    planner_requests = [request for request in model.requests if request["writer"] is None]
+    assert {request["writer"] for request in writer_requests} == {1, 2, 3}
+    assert {request["store"] for request in writer_requests} == {writer_store}
+    # The planner thread and the check pass keep the provider default (unset).
+    assert planner_requests and {request["store"] for request in planner_requests} == {None}
+    # Every writer attempt records whether it sent store=false, the re-run included.
+    completed = _fanout_trace(harness, "writer_completed")
+    failed = _fanout_trace(harness, "writer_failed")
+    assert sorted((event["writer"], event["attempt"]) for event in completed) == [(1, 1), (2, 1), (3, 2)]
+    assert [(event["writer"], event["attempt"]) for event in failed] == [(3, 1)]
+    assert {event["store_off"] for event in completed + failed} == {store_off}
+
+
+@pytest.mark.parametrize("provider,store_responses,writer_store,store_off", [
+    ("openai", None, False, True),
+    ("openai", "true", None, False),
+    # store is an OpenAI request field; other providers never receive it.
+    ("groq", None, None, False),
+])
+def test_writer_store_is_set_on_the_writer_copy_only(
+    harness, monkeypatch, provider, store_responses, writer_store, store_off,
+):
+    from types import SimpleNamespace
+
+    if store_responses is None:
+        monkeypatch.delenv("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", raising=False)
+    else:
+        monkeypatch.setenv("EXTRACTION_FANOUT_WRITER_STORE_RESPONSES", store_responses)
+    model = ScriptedFanoutModel({})
+    model._agr_provider_id = provider
+    agent = harness.agent(model)
+    prepared = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="trace-store"),
+        specialist_name="Test Builder", input_text="x", emit_event=harness.events.append,
+        record_live_evidence=lambda record: None, evidence_records=[],
+    )
+    prepared.start(planner_agent=agent, max_turns=4, run_config=None, base_run_config=None,
+                   surface=SimpleNamespace(runtime="specialist"))
+    planner_settings = agent.model_settings
+
+    writer = prepared._writer_agent((1, 1))
+
+    assert prepared.writer_store_off is store_off
+    assert writer.model_settings.store is writer_store
+    assert agent.model_settings is planner_settings
+    assert planner_settings.store is None
+    # The writer's copy keeps the planner's other settings.
+    assert writer.model_settings.parallel_tool_calls == planner_settings.parallel_tool_calls
 
 
 # ---------------------------------------------------------------------------

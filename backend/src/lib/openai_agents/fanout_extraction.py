@@ -13,7 +13,8 @@ model (AGENTS.md section 8):
   records than the fan-out threshold: the planner's own thread stages them. Otherwise
   code slices the plan in order and starts writers: agent clones with four tools,
   each with its own provider connection, a developer-role assignment, and the cited
-  chunks prefetched through the agent's own ``read_chunk`` tool.
+  chunks prefetched through the agent's own ``read_chunk`` tool. On native OpenAI,
+  writers send ``store=false`` unless ``EXTRACTION_FANOUT_WRITER_STORE_RESPONSES`` is true.
 - Writers end themselves with a final reply. Code counts what each writer staged;
   it never matches labels or merges records.
 - A writer whose run fails with a failure worth repeating (the typed curator-failure
@@ -427,6 +428,7 @@ def prepare_fanout_extraction(
         items_per_writer=config.get_extraction_fanout_items_per_writer(),
         max_writers=config.get_extraction_fanout_max_writers(),
         writer_reruns=config.get_extraction_fanout_writer_reruns(),
+        writer_store_responses=config.get_extraction_fanout_writer_store_responses(),
         emit_event=emit_event,
         record_live_evidence=record_live_evidence,
         evidence_records=evidence_records,
@@ -500,6 +502,7 @@ class FanoutExtraction:
         items_per_writer: int,
         max_writers: int,
         writer_reruns: int,
+        writer_store_responses: bool,
         emit_event: Callable[[dict[str, Any]], None],
         record_live_evidence: Callable[[dict[str, Any]], None],
         evidence_records: list[dict[str, Any]],
@@ -517,6 +520,9 @@ class FanoutExtraction:
         self.items_per_writer = items_per_writer
         self.max_writers = max_writers
         self.writer_reruns = writer_reruns
+        self.writer_store_responses = writer_store_responses
+        # Whether writers send store=false; set in start() from the planner's provider.
+        self.writer_store_off = False
         self.emit_event = emit_event
         self.record_live_evidence = record_live_evidence
         # The run's evidence list, which record_live_evidence adds to.
@@ -570,10 +576,17 @@ class FanoutExtraction:
         # items in one turn, so the planner thread and its writer clones allow parallel
         # tool calls wherever the provider's capability gates permit them.
         settings = planner_agent.model_settings
+        model_id, provider_id = _agent_model_and_provider(planner_agent)
         if settings.parallel_tool_calls is not True:
-            model_id, provider_id = _agent_model_and_provider(planner_agent)
             if model_id and config.provider_allows_parallel_tool_calls(model_id, provider_id):
                 planner_agent.model_settings = replace(settings, parallel_tool_calls=True)
+        # Writers ask native OpenAI not to keep their responses unless the setting
+        # keeps them; store is an OpenAI request field, so other providers never get it.
+        self.writer_store_off = bool(
+            not self.writer_store_responses
+            and model_id
+            and config.provider_is_openai_native(model_id, provider_id)
+        )
         self.planner_agent = planner_agent
         self.max_turns = max_turns
         self.run_config = run_config
@@ -882,6 +895,7 @@ class FanoutExtraction:
                 "assigned_positions": [position + 1 for position in positions],
                 **fields,
                 "rerun": rerun,
+                "store_off": self.writer_store_off,
             })
             if not rerun:
                 break
@@ -996,6 +1010,7 @@ class FanoutExtraction:
             "staged_candidate_ids": list(staged),
             "prefetched_chunks": chunk_indexes if self.read_tool is not None else [],
             "final_reply": final_text,
+            "store_off": self.writer_store_off,
         })
         return outcome
 
@@ -1011,6 +1026,9 @@ class FanoutExtraction:
             tools=[self._writer_tool(tool, attempt_key) for tool in tools],
             tool_use_behavior="run_llm_again",
         )
+        if self.writer_store_off:
+            # New settings on the writer's copy only; the planner's object is untouched.
+            writer.model_settings = replace(writer.model_settings, store=False)
         apply_tool_surface(writer, runtime=self.surface.runtime)
         return writer
 
