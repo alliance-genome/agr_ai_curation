@@ -260,10 +260,16 @@ def _tool(name, invoke, *, schema=None):
 
 def _source_tools(reads):
     async def read_chunk(_ctx, arguments):
+        from src.lib.openai_agents.document_result_view import document_result_view
+
         index = json.loads(arguments)["chunk_index"]
         reads.append(index)
-        return {"chunk": {"chunk_index": index, "content": f"passage {index}",
-                          "evidence_spans": [{"span_index": 0, "text": f"passage {index}"}]}}
+        text = f"passage {index}"
+        canonical = {"chunk": {"chunk_id": f"uuid-{index}", "chunk_index": index, "content": text,
+                               "evidence_spans": [{"span_id": f"uuid-{index}:s0", "span_index": 0, "text": text,
+                                                   "char_start": 0, "char_end": len(text)}]}}
+        # The inline catalog runner hands the agent the shared model view.
+        return document_result_view("read_chunk", canonical)[0]
 
     async def search_document(_ctx, _arguments):
         return {"hits": []}
@@ -607,7 +613,8 @@ async def test_planner_three_writers_tidy_and_code_finalize(harness):
     assignment = next(_text(item) for item in first_writer_input if item.get("role") == "developer")
     assert "Your items:\nP1. reagent 1 | chunks: 1, 2\nP2. reagent 2 | chunks: 1, 2\nP3. reagent 3 | chunks: 1, 2" in assignment
     assert "Lines were generated in this study." in assignment
-    assert "read_chunk(chunk_index=1) result:\n{'chunk': {'chunk_index': 1, 'content': 'passage 1'" in assignment
+    # Prefetched chunks reach writers in the same numbered form every reading tool shows.
+    assert "read_chunk(chunk_index=1) result:\n{'chunk': {'chunk_index': 1, 'text': '[0] passage 1'}}" in assignment
     # Each cited chunk was read once for all writers (plus the planner's own read).
     assert sorted(harness.reads) == [1, 1, 2]
 

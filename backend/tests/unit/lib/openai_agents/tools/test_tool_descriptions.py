@@ -36,7 +36,7 @@ def _assert_clean_doc(tool_name: str, doc: str) -> None:
     assert stale_hits == [], f"{tool_name} has stale description phrases: {stale_hits}"
 
 
-def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch):
+def test_document_reading_tools_describe_one_numbered_sentence_contract(monkeypatch):
     monkeypatch.setattr(weaviate_search, "function_tool", _identity_tool)
     monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **kwargs: tool)
     context = {"document_id": "doc-1", "user_id": "user-1"}
@@ -50,12 +50,16 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
 
     assert "Discovery tool" in docs["search_document"]
     assert "read_chunk" in docs["search_document"]
-    assert "evidence_spans[].span_index" in docs["read_chunk"]
-    assert "record_evidence(selections=[...])" in docs["read_chunk"]
-    assert "Survey" in docs["read_section"]
-    assert "read_chunk" in docs["read_section"]
-    assert "Survey" in docs["read_subsection"]
-    assert "evidence_spans[].span_index" in docs["read_subsection"]
+    # All three reading tools describe the same numbered-sentence evidence contract.
+    for read_tool in ("read_chunk", "read_section", "read_subsection"):
+        doc = docs[read_tool]
+        assert "numbered" in doc and "square brackets" in doc
+        assert "chunk_index" in doc and "span_index" in doc and "record_evidence" in doc
+        assert "evidence_spans" not in doc and "survey" not in doc.lower()
+    for read_tool in ("read_section", "read_subsection"):
+        doc = docs[read_tool]
+        assert "no need to read the passage again with read_chunk" in doc
+        assert "max_chunks" not in doc and "offset" not in doc
 
     # Document-search guidance relocated from the gene_expression prompt's
     # <search_infrastructure> block must now live in the tool docstrings so a
@@ -74,23 +78,15 @@ def test_document_discovery_tools_point_to_read_chunk_span_selection(monkeypatch
         "search_document must describe MMR as optional and disabled by default"
     )
 
-    # read_section / read_subsection must convey FULL/survey coverage of a named
-    # section via the semantic hierarchy (not page/positional order).
+    # read_section / read_subsection must convey that they return the WHOLE
+    # named section from the paper's outline, however long it is.
     for read_tool in ("read_section", "read_subsection"):
         doc_lower = docs[read_tool].lower()
-        assert "all" in doc_lower, (
-            f"{read_tool} must convey it returns ALL chunks of the named section"
-        )
-        assert "hierarchy" in doc_lower, (
-            f"{read_tool} must convey it uses the LLM-resolved semantic hierarchy"
-        )
-        assert "page" in doc_lower, (
-            f"{read_tool} must contrast with linear page order"
-        )
+        assert "every passage" in doc_lower
+        assert "outline" in doc_lower
+        assert "however long" in doc_lower
 
-    # read_chunk is the evidence-selection step: full text + span ids.
-    assert "evidence_spans" in docs["read_chunk"]
-    assert "span_index" in docs["read_chunk"]
+    assert "same ones read_section and read_subsection show" in docs["read_chunk"]
 
     for tool_name, doc in docs.items():
         _assert_clean_doc(tool_name, doc)

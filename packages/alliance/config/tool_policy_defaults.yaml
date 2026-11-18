@@ -511,7 +511,7 @@ tool_policies:
 
   read_chunk:
     display_name: Read Chunk
-    description: Read one active-document chunk with selectable evidence_spans[].span_index values and its chunk_index for record_evidence.
+    description: Read one active-document chunk as numbered sentences; pass its chunk_index and a sentence number (span_index) to record_evidence.
     category: Document
     curator_visible: true
     allow_attach: true
@@ -520,7 +520,7 @@ tool_policies:
 
   read_section:
     display_name: Read Section
-    description: Survey a specific section from the active document; use read_chunk for final evidence span selection.
+    description: Read every chunk of a specific section from the active document as numbered sentences; any sentence can go to record_evidence directly, without read_chunk.
     category: Document
     curator_visible: true
     allow_attach: true
@@ -529,7 +529,7 @@ tool_policies:
 
   read_subsection:
     display_name: Read Subsection
-    description: Survey a specific subsection from the active document; use read_chunk for final evidence span selection.
+    description: Read every chunk of a specific subsection from the active document as numbered sentences; any sentence can go to record_evidence directly, without read_chunk.
     category: Document
     curator_visible: true
     allow_attach: true

@@ -140,10 +140,10 @@ This document has the following hierarchical structure:
 **Top-level sections (in order):** {top_level_list}
 
 ### How to use this hierarchy:
-- Use `read_section("Methods")` to survey an entire top-level section
-- Use `read_subsection("Methods", "Fly Strains")` to survey a specific subsection
-- Use `read_chunk(chunk_index)` on relevant source chunks for final evidence selection
-- Select `read_chunk.evidence_spans[].span_index` values before calling `record_evidence`
+- Use `read_section("Methods")` to read an entire top-level section
+- Use `read_subsection("Methods", "Fly Strains")` to read a specific subsection
+- `read_section`, `read_subsection` and `read_chunk` all show each passage as numbered sentences; to keep a sentence as evidence, pass the passage's `chunk_index` and the sentence number (`span_index`) to `record_evidence`
+- A passage already read with `read_section` or `read_subsection` does not need to be read again with `read_chunk`
 - The subsections are nested under their parent sections above
 """
 
@@ -155,8 +155,9 @@ This document has the following sections available:
 {section_list}
 
 Use this information to choose the right tool and target your searches effectively.
-For retained evidence, use `read_chunk(chunk_index)` and select
-`evidence_spans[].span_index` values before calling `record_evidence`.
+For retained evidence, pass the `chunk_index` and sentence number (`span_index`)
+of a numbered sentence shown by `read_section`, `read_subsection` or
+`read_chunk(chunk_index)` to `record_evidence`.
 """
 
 # Template for abstract injection

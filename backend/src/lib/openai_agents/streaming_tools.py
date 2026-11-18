@@ -2494,7 +2494,8 @@ def _structured_specialist_finalization_feedback(
             "message": "Retained PDF items require live record_evidence output.",
         })
         repair_instructions.append(
-            "Use read_chunk evidence_spans and record_evidence, then reference the returned evidence_record_id."
+            "Select numbered sentences shown by read_section, read_subsection or read_chunk, "
+            "call record_evidence, then reference the returned evidence_record_id."
         )
     if missing_record_refs:
         field_errors.append({

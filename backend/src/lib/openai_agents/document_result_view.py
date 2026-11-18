@@ -46,83 +46,77 @@ def document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]:
 def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]:
     """Return a separate model view and provenance events; never alter originals.
 
-    Span positions remain absolute character offsets into the original chunk.
-    A paged chunk declares the offset at which its exact content starts. Evidence
-    recording still resolves the original span IDs against canonical source text.
+    The three reading tools show source text the same way: numbered lines, one
+    evidence span per line, ``[span_index] exact span text``. The numbers are the
+    canonical span indexes, so ``(chunk_index, span_index)`` means the same from
+    any tool. Character positions, span IDs and chunk IDs stay in the canonical
+    result for provenance; evidence recording resolves them from issued spans.
     """
     if tool_name not in DOCUMENT_READ_TOOLS:
         return result, []
     raw = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
     view = deepcopy(raw)
+    events = []
     if tool_name == "search_document":
         records = view.get("hits") or []
+    elif tool_name == "read_chunk":
+        records = [view["chunk"]] if view.get("chunk") is not None else []
     else:
-        key = {"read_chunk": "chunk", "read_section": "section", "read_subsection": "subsection"}[tool_name]
-        records = [view[key]] if view.get(key) is not None else []
-    events = []
+        section = view.get(_SECTION_RESULT_KEYS[tool_name])
+        records = section["passages"] if section is not None else []
+        if section is not None:
+            _drop_none(section)
+        geometry = [item for record in records for item in record.pop("doc_items", None) or []]
+        if geometry:
+            events.append({"type": "CHUNK_PROVENANCE", "message_id": str(uuid4()),
+                           "chunk_id": f"section:{section['requested_section']}",
+                           "doc_items": geometry, "source_tool": tool_name})
     for record in records:
         geometry = record.pop("doc_items", None)
         if not geometry and record.get("page_number"):
             geometry = [{"page": record["page_number"]}]
-        source_id = record.get("chunk_id") or f"section:{record.get('section_title')}"
-        if geometry:
+        if geometry and tool_name not in _SECTION_RESULT_KEYS:
             events.append({"type": "CHUNK_PROVENANCE", "message_id": str(uuid4()),
-                           "chunk_id": source_id, "doc_items": geometry, "source_tool": tool_name})
-        record.pop("chunk_id", None)
-        record.pop("chunk_number", None)
-        record.pop("previous_chunk_id", None)
-        record.pop("next_chunk_id", None)
-        for source in record.get("source_chunks") or []:
-            source.pop("chunk_id", None)
-            _drop_none(source)
+                           "chunk_id": record.get("chunk_id"), "doc_items": geometry,
+                           "source_tool": tool_name})
+        for key in ("chunk_id", "chunk_number", "previous_chunk_id", "next_chunk_id"):
+            record.pop(key, None)
+        if "evidence_spans" in record:
+            record["text"] = _numbered_span_text(record)
         _drop_none(record)
-        text = record.get("content")
-        if not isinstance(text, str) or "evidence_spans" not in record:
-            continue
-        start = (record.get("content_range") or {}).get("start", 0)
-        record["content_start"] = start
-        record["span_text_access"] = (
-            "Span text is content[char_start-content_start:char_end-content_start]. "
-            "Offsets count Unicode characters, end exclusive. Use chunk_index and span_index with record_evidence."
-        )
-        for span in record["evidence_spans"]:
-            lo, hi = span["char_start"] - start, span["char_end"] - start
-            if lo < 0 or hi > len(text) or hi <= lo or text[lo:hi] != span.get("text"):
-                raise ValueError("Evidence span does not match the exact returned document text")
-            del span["text"]
-            span.pop("span_id", None)
-        _state_shared_span_fields_once(record)
     _drop_none(view)
     return view, events
 
 
-# Span-only metadata every span usually shares; stated once on the record.
-_SPAN_ONLY_SHARED_FIELDS = ("span_type", "spanizer_version")
-# Each span's own position, always kept on the span.
-_SPAN_POSITION_FIELDS = frozenset({"span_index", "char_start", "char_end"})
+_SECTION_RESULT_KEYS = {"read_section": "section", "read_subsection": "subsection"}
+
+
+def _numbered_span_text(record: dict) -> str:
+    """Replace a record's exact content and span list with its numbered lines.
+
+    Every span is checked against the exact returned text before it is shown, so
+    the model sees only sentences the canonical source actually contains. A span
+    can hold single line breaks (a table row, a primer list); its continuation
+    lines are indented so that only a real span number ever starts a line.
+    """
+    text = record.pop("content")
+    spans = record.pop("evidence_spans")
+    start = (record.pop("content_range", None) or {}).get("start", 0)
+    if not isinstance(text, str):
+        raise ValueError("Document record has no exact text")
+    lines = []
+    for span in spans:
+        lo, hi = span["char_start"] - start, span["char_end"] - start
+        if lo < 0 or hi > len(text) or hi <= lo or text[lo:hi] != span.get("text"):
+            raise ValueError("Evidence span does not match the exact returned document text")
+        shown = span["text"].replace("\n", "\n" + _CONTINUATION_INDENT)
+        lines.append(f"[{span['span_index']}] {shown}")
+    return "\n".join(lines)
+
+
+_CONTINUATION_INDENT = "    "
 
 
 def _drop_none(mapping: dict) -> None:
     for key in [key for key, value in mapping.items() if value is None]:
         del mapping[key]
-
-
-def _state_shared_span_fields_once(record: dict) -> None:
-    """Keep each span's own position; state values every span repeats once.
-
-    A span field that is absent takes the record's value (none when the record
-    has none). So a span drops a field only where its value equals the record's,
-    including null against an absent record value; a null against a record value
-    stays explicit. A span-only field every span shares moves to the record.
-    """
-    spans = record["evidence_spans"]
-    for field in _SPAN_ONLY_SHARED_FIELDS:
-        values = [span.get(field) for span in spans]
-        if field not in record and values and values[0] is not None and all(
-            field in span and value == values[0] for span, value in zip(spans, values)
-        ):
-            record[field] = values[0]
-    for span in spans:
-        for field in [field for field, value in span.items()
-                      if field not in _SPAN_POSITION_FIELDS and value == record.get(field)]:
-            del span[field]

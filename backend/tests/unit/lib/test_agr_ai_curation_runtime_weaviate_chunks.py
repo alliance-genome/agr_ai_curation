@@ -14,10 +14,6 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         captured["hybrid_search_chunks"] = kwargs
         return [{"id": "search-hit"}]
 
-    async def _fake_get_document_sections(**kwargs):
-        captured["get_document_sections"] = kwargs
-        return [{"title": "Methods"}]
-
     async def _fake_get_chunk_by_id(**kwargs):
         captured["get_chunk_by_id"] = kwargs
         return {"id": "chunk-1"}
@@ -39,7 +35,6 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         "_load_chunks_module",
         lambda: SimpleNamespace(
             hybrid_search_chunks=_fake_hybrid_search_chunks,
-            get_document_sections=_fake_get_document_sections,
             get_chunk_by_id=_fake_get_chunk_by_id,
             get_chunk_neighbor_ids=_fake_get_chunk_neighbor_ids,
             get_chunks_by_parent_section=_fake_get_chunks_by_parent_section,
@@ -52,10 +47,6 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         query="wg",
         user_id="user-1",
     ) == [{"id": "search-hit"}]
-    assert await runtime_weaviate_chunks.get_document_sections(
-        document_id="doc-1",
-        user_id="user-1",
-    ) == [{"title": "Methods"}]
     assert await runtime_weaviate_chunks.get_chunk_by_id(
         chunk_id="chunk-1",
         user_id="user-1",
@@ -82,10 +73,6 @@ async def test_public_runtime_weaviate_helpers_delegate(monkeypatch):
         "hybrid_search_chunks": {
             "document_id": "doc-1",
             "query": "wg",
-            "user_id": "user-1",
-        },
-        "get_document_sections": {
-            "document_id": "doc-1",
             "user_id": "user-1",
         },
         "get_chunk_by_id": {

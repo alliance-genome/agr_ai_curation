@@ -9,13 +9,17 @@ and capacity recovery; no last-N tool retirement or per-tool byte quota remains.
 1. **Document results contain text once.** The package still returns its complete
    structured result, including span text and PDF geometry. The shared backend
    catalog records that original before creating a distinct model response.
-   `content` appears once; evidence spans retain their original IDs and absolute
-   Unicode character offsets. `content_start` makes offsets usable within a paged
-   chunk. Every removed span text is checked against the exact returned slice.
-   Page/section/chunk identities and continuation fields remain. The model view
-   leaves out null fields, a content hash, and span page, section, type and
-   spanizer values that repeat the chunk's; each span keeps `span_index`,
-   `char_start` and `char_end`. Geometry travels
+   The model sees the source text once, as numbered lines
+   `[span_index] sentence`, one evidence span per line. A span's own line breaks
+   are kept and its continuation lines are indented four spaces, so only a real
+   span number starts a line. `read_chunk`, `read_section` and `read_subsection`
+   all use this view, and a span number means the same in all three. In the
+   canonical result, evidence spans retain their original IDs and absolute
+   Unicode character offsets; `content_range` makes offsets usable within a chunk
+   read from a span offset. Every span text is checked against the exact returned
+   slice before it is shown. Page, section, `chunk_index` and continuation fields
+   remain in the model view; chunk IDs, span IDs, character offsets and null
+   fields stay out of it. Geometry travels
    in `CHUNK_PROVENANCE` events, including for `read_chunk` and `read_subsection`.
    Evidence results are model views too: a verified `record_evidence` result
    shows the record's ID, location and `verified_quote` once, and

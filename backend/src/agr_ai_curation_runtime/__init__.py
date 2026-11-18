@@ -23,7 +23,6 @@ from .weaviate_chunks import (
     get_chunk_neighbor_ids,
     get_chunks_by_parent_section,
     get_chunks_by_subsection,
-    get_document_sections,
     hybrid_search_chunks,
 )
 
@@ -48,6 +47,5 @@ __all__ = [
     "get_chunk_neighbor_ids",
     "get_chunks_by_parent_section",
     "get_chunks_by_subsection",
-    "get_document_sections",
     "hybrid_search_chunks",
 ]

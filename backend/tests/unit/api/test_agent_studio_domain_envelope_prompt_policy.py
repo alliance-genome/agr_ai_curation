@@ -323,7 +323,8 @@ def test_agent_studio_system_prompt_grounded_in_pdf_evidence_span_tools():
     assert "PDF evidence is span-backed" in prompt
     assert "Do not tell curators or prompt authors that extraction agents should invent" in prompt
     assert "`search_document` for candidate chunks" in prompt
-    assert "`read_chunk` for exact chunk text plus deterministic `evidence_spans[].span_index`" in prompt
+    assert "`read_chunk`, `read_section` or `read_subsection` for exact chunk text shown as numbered sentences" in prompt
+    assert "agents do not need to read those passages again with `read_chunk`" in prompt
     assert '`record_evidence(selections=[{"chunk_index": 0, "span_index": 0}])`' in prompt
     assert "`search_document.search_mode` supports `auto`, `hybrid`, `lexical`, and `hybrid_lexical_first`" in prompt
     assert "Prefer lexical-heavy modes for exact biomedical symbols" in prompt

@@ -45,8 +45,8 @@ logger = logging.getLogger(__name__)
 # Env-configurable via RECORD_EVIDENCE_PREVIEW_CHARS (default 300); see config.py.
 _PREVIEW_CHARS = get_record_evidence_preview_chars()
 _SPAN_RETRY_INSTRUCTIONS = (
-    "Call read_chunk for the source chunk again and select current "
-    "evidence_spans[].span_index values. Do not provide model-authored source text."
+    "Call read_chunk for the source chunk again and select current sentence "
+    "numbers (span_index) from its numbered lines. Do not provide model-authored source text."
 )
 _SOURCE_REVISION_FIELDS = (
     "verified_quote",
@@ -1146,7 +1146,8 @@ def _invalid_arguments_result(problems: list[dict[str, Any]]) -> str:
             "argument_errors": problems,
             "message": (
                 "Nothing was saved. Call record_evidence again with entity and "
-                "selections as chunk_index/span_index pairs from read_chunk."
+                "selections as chunk_index/span_index pairs from read_chunk, "
+                "read_section or read_subsection."
             ),
         },
         ensure_ascii=False,
@@ -1215,7 +1216,7 @@ def create_record_evidence_tool(
 
         Args:
             entity: Entity or object label supported by the evidence.
-            selections: Non-empty list of chunk_index/span_index pairs from read_chunk.
+            selections: Non-empty list of chunk_index/span_index pairs from read_chunk, read_section or read_subsection.
             evidence_record_id: Existing active-run record to update in place.
             object_id: Optional curatable object to attach to; requires field_path.
             pending_ref_id: Optional pending target; requires field_path.

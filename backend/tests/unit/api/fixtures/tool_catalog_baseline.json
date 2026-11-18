@@ -4311,23 +4311,23 @@
     "agent_methods": null,
     "binding_kind": "context_factory",
     "category": "PDF Extraction",
-    "description": "Read the full text of one passage from the PDF and get back the exact pieces of it that can be saved as evidence.",
+    "description": "Read the full text of one passage from the PDF, numbered sentence by sentence, so any sentence can be saved as evidence.",
     "documentation": {
       "parameters": [
         {
-          "description": "Which passage to read, taken from a search result or a section's list of passages.",
+          "description": "Which passage to read, taken from a search result or a section read.",
           "name": "chunk_index",
           "required": true,
           "type": "integer"
         },
         {
-          "description": "Optional starting span index for an exact suffix read; omitted means the whole passage.",
+          "description": "Optional sentence number to start from; omitted means the whole passage.",
           "name": "span_offset",
           "required": false,
           "type": "integer"
         }
       ],
-      "summary": "Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence. The default call returns the whole passage. An explicit span offset returns all remaining spans and text from that offset."
+      "summary": "Returns the complete text of one passage as numbered sentences, with pointers to the passages just before and after it. Each numbered sentence is one of the snippets within it that can be captured as supporting evidence; the sentence is copied exactly from the paper and becomes the verified quote on the saved piece of evidence. The sentence numbers are the same ones Read Section and Read Subsection show for this passage. The default call returns the whole passage; a starting sentence number returns every sentence from there to the end of the passage."
     },
     "methods": null,
     "name": "Read Chunk",
@@ -4402,25 +4402,13 @@
           "type": "string"
         },
         {
-          "description": "Optional maximum passages to select; omit for the complete section.",
-          "name": "max_chunks",
-          "required": false,
-          "type": "integer"
-        },
-        {
-          "description": "How many passages to skip; use the next_offset from the previous result to continue.",
-          "name": "offset",
-          "required": false,
-          "type": "integer"
-        },
-        {
-          "description": "Return only passages containing this text (case-insensitive), each with a short excerpt, instead of the whole section.",
+          "description": "Return only the passages containing this text (case-insensitive), each one whole, and say how many of the section's passages matched.",
           "name": "text_contains",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. The default call returns the whole section. Explicit max_chunks and offset select a requested passage page without size-based clipping. The individual passages it lists can then be read in full to pick out exact supporting quotes."
+      "summary": "Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, however long the section is, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. The section name matches as part of a name, so Methods also matches Materials and Methods; the result lists every section name that matched."
     },
     "methods": null,
     "name": "Read Section",
@@ -4445,36 +4433,24 @@
       "parameters": [
         {
           "description": "The section that contains the subsection.",
-          "name": "section_name",
+          "name": "parent_section",
           "required": true,
           "type": "string"
         },
         {
           "description": "The subsection to read.",
-          "name": "subsection_name",
+          "name": "subsection",
           "required": true,
           "type": "string"
         },
         {
-          "description": "Optional maximum passages to select; omit for the complete subsection.",
-          "name": "max_chunks",
-          "required": false,
-          "type": "integer"
-        },
-        {
-          "description": "How many passages to skip; use the next_offset from the previous result to continue.",
-          "name": "offset",
-          "required": false,
-          "type": "integer"
-        },
-        {
-          "description": "Return only passages containing this text (case-insensitive), each with a short excerpt, instead of the whole subsection.",
+          "description": "Return only the passages containing this text (case-insensitive), each one whole, and say how many of the subsection's passages matched.",
           "name": "text_contains",
           "required": false,
           "type": "string"
         }
       ],
-      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. The default call returns the whole subsection. Explicit max_chunks and offset select a requested passage page without size-based clipping. The relevant passages can then be read in full to pick out exact supporting quotes."
+      "summary": "Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, however long it is, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. Both names match as part of a name; the result lists every section and subsection name that matched."
     },
     "methods": null,
     "name": "Read Subsection",

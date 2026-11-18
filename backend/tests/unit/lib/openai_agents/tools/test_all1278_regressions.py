@@ -76,31 +76,20 @@ def test_c_builder_page_stays_within_budget():
 
 
 @pytest.mark.asyncio
-async def test_e_section_page_is_bounded_by_total_size(monkeypatch):
-    chunks = [{"id": f"c-{i}", "chunk_index": i, "text": "t" * 3000, "page_number": 1, "section_title": "R"}
-              for i in range(30)]
-
-    async def _section(**_kwargs):
-        return chunks
-
-    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _section)
-    tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
-    result = await tool("R")
-    assert result.section.content == "\n\n".join(chunk["text"] for chunk in chunks)
-
-
-@pytest.mark.asyncio
-async def test_e_section_max_chunks_is_capped(monkeypatch):
-    chunks = [{"id": f"c-{i}", "chunk_index": i, "text": "t", "page_number": 1, "section_title": "R"}
+async def test_e_section_read_returns_every_chunk_whole(monkeypatch):
+    chunks = [{"id": f"c-{i}", "chunk_index": i, "text": "t" * 3000, "page_number": 1, "parent_section": "R"}
               for i in range(300)]
 
     async def _section(**_kwargs):
         return chunks
 
+    from unittest.mock import AsyncMock
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _section)
+    monkeypatch.setattr(weaviate_search, "retain_issued_spans", AsyncMock())
     tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
-    result = await tool("R", max_chunks=10**6)
-    assert result.section.returned_chunk_count == 300
+    result = await tool("R")
+    assert [passage.content for passage in result.section.passages] == [chunk["text"] for chunk in chunks]
+    assert result.section.total_chunk_count == 300
 
 
 

@@ -12,7 +12,10 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 from .tool_calls import ToolCallAnalyzer
 from .extraction_followup import FACTS as FOLLOWUP_FACTS
 
-ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v1"
+# Also the cache key for every stored trace analysis (api/traces.py, api/claude.py):
+# bump it whenever any analyzer's output changes, so cached analyses are recomputed.
+# v2: tool_calls and pdf_citations read numbered section reads (ALL-1550).
+ANALYZER_SCHEMA_VERSION = "extraction_timeline_analyzer.v2"
 EVENT_SCHEMA_VERSION = "extraction_trace_event.v1"
 EVIDENCE_REVISIONS_SCHEMA_VERSION = "evidence_revisions.v1"
 SUMMARY_TEXT_LIMIT = 500

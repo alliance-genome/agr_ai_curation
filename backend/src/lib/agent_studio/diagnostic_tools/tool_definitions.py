@@ -919,8 +919,8 @@ def _create_get_tool_inventory_handler():
             "instruction": (
                 "Use agent_id to inspect one agent's attached tools, or "
                 "get_tool_details(tool_id, agent_id) for full metadata. For PDF "
-                "evidence guidance, inspect search_document, read_chunk, "
-                "record_evidence, and active-run evidence workspace tools."
+                "evidence guidance, inspect search_document, read_chunk, read_section, "
+                "read_subsection, record_evidence, and active-run evidence workspace tools."
             ),
         }
 
@@ -974,8 +974,9 @@ def _create_get_tool_details_handler():
                 "Use tool.documentation.parameters for call shape, methods or "
                 "relevant_methods for multi-method tools, and agent_context for "
                 "agent-specific allowlists. For PDF evidence tools, treat this "
-                "metadata as the source of truth for search_mode, read_chunk "
-                "evidence_spans[].span_index output, record_evidence selections "
+                "metadata as the source of truth for search_mode, the numbered "
+                "sentences (span_index) that read_chunk, read_section and "
+                "read_subsection show, record_evidence selections "
                 "input, and immutable evidence provenance behavior."
             ),
         }

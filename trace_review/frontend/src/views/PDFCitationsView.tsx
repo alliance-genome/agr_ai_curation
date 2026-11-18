@@ -7,7 +7,7 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import NumbersIcon from '@mui/icons-material/Numbers';
 import RuleIcon from '@mui/icons-material/Rule';
 import { alpha } from '@mui/material/styles';
-import type { CitationMappingStatus, PDFCitationsData } from '../types';
+import type { CitationMappingStatus, PDFCitationsData, UndecodableRead } from '../types';
 
 interface PDFCitationsViewProps {
   data: PDFCitationsData;
@@ -44,6 +44,23 @@ function mappingStatusColor(status: CitationMappingStatus): ChipProps['color'] {
   return 'default';
 }
 
+function UndecodableReadsAlert({ reads }: { reads?: UndecodableRead[] }) {
+  if (!reads || reads.length === 0) {
+    return null;
+  }
+  return (
+    <Alert severity="warning" sx={{ mb: 3 }}>
+      {reads.length} document read{reads.length !== 1 ? 's' : ''} could not be decoded and
+      {reads.length !== 1 ? ' were' : ' was'} left out of this analysis:
+      {reads.map((read) => (
+        <Box key={`${read.call_id}-${read.tool_name}`} component="div" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+          {read.tool_name} {read.call_id}: {read.reason}
+        </Box>
+      ))}
+    </Alert>
+  );
+}
+
 export function PDFCitationsView({ data }: PDFCitationsViewProps) {
   if (!data.found) {
     return (
@@ -51,6 +68,7 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
         <Typography variant="h5" gutterBottom>
           PDF Citations
         </Typography>
+        <UndecodableReadsAlert reads={data.citation_number_diagnostics?.undecodable_reads} />
         <Alert severity="info">No PDF citations found in this trace</Alert>
       </Box>
     );
@@ -87,6 +105,8 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
           />
         )}
       </Box>
+
+      <UndecodableReadsAlert reads={data.citation_number_diagnostics?.undecodable_reads} />
 
       {/* Citation-number diagnostics */}
       {data.citation_number_diagnostics && (

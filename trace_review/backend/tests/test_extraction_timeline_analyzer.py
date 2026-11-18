@@ -100,7 +100,7 @@ def test_analyzer_merges_durable_events_and_agents_sdk_tool_observations(tmp_pat
         observations=observations,
     )
 
-    assert timeline["schema_version"] == "extraction_timeline_analyzer.v1"
+    assert timeline["schema_version"] == "extraction_timeline_analyzer.v2"
     assert timeline["durable_event_count"] == 3
     assert timeline["observation_event_count"] == 1
     assert timeline["reasoning_summary"]["status"] == "present"

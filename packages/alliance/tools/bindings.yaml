@@ -2222,7 +2222,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Read the full text of one passage from the PDF and get back the exact pieces of it that can be saved as evidence.
+    description: Read the full text of one passage from the PDF, numbered sentence by sentence, so any sentence can be saved as evidence.
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
     metadata:
       paper_source: true
@@ -2230,16 +2230,16 @@ tools:
       name: Read Chunk
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of one passage, pointers to the passages just before and after it, and the specific snippets within it that can be captured as supporting evidence. This is the step where evidence is chosen, since the snippets selected here become the exact verified quote on a saved piece of evidence. The default call returns the whole passage. An explicit span offset returns all remaining spans and text from that offset.
+        summary: Returns the complete text of one passage as numbered sentences, with pointers to the passages just before and after it. Each numbered sentence is one of the snippets within it that can be captured as supporting evidence; the sentence is copied exactly from the paper and becomes the verified quote on the saved piece of evidence. The sentence numbers are the same ones Read Section and Read Subsection show for this passage. The default call returns the whole passage; a starting sentence number returns every sentence from there to the end of the passage.
         parameters:
         - name: chunk_index
           type: integer
           required: true
-          description: Which passage to read, taken from a search result or a section's list of passages.
+          description: Which passage to read, taken from a search result or a section read.
         - name: span_offset
           type: integer
           required: false
-          description: Optional starting span index for an exact suffix read; omitted means the whole passage.
+          description: Optional sentence number to start from; omitted means the whole passage.
   - tool_id: read_section
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_section_tool
@@ -2254,24 +2254,16 @@ tools:
       name: Read Section
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. The default call returns the whole section. Explicit max_chunks and offset select a requested passage page without size-based clipping. The individual passages it lists can then be read in full to pick out exact supporting quotes.
+        summary: Returns the complete text of every passage in a section, grouped by the paper's own structure rather than by page order, however long the section is, so it gives full coverage of the section even when a search might overlook a faintly matching passage. This is the way to read an entire section, including tables and figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. The section name matches as part of a name, so Methods also matches Materials and Methods; the result lists every section name that matched.
         parameters:
         - name: section_name
           type: string
           required: true
           description: The section to read, such as Methods or Introduction.
-        - name: max_chunks
-          type: integer
-          required: false
-          description: Optional maximum passages to select; omit for the complete section.
-        - name: offset
-          type: integer
-          required: false
-          description: How many passages to skip; use the next_offset from the previous result to continue.
         - name: text_contains
           type: string
           required: false
-          description: Return only passages containing this text (case-insensitive), each with a short excerpt, instead of the whole section.
+          description: Return only the passages containing this text (case-insensitive), each one whole, and say how many of the section's passages matched.
   - tool_id: read_subsection
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_read_subsection_tool
@@ -2286,28 +2278,20 @@ tools:
       name: Read Subsection
       category: PDF Extraction
       documentation:
-        summary: Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. The default call returns the whole subsection. Explicit max_chunks and offset select a requested passage page without size-based clipping. The relevant passages can then be read in full to pick out exact supporting quotes.
+        summary: Returns the complete text of every passage in one subsection, grouped by the paper's own structure rather than by page order, however long it is, so it gives full coverage of that subsection even when a search might overlook a faintly matching passage. This is the way to read a whole subsection, including its figure legends. Every passage is read in full and shown as numbered sentences, and any of those sentences can be saved as evidence directly, without reading the passage again. Both names match as part of a name; the result lists every section and subsection name that matched.
         parameters:
-        - name: section_name
+        - name: parent_section
           type: string
           required: true
           description: The section that contains the subsection.
-        - name: subsection_name
+        - name: subsection
           type: string
           required: true
           description: The subsection to read.
-        - name: max_chunks
-          type: integer
-          required: false
-          description: Optional maximum passages to select; omit for the complete subsection.
-        - name: offset
-          type: integer
-          required: false
-          description: How many passages to skip; use the next_offset from the previous result to continue.
         - name: text_contains
           type: string
           required: false
-          description: Return only passages containing this text (case-insensitive), each with a short excerpt, instead of the whole subsection.
+          description: Return only the passages containing this text (case-insensitive), each one whole, and say how many of the subsection's passages matched.
   - tool_id: record_evidence
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_record_evidence_tool

@@ -16,6 +16,7 @@ from weaviate.exceptions import WeaviateQueryError
 
 from ..bedrock_reranker import get_effective_rerank_provider, rerank_chunks
 from ..openai_agents.config import (
+    get_weaviate_chunk_fetch_page_size,
     get_weaviate_search_hybrid_alpha,
     get_weaviate_search_initial_limit,
     get_weaviate_search_mmr_enabled,
@@ -251,9 +252,10 @@ def fetch_document_chunks_for_resolution(
         offset = 0
 
         while True:
+            # Offset paging needs a total order: the object id breaks chunkIndex ties.
             response = chunk_collection.query.fetch_objects(
                 filters=Filter.by_property("documentId").equal(document_id),
-                sort=Sort.by_property("chunkIndex", ascending=True),
+                sort=Sort.by_property("chunkIndex", ascending=True).by_id(ascending=True),
                 limit=page_size,
                 offset=offset,
                 include_vector=False,
@@ -1079,130 +1081,6 @@ async def hybrid_search_chunks_retry_adapter(
     return await run(alpha_override=None, rerank=None, mmr=None)
 
 
-async def get_chunks_by_section(
-    document_id: str,
-    section_title: str,
-    user_id: str,
-    max_chunks: int = 50
-) -> List[Dict[str, Any]]:
-    """
-    Retrieve chunks starting from a specific section header.
-    
-    Strategy:
-    1. Find the first chunk matching the section title (the header).
-    2. Fetch subsequent chunks by index to capture the body.
-    3. Stop if a new section clearly starts (heuristic).
-    
-    Args:
-        document_id: Document UUID
-        section_title: Exact or partial title of the section
-        user_id: User identifier for tenant scoping
-        max_chunks: Maximum number of chunks to retrieve (safety limit)
-        
-    Returns:
-        List of chunks sorted by index
-    """
-    if not user_id:
-        raise ValueError("user_id is required for tenant-scoped chunk retrieval")
-
-    connection = get_connection()
-    if not connection:
-        raise RuntimeError("No Weaviate connection established")
-
-    def _fetch():
-        with connection.session() as client:
-            from ..weaviate_helpers import get_user_collections
-            chunk_collection, _ = get_user_collections(client, user_id)
-            
-            from weaviate.classes.query import Filter, Sort
-            
-            # Step 1: Find the start chunk
-            section_filter = Filter.by_property("sectionTitle").like(f"*{section_title}*")
-            doc_filter = Filter.by_property("documentId").equal(document_id)
-            
-            # Get just the first matching chunk to establish the start index
-            start_response = chunk_collection.query.fetch_objects(
-                filters=doc_filter & section_filter,
-                sort=Sort.by_property("chunkIndex", ascending=True),
-                limit=1,
-                return_properties=["chunkIndex", "sectionTitle"]
-            )
-            
-            if not start_response.objects:
-                logger.info("No section header found for '%s'", section_title)
-                return []
-                
-            start_chunk = start_response.objects[0]
-            start_index = start_chunk.properties.get("chunkIndex")
-            found_title = start_chunk.properties.get("sectionTitle")
-            
-            logger.info(
-                "Found section '%s' at index %s. Reading forward...",
-                found_title,
-                start_index,
-            )
-            
-            # Step 2: Fetch range of chunks starting from start_index
-            range_filter = Filter.by_property("chunkIndex").greater_or_equal(start_index)
-            
-            # Fetch a bit more than needed to detect next section
-            fetch_limit = max_chunks + 5
-            
-            range_response = chunk_collection.query.fetch_objects(
-                filters=doc_filter & range_filter,
-                sort=Sort.by_property("chunkIndex", ascending=True),
-                limit=fetch_limit,
-                return_properties=[
-                    "content", 
-                    "chunkIndex", 
-                    "sectionTitle", 
-                    "pageNumber",
-                    "metadata"
-                ]
-            )
-            
-            chunks = []
-            for obj in range_response.objects:
-                props = obj.properties
-                
-                # REMOVED HEURISTIC: Do not stop on title change.
-                # Subsections (e.g. "2.1 Genetics") often have different titles 
-                # that don't contain the main section name ("Materials and Methods").
-                # It is better to over-fetch and let the LLM filter than to miss content.
-                
-                chunk = {
-                    "text": props.get("content"),
-                    "chunk_index": props.get("chunkIndex"),
-                    "section_title": props.get("sectionTitle"),
-                    "page_number": props.get("pageNumber"),
-                    "metadata": props.get("metadata")
-                }
-
-                chunk_id = _weaviate_object_uuid(obj)
-                if chunk_id:
-                    chunk["id"] = chunk_id
-
-                chunks.append(chunk)
-                
-                if len(chunks) >= max_chunks:
-                    break
-                
-            return chunks
-
-    # Async execution
-    try:
-        if hasattr(asyncio, 'to_thread'):
-            return await asyncio.to_thread(_fetch)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _fetch)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            return _fetch()
-        raise
-
-
-
 async def search_chunks_by_keyword(
     document_id: str,
     keyword: str,
@@ -1391,88 +1269,6 @@ async def get_chunks_from_index(
     return await asyncio.to_thread(_fetch)
 
 
-async def get_document_sections(
-    document_id: str,
-    user_id: str
-) -> List[Dict[str, Any]]:
-    """
-    Get a list of all unique sections in a document.
-
-    Returns sections with their page numbers and chunk counts,
-    useful for showing the agent what sections are available.
-
-    Args:
-        document_id: Document UUID
-        user_id: User identifier for tenant scoping
-
-    Returns:
-        List of section info dicts: [{"title": str, "page_number": int, "chunk_count": int}]
-    """
-    if not user_id:
-        raise ValueError("user_id is required for tenant-scoped section listing")
-
-    connection = get_connection()
-    if not connection:
-        raise RuntimeError("No Weaviate connection established")
-
-    def _fetch():
-        with connection.session() as client:
-            from ..weaviate_helpers import get_user_collections
-            chunk_collection, _ = get_user_collections(client, user_id)
-
-            from weaviate.classes.query import Filter, Sort
-            from collections import defaultdict
-
-            doc_filter = Filter.by_property("documentId").equal(document_id)
-
-            # Fetch all chunks to extract unique sections
-            # Using aggregate would be better but Weaviate v4 aggregate is limited
-            response = chunk_collection.query.fetch_objects(
-                filters=doc_filter,
-                sort=Sort.by_property("chunkIndex", ascending=True),
-                limit=500,  # Safety limit - most papers have < 500 chunks
-                return_properties=["sectionTitle", "pageNumber", "chunkIndex"]
-            )
-
-            # Group by section title
-            sections = defaultdict(lambda: {"pages": set(), "chunks": 0, "first_index": float('inf')})
-
-            for obj in response.objects:
-                props = obj.properties
-                title = props.get("sectionTitle") or "Untitled"
-                page = props.get("pageNumber", 1)
-                idx = props.get("chunkIndex", 0)
-
-                sections[title]["pages"].add(page)
-                sections[title]["chunks"] += 1
-                sections[title]["first_index"] = min(sections[title]["first_index"], idx)
-
-            # Convert to sorted list
-            result = []
-            for title, info in sorted(sections.items(), key=lambda x: x[1]["first_index"]):
-                pages = sorted(info["pages"])
-                result.append({
-                    "title": title,
-                    "page_numbers": pages,
-                    "start_page": pages[0] if pages else 1,
-                    "chunk_count": info["chunks"]
-                })
-
-            return result
-
-    # Async execution
-    try:
-        if hasattr(asyncio, 'to_thread'):
-            return await asyncio.to_thread(_fetch)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _fetch)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            return _fetch()
-        raise
-
-
 async def get_document_hierarchy(
     document_id: str,
     user_id: str
@@ -1529,23 +1325,101 @@ async def get_document_hierarchy(
         raise
 
 
+_SECTION_CHUNK_PROPERTIES = [
+    "content",
+    "chunkIndex",
+    "sectionTitle",
+    "parentSection",
+    "subsection",
+    "isTopLevel",
+    "pageNumber",
+    "metadata",
+    "docItemProvenance",
+]
+
+
+def _fetch_every_object(collection: Any, *, filters: Any, return_properties: List[str]) -> List[Any]:
+    """Page through the store in chunk order until every matching object is read.
+
+    Offset paging needs a total order: two stored objects can share a chunkIndex,
+    so the object id breaks ties and no object moves across a page boundary.
+    The page size (WEAVIATE_CHUNK_FETCH_PAGE_SIZE) is transport granularity only.
+    """
+    from weaviate.classes.query import Sort
+
+    page_size = get_weaviate_chunk_fetch_page_size()
+    objects: List[Any] = []
+    while True:
+        response = collection.query.fetch_objects(
+            filters=filters,
+            sort=Sort.by_property("chunkIndex", ascending=True).by_id(ascending=True),
+            limit=page_size,
+            offset=len(objects),
+            include_vector=False,
+            return_properties=return_properties,
+        )
+        objects.extend(response.objects)
+        if len(response.objects) < page_size:
+            return objects
+
+
+def _section_chunk(obj: Any) -> Dict[str, Any]:
+    props = obj.properties
+    doc_items = []
+    doc_items_str = props.get("docItemProvenance")
+    if doc_items_str:
+        try:
+            doc_items = json.loads(doc_items_str) if isinstance(doc_items_str, str) else doc_items_str
+        except json.JSONDecodeError:
+            pass
+    return {
+        "id": _weaviate_object_uuid(obj),
+        "text": props.get("content"),
+        "chunk_index": props.get("chunkIndex"),
+        "section_title": props.get("sectionTitle"),
+        "parent_section": props.get("parentSection"),
+        "subsection": props.get("subsection"),
+        "is_top_level": props.get("isTopLevel"),
+        "page_number": props.get("pageNumber"),
+        "metadata": props.get("metadata"),
+        "doc_items": doc_items,
+    }
+
+
+def _fetch_section_chunks(user_id: str, filters_for: Any) -> List[Dict[str, Any]]:
+    connection = get_connection()
+    if not connection:
+        raise RuntimeError("No Weaviate connection established")
+    with connection.session() as client:
+        from ..weaviate_helpers import get_user_collections
+        from weaviate.classes.query import Filter
+
+        chunk_collection, _ = get_user_collections(client, user_id)
+        objects = _fetch_every_object(
+            chunk_collection,
+            filters=filters_for(Filter),
+            return_properties=_SECTION_CHUNK_PROPERTIES,
+        )
+        return [_section_chunk(obj) for obj in objects]
+
+
 async def get_chunks_by_parent_section(
     document_id: str,
     parent_section: str,
     user_id: str,
-    max_chunks: int = 50
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve all chunks belonging to a top-level section (e.g., Materials and Methods, Results).
+    Retrieve every chunk whose top-level section name contains ``parent_section``.
 
-    Uses the LLM-resolved parentSection field for accurate section boundaries.
-    Unlike get_chunks_by_section, this respects the hierarchical structure.
+    Uses the LLM-resolved parentSection field for section boundaries. Matching is
+    a substring match, so one call can cover several stored section names; each
+    returned chunk carries its own ``parent_section``. Returns every match in
+    chunk order, however many there are.
 
     Args:
         document_id: Document UUID
         parent_section: The paper's own top-level section heading (e.g., "Materials and Methods", "Results")
         user_id: User identifier for tenant scoping
-        max_chunks: Maximum number of chunks to retrieve
 
     Returns:
         List of chunks sorted by index
@@ -1553,82 +1427,15 @@ async def get_chunks_by_parent_section(
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval")
 
-    def _fetch():
-        connection = get_connection()
-        if not connection:
-            raise RuntimeError("No Weaviate connection established")
-        with connection.session() as client:
-            from ..weaviate_helpers import get_user_collections
-            chunk_collection, _ = get_user_collections(client, user_id)
+    def _filters(Filter):
+        return (
+            Filter.by_property("documentId").equal(document_id)
+            & Filter.by_property("parentSection").like(f"*{parent_section}*")
+        )
 
-            from weaviate.classes.query import Filter, Sort
-
-            # Filter by document AND parentSection (case-insensitive like match)
-            doc_filter = Filter.by_property("documentId").equal(document_id)
-            section_filter = Filter.by_property("parentSection").like(f"*{parent_section}*")
-
-            response = chunk_collection.query.fetch_objects(
-                filters=doc_filter & section_filter,
-                sort=Sort.by_property("chunkIndex", ascending=True),
-                limit=max_chunks,
-                return_properties=[
-                    "content",
-                    "chunkIndex",
-                    "sectionTitle",
-                    "parentSection",
-                    "subsection",
-                    "isTopLevel",
-                    "pageNumber",
-                    "metadata",
-                    "docItemProvenance"
-                ]
-            )
-
-            if not response.objects:
-                logger.info("No chunks found for parent section '%s'", parent_section)
-                return []
-
-            logger.info(
-                "Found %s chunks for parent section '%s'",
-                len(response.objects),
-                parent_section,
-            )
-
-            chunks = []
-            for obj in response.objects:
-                props = obj.properties
-
-                # Parse docItemProvenance
-                doc_items = []
-                doc_items_str = props.get("docItemProvenance")
-                if doc_items_str:
-                    try:
-                        doc_items = json.loads(doc_items_str) if isinstance(doc_items_str, str) else doc_items_str
-                    except json.JSONDecodeError:
-                        pass
-
-                chunk = {
-                    "text": props.get("content"),
-                    "chunk_index": props.get("chunkIndex"),
-                    "section_title": props.get("sectionTitle"),
-                    "parent_section": props.get("parentSection"),
-                    "subsection": props.get("subsection"),
-                    "is_top_level": props.get("isTopLevel"),
-                    "page_number": props.get("pageNumber"),
-                    "metadata": props.get("metadata"),
-                    "doc_items": doc_items
-                }
-
-                chunk_id = _weaviate_object_uuid(obj)
-                if chunk_id:
-                    chunk["id"] = chunk_id
-
-                chunks.append(chunk)
-
-            return chunks
-
-    # Dispatch failures propagate to optional-context recovery; never run I/O on the loop.
-    return await asyncio.to_thread(_fetch)
+    chunks = await asyncio.to_thread(_fetch_section_chunks, user_id, _filters)
+    logger.info("Found %s chunks for parent section '%s'", len(chunks), parent_section)
+    return chunks
 
 
 async def get_chunks_by_subsection(
@@ -1636,12 +1443,12 @@ async def get_chunks_by_subsection(
     parent_section: str,
     subsection: str,
     user_id: str,
-    max_chunks: int = 30
 ) -> List[Dict[str, Any]]:
     """
-    Retrieve chunks for a specific subsection within a parent section.
+    Retrieve every chunk of a subsection within a parent section.
 
-    Uses the LLM-resolved subsection field for accurate targeting.
+    Uses the LLM-resolved parentSection and subsection fields, each matched as a
+    substring. Returns every match in chunk order, however many there are.
     Example: get_chunks_by_subsection(doc_id, "Methods", "Fly Strains", user_id)
 
     Args:
@@ -1649,7 +1456,6 @@ async def get_chunks_by_subsection(
         parent_section: Top-level section name (e.g., "Methods")
         subsection: Subsection name (e.g., "Fly Strains", "Cell Culture")
         user_id: User identifier for tenant scoping
-        max_chunks: Maximum number of chunks to retrieve
 
     Returns:
         List of chunks sorted by index
@@ -1657,92 +1463,18 @@ async def get_chunks_by_subsection(
     if not user_id:
         raise ValueError("user_id is required for tenant-scoped chunk retrieval")
 
-    connection = get_connection()
-    if not connection:
-        raise RuntimeError("No Weaviate connection established")
+    def _filters(Filter):
+        return (
+            Filter.by_property("documentId").equal(document_id)
+            & Filter.by_property("parentSection").like(f"*{parent_section}*")
+            & Filter.by_property("subsection").like(f"*{subsection}*")
+        )
 
-    def _fetch():
-        with connection.session() as client:
-            from ..weaviate_helpers import get_user_collections
-            chunk_collection, _ = get_user_collections(client, user_id)
-
-            from weaviate.classes.query import Filter, Sort
-
-            # Filter by document AND parentSection AND subsection
-            doc_filter = Filter.by_property("documentId").equal(document_id)
-            parent_filter = Filter.by_property("parentSection").like(f"*{parent_section}*")
-            sub_filter = Filter.by_property("subsection").like(f"*{subsection}*")
-
-            response = chunk_collection.query.fetch_objects(
-                filters=doc_filter & parent_filter & sub_filter,
-                sort=Sort.by_property("chunkIndex", ascending=True),
-                limit=max_chunks,
-                return_properties=[
-                    "content",
-                    "chunkIndex",
-                    "sectionTitle",
-                    "parentSection",
-                    "subsection",
-                    "isTopLevel",
-                    "pageNumber",
-                    "metadata",
-                    "docItemProvenance"
-                ]
-            )
-
-            if not response.objects:
-                logger.info(
-                    "No chunks found for subsection '%s' in '%s'",
-                    subsection,
-                    parent_section,
-                )
-                return []
-
-            logger.info(
-                "Found %s chunks for subsection '%s' in '%s'",
-                len(response.objects),
-                subsection,
-                parent_section,
-            )
-
-            chunks = []
-            for obj in response.objects:
-                props = obj.properties
-
-                # Parse docItemProvenance
-                doc_items = []
-                doc_items_str = props.get("docItemProvenance")
-                if doc_items_str:
-                    try:
-                        doc_items = json.loads(doc_items_str) if isinstance(doc_items_str, str) else doc_items_str
-                    except json.JSONDecodeError:
-                        pass
-
-                chunks.append({
-                    "id": str(obj.uuid) if obj.uuid else None,
-                    "text": props.get("content"),
-                    "chunk_index": props.get("chunkIndex"),
-                    "section_title": props.get("sectionTitle"),
-                    "parent_section": props.get("parentSection"),
-                    "subsection": props.get("subsection"),
-                    "is_top_level": props.get("isTopLevel"),
-                    "page_number": props.get("pageNumber"),
-                    "metadata": props.get("metadata"),
-                    "doc_items": doc_items
-                })
-
-            return chunks
-
-    try:
-        if hasattr(asyncio, 'to_thread'):
-            return await asyncio.to_thread(_fetch)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, _fetch)
-    except (RuntimeError, OSError) as e:
-        if _should_fallback_to_sync(e):
-            return _fetch()
-        raise
+    chunks = await asyncio.to_thread(_fetch_section_chunks, user_id, _filters)
+    logger.info(
+        "Found %s chunks for subsection '%s' in '%s'", len(chunks), subsection, parent_section,
+    )
+    return chunks
 
 
 async def get_document_sections_hierarchical(
@@ -1788,22 +1520,19 @@ async def get_document_sections_hierarchical(
             from ..weaviate_helpers import get_user_collections
             chunk_collection, _ = get_user_collections(client, user_id)
 
-            from weaviate.classes.query import Filter, Sort
+            from weaviate.classes.query import Filter
             from collections import defaultdict
 
-            doc_filter = Filter.by_property("documentId").equal(document_id)
-
-            response = chunk_collection.query.fetch_objects(
-                filters=doc_filter,
-                sort=Sort.by_property("chunkIndex", ascending=True),
-                limit=500,
+            objects = _fetch_every_object(
+                chunk_collection,
+                filters=Filter.by_property("documentId").equal(document_id),
                 return_properties=[
                     "parentSection",
                     "subsection",
                     "isTopLevel",
                     "pageNumber",
                     "chunkIndex"
-                ]
+                ],
             )
 
             # Build hierarchical structure
@@ -1817,7 +1546,7 @@ async def get_document_sections_hierarchical(
 
             top_level_order = []
 
-            for obj in response.objects:
+            for obj in objects:
                 props = obj.properties
                 parent = props.get("parentSection") or "Unknown"
                 subsection = props.get("subsection")
@@ -2079,10 +1808,11 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                 chunk_collection, pdf_collection = get_user_collections(client, user_id)
                 collection = chunk_collection
 
-                # Main page query - fetch_objects uses filters parameter
+                # Main page query. Offset pages need a total order, so the
+                # object id breaks chunkIndex ties.
                 response = collection.query.fetch_objects(
                     filters=Filter.by_property("documentId").equal(document_id),
-                    sort=Sort.by_property("chunkIndex", ascending=True),
+                    sort=Sort.by_property("chunkIndex", ascending=True).by_id(ascending=True),
                     limit=page_size,
                     offset=offset,
                     include_vector=False,
@@ -2163,20 +1893,15 @@ async def get_chunks(document_id: str, pagination: Dict[str, Any], user_id: str)
                     }
                     chunks.append(chunk_data)
 
-                # Get total count for pagination using aggregate
-                # Note: aggregate.over_all() doesn't take where/filter directly
-                # We need to count manually from the filtered results
-                total_response = collection.query.fetch_objects(
+                # The store counts every chunk of the document, with no window.
+                total = collection.aggregate.over_all(
                     filters=Filter.by_property("documentId").equal(document_id),
-                    limit=1000,  # Get max to count
-                    include_vector=False,
-                    return_properties=["chunkIndex"]  # Minimal data for counting
-                )
-                total = len(total_response.objects)
+                    total_count=True,
+                ).total_count
 
                 return {
                     "chunks": chunks,
-                    "total": total if total else 0
+                    "total": total
                 }
 
             except Exception as e:

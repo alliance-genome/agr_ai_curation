@@ -62,7 +62,7 @@ def test_selection_schema_does_not_coerce_indexes(value, field):
 async def test_restart_and_new_specialist_keep_issued_span_meaning(store, scope, monkeypatch):
     chunk, spans = source()
     first = binding(store, scope)
-    first.retain(chunk, spans, [0])
+    first.retain([(chunk, spans, [0])])
     restarted = binding(HistoryStore(store.session_factory), replace(scope, run_id="run-b", invocation_id="other", lineage="other/"))
     monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value=chunk))
     selections = [DocumentSelection(chunk_index=42, span_index=0)] * 2
@@ -74,7 +74,7 @@ async def test_restart_and_new_specialist_keep_issued_span_meaning(store, scope,
 @pytest.mark.asyncio
 async def test_same_numbers_do_not_cross_owner_session_or_document(store, scope, change):
     chunk, spans = source()
-    binding(store, scope).retain(chunk, spans, [0])
+    binding(store, scope).retain([(chunk, spans, [0])])
     other = replace(scope, **({"owner_id": "bob"} if change == "owner" else {"session_id": "chat-b"} if change == "session" else {}))
     foreign = binding(store, other, doc="doc-b" if change == "document" else "doc-a")
     with pytest.raises(refs.DocumentReferenceError, match="Read the selected chunk"):
@@ -91,7 +91,7 @@ def test_reprocessing_invalidates_conversation_without_rebinding(store, scope):
 def test_reread_does_not_reinterpret_an_issued_ordinal(store, scope, change):
     chunk, spans = source()
     original = binding(store, scope)
-    original.retain(chunk, spans, [0])
+    original.retain([(chunk, spans, [0])])
     if change == "text":
         chunk = {**chunk, "text": chunk["text"] + " Changed."}
     if change == "uuid":
@@ -99,7 +99,7 @@ def test_reread_does_not_reinterpret_an_issued_ordinal(store, scope, change):
     if change == "span":
         spans = [{**spans[0], "char_end": spans[0]["char_end"] + 1}]
     with pytest.raises(ValueError):
-        binding(store, scope).retain(chunk, spans, [0])
+        binding(store, scope).retain([(chunk, spans, [0])])
 
 
 @pytest.mark.asyncio
@@ -107,10 +107,10 @@ async def test_span_window_must_have_been_issued_and_current_source_verified(sto
     chunk, spans = source(text="First sentence.\n\nSecond sentence.")
     assert len(spans) > 1
     value = binding(store, scope)
-    value.retain(chunk, spans, [0])
+    value.retain([(chunk, spans, [0])])
     with pytest.raises(refs.DocumentReferenceError, match="span window"):
         await value.resolve([DocumentSelection(chunk_index=42, span_index=1)])
-    value.retain(chunk, spans, [1])
+    value.retain([(chunk, spans, [1])])
     monkeypatch.setattr(refs, "get_chunk_by_index", AsyncMock(return_value={**chunk, "text": chunk["text"] + " Mutation."}))
     with pytest.raises(refs.DocumentReferenceError, match="no longer matches"):
         await value.resolve([DocumentSelection(chunk_index=42, span_index=1)])
@@ -190,6 +190,171 @@ async def test_public_sdk_discovery_read_record_and_model_projection_preserve_ca
     assert "source_fragments" in items[1]["output"]
 
 
+def _section_reading_setup(store, scope, monkeypatch, section_chunks):
+    """Real source scope, store and tools; the Weaviate fetches return ``section_chunks``."""
+    from agr_ai_curation_alliance.tools import documents, weaviate_search
+    from src.lib.openai_agents.tools import record_evidence
+
+    by_index = {chunk["chunk_index"]: chunk for chunk in section_chunks}
+    monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
+    monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
+    monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
+    monkeypatch.setattr(refs, "_load_source_binding", lambda *args: binding(store, scope))
+    monkeypatch.setattr(refs, "_verify_source_generation", lambda value: None)
+
+    async def by_chunk_index(*, chunk_index, **_kwargs):
+        return by_index.get(chunk_index)
+
+    async def by_chunk_id(*, chunk_id, **_kwargs):
+        return next((chunk for chunk in section_chunks if chunk["id"] == chunk_id), None)
+
+    async def section_fetch(**_kwargs):
+        return [dict(chunk) for chunk in section_chunks]
+
+    monkeypatch.setattr(refs, "get_chunk_by_index", by_chunk_index)
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", by_chunk_index)
+    monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", AsyncMock(return_value={}))
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", section_fetch)
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", section_fetch)
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", by_chunk_id)
+    monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "alice")
+    context = {"document_id": "doc-a", "user_id": "alice"}
+    return {
+        "read_section": documents.create_read_section_tool(context),
+        "read_subsection": documents.create_read_subsection_tool(context),
+        "read_chunk": documents.create_read_chunk_tool(context),
+        "record_evidence": documents.create_record_evidence_tool(context),
+    }
+
+
+def _section_chunk(index, text, *, subsection="Expression"):
+    from uuid import UUID
+    return {"id": str(UUID(int=index + 1)), "chunk_index": index, "text": text, "document_id": "doc-a",
+            "page_number": 3, "section_title": "Results", "parent_section": "Results",
+            "subsection": subsection, "metadata": {"page_number": 3, "section_title": "Results"}}
+
+
+async def _invoke(tool, arguments):
+    from src.lib.packages.package_runner_entrypoint import _build_tool_context
+    return await tool.on_invoke_tool(_build_tool_context(tool.name, arguments), json.dumps(arguments))
+
+
+@pytest.mark.asyncio
+async def test_section_read_issues_its_spans_for_record_evidence_without_read_chunk(store, scope, monkeypatch):
+    chunks = [
+        _section_chunk(10, "Wingless was absent from the wing disc. Hedgehog was unchanged."),
+        _section_chunk(11, "Third sentence of the section."),
+    ]
+    outside = _section_chunk(12, "A chunk the section read never showed.")
+    tools = _section_reading_setup(store, scope, monkeypatch, chunks + [outside])
+    monkeypatch.setattr("agr_ai_curation_alliance.tools.weaviate_search.get_chunks_by_parent_section",
+                        AsyncMock(return_value=[dict(chunk) for chunk in chunks]))
+
+    section = await _invoke(tools["read_section"], {"section_name": "Results"})
+    assert [p.chunk_index for p in section.section.passages] == [10, 11]
+
+    args = {"entity": "wg", "selections": [{"chunk_index": 10, "span_index": 1}]}
+    accepted = await _invoke(tools["record_evidence"], args)
+    assert accepted["status"] == "verified"
+    assert accepted["verified_quote"] == "Hedgehog was unchanged."
+
+    never_shown = {"entity": "wg", "selections": [{"chunk_index": 12, "span_index": 0}]}
+    refused = await _invoke(tools["record_evidence"], never_shown)
+    assert refused["status"] == "needs_source_read"
+    assert refused["error_code"] == "unissued_document_selection"
+    assert refused["saved"] is False
+
+    # A sentence number the passage never had is refused too.
+    with pytest.raises(refs.DocumentReferenceError, match="unavailable"):
+        await binding(store, scope).resolve([DocumentSelection(chunk_index=11, span_index=5)])
+
+
+@pytest.mark.asyncio
+async def test_text_contains_read_issues_only_the_matching_chunks(store, scope, monkeypatch):
+    chunks = [
+        _section_chunk(20, "Stock A was obtained from Bloomington."),
+        _section_chunk(21, "Embryos were fixed and stained."),
+    ]
+    tools = _section_reading_setup(store, scope, monkeypatch, chunks)
+
+    result = await _invoke(tools["read_section"], {"section_name": "Results", "text_contains": "bloomington"})
+    assert (result.section.matched_chunk_count, result.section.total_chunk_count) == (1, 2)
+    assert [p.chunk_index for p in result.section.passages] == [20]
+
+    accepted = await _invoke(tools["record_evidence"], {"entity": "A", "selections": [{"chunk_index": 20, "span_index": 0}]})
+    assert accepted["status"] == "verified"
+    refused = await _invoke(tools["record_evidence"], {"entity": "A", "selections": [{"chunk_index": 21, "span_index": 0}]})
+    assert refused["error_code"] == "unissued_document_selection"
+
+
+@pytest.mark.asyncio
+async def test_section_read_issues_every_chunk_in_exactly_one_retain_transaction(store, scope, monkeypatch):
+    chunks = [_section_chunk(index, f"Passage {index} reports one finding. And a second.") for index in range(40)]
+    tools = _section_reading_setup(store, scope, monkeypatch, chunks)
+    retains, scans = [], []
+    original_retain, original_scan = refs.SourceBinding.retain, refs._read_bindings
+
+    def counting_retain(self, reads):
+        retains.append(len(reads))
+        return original_retain(self, reads)
+
+    def counting_scan(*args, **kwargs):
+        scans.append(kwargs.get("db") is not None)
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(refs.SourceBinding, "retain", counting_retain)
+    monkeypatch.setattr(refs, "_read_bindings", counting_scan)
+
+    await _invoke(tools["read_section"], {"section_name": "Results"})
+
+    assert retains == [40]
+    # One locked transaction re-reads the bindings once for the whole read.
+    assert scans.count(True) == 1
+    records = original_scan(store, scope, "doc-a")
+    assert sorted(r["chunk_index"] for r in records if r["kind"] == refs._SPAN_KIND) == list(range(40))
+
+
+def test_one_read_with_two_definitions_for_one_chunk_is_refused(store, scope):
+    first, first_spans = source(7, "One text.")
+    second, second_spans = source(7, "Another text.")
+    with pytest.raises(refs.DocumentReferenceError, match="two definitions"):
+        binding(store, scope).retain([(first, first_spans, [0]), (second, second_spans, [0])])
+    assert [r for r in refs._read_bindings(store, scope, "doc-a") if r["kind"] != refs._SOURCE_KIND] == []
+
+
+@pytest.mark.asyncio
+async def test_span_numbers_mean_the_same_from_all_three_reading_tools(store, scope, monkeypatch):
+    from src.lib.openai_agents.document_result_view import document_result_view
+
+    text = "First finding was negative. Second finding held.\n\nThird is a caption line. Fourth closes it."
+    chunk = _section_chunk(30, text)
+    tools = _section_reading_setup(store, scope, monkeypatch, [chunk])
+
+    section = await _invoke(tools["read_section"], {"section_name": "Results"})
+    subsection = await _invoke(tools["read_subsection"], {"parent_section": "Results", "subsection": "Expression"})
+    whole = await _invoke(tools["read_chunk"], {"chunk_index": 30})
+    suffix = await _invoke(tools["read_chunk"], {"chunk_index": 30, "span_offset": 2})
+
+    def identity(spans):
+        return [(span.span_index, span.span_id, span.text) for span in spans]
+
+    expected = identity(whole.chunk.evidence_spans)
+    assert len(expected) == 4
+    assert identity(section.section.passages[0].evidence_spans) == expected
+    assert identity(subsection.subsection.passages[0].evidence_spans) == expected
+    assert identity(suffix.chunk.evidence_spans) == expected[2:]
+
+    lines = [f"[{index}] {span_text}" for index, _, span_text in expected]
+    assert document_result_view("read_section", section)[0]["section"]["passages"][0]["text"] == "\n".join(lines)
+    assert document_result_view("read_subsection", subsection)[0]["subsection"]["passages"][0]["text"] == "\n".join(lines)
+    assert document_result_view("read_chunk", whole)[0]["chunk"]["text"] == "\n".join(lines)
+    assert document_result_view("read_chunk", suffix)[0]["chunk"]["text"] == "\n".join(lines[2:])
+
+    # The four reads share one definition of the chunk and never conflict.
+    records = refs._read_bindings(store, scope, "doc-a")
+    assert len([r for r in records if r["kind"] == refs._SPAN_KIND]) == 1
+
+
 @pytest.mark.asyncio
 async def test_source_scope_requires_authenticated_owner_before_database(monkeypatch):
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "bob")
@@ -205,8 +370,8 @@ def test_paging_retains_one_definition_and_only_new_coverage(store, scope):
     chunk, spans = source(text="First.\n\nSecond.\n\nThird.")
     value = binding(store, scope)
     for index in range(len(spans)):
-        value.retain(chunk, spans, [index])
-        value.retain(chunk, spans, [index])
+        value.retain([(chunk, spans, [index])])
+        value.retain([(chunk, spans, [index])])
     records = refs._read_bindings(store, scope, "doc-a")
     assert len([r for r in records if r["kind"] == refs._SPAN_KIND]) == 1
     windows = [r for r in records if r["kind"] == refs._WINDOW_KIND]
@@ -220,8 +385,8 @@ async def test_multiple_chunks_preserve_selection_order_and_deduplicate(store, s
     second["id"] = "99220bef-62f7-0440-12bb-1d34e1f98ce0"
     second_spans = [s.to_dict() for s in build_evidence_spans(chunk_id=second["id"], chunk_text=second["text"])]
     value = binding(store, scope)
-    value.retain(first, first_spans, [0, 1])
-    value.retain(second, second_spans, [0])
+    value.retain([(first, first_spans, [0, 1])])
+    value.retain([(second, second_spans, [0])])
     async def lookup(**kwargs):
         return {42: first, 99: second}[kwargs["chunk_index"]]
     monkeypatch.setattr(refs, "get_chunk_by_index", lookup)
@@ -415,12 +580,11 @@ async def test_old_document_history_refreshes_only_backend_guidance(monkeypatch)
     original = {"event": {"tool_name": "read_chunk", "kind": "input_item"}, "payload": {
         "type": "function_call_output", "call_id": "old", "output": json.dumps({
             "summary": "Select evidence_spans[].span_id.", "chunk": {"chunk_id": chunk["id"],
-                "content": "Scientific span_id text is unchanged.", "span_text_access": "Use span_id."}})}}
+                "content": "Scientific span_id text is unchanged."}})}}
     projected = await refs.project_history_source_result(original, user_id="alice")
     payload = json.loads(projected["payload"]["output"])
     assert "span_id" not in payload["summary"]
     assert "span_index" in payload["summary"]
-    assert "span_id" not in payload["chunk"]["span_text_access"]
     assert payload["chunk"]["content"] == "Scientific span_id text is unchanged."
     assert "Select evidence_spans[].span_id." in original["payload"]["output"]
 
@@ -440,7 +604,7 @@ async def test_record_evidence_rejects_undeclared_arguments_instead_of_ignoring_
     from src.lib.packages.package_runner_entrypoint import _build_tool_context
     chunk, spans = source()
     value = binding(store, scope)
-    value.retain(chunk, spans, [0])
+    value.retain([(chunk, spans, [0])])
     loads = []
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
@@ -568,13 +732,13 @@ async def test_unissued_selection_requires_explicit_read_then_resubmission(store
     chunk.update(document_id="doc-a", page_number=3, section_title="Results", metadata={"page_number": 3, "section_title": "Results"})
     selected_span = 1 if unissued == "span_window" else 0
     if unissued == "span_window":
-        binding(store, scope).retain(chunk, spans, [0])
+        binding(store, scope).retain([(chunk, spans, [0])])
     else:
         from uuid import UUID
         neighbor, _ = source(selected_chunk - 1, "Neighbor read does not issue the selected chunk.")
         neighbor["id"] = str(UUID(int=selected_chunk))
         neighbor_spans = [s.to_dict() for s in build_evidence_spans(chunk_id=neighbor["id"], chunk_text=neighbor["text"])]
-        binding(store, scope).retain(neighbor, neighbor_spans, [0])
+        binding(store, scope).retain([(neighbor, neighbor_spans, [0])])
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
@@ -622,7 +786,7 @@ async def test_mixed_issued_and_unissued_selections_cannot_partially_update_evid
     from src.lib.packages.package_runner_entrypoint import _build_tool_context
     chunk, spans = source()
     value = binding(store, scope)
-    value.retain(chunk, spans, [0])
+    value.retain([(chunk, spans, [0])])
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
@@ -654,7 +818,7 @@ async def test_record_evidence_source_faults_remain_terminal(store, scope, monke
     from src.lib.packages.package_runner_entrypoint import _build_tool_context
     chunk, spans = source()
     value = binding(store, scope)
-    value.retain(chunk, spans, [0])
+    value.retain([(chunk, spans, [0])])
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
@@ -694,7 +858,7 @@ async def test_parallel_record_calls_keep_read_prerequisites_scoped(store, scope
     from src.lib.packages.package_runner_entrypoint import _build_tool_context
     chunk, spans = source()
     chunk.update(document_id="doc-a", page_number=3, section_title="Results", metadata={"page_number": 3, "section_title": "Results"})
-    binding(store, scope).retain(chunk, spans, [0])
+    binding(store, scope).retain([(chunk, spans, [0])])
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
@@ -723,7 +887,7 @@ async def test_cancelled_selection_verification_never_reaches_evidence_mutation(
     from src.lib.packages.package_runner_entrypoint import _build_tool_context
     chunk, spans = source()
     value = binding(store, scope)
-    value.retain(chunk, spans, [0])
+    value.retain([(chunk, spans, [0])])
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")
@@ -775,7 +939,7 @@ async def test_selection_result_through_flow_boundary_and_sentry(store, scope, m
     chunk, spans = source()
     value = binding(store, scope)
     if source_failure:
-        value.retain(chunk, spans, [0])
+        value.retain([(chunk, spans, [0])])
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
     monkeypatch.setattr(refs, "get_current_session_id", lambda: "chat-a")

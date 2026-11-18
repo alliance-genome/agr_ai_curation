@@ -375,7 +375,7 @@ class ExtractionDiagnosticReportTests(unittest.IsolatedAsyncioTestCase):
         extractor_cls.assert_called_with(source="local")
         self.assertEqual(analyze_response["status"], "success")
         self.assertEqual(view_response["view"], "extraction_timeline")
-        self.assertEqual(view_response["data"]["schema_version"], "extraction_timeline_analyzer.v1")
+        self.assertEqual(view_response["data"]["schema_version"], "extraction_timeline_analyzer.v2")
         self.assertEqual(view_response["data"]["reasoning_summary"]["status"], "unavailable")
 
     @patch("src.analyzers.extraction_timeline.ExtractionTimelineAnalyzer.load_durable_events")

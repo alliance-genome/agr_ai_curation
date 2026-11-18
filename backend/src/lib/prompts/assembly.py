@@ -43,8 +43,8 @@ schema, tool, audit, or safety requirements.
 
 TOOL_POLICY_SUMMARIES = {
     "record_evidence": (
-        "- Evidence policy: retained PDF evidence must come from "
-        "`read_chunk.evidence_spans[].span_index` values. Use `record_evidence` with "
+        "- Evidence policy: retained PDF evidence must come from numbered sentences "
+        "(`span_index`). Use `record_evidence` with "
         "`selections`; the backend copies exact source text into `verified_quote` and "
         "preserves source span provenance. Before final output, review the active-run "
         "evidence workspace and keep only intended active evidence records."

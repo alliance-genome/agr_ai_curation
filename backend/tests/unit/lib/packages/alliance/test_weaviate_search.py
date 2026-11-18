@@ -384,14 +384,15 @@ async def test_read_section_tool_no_content(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatch):
+async def test_read_section_tool_returns_whole_numbered_passages_and_issues_them(monkeypatch):
     async def _chunks(**_kwargs):
         return [
             {
                 "chunk_index": 17, "id": "chunk-methods-1",
-                "text": "Paragraph one",
+                "text": "Paragraph one. It has two sentences.",
                 "page_number": 2,
-                "section_title": "Materials and Methods",
+                "section_title": "Animals",
+                "parent_section": "Materials and Methods",
                 "subsection": "Animals",
                 "metadata": '{"doc_items":[{"id":"bbox-1"}]}',
             },
@@ -399,7 +400,7 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
                 "chunk_index": 19, "id": "chunk-methods-2",
                 "content": "Paragraph two",
                 "pageNumber": 3,
-                "sectionTitle": "Materials and Methods",
+                "parent_section": "Supplementary Methods",
                 "metadata": {"doc_items": [{"id": "bbox-2"}]},
             },
         ]
@@ -408,33 +409,32 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
     tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
     result = await tool("Methods")
 
-    assert result.section is not None
-    assert result.section.section_title == "Materials and Methods"
-    assert result.section.page_numbers == [2, 3]
-    assert result.section.chunk_count == 2
-    assert result.section.returned_chunk_count == 2
-    assert result.section.total_chunk_count == 2
-    assert result.section.offset == 0
-    assert result.section.next_offset is None
-    assert result.section.truncated is False
-    assert result.section.content == "Paragraph one\n\nParagraph two"
-    assert result.section.source_chunks is not None
-    assert [source.chunk_id for source in result.section.source_chunks] == [
-        "chunk-methods-1",
-        "chunk-methods-2",
+    section = result.section
+    assert section is not None
+    assert section.requested_section == "Methods"
+    assert section.matched_sections == ["Materials and Methods", "Supplementary Methods"]
+    assert section.page_numbers == [2, 3]
+    assert section.total_chunk_count == 2
+    assert section.text_contains is None and section.matched_chunk_count is None
+    assert [p.chunk_index for p in section.passages] == [17, 19]
+    assert [p.chunk_id for p in section.passages] == ["chunk-methods-1", "chunk-methods-2"]
+    assert [p.content for p in section.passages] == ["Paragraph one. It has two sentences.", "Paragraph two"]
+    assert section.passages[0].section == "Materials and Methods"
+    assert section.passages[0].subsection == "Animals"
+    assert [s.text for s in section.passages[0].evidence_spans] == ["Paragraph one.", "It has two sentences."]
+    assert section.passages[0].doc_items == [{"id": "bbox-1"}]
+    assert section.passages[1].doc_items == [{"id": "bbox-2"}]
+    assert "'Materials and Methods', 'Supplementary Methods'" in result.summary
+    assert "Read all 2 chunks" in result.summary
+    assert not hasattr(section, "content") and not hasattr(section, "source_chunks")
+
+    # Every shown span is issued, in one batched call for the whole read.
+    weaviate_search.retain_issued_spans.assert_awaited_once()
+    (reads,), _ = weaviate_search.retain_issued_spans.await_args
+    assert [(chunk["chunk_index"], chunk["id"], issued) for chunk, _spans, issued in reads] == [
+        (17, "chunk-methods-1", [0, 1]),
+        (19, "chunk-methods-2", [0]),
     ]
-    assert result.section.source_chunks[0].subsection == "Animals"
-    # source_chunks carry lightweight locators only; the full text lives once in
-    # section.content and must not be echoed per-chunk.
-    assert result.section.source_chunks[0].char_count == len("Paragraph one")
-    assert result.section.source_chunks[1].char_count == len("Paragraph two")
-    assert result.section.source_chunks[0].chunk_index == 17
-    assert result.section.source_chunks[1].chunk_index == 19
-    assert result.section.source_chunks[0].snippet is None
-    assert not hasattr(result.section.source_chunks[0], "content")
-    assert not hasattr(result.section.source_chunks[0], "content_preview")
-    assert not hasattr(result.section.source_chunks[0], "evidence_spans")
-    assert result.section.doc_items == [{"id": "bbox-1"}, {"id": "bbox-2"}]
 
 
 @pytest.mark.asyncio
@@ -451,6 +451,7 @@ async def test_read_section_tool_retrieves_provider_figure_metadata(monkeypatch)
                 ),
                 "page_number": 12,
                 "section_title": PROVIDER_FIGURE_METADATA_SECTION,
+                "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
                 "subsection": f"{PROVIDER_FIGURE_SUBSECTION_PREFIX} Figure 1",
             }
         ]
@@ -460,10 +461,9 @@ async def test_read_section_tool_retrieves_provider_figure_metadata(monkeypatch)
     result = await tool(PROVIDER_FIGURE_METADATA_SECTION)
 
     assert result.section is not None
-    assert result.section.section_title == PROVIDER_FIGURE_METADATA_SECTION
-    assert "Fig. 1A shows wg expression" in result.section.content
-    assert result.section.source_chunks is not None
-    assert result.section.source_chunks[0].subsection == f"{PROVIDER_FIGURE_SUBSECTION_PREFIX} Figure 1"
+    assert result.section.matched_sections == [PROVIDER_FIGURE_METADATA_SECTION]
+    assert "Fig. 1A shows wg expression" in result.section.passages[0].content
+    assert result.section.passages[0].subsection == f"{PROVIDER_FIGURE_SUBSECTION_PREFIX} Figure 1"
 
 
 @pytest.mark.asyncio
@@ -498,10 +498,11 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
     empty_result = await tool("Methods", "Fly Strains")
     assert "No content found for subsection" in empty_result.summary
     assert empty_result.subsection is None
-    assert captured["document_id"] == "doc-123"
-    assert captured["parent_section"] == "Methods"
-    assert captured["subsection"] == "Fly Strains"
-    assert captured["user_id"] == "user-1"
+    assert captured == {
+        "document_id": "doc-123", "parent_section": "Methods",
+        "subsection": "Fly Strains", "user_id": "user-1",
+    }
+    weaviate_search.retain_issued_spans.assert_not_awaited()
 
     async def _chunks(**_kwargs):
         return [
@@ -509,17 +510,17 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
                 "chunk_index": 0, "id": "chunk-subsection-1",
                 "text": "Line one",
                 "page_number": 9,
-                "section_title": "Methods",
+                "parent_section": "Methods",
                 "subsection": "Fly Strains",
                 "doc_items": [{"id": "bbox-1"}],
             },
             {
                 "chunk_index": 1, "id": "chunk-subsection-2",
                 "content": "Line two",
+                "parent_section": "Methods",
                 "metadata": {
                     "pageNumber": 10,
-                    "sectionTitle": "Methods",
-                    "subsection": "Fly Strains",
+                    "subsection": "Fly Strains and stocks",
                 },
                 "doc_items": [],
             },
@@ -527,29 +528,20 @@ async def test_read_subsection_tool_no_content_and_success(monkeypatch):
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _chunks)
     success_result = await tool("Methods", "Fly Strains")
-    assert success_result.subsection is not None
-    assert success_result.subsection.parent_section == "Methods"
-    assert success_result.subsection.subsection == "Fly Strains"
-    assert success_result.subsection.page_numbers == [9, 10]
-    assert success_result.subsection.content == "Line one\n\nLine two"
-    assert success_result.subsection.returned_chunk_count == 2
-    assert success_result.subsection.total_chunk_count == 2
-    assert success_result.subsection.offset == 0
-    assert success_result.subsection.next_offset is None
-    assert success_result.subsection.truncated is False
-    assert success_result.subsection.source_chunks is not None
-    assert [source.chunk_id for source in success_result.subsection.source_chunks] == [
-        "chunk-subsection-1",
-        "chunk-subsection-2",
-    ]
-    assert success_result.subsection.source_chunks[0].char_count == len("Line one")
-    assert success_result.subsection.source_chunks[1].char_count == len("Line two")
-    assert success_result.subsection.source_chunks[0].snippet is None
-    assert not hasattr(success_result.subsection.source_chunks[0], "content")
-    assert not hasattr(success_result.subsection.source_chunks[0], "content_preview")
-    assert not hasattr(success_result.subsection.source_chunks[0], "evidence_spans")
-    assert success_result.subsection.doc_items == [{"id": "bbox-1"}]
-    assert not hasattr(success_result.subsection, "evidence_spans")
+    section = success_result.subsection
+    assert section is not None
+    assert section.requested_section == "Methods"
+    assert section.requested_subsection == "Fly Strains"
+    assert section.matched_sections == ["Methods"]
+    assert section.matched_subsections == ["Fly Strains", "Fly Strains and stocks"]
+    assert section.page_numbers == [9, 10]
+    assert [p.content for p in section.passages] == ["Line one", "Line two"]
+    assert [p.chunk_id for p in section.passages] == ["chunk-subsection-1", "chunk-subsection-2"]
+    assert section.total_chunk_count == 2
+    assert section.passages[0].doc_items == [{"id": "bbox-1"}]
+    assert section.passages[1].doc_items is None
+    assert "subsections 'Fly Strains', 'Fly Strains and stocks'" in success_result.summary
+    weaviate_search.retain_issued_spans.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -569,6 +561,7 @@ async def test_read_subsection_tool_retrieves_provider_figure_entry(monkeypatch)
                 ),
                 "page_number": 13,
                 "section_title": PROVIDER_FIGURE_METADATA_SECTION,
+                "parent_section": PROVIDER_FIGURE_METADATA_SECTION,
                 "subsection": provider_subsection,
             }
         ]
@@ -578,11 +571,9 @@ async def test_read_subsection_tool_retrieves_provider_figure_entry(monkeypatch)
     result = await tool(PROVIDER_FIGURE_METADATA_SECTION, provider_subsection)
 
     assert result.subsection is not None
-    assert result.subsection.parent_section == PROVIDER_FIGURE_METADATA_SECTION
-    assert result.subsection.subsection == provider_subsection
-    assert "Fig. 2B shows eve expression" in result.subsection.content
-    assert result.subsection.source_chunks is not None
-    assert result.subsection.source_chunks[0].chunk_id == "chunk-provider-figure-2"
+    assert result.subsection.matched_subsections == [provider_subsection]
+    assert "Fig. 2B shows eve expression" in result.subsection.passages[0].content
+    assert result.subsection.passages[0].chunk_id == "chunk-provider-figure-2"
 
 
 @pytest.mark.asyncio
@@ -614,76 +605,21 @@ def _numbered_chunks(count: int, *, prefix: str = "chunk", text_for=None):
                 "chunk_index": i, "id": f"{prefix}-{i}",
                 "text": text,
                 "page_number": i + 1,
-                "section_title": "Results",
+                "parent_section": "Results",
             }
         )
     return chunks
 
 
-@pytest.mark.asyncio
-async def test_read_section_source_chunks_do_not_echo_full_content(monkeypatch):
-    """source_chunks must carry only lightweight locators, never the full chunk text."""
-    body_one = "Alpha paragraph " + ("x" * 500)
-    body_two = "Beta paragraph " + ("y" * 500)
+@pytest.mark.parametrize("factory", ["create_read_section_tool", "create_read_subsection_tool"])
+def test_section_tools_have_no_paging_or_size_parameters(monkeypatch, factory):
+    from agents import function_tool  # pyright: ignore[reportMissingImports]
 
-    async def _chunks(**_kwargs):
-        return [
-            {"chunk_index": 0, "id": "chunk-1", "text": body_one, "page_number": 1, "section_title": "Results"},
-            {"chunk_index": 1, "id": "chunk-2", "text": body_two, "page_number": 2, "section_title": "Results"},
-        ]
-
-    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
-    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
-    result = await tool("Results")
-
-    assert result.section is not None
-    # Assembled content holds each chunk's text exactly once.
-    assert result.section.content == f"{body_one}\n\n{body_two}"
-    # The full text appears once (in content), not a second time per source chunk.
-    serialized = result.model_dump_json()
-    assert serialized.count(body_one) == 1
-    assert serialized.count(body_two) == 1
-    for source in result.section.source_chunks:
-        assert not hasattr(source, "content")
-        assert source.snippet is None
-    assert result.section.source_chunks[0].char_count == len(body_one)
-    assert result.section.source_chunks[1].char_count == len(body_two)
-
-
-@pytest.mark.asyncio
-async def test_read_section_bounds_chunk_count_and_pages_with_offset(monkeypatch):
-    async def _chunks(**_kwargs):
-        return _numbered_chunks(5)
-
-    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
-    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
-
-    first = await tool("Results", max_chunks=2)
-    assert first.section is not None
-    assert first.section.returned_chunk_count == 2
-    assert first.section.total_chunk_count == 5
-    assert first.section.offset == 0
-    assert first.section.next_offset == 2
-    assert first.section.truncated is True
-    assert [s.chunk_id for s in first.section.source_chunks] == ["chunk-0", "chunk-1"]
-    assert [s.chunk_index for s in first.section.source_chunks] == [0, 1]
-    assert "Read 2 of 5 chunks" in first.summary
-    assert "offset=2" in first.summary
-
-    second = await tool("Results", max_chunks=2, offset=first.section.next_offset)
-    assert second.section.returned_chunk_count == 2
-    assert second.section.offset == 2
-    assert second.section.next_offset == 4
-    assert second.section.truncated is True
-    assert [s.chunk_id for s in second.section.source_chunks] == ["chunk-2", "chunk-3"]
-    assert [s.chunk_index for s in second.section.source_chunks] == [2, 3]
-
-    last = await tool("Results", max_chunks=2, offset=second.section.next_offset)
-    assert last.section.returned_chunk_count == 1
-    assert last.section.offset == 4
-    assert last.section.next_offset is None
-    assert last.section.truncated is False
-    assert [s.chunk_id for s in last.section.source_chunks] == ["chunk-4"]
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    tool = getattr(weaviate_search, factory)("doc-12345678", "user-1")
+    properties = set(tool.params_json_schema["properties"])
+    assert not properties & {"max_chunks", "offset", "next_offset", "limit"}
+    assert "text_contains" in properties
 
 
 @pytest.mark.asyncio
@@ -696,76 +632,88 @@ async def test_read_section_default_returns_entire_large_section(monkeypatch):
 
     result = await tool("Results")
     assert result.section is not None
-    assert result.section.returned_chunk_count == 45
+    assert len(result.section.passages) == 45
     assert result.section.total_chunk_count == 45
-    assert result.section.truncated is False
-    assert result.section.next_offset is None
 
 
 @pytest.mark.asyncio
-async def test_read_section_text_contains_filters_and_returns_snippet(monkeypatch):
+async def test_read_section_text_contains_returns_whole_matching_chunks_and_issues_them(monkeypatch):
     pre = "p" * 400
     post = "q" * 400
-    target_text = f"{pre} hedgehog ligand {post}"
+    target_text = f"{pre} hedgehog ligand {post}. A second sentence follows."
 
     async def _chunks(**_kwargs):
         return [
-            {"chunk_index": 0, "id": "chunk-0", "text": "no match here", "page_number": 1, "section_title": "Results"},
-            {"chunk_index": 0, "id": "chunk-1", "text": target_text, "page_number": 2, "section_title": "Results"},
-            {"chunk_index": 1, "id": "chunk-2", "text": "still nothing", "page_number": 3, "section_title": "Results"},
+            {"chunk_index": 0, "id": "chunk-0", "text": "no match here", "page_number": 1, "parent_section": "Results"},
+            {"chunk_index": 1, "id": "chunk-1", "text": target_text, "page_number": 2, "parent_section": "Results"},
+            {"chunk_index": 2, "id": "chunk-2", "text": "still nothing", "page_number": 3, "parent_section": "Results"},
         ]
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
     tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
 
     result = await tool("Results", text_contains="HEDGEHOG")
-    assert result.section is not None
-    assert result.section.total_chunk_count == 1
-    assert result.section.returned_chunk_count == 1
-    assert [s.chunk_id for s in result.section.source_chunks] == ["chunk-1"]
+    section = result.section
+    assert section is not None
+    assert section.text_contains == "HEDGEHOG"
+    assert section.matched_chunk_count == 1
+    assert section.total_chunk_count == 3
+    assert [p.chunk_index for p in section.passages] == [1]
+    # The whole chunk, not an excerpt.
+    assert section.passages[0].content == target_text
+    assert section.page_numbers == [2]
+    assert "1 of the 3 chunks of 'Results' contain 'HEDGEHOG'" in result.summary
 
-    snippet = result.section.source_chunks[0].snippet
-    assert snippet is not None
-    assert "hedgehog ligand" in snippet
-    # Snippet is bounded, not the whole chunk; the radius is 200 chars on each side.
-    assert len(snippet) <= 2 * weaviate_search._SECTION_SNIPPET_RADIUS + len("hedgehog ligand") + 6
-    assert len(snippet) < len(target_text)
-    assert snippet.startswith("...")
-    assert snippet.endswith("...")
-    # content carries the bounded excerpt, not the full matched chunk text.
-    assert result.section.content == snippet
-    assert "matching 'HEDGEHOG'" in result.summary
+    (reads,), _ = weaviate_search.retain_issued_spans.await_args
+    assert [(chunk["chunk_index"], issued) for chunk, _spans, issued in reads] == [(1, [0, 1])]
 
 
 @pytest.mark.asyncio
-async def test_read_subsection_bounds_pages_and_filters(monkeypatch):
+async def test_section_summary_names_no_sections_when_no_passage_has_a_section_name(monkeypatch):
+    async def _chunks(**_kwargs):
+        return [{"chunk_index": 0, "id": "chunk-0", "text": "Unnamed text.", "page_number": 1}]
+
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Results")
+    assert result.section.matched_sections == []
+    assert "Matched section names" not in result.summary
+    assert result.summary.startswith("Read all 1 chunks of 'Results'. Each passage lists numbered sentences;")
+
+
+@pytest.mark.asyncio
+async def test_read_section_text_contains_without_match_reports_counts_and_issues_nothing(monkeypatch):
+    async def _chunks(**_kwargs):
+        return _numbered_chunks(3)
+
+    monkeypatch.setattr(weaviate_search, "get_chunks_by_parent_section", _chunks)
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Results", text_contains="absent phrase")
+    assert result.section.passages == []
+    assert result.section.matched_chunk_count == 0
+    assert result.section.total_chunk_count == 3
+    weaviate_search.retain_issued_spans.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_subsection_text_contains_returns_whole_matching_chunks(monkeypatch):
     async def _chunks(**_kwargs):
         return [
-            {"chunk_index": 0, "id": "sub-0", "text": "alpha mention", "page_number": 1, "subsection": "Fly Strains"},
-            {"chunk_index": 0, "id": "sub-1", "text": "beta mention", "page_number": 2, "subsection": "Fly Strains"},
-            {"chunk_index": 1, "id": "sub-2", "text": "gamma mention", "page_number": 3, "subsection": "Fly Strains"},
+            {"chunk_index": 0, "id": "sub-0", "text": "alpha mention", "page_number": 1, "parent_section": "Methods", "subsection": "Fly Strains"},
+            {"chunk_index": 1, "id": "sub-1", "text": "beta mention", "page_number": 2, "parent_section": "Methods", "subsection": "Fly Strains"},
+            {"chunk_index": 2, "id": "sub-2", "text": "gamma mention", "page_number": 3, "parent_section": "Methods", "subsection": "Fly Strains"},
         ]
 
     monkeypatch.setattr(weaviate_search, "get_chunks_by_subsection", _chunks)
     tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
 
-    paged = await tool("Methods", "Fly Strains", max_chunks=2)
-    assert paged.subsection is not None
-    assert paged.subsection.returned_chunk_count == 2
-    assert paged.subsection.total_chunk_count == 3
-    assert paged.subsection.offset == 0
-    assert paged.subsection.next_offset == 2
-    assert paged.subsection.truncated is True
-    assert [s.chunk_id for s in paged.subsection.source_chunks] == ["sub-0", "sub-1"]
-
     filtered = await tool("Methods", "Fly Strains", text_contains="beta")
-    assert filtered.subsection.total_chunk_count == 1
-    assert [s.chunk_id for s in filtered.subsection.source_chunks] == ["sub-1"]
-    snippet = filtered.subsection.source_chunks[0].snippet
-    assert snippet == "beta mention"
-    assert filtered.subsection.content == "beta mention"
-    for source in filtered.subsection.source_chunks:
-        assert not hasattr(source, "content")
+    assert filtered.subsection.total_chunk_count == 3
+    assert filtered.subsection.matched_chunk_count == 1
+    assert [p.chunk_id for p in filtered.subsection.passages] == ["sub-1"]
+    assert filtered.subsection.passages[0].content == "beta mention"
 
 
 @pytest.mark.asyncio
@@ -893,10 +841,72 @@ async def test_real_sdk_preserves_required_pdf_read_failure(monkeypatch):
     assert "PRIVATE" not in failure.message
 
 
+def _store_honouring_limit(monkeypatch, objects):
+    """Fake Weaviate store whose fetch honours limit/offset as the real store does."""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from src.lib.weaviate_client import chunks
+
+    calls = []
+
+    def fetch_objects(**kwargs):
+        calls.append(kwargs)
+        offset = kwargs.get("offset") or 0
+        return SimpleNamespace(objects=objects[offset: offset + kwargs["limit"]])
+
+    collection = MagicMock()
+    collection.query.fetch_objects.side_effect = fetch_objects
+    client = object()
+
+    @contextmanager
+    def session():
+        yield client
+
+    monkeypatch.setattr(chunks, "get_connection", lambda: SimpleNamespace(session=session))
+    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *_: (collection, MagicMock()))
+    return calls
+
+
+def _stored_section_objects(count, *, parent="Results", subsection="Expression"):
+    from types import SimpleNamespace
+    from uuid import UUID
+    return [SimpleNamespace(uuid=UUID(int=index + 1), properties={
+        "content": f"Passage {index} reports a finding. It has a second sentence.",
+        "chunkIndex": index, "sectionTitle": parent, "parentSection": parent,
+        "subsection": subsection, "pageNumber": 1 + index // 10, "metadata": {},
+        "docItemProvenance": None,
+    }) for index in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_read_section_returns_every_chunk_of_a_section_over_fifty(monkeypatch):
+    _store_honouring_limit(monkeypatch, _stored_section_objects(60))
+    tool = weaviate_search.create_read_section_tool("doc-12345678", "user-1")
+
+    result = await tool("Results")
+
+    assert result.section is not None
+    assert result.section.total_chunk_count == 60
+    assert [passage.chunk_index for passage in result.section.passages] == list(range(60))
+
+
+@pytest.mark.asyncio
+async def test_read_subsection_returns_every_chunk_of_a_subsection_over_thirty(monkeypatch):
+    _store_honouring_limit(monkeypatch, _stored_section_objects(40))
+    tool = weaviate_search.create_read_subsection_tool("doc-12345678", "user-1")
+
+    result = await tool("Results", "Expression")
+
+    assert result.subsection is not None
+    assert result.subsection.total_chunk_count == 40
+    assert [passage.chunk_index for passage in result.subsection.passages] == list(range(40))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("parent,count", [("Results", 4), ("Methods", 1)])
 @pytest.mark.parametrize("partial_name", [False, True])
-@pytest.mark.parametrize("mode", ["all", "first_page", "page", "filtered", "missing_identity", "missing_index", "no_match"])
+@pytest.mark.parametrize("mode", ["all", "filtered", "missing_identity", "missing_index", "no_match"])
 async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
     monkeypatch, parent, count, partial_name, mode,
 ):
@@ -942,46 +952,44 @@ async def test_subsection_real_retrieval_to_registered_tool_and_model_view(
     tool = create_read_subsection_tool({"document_id": "doc-12345678", "user_id": "owner-1"})
     payload = {"parent_section": parent, "subsection": "Animals" if partial_name else "Animals and expression"}
     selected = list(range(count))
-    if mode == "first_page":
-        payload.update(max_chunks=1, offset=0)
-        selected = [0]
-    elif mode == "page":
-        payload.update(max_chunks=1, offset=count - 1)
-        selected = [count - 1]
-    elif mode == "filtered":
+    if mode == "filtered":
         payload["text_contains"] = "passage 0"
         selected = [0]
     if mode in {"missing_identity", "missing_index"}:
         from agr_ai_curation_runtime.document_errors import DocumentReadError
         with pytest.raises(DocumentReadError):
             await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
+        weaviate_search.retain_issued_spans.assert_not_awaited()
         return
     canonical = await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
     raw = canonical.model_dump(mode="json")
     if mode == "no_match":
         assert raw["subsection"] is None
         assert "No content found" in raw["summary"]
-        assert raw["error_code"] is None
+        assert set(raw) == {"summary", "subsection"}
         return
     result = raw["subsection"]
-    assert result["content"] == "\n\n".join(texts[index] for index in selected)
-    assert result["returned_chunk_count"] == len(selected)
-    assert result["total_chunk_count"] == (1 if mode == "filtered" else count)
-    has_more = mode == "first_page" and count > 1
-    assert result["truncated"] is has_more
-    assert result["next_offset"] == (1 if has_more else None)
-    assert [source["chunk_id"] for source in result["source_chunks"]] == [str(objects[index].uuid) for index in selected]
-    assert [source["chunk_index"] for source in result["source_chunks"]] == [30 + index for index in selected]
+    assert [p["content"] for p in result["passages"]] == [texts[index] for index in selected]
+    assert result["total_chunk_count"] == count
+    assert result["matched_chunk_count"] == (1 if mode == "filtered" else None)
+    assert result["matched_sections"] == [parent]
+    assert result["matched_subsections"] == ["Animals and expression"]
+    assert [p["chunk_id"] for p in result["passages"]] == [str(objects[index].uuid) for index in selected]
+    assert [p["chunk_index"] for p in result["passages"]] == [30 + index for index in selected]
     view = _document_model_result("read_subsection", canonical)
-    assert view["subsection"]["content"] == result["content"]
-    assert "content_sha256" not in view["subsection"]
-    assert all("chunk_id" not in source for source in view["subsection"]["source_chunks"])
-    assert [source["chunk_index"] for source in view["subsection"]["source_chunks"]] == [30 + index for index in selected]
-    assert "doc_items" not in view["subsection"]
-    assert emitted[0]["doc_items"] == result["doc_items"]
+    passages = view["subsection"]["passages"]
+    assert [p["chunk_index"] for p in passages] == [30 + index for index in selected]
+    for passage, index in zip(passages, selected):
+        assert passage["text"] == f"[0] α passage {index}.\n[1] Negative finding preserved."
+        assert not {"content", "evidence_spans", "chunk_id", "doc_items"} & set(passage)
+    assert emitted[0]["doc_items"] == [item for p in result["passages"] for item in p["doc_items"]]
+    assert len(emitted) == 1
     assert tenants == ["owner-1"]
     assert all(str(obj.uuid) not in json.dumps(view) for obj in objects)
-    weaviate_search.retain_issued_spans.assert_not_awaited()
+    (reads,), _ = weaviate_search.retain_issued_spans.await_args
+    assert [(chunk["chunk_index"], chunk["id"], issued) for chunk, _spans, issued in reads] == [
+        (30 + index, str(objects[index].uuid), [0, 1]) for index in selected
+    ]
 
 
 @pytest.mark.asyncio

@@ -231,6 +231,21 @@ def test_weaviate_query_timeout_defaults_to_client_default(monkeypatch, raw, exp
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 250), ("40", 40), ("1", 1), ("0", 1), ("-5", 1), ("many", 250)],
+)
+def test_weaviate_chunk_fetch_page_size_is_configurable(monkeypatch, raw, expected):
+    """ALL-1550: objects per store round trip when a read pages every matching chunk."""
+    from src.lib.openai_agents.config import get_weaviate_chunk_fetch_page_size
+
+    if raw is None:
+        monkeypatch.delenv("WEAVIATE_CHUNK_FETCH_PAGE_SIZE", raising=False)
+    else:
+        monkeypatch.setenv("WEAVIATE_CHUNK_FETCH_PAGE_SIZE", raw)
+    assert get_weaviate_chunk_fetch_page_size() == expected
+
+
+@pytest.mark.parametrize(
     ("environment_name", "getter", "default"),
     [
         (

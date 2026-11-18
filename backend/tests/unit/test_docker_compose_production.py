@@ -15,6 +15,7 @@ from src.lib.openai_agents.config import (
     get_max_parallel_validators,
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
+    get_weaviate_chunk_fetch_page_size,
 )
 
 
@@ -70,6 +71,24 @@ def test_production_forwards_batch_zip_metadata_chunk_size(monkeypatch, configur
     else:
         monkeypatch.setenv(key, configured)
     assert get_batch_zip_metadata_chunk_size() == expected
+
+
+@pytest.mark.parametrize("configured,expected", [(None, 250), ("40", 40)])
+def test_compose_forwards_weaviate_chunk_fetch_page_size(monkeypatch, configured, expected):
+    key = "WEAVIATE_CHUNK_FETCH_PAGE_SIZE"
+    production = _load_compose()["services"]["backend"]["environment"]
+    development = dict(
+        item.split("=", 1) for item in _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    # Assert the actual Compose substitution contract, including its source key.
+    assert production[key] == "${WEAVIATE_CHUNK_FETCH_PAGE_SIZE:-250}"
+    assert development[key] == "${WEAVIATE_CHUNK_FETCH_PAGE_SIZE:-250}"
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "250"
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
+    assert get_weaviate_chunk_fetch_page_size() == expected
 
 
 def _load_dev_compose() -> dict:

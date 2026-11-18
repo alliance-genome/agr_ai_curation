@@ -160,6 +160,27 @@ trace_review/
 
 **Available Views**: `summary`, `conversation`, `tool_calls`, `pdf_citations`, `token_analysis`, `agent_context`, `trace_summary`, `document_hierarchy`, `agent_configs`, `group_context`, `domain_envelope`, `extraction_timeline`, `evidence_revisions`
 
+**Section reads in two shapes.** A `read_section` or `read_subsection` result in
+a trace is what the model received, not the application's stored result.
+Traces recorded before the numbered-passage release hold one joined `content`
+string with `section_title` (or `parent_section` and `subsection`). Later traces
+hold `requested_section`, `matched_sections` and a `passages` list, where each
+passage's `text` is numbered lines, `[span_index] sentence`, with a sentence's
+later lines indented four spaces. TraceReview reads both shapes
+(`backend/src/analyzers/document_read_results.py`): the `tool_calls` view shows
+the section fields with the numbered text as the model saw it and labels the
+result's `shape`, and the `pdf_citations` view removes the span numbers before it
+looks for citation markers and bibliography entries, so they are never counted.
+Bibliography entry numbers from numbered reads are approximate: the numbered
+view puts each sentence on its own line, so a sentence of a reference list that
+starts with a year can be counted as an entry.
+A document read whose output cannot be decoded is left out of that analysis and
+listed by call in `citation_number_diagnostics.undecodable_reads`; the rest of
+the trace is still analysed. The decoder is kept in step with the application's
+renderer by a shared fixture, `trace_review/backend/tests/fixtures/numbered_document_view.json`,
+written and checked by the backend test
+`backend/tests/unit/lib/packages/alliance/test_numbered_view_fixture.py`.
+
 Trace search preserves the legacy oldest-first trace ordering. Under Langfuse
 v4 it reconstructs each reference from v2 observations: the earliest root
 timestamp identifies the trace, latency spans the complete observation group,

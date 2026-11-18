@@ -7,6 +7,13 @@ import re
 from collections import Counter
 from typing import Dict, List, Set
 
+from .document_read_results import (
+    NUMBERED_PASSAGES_SHAPE,
+    UndecodableReadError,
+    decode_tool_output,
+    passage_source_text,
+    section_read_shape,
+)
 
 _PDF_EVIDENCE_TOOL_NAMES = {"search_document", "read_section", "read_subsection"}
 _REFERENCE_SECTION_RE = re.compile(
@@ -50,7 +57,7 @@ class PDFCitationsAnalyzer:
     """Analyzes PDF citations from PDF Specialist agent observations"""
 
     @classmethod
-    def _empty_result(cls) -> Dict:
+    def _empty_result(cls, undecodable_reads: List[Dict]) -> Dict:
         return {
             "found": False,
             "total_citations": 0,
@@ -59,7 +66,9 @@ class PDFCitationsAnalyzer:
             "citations": [],
             "total_chunks_found": 0,
             "tool_calls": [],
-            "citation_number_diagnostics": cls._build_citation_number_diagnostics([], []),
+            "citation_number_diagnostics": cls._build_citation_number_diagnostics(
+                [], [], undecodable_reads
+            ),
         }
 
     @classmethod
@@ -91,6 +100,9 @@ class PDFCitationsAnalyzer:
         diagnostic_texts = []
         bibliography_texts = []
         tool_calls_metadata = []
+        # A document read that cannot be decoded is reported here, by call,
+        # and the rest of the trace is still analysed.
+        undecodable_reads: Dict[str, Dict] = {}
 
         for obs in observations:
             if obs.get("type") != "GENERATION":
@@ -130,13 +142,30 @@ class PDFCitationsAnalyzer:
                     if not cls._is_pdf_related_tool(tool_name):
                         continue
 
-                    # Parse the output JSON
                     try:
-                        output_data = json.loads(output_str)
-                    except (json.JSONDecodeError, TypeError):
+                        output_data = decode_tool_output(output_str)
+                    except UndecodableReadError as exc:
+                        # Specialist answers may be plain text; only document
+                        # reads are expected to be structured.
+                        if tool_name in _PDF_EVIDENCE_TOOL_NAMES:
+                            cls._report_undecodable(undecodable_reads, call_id, tool_name, exc)
                         continue
                     if not isinstance(output_data, dict):
                         continue
+
+                    read_diagnostic_texts: List[str] = []
+                    read_bibliography_texts: List[str] = []
+                    try:
+                        cls._collect_diagnostic_texts(
+                            output_data,
+                            read_diagnostic_texts,
+                            read_bibliography_texts,
+                        )
+                    except UndecodableReadError as exc:
+                        cls._report_undecodable(undecodable_reads, call_id, tool_name, exc)
+                        continue
+                    diagnostic_texts.extend(read_diagnostic_texts)
+                    bibliography_texts.extend(read_bibliography_texts)
 
                     # Extract citations
                     citations = output_data.get("citations", [])
@@ -153,12 +182,6 @@ class PDFCitationsAnalyzer:
                     if extracted_content:
                         all_answers.append(extracted_content)
 
-                    cls._collect_diagnostic_texts(
-                        output_data,
-                        diagnostic_texts,
-                        bibliography_texts,
-                    )
-
                     # Store tool call metadata
                     tool_calls_metadata.append({
                         "tool_name": tool_name,
@@ -167,8 +190,9 @@ class PDFCitationsAnalyzer:
                         "call_id": call_id
                     })
 
+        undecodable = list(undecodable_reads.values())
         if not all_citations and not all_answers:
-            return cls._empty_result()
+            return cls._empty_result(undecodable)
 
         # Deduplicate citations by chunk_id
         seen_chunks = set()
@@ -229,8 +253,23 @@ class PDFCitationsAnalyzer:
             "citation_number_diagnostics": cls._build_citation_number_diagnostics(
                 diagnostic_texts,
                 bibliography_texts,
+                undecodable,
             )
         }
+
+    @classmethod
+    def _report_undecodable(
+        cls,
+        undecodable_reads: Dict[str, Dict],
+        call_id: str,
+        tool_name: str,
+        error: UndecodableReadError,
+    ) -> None:
+        # A recorded output reappears in every later generation's input; report it once.
+        key = call_id or f"{tool_name}:{len(undecodable_reads)}"
+        undecodable_reads.setdefault(
+            key, {"call_id": call_id, "tool_name": tool_name, "reason": str(error)}
+        )
 
     @classmethod
     def _is_pdf_related_tool(cls, tool_name: str) -> bool:
@@ -299,6 +338,11 @@ class PDFCitationsAnalyzer:
         diagnostic_texts: List[str],
         bibliography_texts: List[str],
     ) -> None:
+        if section_read_shape(section) == NUMBERED_PASSAGES_SHAPE:
+            cls._collect_numbered_passages(section, diagnostic_texts, bibliography_texts)
+            return
+        # Joined-content reads (before the numbered-passage release) and other
+        # section-like fields carry their text in content fields.
         if not isinstance(section, dict):
             return
 
@@ -319,10 +363,33 @@ class PDFCitationsAnalyzer:
                 cls._append_text(diagnostic_texts, text)
 
     @classmethod
+    def _collect_numbered_passages(
+        cls,
+        section: Dict,
+        diagnostic_texts: List[str],
+        bibliography_texts: List[str],
+    ) -> None:
+        """Read each passage's sentences without the span numbers shown to the model.
+
+        The numbers are the application's reading aids, so counting them would
+        report citation markers and bibliography entries the paper never had.
+        """
+        for passage in cls._iter_dicts(section.get("passages")):
+            text = passage_source_text(passage)
+            headings = (passage.get("section"), passage.get("subsection"))
+            if any(cls._is_reference_section(heading) for heading in headings):
+                for heading in headings:
+                    cls._append_text(bibliography_texts, heading)
+                cls._append_text(bibliography_texts, text)
+            else:
+                cls._append_text(diagnostic_texts, text)
+
+    @classmethod
     def _build_citation_number_diagnostics(
         cls,
         diagnostic_texts: List[str],
         bibliography_texts: List[str],
+        undecodable_reads: List[Dict],
     ) -> Dict:
         marker_occurrences = cls._detect_marker_occurrences(
             cls._without_reference_sections(diagnostic_texts)
@@ -361,6 +428,8 @@ class PDFCitationsAnalyzer:
             "mapped_numbers": mapped_numbers,
             "missing_marker_numbers": missing_marker_numbers,
             "ambiguous_marker_numbers": ambiguous_numbers,
+            # Document reads left out because their output could not be decoded.
+            "undecodable_reads": undecodable_reads,
         }
 
     @classmethod
