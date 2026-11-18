@@ -1,5 +1,5 @@
 """Unit tests for /api/chat/stream endpoint lifecycle handling."""
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import asyncio
 import json
@@ -14,6 +14,7 @@ from sqlalchemy.exc import OperationalError
 import pytest
 
 from src.api import chat, chat_common, chat_stream
+from src.api.chat_common import _persist_completed_chat_stream_turn
 from src.lib import http_errors
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.executable_runs import ExecutableRun
@@ -2541,6 +2542,100 @@ def test_preferred_flow_answer_and_file_live_persisted_and_replayed(monkeypatch,
             assert [event["details"]["output"] for event in events if event["type"] == "CHAT_OUTPUT_READY"] == [expected]
         else:
             assert text == [expected]
+
+
+@pytest.mark.parametrize("interruption", ["task_cancel", "stop_at_handoff", "review_stop", "save_failed"])
+def test_preferred_flow_interruption_recovers_file_on_live_stream_and_replay(monkeypatch, interruption):
+    flow = SimpleNamespace(id=uuid4(), name="File export")
+    request = chat.ChatMessage(message="Export results", session_id="export-session", turn_id="export-turn")
+    file_event = {"type": "FILE_READY", "details": {
+        "file_id": "export-file", "filename": "results.tsv", "download_url": "/api/files/export-file/download",
+    }}
+    executions = []
+    saved = []
+    file_rows = []
+    completion_db = Mock()
+    completion_db.execute.return_value.scalars.return_value.all.return_value = []
+    at_handoff = False
+
+    async def execute(**_kwargs):
+        nonlocal at_handoff
+        executions.append(True)
+        yield {"type": "RUN_FINISHED", "data": {"response": "Provisional response"}}
+        yield {"type": "CHAT_OUTPUT_READY", "details": {"output": "Provisional answer"}}
+        yield file_event
+        yield file_event
+        if interruption == "review_stop":
+            raise chat_stream.ReviewInterrupted()
+        if interruption != "stop_at_handoff":
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+        yield {"type": "FLOW_FINISHED", "data": {"status": "completed"}}
+        at_handoff = True
+
+    async def stop_requested(*_args):
+        return at_handoff
+
+    def append_message(**kwargs):
+        if kwargs["role"] == "flow":
+            file_rows.append((kwargs["message_type"], kwargs["payload_json"]))
+            return
+        if interruption == "save_failed":
+            raise RuntimeError("Controlled recovery save failure")
+        record = _assistant_record(
+            session_id=kwargs["session_id"], turn_id=kwargs["turn_id"],
+            content=kwargs["content"], payload_json=kwargs["payload_json"],
+        )
+        saved.append(record)
+        return SimpleNamespace(message=record, created=True)
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", AsyncMock(return_value=True))
+    for name in ("unregister_active_stream", "clear_cancel_signal"):
+        _patch_chat_impl(monkeypatch, name, AsyncMock())
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", stop_requested)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_provider_groups", lambda _: [])
+    repository = SimpleNamespace(
+        list_recent_messages=lambda **_: [], get_session=lambda **_: request.session_id,
+        get_message_by_turn_id=lambda **_: saved[0] if saved else None, append_message=append_message,
+    )
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _: repository)
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", lambda **_: chat.PreparedChatStreamTurn(
+        turn_id=request.turn_id, effective_user_message=request.message, user_turn_created=not saved,
+        route=chat.ResolvedChatRoute(mode="flow", target_id=str(flow.id), flow_run_id="export-run"),
+        replay_assistant_turn=saved[0] if saved else None))
+    _patch_chat_impl(monkeypatch, "execute_flow", execute)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", _persist_completed_chat_stream_turn)
+
+    async def consume():
+        response = await chat.chat_stream_endpoint(
+            chat_message=request, user={"sub": "owner", "cognito:groups": []},
+            db=SimpleNamespace(get=lambda *_: flow, rollback=lambda: None))
+        return await _consume_stream(response)
+
+    live = asyncio.run(consume())
+    assert file_rows == [("file_download", file_event)]
+    if interruption == "save_failed":
+        completion_db.rollback.assert_called()
+        assert not saved
+        assert live[-1]["type"] == "turn_save_failed"
+        assert "remain available below" not in live[-1]["message"]
+        assert not any(event["type"] == "FILE_READY" for event in live)
+        return
+
+    (record,) = saved
+    assert record.payload_json["terminal_state"] == "turn_interrupted"
+    assert record.payload_json[chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY] == [file_event]
+    assert "Generated files" in record.content
+    assert "Provisional" not in record.content
+    replay = asyncio.run(consume())
+    assert len(executions) == 1
+    for events in (live, replay):
+        assert events[-1]["type"] == "turn_interrupted"
+        assert [e["details"] for e in events if e["type"] == "FILE_READY"] == [file_event["details"]]
+        assert not any(e["type"] in {"turn_completed", "CHAT_OUTPUT_READY", "FLOW_FINISHED"} for e in events)
+        assert "Provisional" not in json.dumps(events)
 
 
 def test_chat_stream_endpoint_replays_preferred_flow_file_output(monkeypatch):

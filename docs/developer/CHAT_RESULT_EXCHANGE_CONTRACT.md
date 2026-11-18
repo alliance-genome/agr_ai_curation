@@ -139,6 +139,10 @@ safe notice in history, even when no extraction exists. Available partial text
 is labeled as unfinished. Already persisted extraction results remain available
 for review. Generated flow files are released only after their failure/partial
 transcript is committed. Provisional success text is withheld from failed flows.
+If chat is interrupted after a preferred flow generates a file, the interrupted
+transcript retains that download even when the flow has yet to return its final
+answer. Live chat publishes the file after the transcript commits. Reopening
+the turn replays the same file and interruption notice without rerunning tools.
 A partial flow remains visibly partial after replay or history reload.
 
 `Restore request` copies the original request into an empty composer. It does not

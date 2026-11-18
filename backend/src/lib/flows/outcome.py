@@ -129,7 +129,7 @@ class FlowRunOutcome:
                 in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
             )
             self.final_user_visible_text = None
-            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+            self._success_output_events = self.retained_file_events()
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             return
@@ -174,7 +174,7 @@ class FlowRunOutcome:
             self.status = cast(FlowRunStatus, terminal_status)
             self.stop_reason = str(event.get("review_reason") or "Review did not complete.")
             self.final_user_visible_text = None
-            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+            self._success_output_events = self.retained_file_events()
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             return
@@ -184,7 +184,7 @@ class FlowRunOutcome:
                 event.get("failure_reason") or self.failure_reason or "Flow execution failed."
             )
             self.final_user_visible_text = None
-            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+            self._success_output_events = self.retained_file_events()
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             self._flow_finished_event["status"] = "failed"
@@ -220,6 +220,10 @@ class FlowRunOutcome:
     @property
     def terminal(self) -> bool:
         return self._flow_finished_event is not None or self._run_error_event is not None
+
+    def retained_file_events(self) -> list[dict[str, Any]]:
+        """File references available for recovery even before FLOW_FINISHED."""
+        return [dict(event) for event in self._success_output_events if event["type"] == "FILE_READY"]
 
     def events_for_persistence(self) -> list[dict[str, Any]]:
         """Return the canonical terminal order to store for durable replay."""
@@ -282,7 +286,7 @@ class FlowRunOutcome:
         self.failure_tool = None
         self.failure_already_reported = True
         self.final_user_visible_text = None
-        self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+        self._success_output_events = self.retained_file_events()
         self._run_finished_event = None
         self._curation_handoff_ready_event = None
         self._run_error_event = None

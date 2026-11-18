@@ -115,7 +115,6 @@ from ..lib.context import set_current_session_id, set_current_user_id
 logger = logging.getLogger("src.api.chat")
 
 _CHAT_ROUTE_PAYLOAD_KEY = "chat_route"
-_PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE = "_PREFERRED_FLOW_TERMINAL_EVENTS"
 
 # Create router with prefix
 router = APIRouter(prefix="/api")
@@ -1294,6 +1293,7 @@ def _raise_unavailable_chat_route(state: ChatRoutePreferenceState) -> NoReturn:
 async def _run_resolved_chat_route(
     *,
     route: ResolvedChatRoute,
+    outcome: FlowRunOutcome,
     db: Session,
     db_user_id: int,
     context_messages: List[Dict[str, Any]],
@@ -1318,7 +1318,6 @@ async def _run_resolved_chat_route(
             flow = db.get(CurationFlow, UUID(route.target_id or ""))
             if flow is None:
                 raise RuntimeError("Authorized preferred flow disappeared before execution")
-            outcome = FlowRunOutcome()
             agents_used: List[str] = []
             flow_stream = execute_flow(
                 flow=flow,
@@ -1385,11 +1384,6 @@ async def _run_resolved_chat_route(
         finally:
             await flow_stream.aclose()
 
-        terminal_events = outcome.events_for_persistence()
-        yield {
-            "type": _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE,
-            "internal": {"events": terminal_events},
-        }
         from src.lib.flows.outcome import REVIEW_STOP_STATUSES
         if outcome.status in REVIEW_STOP_STATUSES:
             response = f"Flow review did not complete: {outcome.stop_reason}"
