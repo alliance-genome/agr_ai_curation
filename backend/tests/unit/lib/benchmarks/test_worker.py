@@ -615,23 +615,28 @@ def test_sentry_capture_failure_does_not_escape_worker_reporter(monkeypatch):
     capture.assert_called_once()
 
 
-def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
+@pytest.mark.parametrize("log_event_level", ["", "WARNING"])
+def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit(log_event_level):
     """Use real worker startup/facade/SDK with only I/O replaced in a fresh process."""
+    import base64
     import json
     import os
     import subprocess
     import textwrap
 
     script = textwrap.dedent('''
+        import base64
         import json
+        import os
         from unittest.mock import AsyncMock, MagicMock, patch
         from uuid import UUID
 
         import sentry_sdk
-        from langfuse import Langfuse
+        from requests import Response
         from sentry_sdk.transport import Transport
         from src.lib.benchmarks import worker
         from src.lib.observability import sentry
+        from src.lib.openai_agents import langfuse_client
 
         class MemoryTransport(Transport):
             def __init__(self, options):
@@ -646,16 +651,18 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
             def flush(self, timeout, callback=None):
                 print("SENTRY_EXIT_FLUSH=" + json.dumps(self.events))
 
-        class TestClient:
-            # Exercise the SDK's own logged auth failure and False outcome.
-            auth_check = Langfuse.auth_check
-
-            @property
-            def api(self):
-                raise AttributeError("synthetic-private-auth")
-
-            def flush(self):
-                raise ConnectionError("synthetic-private-trace")
+        # Accept the first batch and reject the one flushed on worker shutdown.
+        status_codes = iter([200, 400])
+        def collector(session, request, **kwargs):
+            assert request.url == "http://example.invalid/collector/traces"
+            credentials = base64.b64decode(request.headers["Authorization"].split()[1]).decode()
+            assert credentials == "synthetic-private-public-key:synthetic-private-secret-key"
+            assert request.headers["x-langfuse-public-key"] == os.environ["LANGFUSE_PUBLIC_KEY"]
+            assert kwargs["timeout"] == 9
+            response = Response()
+            response.status_code = next(status_codes)
+            response.reason = "synthetic-private-response"
+            return response
 
         sdk_init = sentry_sdk.init
         def initialize(**kwargs):
@@ -663,23 +670,32 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
 
         async def run():
             assert sentry._INITIALIZED
+            client = langfuse_client.get_langfuse()
+            client.start_observation(as_type="span", name="first-batch").end()
+            langfuse_client.flush_langfuse()
             worker._report_failure(
                 ValueError("token=synthetic-private-value"),
                 job_id=UUID("00000000-0000-0000-0000-000000000001"),
                 cell_id=UUID("00000000-0000-0000-0000-000000000002"),
             )
+            client.start_observation(as_type="span", name="synthetic-private-trace").end()
 
         with (
             patch.object(sentry_sdk, "init", side_effect=initialize) as init,
             patch.object(worker, "SessionLocal", MagicMock()),
             patch("src.lib.prompts.cache.initialize"),
             patch("src.lib.config.groups_loader.load_groups"),
-            patch("langfuse.Langfuse", return_value=TestClient()),
+            patch("langfuse.api.projects.client.ProjectsClient.get",
+                  side_effect=AttributeError("synthetic-private-auth")),
+            patch("opentelemetry.exporter.otlp.proto.http.trace_exporter.time", return_value=100),
+            patch("requests.Session.send", autospec=True, side_effect=collector) as send,
             patch("src.lib.openai_agents.langfuse_client._instrument_openai_agents_tracing"),
             patch.object(worker.BenchmarkWorker, "run_forever", AsyncMock(side_effect=run)),
         ):
             worker.main()
             init.assert_called_once()
+            assert send.call_count == 2
+            assert list(status_codes) == []
         # No explicit flush: verify the same SDK atexit convention as the backend.
     ''')
     env = {key: value for key, value in os.environ.items() if not key.startswith("SENTRY_")}
@@ -687,8 +703,11 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
         SENTRY_DSN="https://public@example.invalid/1",
         SENTRY_ENVIRONMENT="worker-test",
         SENTRY_RELEASE="synthetic-worker-release",
-        SENTRY_LOG_EVENT_LEVEL="WARNING",
-        LANGFUSE_HOST="http://example.invalid",
+        SENTRY_LOG_EVENT_LEVEL=log_event_level,
+        LANGFUSE_HOST="http://host-overridden-by-base-url.invalid",
+        LANGFUSE_BASE_URL="http://example.invalid",
+        LANGFUSE_OTEL_TRACES_EXPORT_PATH="collector/traces",
+        LANGFUSE_TIMEOUT="9",
         LANGFUSE_PUBLIC_KEY="synthetic-private-public-key",
         LANGFUSE_SECRET_KEY="synthetic-private-secret-key",
         BENCHMARK_WORKER_ENABLED="true",
@@ -704,13 +723,12 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
         for line in completed.stdout.splitlines() if line.startswith("SENTRY_EXIT_FLUSH=")
     ]
     assert len(flushes) == 1
-    auth, event, flush = flushes[0]
-    for tracing_event, operation in ((auth, "authentication_failed"), (flush, "flush_failed")):
+    auth, event, export = flushes[0]
+    for tracing_event, operation in ((auth, "authentication_failed"), (export, "export_failed")):
         assert tracing_event["tags"]["runtime_component"] == "langfuse"
         assert tracing_event["tags"]["operation"] == operation
         assert tracing_event["fingerprint"] == ["langfuse", operation]
         assert [value["type"] for value in tracing_event["exception"]["values"]] == ["RuntimeError"]
-    assert flush["contexts"]["runtime_exception"]["type"] == "ConnectionError"
     assert event["event_id"]
     assert event["release"] == "synthetic-worker-release"
     assert event["environment"] == "worker-test"
@@ -718,6 +736,8 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit():
     assert event["tags"]["operation"] == "cell_execution_failed"
     serialized = json.dumps(flushes[0])
     assert "synthetic-private" not in serialized
+    encoded_credentials = base64.b64encode(b"synthetic-private-public-key:synthetic-private-secret-key")
+    assert encoded_credentials.decode("ascii") not in serialized
     assert "00000000-0000-0000-0000-000000000001" not in serialized
     assert [value["type"] for value in event["exception"]["values"]] == ["_BenchmarkWorkerError"]
 

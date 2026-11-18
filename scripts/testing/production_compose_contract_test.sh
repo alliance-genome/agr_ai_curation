@@ -48,6 +48,7 @@ write_test_env() {
       'VALIDATION_REVIEW_QUICK_CHECK_TIMEOUT_SECONDS=12.5' \
       'VALIDATION_REVIEW_QUICK_CHECK_MAX_RETRIES=0' \
       'MAX_PARALLEL_VALIDATORS=3' \
+      'LANGFUSE_TIMEOUT=9' \
       'ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=6000' \
       'BATCH_STREAM_POLL_INTERVAL_SECONDS=2.5' \
       'CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=7.5' \
@@ -122,7 +123,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -Ev '^(MAX_PARALLEL_VALIDATORS=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -353,6 +354,7 @@ for index, path in enumerate(sys.argv[2:]):
     services = json.loads(Path(path).read_text())["services"]
     for service in ("backend", "benchmark_worker"):
         assert str(services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == ("8" if index < 2 else "3")
+        assert str(services[service]["environment"]["LANGFUSE_TIMEOUT"]) == ("5" if index < 2 else "9")
     for key, default, override in settings:
         expected = default if index < 2 else override
         for service in ("backend", "benchmark_worker"):

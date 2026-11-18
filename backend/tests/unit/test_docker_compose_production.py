@@ -12,6 +12,7 @@ import yaml
 
 from src.lib.openai_agents.config import (
     get_batch_zip_metadata_chunk_size,
+    get_langfuse_timeout,
     get_max_parallel_validators,
     get_pdf_max_file_size_bytes,
     get_pdf_upload_max_page_count,
@@ -93,6 +94,21 @@ def test_compose_forwards_weaviate_chunk_fetch_page_size(monkeypatch, configured
 
 def _load_dev_compose() -> dict:
     return yaml.safe_load(DEV_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("configured,expected", [(None, 5), ("9", 9)])
+def test_langfuse_timeout(monkeypatch, configured, expected):
+    key = "LANGFUSE_TIMEOUT"
+    services = _load_compose()["services"]
+    for service in ("backend", "benchmark_worker"):
+        assert services[service]["environment"][key] == "${LANGFUSE_TIMEOUT:-5}"
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "5"
+    assert _load_env_assignments(ENV_TEMPLATE_PATH)[key] == "5"
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
+    assert get_langfuse_timeout() == expected
 
 
 @pytest.mark.parametrize("compose_path,backend_name,worker_name", [

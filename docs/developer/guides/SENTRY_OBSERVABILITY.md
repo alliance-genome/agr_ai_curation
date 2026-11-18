@@ -396,11 +396,12 @@ claim tasks stop.
 
 Configured Langfuse failures report under component `langfuse` and group by
 operation (`initialization_failed`, `instrumentation_failed`,
-`authentication_failed`, or `flush_failed`). A configured initialization that
+`authentication_failed`, `export_failed`, or `flush_failed`). A configured initialization that
 returns no client reports once at the client boundary. Authentication and
 instrumentation failures retain the client for best-effort tracing. Reports
-carry the exception class when available. Application companion warnings and
-Langfuse SDK logs emitted during the authentication check skip event promotion.
+carry the exception class when available. The OTLP exporter reports a terminal
+batch failure even when the public flush returns normally. Application companion
+warnings, SDK authentication logs and this exporter's OTLP logs skip event promotion.
 Workers continue claiming work even when tracing or reporting is unavailable.
 
 The worker uses the same Sentry configuration as its backend counterpart:

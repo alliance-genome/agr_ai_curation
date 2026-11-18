@@ -1,10 +1,32 @@
 """Content-free reporting for best-effort Langfuse lifecycle operations."""
 
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from src.lib.observability import runtime
 
 logger = logging.getLogger(__name__)
+_owned_logger: ContextVar[str | None] = ContextVar("langfuse_owned_logger", default=None)
+
+
+def _mark_owned_sdk_log(record: logging.LogRecord) -> bool:
+    if record.name == _owned_logger.get():
+        record.sentry_skip_event = True
+    return True
+
+
+@contextmanager
+def own_langfuse_sdk_logs(logger_name: str):
+    """Keep companion SDK logs from becoming duplicate Sentry events."""
+    # addFilter is idempotent. The context distinguishes other threads and
+    # other OTLP exporters using the very same logger.
+    logging.getLogger(logger_name).addFilter(_mark_owned_sdk_log)
+    token = _owned_logger.set(logger_name)
+    try:
+        yield
+    finally:
+        _owned_logger.reset(token)
 
 
 def report_langfuse_failure(operation: str, exc: Exception | None = None) -> None:

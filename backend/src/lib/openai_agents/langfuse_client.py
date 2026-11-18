@@ -18,22 +18,9 @@ import logging
 from contextvars import ContextVar
 from typing import List, Dict, Any, Optional
 
-from src.lib.observability.langfuse import report_langfuse_failure
+from src.lib.observability.langfuse import own_langfuse_sdk_logs, report_langfuse_failure
 
 logger = logging.getLogger(__name__)
-
-# Langfuse logs rejected credentials before raising or returning False. The
-# caller owns that report. Keep unrelated SDK activity eligible for promotion.
-_auth_check_active = ContextVar("langfuse_auth_check_active", default=False)
-
-
-def _mark_auth_check_log(record: logging.LogRecord) -> bool:
-    if _auth_check_active.get():
-        record.sentry_skip_event = True
-    return True
-
-
-logging.getLogger("langfuse").addFilter(_mark_auth_check_log)
 
 # Flag to track if we've logged the observe decorator fallback warning
 _observe_fallback_warned = False
@@ -120,12 +107,14 @@ def initialize_langfuse():
 
         # Import and initialize Langfuse
         from langfuse import Langfuse
+        from src.lib.observability.langfuse_exporter import LangfuseSpanExporter
 
         # Create the global client directly (get_client() removed in 2.60.x)
         _langfuse_client = Langfuse(
             host=host,
             public_key=public_key,
             secret_key=secret_key,
+            span_exporter=LangfuseSpanExporter(host, public_key, secret_key),
         )
     except Exception as exc:
         report_langfuse_failure("initialization_failed", exc)
@@ -136,16 +125,15 @@ def initialize_langfuse():
         return None
 
     _instrument_openai_agents_tracing()
-    auth_token = _auth_check_active.set(True)
     try:
-        if _langfuse_client.auth_check():
+        with own_langfuse_sdk_logs("langfuse"):
+            authenticated = _langfuse_client.auth_check()
+        if authenticated:
             logger.info("Langfuse initialized and authenticated")
         else:
             report_langfuse_failure("authentication_failed")
     except Exception as exc:
         report_langfuse_failure("authentication_failed", exc)
-    finally:
-        _auth_check_active.reset(auth_token)
 
     return _langfuse_client
 

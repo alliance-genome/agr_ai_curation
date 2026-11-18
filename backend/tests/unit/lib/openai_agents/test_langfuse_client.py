@@ -97,7 +97,7 @@ def test_initialize_langfuse_success_sets_env_and_client(monkeypatch):
     instrument_calls = []
 
     class FakeLangfuse:
-        def __init__(self, host, public_key, secret_key):
+        def __init__(self, host, public_key, secret_key, span_exporter):
             self.host = host
             self.public_key = public_key
             self.secret_key = secret_key
@@ -241,6 +241,32 @@ def test_get_and_flush_langfuse_handles_flush_exception(monkeypatch, report, cap
     lc.flush_langfuse()
     assert client.flushed is True
     assert_failure(report, caplog, "flush_failed", "RuntimeError")
+
+
+@pytest.mark.parametrize("export_raises", [False, True])
+def test_export_failure_result_survives_reporter_outage(monkeypatch, report, caplog, export_raises):
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import SpanExportResult
+    from src.lib.observability.langfuse_exporter import LangfuseSpanExporter
+
+    sdk_logger = logging.getLogger(OTLPSpanExporter.__module__)
+
+    def fail_export(self, spans):
+        sdk_logger.error("SDK export failed")
+        if export_raises:
+            raise ValueError("synthetic-private span contents")
+        return SpanExportResult.FAILURE
+
+    monkeypatch.setattr(OTLPSpanExporter, "export", fail_export)
+    report.side_effect = RuntimeError("synthetic-private reporter error")
+    exporter = LangfuseSpanExporter("http://example.invalid", "pub", "sec")
+    try:
+        assert exporter.export([]) is SpanExportResult.FAILURE
+    finally:
+        exporter.shutdown()
+    assert_failure(report, caplog, "export_failed", "ValueError" if export_raises else None)
+    sdk_logger.warning("independent exporter warning")
+    assert not getattr(caplog.records[-1], "sentry_skip_event", False)
 
 
 def test_create_trace_success_and_failures(monkeypatch):
