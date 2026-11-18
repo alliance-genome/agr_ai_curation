@@ -8,6 +8,12 @@ vi.mock('../services/validationHistoryService', () => ({
   fetchCandidateReviewOperation: vi.fn(), fetchReviewOperation: vi.fn(), requestReview: vi.fn(), controlReview: vi.fn(),
 }))
 const saved = { operation_id: 'existing', session_id: 'session', state: 'running', artifact_count: 1, outcome: null }
+const stoppedRecord = {
+  state: 'needs_curator_review',
+  reason: 'curator_revalidation_required',
+  resource: 'B',
+  review: { state: 'pending', ready: false },
+}
 
 describe('Record revalidation', () => {
   beforeEach(() => { vi.resetAllMocks(); sessionStorage.clear() })
@@ -84,6 +90,23 @@ describe('Record revalidation', () => {
     view.unmount()
     vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({ ...saved, state: 'needs_review',
       outcome: { reason: 'reviewer_left_pending' } })
+    render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    expect(await screen.findByRole('button', { name: 'Continue existing round' })).toBeEnabled()
+  })
+  it('requires a fresh Revalidate when the only reviewer result stops for curator revalidation', async () => {
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({
+      ...saved, state: 'needs_review', outcome: { results: [stoppedRecord] },
+    })
+    render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
+    await screen.findByText('Revalidation: needs review')
+    expect(screen.queryByRole('button', { name: 'Continue existing round' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Revalidate record' })).toBeEnabled()
+  })
+  it('offers Continue when another reviewer result is still pending', async () => {
+    vi.mocked(service.fetchCandidateReviewOperation).mockResolvedValue({
+      ...saved, state: 'needs_review', artifact_count: 2,
+      outcome: { results: [stoppedRecord, { reason: 'reviewer_left_pending', review: { state: 'pending', ready: false } }] },
+    })
     render(<RevalidationControls candidateId="B" sessionId="session" onChanged={vi.fn()} />)
     expect(await screen.findByRole('button', { name: 'Continue existing round' })).toBeEnabled()
   })

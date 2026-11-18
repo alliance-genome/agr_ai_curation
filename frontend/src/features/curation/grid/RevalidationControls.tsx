@@ -23,6 +23,11 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
   changed.current = onChanged
   const storageKey = `workspace-review-request:${sessionId}:${candidateId ?? 'all'}`
   const active = operation && ['queued', 'preparing', 'running'].includes(operation.state)
+  const results = operation?.outcome?.results
+  const singleRecordRequiresRevalidation = results?.length === 1 && results[0].reason === 'curator_revalidation_required'
+  const canContinue = operation?.state === 'needs_review'
+    && !['record_or_access_changed', 'no_eligible_records', 'preparation_abandoned', 'source_projection_invalid', 'curator_revalidation_required'].includes(operation.outcome?.reason ?? '')
+    && !singleRecordRequiresRevalidation
   useEffect(() => {
     const controller = new AbortController()
     setLoaded(false)
@@ -97,12 +102,12 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
       {operation.outcome?.message && <Typography variant="body2">{operation.outcome.message}</Typography>}
       {operation.outcome?.reason && <Typography variant="body2">Stopped: {reasonText(operation.outcome.reason)}</Typography>}
       {operation.outcome?.results?.map((result, index) => <Typography key={index} variant="body2">Review: {reasonText(result.reason ?? result.review.state)}</Typography>)}
-      {operation.state === 'needs_review' && <Typography variant="body2">Continuing keeps the same allowance. To authorize a fresh bounded round, choose Revalidate.</Typography>}
+      {operation.state === 'needs_review' && <Typography variant="body2">{canContinue && 'Continuing keeps the same allowance. '}To authorize a fresh bounded round, choose Revalidate.</Typography>}
     </Stack>}
     <Stack direction="row" spacing={1}>
       <Button disabled={!loaded || busy || Boolean(active)} onClick={() => void start()}>{request.current ? 'Retry this request' : candidateId ? 'Revalidate record' : 'Revalidate all records'}</Button>
       {active && <Button disabled={busy} onClick={() => void control('cancel')}>Stop revalidation</Button>}
-      {operation?.state === 'needs_review' && !['record_or_access_changed', 'no_eligible_records', 'preparation_abandoned', 'source_projection_invalid', 'curator_revalidation_required'].includes(operation.outcome?.reason ?? '') && <Button disabled={busy} onClick={() => void control('resume')}>Continue existing round</Button>}
+      {canContinue && <Button disabled={busy} onClick={() => void control('resume')}>Continue existing round</Button>}
     </Stack>
   </Stack>
 }
