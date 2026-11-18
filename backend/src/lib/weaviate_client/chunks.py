@@ -16,6 +16,7 @@ from weaviate.exceptions import WeaviateQueryError
 
 from ..bedrock_reranker import get_effective_rerank_provider, rerank_chunks
 from ..openai_agents.config import (
+    get_weaviate_chunk_fetch_page_size,
     get_weaviate_search_hybrid_alpha,
     get_weaviate_search_initial_limit,
     get_weaviate_search_mmr_enabled,
@@ -1324,11 +1325,6 @@ async def get_document_hierarchy(
         raise
 
 
-# Objects requested per store round trip when a read pages through every
-# matching chunk. Transport granularity only: every read continues until the
-# store has no more matches, so this never limits what a caller receives.
-_STORE_PAGE_SIZE = 250
-
 _SECTION_CHUNK_PROPERTIES = [
     "content",
     "chunkIndex",
@@ -1347,21 +1343,23 @@ def _fetch_every_object(collection: Any, *, filters: Any, return_properties: Lis
 
     Offset paging needs a total order: two stored objects can share a chunkIndex,
     so the object id breaks ties and no object moves across a page boundary.
+    The page size (WEAVIATE_CHUNK_FETCH_PAGE_SIZE) is transport granularity only.
     """
     from weaviate.classes.query import Sort
 
+    page_size = get_weaviate_chunk_fetch_page_size()
     objects: List[Any] = []
     while True:
         response = collection.query.fetch_objects(
             filters=filters,
             sort=Sort.by_property("chunkIndex", ascending=True).by_id(ascending=True),
-            limit=_STORE_PAGE_SIZE,
+            limit=page_size,
             offset=len(objects),
             include_vector=False,
             return_properties=return_properties,
         )
         objects.extend(response.objects)
-        if len(response.objects) < _STORE_PAGE_SIZE:
+        if len(response.objects) < page_size:
             return objects
 
 

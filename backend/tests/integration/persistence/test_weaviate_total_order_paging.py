@@ -24,7 +24,7 @@ def _uuid(number: int) -> str:
 
 
 def test_every_object_is_read_once_in_chunk_index_then_id_order(chunk_collection, clean_chunks):
-    page = chunks._STORE_PAGE_SIZE
+    page = chunks.get_weaviate_chunk_fetch_page_size()
     tied_index = page - 1
     objects = [(index, _uuid(1000 + index)) for index in range(page + 10) if index != tied_index]
     # Two objects share the chunkIndex that straddles the first page boundary.

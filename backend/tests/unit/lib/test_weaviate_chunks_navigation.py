@@ -507,9 +507,29 @@ async def test_section_helpers_page_until_every_matching_chunk_is_read(monkeypat
 
     assert [row["chunk_index"] for row in rows] == list(range(count))
     assert [row["id"] for row in rows] == [f"uuid-{index}" for index in range(count)]
-    page = chunks._STORE_PAGE_SIZE
+    page = chunks.get_weaviate_chunk_fetch_page_size()
     assert [call["offset"] for call in calls] == list(range(0, count + 1, page))
     assert all(call["limit"] == page for call in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [0, 6, 7, 8, 20])
+async def test_section_reads_page_by_the_configured_store_page_size(monkeypatch, count):
+    """WEAVIATE_CHUNK_FETCH_PAGE_SIZE sets each round trip; every chunk is still read."""
+    monkeypatch.setenv("WEAVIATE_CHUNK_FETCH_PAGE_SIZE", "7")
+    _sync_to_thread(monkeypatch)
+    objects = [SimpleNamespace(uuid=f"uuid-{index}", properties={
+        "content": f"P{index}", "chunkIndex": index, "parentSection": "Methods",
+        "subsection": None, "pageNumber": 1,
+    }) for index in range(count)]
+    collection, calls = _paging_store(objects)
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        rows = await chunks.get_chunks_by_parent_section("doc-1", "Methods", "user-1")
+
+    assert [row["chunk_index"] for row in rows] == list(range(count))
+    assert [call["offset"] for call in calls] == list(range(0, count + 1, 7))
+    assert all(call["limit"] == 7 for call in calls)
 
 
 @pytest.mark.asyncio

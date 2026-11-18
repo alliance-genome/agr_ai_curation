@@ -56,6 +56,7 @@ write_test_env() {
       'PDF_JOB_RECOVERY_INTERVAL_SECONDS=75' \
       'PDF_JOB_RECOVERY_BATCH_SIZE=25' \
       'PDF_JOB_RECOVERY_TIMEOUT_SECONDS=15' \
+      'WEAVIATE_CHUNK_FETCH_PAGE_SIZE=40' \
       'VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS=7' \
       'VITE_CHAT_STREAM_RECOVERY_DELAY_MS=2500' \
       'VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS=8000' \
@@ -121,7 +122,7 @@ assert_rejected_with() {
 }
 
 write_test_env
-grep -Ev '^(MAX_PARALLEL_VALIDATORS=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=)' "${env_file}" >"${default_env_file}"
+grep -Ev '^(MAX_PARALLEL_VALIDATORS=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":true,"git_sha":"abcdef1"}' \
@@ -164,6 +165,7 @@ assert str(backend_env["BATCH_STREAM_POLL_INTERVAL_SECONDS"]) == "1.0"
 assert str(backend_env["CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS"]) == "30"
 assert str(backend_env["PDF_JOB_RECOVERY_BATCH_SIZE"]) == "100"
 assert str(backend_env["PDF_JOB_RECOVERY_TIMEOUT_SECONDS"]) == "30"
+assert str(backend_env["WEAVIATE_CHUNK_FETCH_PAGE_SIZE"]) == "250"
 frontend_env = config["services"]["frontend"]["environment"]
 assert frontend_env["FRONTEND_RUNTIME_CONFIG_KEYS"] == (
     "VITE_CHAT_STREAM_RECOVERY_MAX_ATTEMPTS VITE_CHAT_STREAM_RECOVERY_DELAY_MS VITE_PDF_PROGRESS_CONNECT_TIMEOUT_MS VITE_PDF_PROGRESS_TIMEOUT_MS VITE_PDF_PROGRESS_POLL_INTERVAL_MS VITE_BENCHMARK_PORTAL_URL"
@@ -254,6 +256,7 @@ assert backend_env["ELASTICSEARCH_HOST"] == ""
 assert backend_env["ELASTICSEARCH_SCHEME"] == "https"
 assert str(backend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
 assert str(frontend_env["PDF_MAX_FILE_SIZE_BYTES"]) == "524288000"
+assert str(backend_env["WEAVIATE_CHUNK_FETCH_PAGE_SIZE"]) == "250"
 assert "backup-filesystem" in str(weaviate_env["ENABLE_MODULES"]).split(",")
 assert weaviate_env["BACKUP_FILESYSTEM_PATH"] == "/var/lib/weaviate-backups"
 assert any(
@@ -291,6 +294,7 @@ assert str(backend_env["BATCH_STREAM_POLL_INTERVAL_SECONDS"]) == "2.5"
 assert str(backend_env["CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS"]) == "7.5"
 assert str(backend_env["PDF_JOB_RECOVERY_BATCH_SIZE"]) == "25"
 assert str(backend_env["PDF_JOB_RECOVERY_TIMEOUT_SECONDS"]) == "15"
+assert str(backend_env["WEAVIATE_CHUNK_FETCH_PAGE_SIZE"]) == "40"
 frontend_env = config["services"]["frontend"]["environment"]
 weaviate_env = config["services"]["weaviate"]["environment"]
 weaviate = config["services"]["weaviate"]

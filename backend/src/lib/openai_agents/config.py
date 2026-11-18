@@ -1977,6 +1977,15 @@ def get_weaviate_search_transient_retry_count() -> int:
     return max(0, _get_env_int_with_fallback("WEAVIATE_SEARCH_TRANSIENT_RETRY_COUNT", 1))
 
 
+def get_weaviate_chunk_fetch_page_size() -> int:
+    """Objects requested per store round trip when a read pages every matching chunk.
+
+    Transport granularity only: the read continues until the store has no more
+    matches, so this never limits what a caller receives.
+    """
+    return max(1, _get_env_int_with_fallback("WEAVIATE_CHUNK_FETCH_PAGE_SIZE", 250))
+
+
 def get_weaviate_search_initial_limit() -> int:
     """Candidate pool retrieved before reranking (default 50, provider max 100)."""
 
