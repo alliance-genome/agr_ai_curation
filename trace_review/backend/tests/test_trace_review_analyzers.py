@@ -628,6 +628,27 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(domain["validation_findings"][0]["machine_review"], "pending")
         self.assertIs(domain["validation_findings"][0]["selected_value"], False)
 
+    def test_domain_envelope_reports_retained_curator_edits(self):
+        edits = [
+            {"record_object_id": "record-1", "object_id": "reference-1", "value_path": "name"},
+            {"record_object_id": None, "object_id": "reference-2", "value_path": ""},
+        ]
+        envelope = {
+            "envelope_id": "env-retired",
+            "objects": [],
+            "metadata": {"curator_edits_not_applied": edits},
+        }
+
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload([envelope, self._make_domain_envelope()])
+
+        expected = [
+            {**edit, "envelope_id": "env-retired", "source_path": "payload[0]"} for edit in edits
+        ]
+        for view in (domain, DomainEnvelopeTraceAnalyzer.compact(domain)):
+            self.assertEqual(view["curator_edits_not_applied"], expected)
+            self.assertEqual(view["summary"]["curator_edit_count"], 1)
+        self.assertEqual([edit["event_id"] for edit in domain["curator_edits"]], ["curator-edit-1"])
+
     def test_domain_envelope_analyzer_surfaces_group_scoped_validator_audit(self):
         envelope = self._make_domain_envelope()
         envelope["metadata"] = {

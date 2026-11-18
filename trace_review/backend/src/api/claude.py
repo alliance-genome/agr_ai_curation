@@ -376,6 +376,7 @@ def _domain_envelope_projection(
         "field_paths",
         "readiness_statuses",
         "validator_group_scope_audits",
+        "curator_edits_not_applied",
     )
     return {
         "found": bool(value.get("found")),
