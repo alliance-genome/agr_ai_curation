@@ -1903,7 +1903,7 @@ def before_send(
     return scrubbed
 
 
-def _exception_chain_already_captured(exc: Any) -> bool:
+def exception_chain_already_captured(exc: Any) -> bool:
     seen: set[int] = set()
     while isinstance(exc, BaseException) and id(exc) not in seen:
         seen.add(id(exc))
@@ -1943,7 +1943,7 @@ def _reports_already_captured_exception(hint: Mapping[str, Any] | None) -> bool:
             candidates.extend(
                 arg for arg in log_record.args if isinstance(arg, BaseException)
             )
-    return any(_exception_chain_already_captured(candidate) for candidate in candidates)
+    return any(exception_chain_already_captured(candidate) for candidate in candidates)
 
 
 def _is_known_httpcore_closed_loop_cleanup(event: Mapping[str, Any]) -> bool:

@@ -99,6 +99,12 @@ the owner exits remain reportable. Discarded child-task failures are reported
 during drain; transparent SDK `UserError` wrappers retain reporting identity.
 This does not alter admission, decisions, Langfuse evidence or span status.
 
+Extraction fan-out leaves the primary writer failure to its caller. During
+task draining it reports each distinct discarded writer failure, including
+cleanup failures during parent cancellation. The event uses a fixed message,
+the exception class and the operation `extraction_fanout_additional_writer_failure`.
+Cancelled writers and errors already marked as captured stay quiet.
+
 Expected successful liveness, readiness, PDF-extraction-health, document-status,
 and batch-status polling transactions are dropped after completion. A failed
 transaction on the same route is retained. This keeps operational polling from

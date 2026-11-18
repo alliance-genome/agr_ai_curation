@@ -820,6 +820,85 @@ async def test_a_writer_provider_failure_fails_the_step(harness):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_parent", [False, True])
+@pytest.mark.parametrize("capture_fails", [False, True])
+async def test_writer_drain_reports_discarded_failures(harness, monkeypatch, caplog, cancel_parent, capture_fails):
+    from src.lib.observability import runtime
+
+    agent = harness.agent(ScriptedFanoutModel({}))
+    extraction = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="fake-private-run-id"),
+        specialist_name="fake-private-specialist", input_text="fake-private-prompt",
+        emit_event=harness.events.append, record_live_evidence=lambda record: None,
+    )
+    ready = asyncio.Event()
+    primary = RuntimeError("fake-private-provider-message")
+    secondary = ValueError("fake-private-document-content")
+    captured = []
+
+    def capture(exc, **metadata):
+        captured.append((exc, metadata))
+        if capture_fails:
+            raise RuntimeError("fake-private-telemetry-message")
+        return True
+
+    async def writer(index, count, positions):
+        if index == count:
+            ready.set()
+        if not cancel_parent and index in (1, 2):
+            await ready.wait()
+            raise primary if index == 1 else secondary
+        try:
+            await asyncio.Future()
+        finally:
+            if index == 3:
+                raise secondary
+            if index == 4:
+                owned = RuntimeError("fake-private-owned")
+                owned._ai_curation_sentry_captured = True
+                raise owned
+
+    monkeypatch.setattr(runtime, "report_runtime_exception", capture)
+    monkeypatch.setattr(extraction, "_run_writer", writer)
+    parent = asyncio.create_task(extraction._run_writers([(i,) for i in range(5)]))
+    await ready.wait()
+    if cancel_parent:
+        parent.cancel("caller stopped")
+        with pytest.raises(asyncio.CancelledError, match="caller stopped"):
+            await parent
+    else:
+        with pytest.raises(RuntimeError) as raised:
+            await parent
+        assert raised.value is primary
+
+    (safe, metadata), = captured
+    assert safe is not secondary
+    assert safe.__cause__ is safe.__context__ is None
+    assert metadata["operation"] == "extraction_fanout_additional_writer_failure"
+    assert metadata["context"] == {"type": "ValueError"}
+    assert getattr(secondary, "_ai_curation_sentry_captured", False) is (not capture_fails)
+    assert "fake-private" not in repr((safe, metadata))
+    assert "fake-private" not in caplog.text
+
+
+def test_discarded_writer_sdk_capture_failure_is_private(monkeypatch, caplog):
+    import sentry_sdk
+
+    def fail_capture(exc):
+        raise RuntimeError("fake-private-sdk-detail")
+
+    monkeypatch.setattr(sentry_sdk, "capture_exception", fail_capture)
+    secondary = ValueError("fake-private-writer-detail")
+    fanout._report_discarded_writer_failure(secondary)
+
+    assert not getattr(secondary, "_ai_curation_sentry_captured", False)
+    assert "fake-private" not in caplog.text
+    warning, = caplog.records
+    assert warning.getMessage() == "Failed to capture runtime exception in Sentry"
+    assert warning.sentry_skip_event is True
+
+
+@pytest.mark.asyncio
 async def test_missing_plan_gets_one_reminder_then_fails(harness):
     model = ScriptedFanoutModel({"plan": None})
 

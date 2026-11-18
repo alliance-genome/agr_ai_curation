@@ -42,6 +42,8 @@ from agents.tool_context import ToolContext
 from openai.types.responses import ResponseFunctionToolCall
 
 from src.lib.context import get_current_user_id
+from src.lib.observability import runtime
+from src.lib.observability.sentry import exception_chain_already_captured
 from src.lib.packages import tool_roles
 
 from . import config
@@ -416,6 +418,21 @@ def _not_applicable(
     return None
 
 
+def _report_discarded_writer_failure(error: Exception) -> None:
+    try:
+        if exception_chain_already_captured(error):
+            return
+        if runtime.report_runtime_exception(
+            runtime.sanitized_runtime_error("Additional fan-out writer failed"),
+            component="extraction_fanout",
+            operation="extraction_fanout_additional_writer_failure",
+            context={"type": type(error).__name__},
+        ):
+            setattr(error, "_ai_curation_sentry_captured", True)
+    except Exception:
+        logger.warning("Could not report fan-out writer failure", extra={"sentry_skip_event": True})
+
+
 class FanoutExtraction:
     """One fan-out extraction run, consumed by the specialist stream loop.
 
@@ -732,32 +749,36 @@ class FanoutExtraction:
             asyncio.create_task(self._run_writer(index, writer_count, positions))
             for index, positions in enumerate(slices, start=1)
         ]
+        primary = None
         try:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+            for task in tasks:
+                if task in done and not task.cancelled():
+                    primary = task.exception()
+                    if primary is not None:
+                        raise primary
         finally:
             pending = [task for task in tasks if not task.done()]
             for task in pending:
                 task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-            for view in self._chunk_views.values():
-                if not view.done():
-                    view.cancel()
-        failures = [task.exception() for task in tasks if not task.cancelled() and task.exception()]
-        if failures:
-            for extra in failures[1:]:
-                logger.warning(
-                    "%s fan-out writer also failed: %s",
-                    self.specialist_name,
-                    type(extra).__name__,
-                    extra={
-                        "specialist_name": self.specialist_name,
-                        "builder_run_id": self.workspace.run_id,
-                        "operation": "extraction_fanout_additional_writer_failure",
-                        "sentry_skip_event": True,
-                    },
-                )
-            raise failures[0]
+            try:
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+            except asyncio.CancelledError:
+                # Cancellation during the drain supersedes the writer failure.
+                primary = None
+                raise
+            finally:
+                for view in self._chunk_views.values():
+                    if not view.done():
+                        view.cancel()
+                seen = {id(primary)}
+                for task in tasks:
+                    if task.done() and not task.cancelled():
+                        error = task.exception()
+                        if isinstance(error, Exception) and id(error) not in seen:
+                            seen.add(id(error))
+                            _report_discarded_writer_failure(error)
         return [task.result() for task in tasks]
 
     async def _run_writer(self, index: int, writer_count: int, positions: tuple[int, ...]) -> WriterOutcome:

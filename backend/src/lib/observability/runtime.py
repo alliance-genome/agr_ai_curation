@@ -94,8 +94,8 @@ def report_runtime_exception(
 
     try:
         sentry_sdk = importlib.import_module("sentry_sdk")
-    except Exception as import_exc:
-        logger.warning("Sentry SDK unavailable for runtime exception capture: %s", import_exc)
+    except Exception:
+        logger.warning("Sentry SDK unavailable for runtime exception capture", extra={"sentry_skip_event": True})
         return False
 
     tag_value_max_chars = get_runtime_observability_tag_value_max_chars()
@@ -125,6 +125,6 @@ def report_runtime_exception(
             )
             event_id = sentry_sdk.capture_exception(exc)
         return bool(event_id)
-    except Exception as capture_exc:
-        logger.warning("Failed to capture runtime exception in Sentry: %s", capture_exc)
+    except Exception:
+        logger.warning("Failed to capture runtime exception in Sentry", extra={"sentry_skip_event": True})
         return False
