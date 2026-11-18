@@ -412,6 +412,26 @@ def test_protocol_v6_reads_the_packet_once_and_keeps_record_specific_reasons():
     assert "read_validation_history" in tools["get_outstanding_validation_reviews"]["description"]
 
 
+def test_reasons_and_field_doubts_are_worded_for_the_curator():
+    """ALL-1565: reasons and unresolved_fields explanations are exported for curators to read."""
+    from src.lib.validation_review.protocol import REVIEW_PROTOCOL
+    from src.lib.validation_review.tools import runtime_tool_contract
+
+    protocol = " ".join(REVIEW_PROTOCOL.split())
+    for text in ("Curators read every reason and unresolved_fields explanation",
+                 "what in the paper supports or questions the record",
+                 "without handles, internal IDs, tool names or field paths",
+                 "each explanation naming the doubt and what the curator should check"):
+        assert text in protocol, text
+    save = next(tool for tool in runtime_tool_contract() if tool["name"] == "record_validation_review")
+    definitions = save["parameters"]["$defs"]
+    for model in ("PacketDecision", "ReviewEntry"):
+        fields = definitions[model]["properties"]
+        assert fields["reason"]["description"].startswith("Curators read this: in plain words"), model
+        doubts = " ".join(item.get("description", "") for item in [fields["unresolved_fields"]])
+        assert "what to check in the paper" in doubts, model
+
+
 @pytest.mark.asyncio
 async def test_save_takes_exactly_one_decision_form(monkeypatch):
     import json

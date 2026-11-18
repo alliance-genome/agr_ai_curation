@@ -28,7 +28,9 @@ one record, check whether it applies to the others and treat them consistently.
 Decide every D handle, then save them in one record_validation_review call with the
 packet_id and packet_decisions; split only when they exceed decision_entries. Give a
 reason specific to each record that says what establishes or questions it, never a
-generic reason. A record item is the extracted record itself, with no validator
+generic reason. Curators read every reason and unresolved_fields explanation, so write
+them for a biologist: say in plain words what in the paper supports or questions the
+record, without handles, internal IDs, tool names or field paths. A record item is the extracted record itself, with no validator
 answer. Judge each validator_answer together with its record: a correct identity does
 not make a record that is out of scope acceptable. A caveat or a completed unresolved
 answer need not trigger another validation, but judge its record on the evidence like
@@ -101,8 +103,8 @@ review use the authorized baseline reference and its manifest unit/target. One c
 holds at most decision_entries and is atomic. A conflict naming no record concerns the
 combined result: keep a composite record's decision units together, deciding them in
 the same way and the same call. For extraction-only acceptance, put uncertain plain
-fields and explanations in unresolved_fields: export retains uncertainty without
-blocking completion. Rejecting a replacement leaves earlier acceptance intact; revoke
+fields in unresolved_fields, each explanation naming the doubt and what the curator
+should check: export retains uncertainty without blocking completion. Rejecting a replacement leaves earlier acceptance intact; revoke
 to withdraw it. Defer pending investigation, not completed uncertainty. Acknowledge
 operational failures without scientific rejection.
 Assess declared optional-input absences (optional_input_absent) against the record and
