@@ -10,7 +10,7 @@ document never has both.
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 from uuid import UUID
 
 from fastapi import HTTPException, Request, status
@@ -141,6 +141,29 @@ def require_document_can_be_linked(
     _refuse_link(_document_or_404(db, session.document_id))
 
 
+def _report_reference_failure(
+    message: str,
+    *,
+    operation: str,
+    exception_type: str,
+    level: Literal["error", "warning"] = "error",
+    tags: Mapping[str, str] | None = None,
+) -> None:
+    logger.warning(message, extra={"sentry_skip_event": True})
+    try:
+        report_runtime_exception(
+            sanitized_runtime_error(message),
+            component="document_reference",
+            operation=operation,
+            level=level,
+            tags=tags,
+            context={"exception_type": exception_type},
+        )
+    except Exception:
+        # Capture is best effort. The lookup still owes the curator its result.
+        pass
+
+
 async def find_document_reference(
     identifier: str,
     *,
@@ -155,19 +178,12 @@ async def find_document_reference(
             user_claims=user_claims,
         )
     except DevelopmentReaderUnavailable as exc:
-        message = "Development document-source reader unavailable for reference lookup"
-        logger.warning(message, extra={"sentry_skip_event": True})
-        try:
-            report_runtime_exception(
-                sanitized_runtime_error(message),
-                component="document_reference",
-                operation="development_reader_authentication_failed",
-                tags={"failure_category": "development_reader_unavailable"},
-                context={"exception_type": type(exc).__name__},
-            )
-        except Exception:
-            # Reporting must not interrupt the curator's token-unavailable response.
-            pass
+        _report_reference_failure(
+            "Development document-source reader unavailable for reference lookup",
+            operation="development_reader_authentication_failed",
+            exception_type=type(exc).__name__,
+            tags={"failure_category": "development_reader_unavailable"},
+        )
         return _failure(
             CurationDocumentReferenceStatus.TOKEN_UNAVAILABLE,
             _TOKEN_UNAVAILABLE_MESSAGE,
@@ -196,15 +212,10 @@ async def find_document_reference(
     except DocumentSourceAccessDenied:
         return _failure(CurationDocumentReferenceStatus.ACCESS_DENIED, _ACCESS_DENIED_MESSAGE)
     except DocumentSourceError as exc:
-        logger.warning(
-            "Document-source reference lookup failed: %s",
-            type(exc).__name__,
-            extra={"sentry_skip_event": True},
-        )
-        report_runtime_exception(
-            exc,
-            component="document_reference",
+        _report_reference_failure(
+            "Document-source reference lookup failed",
             operation="find_document_reference",
+            exception_type=type(exc).__name__,
         )
         return _failure(
             CurationDocumentReferenceStatus.SOURCE_UNAVAILABLE,
@@ -215,9 +226,11 @@ async def find_document_reference(
             try:
                 await provider.aclose()
             except Exception as cleanup_err:
-                logger.warning(
-                    "Best-effort document-source provider cleanup failed: %s",
-                    type(cleanup_err).__name__,
+                _report_reference_failure(
+                    "Document-source provider cleanup failed",
+                    operation="provider_cleanup_failed",
+                    exception_type=type(cleanup_err).__name__,
+                    level="warning",
                 )
 
     # A provider can know an identifier from elsewhere (such as PubMed) without

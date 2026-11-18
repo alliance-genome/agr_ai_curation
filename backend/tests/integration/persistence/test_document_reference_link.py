@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -70,20 +71,24 @@ def _found() -> SourceReference:
 
 @pytest.fixture
 def wired(monkeypatch):
-    state = SimpleNamespace(provider=FakeProvider(_found()), token="curator-token", reports=[])
+    state = SimpleNamespace(
+        provider=FakeProvider(_found()), token="curator-token", reports=[], capture_fails=False,
+    )
 
     async def context(*, request, user_claims):
         return SimpleNamespace(curator_token=state.token)
+
+    def report(exc, **kwargs):
+        state.reports.append((exc, kwargs))
+        if state.capture_fails:
+            raise RuntimeError("fake-reporting-secret")
+        return True
 
     monkeypatch.setattr(service, "build_document_source_request_context", context)
     monkeypatch.setattr(
         service, "get_configured_document_source_provider", lambda: state.provider
     )
-    monkeypatch.setattr(
-        service,
-        "report_runtime_exception",
-        lambda exc, **kwargs: state.reports.append((exc, kwargs)),
-    )
+    monkeypatch.setattr(service, "report_runtime_exception", report)
     monkeypatch.setattr(api, "external_document_source_import_enabled", lambda: True)
 
     async def provision(_principal):
@@ -296,14 +301,8 @@ async def test_an_unavailable_development_reader_is_reported_as_no_token(
     async def context(*, request, user_claims):
         raise DevelopmentReaderUnavailable("fake-reader-secret") from ValueError("fake-resolver-secret")
 
-    def report(exc, **kwargs):
-        wired.reports.append((exc, kwargs))
-        if capture_fails:
-            raise RuntimeError("fake-reporting-secret")
-        return True
-
+    wired.capture_fails = capture_fails
     monkeypatch.setattr(service, "build_document_source_request_context", context)
-    monkeypatch.setattr(service, "report_runtime_exception", report)
 
     session_id = _session(scope.document_id)
     identifier = "SOURCE:private-lookup"
@@ -321,6 +320,7 @@ async def test_an_unavailable_development_reader_is_reported_as_no_token(
     assert metadata == {
         "component": "document_reference",
         "operation": "development_reader_authentication_failed",
+        "level": "error",
         "tags": {"failure_category": "development_reader_unavailable"},
         "context": {"exception_type": "DevelopmentReaderUnavailable"},
     }
@@ -334,17 +334,52 @@ async def test_an_unavailable_development_reader_is_reported_as_no_token(
 
 
 @pytest.mark.asyncio
-async def test_a_provider_that_fails_to_close_does_not_lose_the_answer(
-    scope, migrated, wired, monkeypatch
+@pytest.mark.parametrize("capture_fails", [False, True], ids=["capture", "capture-fails"])
+@pytest.mark.parametrize("during_cleanup", [False, True], ids=["lookup", "cleanup"])
+async def test_provider_failure_reporting_preserves_the_lookup_result(
+    scope, migrated, wired, monkeypatch, caplog, capture_fails, during_cleanup
 ):
-    async def failing_close():
-        raise DocumentSourceError("close failed")
+    identifier = "SOURCE:private-lookup"
+    wired.capture_fails = capture_fails
+    error = DocumentSourceError(f"fake-provider-secret at /references/{identifier}")
+    error.__cause__ = ValueError("fake-transport-secret")
+    if during_cleanup:
+        monkeypatch.setattr(wired.provider, "aclose", AsyncMock(side_effect=error))
+    else:
+        wired.provider.outcome = error
 
-    monkeypatch.setattr(wired.provider, "aclose", failing_close)
+    session_id = _session(scope.document_id)
+    result = await _find(session_id, identifier)
 
-    result = await _find(_session(scope.document_id))
+    if during_cleanup:
+        assert result.status is CurationDocumentReferenceStatus.FOUND
+        assert (result.reference_curie, result.reference_title) == (CURIE, TITLE)
+    else:
+        assert result.status is CurationDocumentReferenceStatus.SOURCE_UNAVAILABLE
+        assert result.message == "The literature source is unavailable. Try again later."
+        assert wired.provider.closed
 
-    assert result.status is CurationDocumentReferenceStatus.FOUND
+    (exc, metadata), = wired.reports
+    assert type(exc) is RuntimeError
+    assert str(exc) == (
+        "Document-source provider cleanup failed" if during_cleanup else "Document-source reference lookup failed"
+    )
+    assert exc.__traceback__ is not None
+    assert exc.__cause__ is None
+    assert exc.__context__ is None
+    assert metadata["component"] == "document_reference"
+    assert metadata["operation"] == ("provider_cleanup_failed" if during_cleanup else "find_document_reference")
+    assert metadata["level"] == ("warning" if during_cleanup else "error")
+    assert metadata["context"] == {"exception_type": "DocumentSourceError"}
+    warning, = [record for record in caplog.records if record.name == service.__name__]
+    assert warning.sentry_skip_event is True
+    for private_value in (
+        "fake-provider-secret", "fake-transport-secret", "fake-reporting-secret",
+        identifier, wired.token, session_id, CLAIMS["sub"], CLAIMS["email"],
+    ):
+        assert private_value not in str(exc)
+        assert private_value not in repr(metadata)
+        assert private_value not in caplog.text
 
 
 def test_the_request_cannot_carry_a_reference():
