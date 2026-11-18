@@ -3,9 +3,10 @@
 from tests.cancellation_test_support import install_cancel_reader
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
+import json
 import pytest
 from sqlalchemy import select, func
-from src.lib.validation_history import store as h
+from src.lib.validation_history import curator_authority, store as h
 from src.lib.curation_workspace import (
     review_history_service as history,
     review_operations as operations,
@@ -631,33 +632,82 @@ async def test_queue_reauthorizes_before_paid_work(
 
 
 def test_record_summary_tracks_rejection_selection_and_curator_overlay(
-    scope, scenario, candidate
+    scope, scenario, candidate, monkeypatch
 ):
-    _, cid = candidate
+    def record_pages(db, record_id, after=0):
+        while True:
+            page = history.history_page(db, record_id, owner_id=scope.owner_id, after=after)
+            yield page
+            if page["next_after"] is None:
+                return
+            assert page["next_after"] > after
+            after = page["next_after"]
+
+    sid, cid = candidate
     x = scenario
     x.episode_fn()
     rejected = x.propose("ECO:REJECTED")
     x.publish(rejected, "reject")
     accepted = x.propose(None, status="unresolved")
     x.publish(accepted)
-    x.edit("ECO:CURATOR")
+    overlay_id = x.edit("ECO:CURATOR")
     x.publish(accepted)
     with h.SessionLocal() as db:
-        page = history.history_page(db, cid, owner_id=scope.owner_id)
-        entries = page["entries"]
-        while page["next_after"] is not None:
-            page = history.history_page(
-                db, cid, owner_id=scope.owner_id, after=page["next_after"]
-            )
-            entries.extend(page["entries"])
-        by_id = {entry["id"]: entry for entry in entries}
+        pages = list(record_pages(db, cid))
+        by_id = {entry["id"]: entry for page in pages for entry in page["entries"]}
         assert by_id[rejected]["answer_states"][0]["review"] == "reject"
         assert by_id[accepted]["scientific_status"] == "unresolved"
         assert by_id[accepted]["answer_states"][0]["selected"] is True
         assert by_id[accepted]["answer_states"][0]["review"] == "accept"
-        assert "eco:1" in str(page["record"]["original"])
-        assert "ECO:CURATOR" in str(page["record"]["current"])
-        assert page["record"]["curator_overrides"]
+        record = pages[0]["record"]
+        assert "eco:1" in str(record["original"])
+        assert "ECO:CURATOR" in str(record["current"])
+        assert record["curator_overrides"]
+
+    x.episode_fn()
+    curator_authority.record_revalidation_intent(
+        x.bound,
+        envelope=x.env,
+        episode_id=x.episode,
+        object_id="one",
+        field_paths=["evidence_code_curies[0]"],
+        actor_id=scope.owner_id,
+    )
+    replacement = x.propose("ECO:REPLACEMENT")
+    x.publish(replacement)
+    h.register_target(scope, x.aid, identity="object:two", original={"object_ref": "two"})
+    monkeypatch.setenv("VALIDATION_HISTORY_PAGE_SIZE", "1")
+    with h.SessionLocal.begin() as db:
+        sibling = CurationCandidate(
+            session_id=UUID(sid),
+            adapter_key="fixture",
+            source=CurationCandidateSource.MANUAL,
+            envelope_id=x.env.envelope_id,
+            object_id="two",
+            envelope_revision=x.revision,
+        )
+        db.add(sibling)
+        db.flush()
+
+        def releases_after_edit(record_id):
+            return [
+                entry
+                for page in record_pages(db, record_id, after=by_id[overlay_id]["sequence"])
+                for entry in page["entries"]
+                if entry["kind"] == "curator_revalidation_release"
+            ]
+
+        (release,) = releases_after_edit(cid)
+        assert release["parent_id"] == x.episode
+        assert release["reason"] == "Explicit curator revalidation accepted"
+        detail = history.history_detail(
+            db, cid, owner_id=scope.owner_id, fact_id=release["id"], sha256=release["sha256"],
+        )
+        assert json.loads(detail["content"]) == {
+            "overlay_ids": [overlay_id],
+            "reason": release["reason"],
+        }
+        assert releases_after_edit(sibling.id) == []
 
 
 def test_current_access_never_expands_saved_groups(scope, candidate, monkeypatch):
