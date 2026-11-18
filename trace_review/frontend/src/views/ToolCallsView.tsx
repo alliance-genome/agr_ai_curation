@@ -22,7 +22,7 @@ import OutputIcon from '@mui/icons-material/Output';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import Tooltip from '@mui/material/Tooltip';
 import { alpha } from '@mui/material/styles';
-import { ToolCallsData, ToolResultParsed } from '../types';
+import { SectionReadDisplay, ToolCallsData, ToolResultParsed } from '../types';
 import { DomainEnvelopeSignalPanel, hasDomainEnvelopeSignals } from './DomainEnvelopeSignalPanel';
 
 interface ToolCallsViewProps {
@@ -190,7 +190,7 @@ function DataList({ data }: { data: Array<Record<string, any>> }) {
 }
 
 // Component to display section content (from read_section)
-function SectionContentDisplay({ section }: { section: { section_title: string; page_numbers: number[]; chunk_count: number; content_preview: string; full_content?: string } }) {
+function SectionContentDisplay({ section }: { section: SectionReadDisplay }) {
   // Use full_content if available, otherwise fall back to content_preview
   const content = section.full_content || section.content_preview;
   const contentLength = content?.length || 0;
@@ -214,6 +214,12 @@ function SectionContentDisplay({ section }: { section: { section_title: string; 
         )}
         {section.chunk_count && (
           <Chip label={`${section.chunk_count} chunks`} size="small" color="info" variant="outlined" />
+        )}
+        {section.matched_sections && section.matched_sections.length > 0 && (
+          <Chip label={`Matched: ${section.matched_sections.join(', ')}`} size="small" variant="outlined" />
+        )}
+        {section.shape === 'numbered_passages' && (
+          <Chip label="Numbered as the model saw it" size="small" variant="outlined" />
         )}
         {contentLength > 0 && (
           <Chip label={`${contentLength.toLocaleString()} chars`} size="small" variant="outlined" />

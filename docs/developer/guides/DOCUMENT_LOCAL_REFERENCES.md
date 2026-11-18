@@ -29,8 +29,9 @@ no row lock spans asynchronous tool I/O. A failed status write prevents ingestio
 from continuing. Reprocessing requires a new conversation; an old selection
 cannot silently acquire a new source meaning.
 
-A successful chunk read stores its exact full-chunk hash, canonical UUID, and
-issued span definitions. Pages add only newly issued ordinal coverage, preserving
+A successful chunk read, whether by `read_chunk` or as a passage of `read_section`
+or `read_subsection`, stores its exact full-chunk hash, canonical UUID, and
+issued span definitions. A read from a span offset adds only newly issued ordinal coverage, preserving
 full-chunk ordinals and avoiding repeated copies of the definition. A PostgreSQL
 transaction lock serializes concurrent issuance. Evidence selection requires a
 previously issued window, checks the current full chunk and canonical span
@@ -44,8 +45,8 @@ These checks verify identity and exact source, not scientific sufficiency.
 If `record_evidence` selects a chunk or span window that has not been issued in
 the authenticated source scope, it returns `status: needs_source_read`,
 `error_code: unissued_document_selection`, `saved: false`, and the rejected local
-selection. The agent must explicitly call `read_chunk` for the relevant window
-and submit the selections again within its existing turn budget. The application
+selection. The agent must explicitly read the relevant passage with `read_chunk`,
+`read_section` or `read_subsection` and submit the selections again within its existing turn budget. The application
 does not fetch the missing selection, replay the tool, or save partial evidence.
 Mixed issued/unissued selections cannot alter an existing evidence record.
 

@@ -1,0 +1,16 @@
+{
+  "about": "Written by backend/tests/unit/lib/packages/alliance/test_numbered_view_fixture.py; do not edit by hand.",
+  "sentences": [
+    [
+      "Flies were raised at 25 C.\nPrimers\n[1] GAL4-F\n[2] GAL4-R"
+    ],
+    [
+      "[2] Brown A. Wingless signalling in the wing disc."
+    ],
+    [
+      "Larvae were staged at 96 h.\r\nDiscs were dissected in PBS\r\nand fixed."
+    ],
+    []
+  ],
+  "model_output": "{'summary': 'Read 4 passages from Methods.', 'section': {'requested_section': 'Methods', 'matched_sections': ['Methods'], 'page_numbers': [3], 'total_chunk_count': 4, 'passages': [{'chunk_index': 4, 'page_number': 3, 'section': 'Methods', 'text': '[0] Flies were raised at 25 C.\\n    Primers\\n    [1] GAL4-F\\n    [2] GAL4-R'}, {'chunk_index': 5, 'page_number': 3, 'section': 'Methods', 'text': '[0] [2] Brown A. Wingless signalling in the wing disc.'}, {'chunk_index': 6, 'page_number': 3, 'section': 'Methods', 'text': '[0] Larvae were staged at 96 h.\\r\\n    Discs were dissected in PBS\\r\\n    and fixed.'}, {'chunk_index': 7, 'page_number': 3, 'section': 'Methods', 'text': ''}]}}"
+}

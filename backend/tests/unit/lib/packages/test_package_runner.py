@@ -708,60 +708,27 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
     )
 
     assert section_result.ok is True
-    # E2a: source_chunks entries no longer echo the full chunk `content`; they
-    # carry lightweight metadata (chunk_id/chunk_index/page_number/section_title/
-    # subsection/char_count plus an optional snippet), and the result gained the
-    # paging fields (returned/total_chunk_count, offset, next_offset, truncated).
-    # The assembled section `content` is unchanged.
-    assert section_result.result == {
-        "summary": (
-            "Read 2 of 2 chunks from 'Materials and Methods'. "
-            "Use section.source_chunks[].chunk_index with read_chunk, then pass selected "
-            "evidence_spans[].span_index values to record_evidence."
-        ),
-        "section": {
-            "section_title": "Materials and Methods",
-            "page_numbers": [3, 4],
-            "content": "Paragraph one\n\nParagraph two",
-            "chunk_count": 2,
-            "returned_chunk_count": 2,
-            "total_chunk_count": 2,
-            "offset": 0,
-            "next_offset": None,
-            "truncated": False,
-            "source_chunks": [
-                {
-                    "chunk_id": "chunk-methods-1",
-                    "chunk_index": 0,
-                    "page_number": 3,
-                    "section_title": "Materials and Methods",
-                    "subsection": "Animals",
-                    "char_count": 13,
-                    "snippet": None,
-                },
-                {
-                    "chunk_id": "chunk-methods-2",
-                    "chunk_index": 1,
-                    "page_number": 4,
-                    "section_title": "Materials and Methods",
-                    "subsection": None,
-                    "char_count": 13,
-                    "snippet": None,
-                },
-            ],
-            "doc_items": [{"id": "bbox-1"}, {"id": "bbox-2"}],
-            # ALL-1278: page bounds are reported alongside the unchanged content.
-            "page_ended_by": "end",
-            "requested_max_chunks": None,
-            "effective_max_chunks": 2,
-        },
-        "error_code": None,
-        "result_bounds": None,
+    section = section_result.result["section"]
+    assert section_result.result["summary"].startswith("Read all 2 chunks of 'Methods'.")
+    assert {key: section[key] for key in (
+        "requested_section", "matched_sections", "page_numbers", "total_chunk_count",
+        "text_contains", "matched_chunk_count",
+    )} == {
+        "requested_section": "Methods", "matched_sections": ["Materials and Methods"],
+        "page_numbers": [3, 4], "total_chunk_count": 2, "text_contains": None,
+        "matched_chunk_count": None,
     }
-    assert "evidence_spans" not in section_result.result["section"]["source_chunks"][0]
-    # E2a guard: no full chunk text is echoed back in source_chunks entries.
-    assert "content" not in section_result.result["section"]["source_chunks"][0]
-    assert "content" not in section_result.result["section"]["source_chunks"][1]
+    assert [
+        (p["chunk_id"], p["chunk_index"], p["page_number"], p["subsection"], p["content"], p["doc_items"])
+        for p in section["passages"]
+    ] == [
+        ("chunk-methods-1", 0, 3, "Animals", "Paragraph one", [{"id": "bbox-1"}]),
+        ("chunk-methods-2", 1, 4, None, "Paragraph two", [{"id": "bbox-2"}]),
+    ]
+    assert [[span["text"] for span in p["evidence_spans"]] for p in section["passages"]] == [
+        ["Paragraph one"], ["Paragraph two"],
+    ]
+    assert not {"content", "source_chunks", "offset", "next_offset"} & set(section)
 
 
 def test_package_runner_does_not_expose_removed_raw_file_output_binding(
@@ -1242,11 +1209,14 @@ async def document_reference_scope(document_id, user_id):
     assert document_id == "doc-42" and user_id == "user-9"
     yield
 
-async def retain_issued_spans(chunk, spans, issued_indexes):
-    assert chunk["chunk_index"] == 4
-    assert chunk["id"] == "chunk-search-1"
-    assert issued_indexes == [0, 1]
-    assert all(span["span_id"].startswith("chunk-search-1:") for span in spans)
+async def retain_issued_spans(reads):
+    issued = {chunk["id"]: (chunk["chunk_index"], indexes) for chunk, _spans, indexes in reads}
+    assert issued in (
+        {"chunk-search-1": (4, [0, 1])},
+        {"chunk-methods-1": (0, [0]), "chunk-methods-2": (1, [0])},
+    )
+    for chunk, spans, _indexes in reads:
+        assert all(span["span_id"].startswith(chunk["id"] + ":") for span in spans)
 """, encoding="utf-8",
     )
     (package_root / "chunks.py").write_text(
@@ -1281,10 +1251,6 @@ async def retain_issued_spans(chunk, spans, issued_indexes):
     ]
 
 
-async def get_document_sections(*_args, **_kwargs):
-    return [{\"title\": \"Methods\", \"page_number\": 3, \"chunk_count\": 2}]
-
-
 async def get_chunk_by_index(*, chunk_index, document_id, user_id, **_kwargs):
     assert chunk_index == 4
     assert document_id == \"doc-42\"
@@ -1316,6 +1282,7 @@ async def get_chunks_by_parent_section(*, document_id, parent_section, user_id, 
             \"text\": \"Paragraph one\",
             \"page_number\": 3,
             \"section_title\": \"Materials and Methods\",
+            \"parent_section\": \"Materials and Methods\",
             \"subsection\": \"Animals\",
             \"metadata\": '{\"chunk_id\": \"stale-metadata-methods-1\", \"doc_items\": [{\"id\": \"bbox-1\"}], \"document_id\": \"%s\", \"parent_section\": \"%s\", \"user_id\": \"%s\"}' % (document_id, parent_section, user_id),
         },
@@ -1325,6 +1292,7 @@ async def get_chunks_by_parent_section(*, document_id, parent_section, user_id, 
             \"content\": \"Paragraph two\",
             \"pageNumber\": 4,
             \"sectionTitle\": \"Materials and Methods\",
+            \"parent_section\": \"Materials and Methods\",
             \"metadata\": {\"chunk_id\": \"stale-metadata-methods-2\", \"doc_items\": [{\"id\": \"bbox-2\"}]},
         },
     ]

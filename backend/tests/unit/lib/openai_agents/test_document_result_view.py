@@ -5,105 +5,69 @@ import pytest
 from src.lib.openai_agents.document_result_view import document_result_view
 
 
-def test_window_preserves_exact_evidence_and_routes_geometry_without_mutating_source():
+def test_window_shows_numbered_spans_and_routes_geometry_without_mutating_source():
     text = "α😀 was not expressed.\nSecond sentence."
+    split = text.index("\n")
     start = 40
-    raw = {"chunk": {"chunk_id": "chunk-1", "content": text,
+    raw = {"chunk": {"chunk_id": "chunk-1", "chunk_index": 3, "content": text,
                      "content_range": {"start": start, "end": start + len(text), "total_chars": 200},
-                     "span_page": {"next_span_offset": 9},
+                     "span_page": {"span_offset": 9, "total_spans": 11},
                      "doc_items": [{"page": 2, "bbox": [1, 2, 3, 4]}],
-                     "evidence_spans": [{"span_id": "s1", "text": text[:20],
-                                         "char_start": start, "char_end": start + 20}]}}
+                     "evidence_spans": [
+                         {"span_id": "s9", "span_index": 9, "text": text[:split], "char_start": start,
+                          "char_end": start + split},
+                         {"span_id": "s10", "span_index": 10, "text": text[split + 1:], "char_start": start + split + 1,
+                          "char_end": start + len(text)}]}}
     original = deepcopy(raw)
     view, events = document_result_view("read_chunk", raw)
     chunk = view["chunk"]
-    span = chunk["evidence_spans"][0]
-    assert chunk["content"][span["char_start"] - chunk["content_start"]:span["char_end"] - chunk["content_start"]] == text[:20]
-    assert "text" not in span and "doc_items" not in chunk
+    assert chunk["text"] == "[9] α😀 was not expressed.\n[10] Second sentence."
+    assert not {"content", "evidence_spans", "content_range", "doc_items", "chunk_id"} & set(chunk)
     assert chunk["span_page"] == raw["chunk"]["span_page"]
     assert events[0]["doc_items"] == raw["chunk"]["doc_items"]
+    assert events[0]["chunk_id"] == "chunk-1"
     assert raw == original
 
 
-@pytest.mark.parametrize("tool,key", [("search_document", "hits"), ("read_section", "section"), ("read_subsection", "subsection")])
-def test_other_document_views_preserve_content_navigation_and_provenance(tool, key):
-    record = {"chunk_id": "c1", "content": "not found in adults", "next_offset": 4,
-              "doc_items": [{"page": 1}], "page_ended_by": None,
-              "source_chunks": [{"chunk_id": "c1", "chunk_index": 42, "snippet": None}]}
-    raw = {key: [record] if key == "hits" else record, "error_code": None}
-    view, events = document_result_view(tool, raw)
-    actual = view[key][0] if key == "hits" else view[key]
-    assert actual["content"] == record["content"]
-    assert actual["source_chunks"] == [{"chunk_index": 42}]
-    assert actual["next_offset"] == 4
-    assert "doc_items" not in actual
-    assert "content_sha256" not in actual
-    assert "page_ended_by" not in actual and "error_code" not in view
+def test_search_view_keeps_hit_content_and_routes_geometry():
+    record = {"chunk_id": "c1", "chunk_index": 42, "content": "not found in adults",
+              "doc_items": [{"page": 1}], "section_title": None}
+    view, events = document_result_view("search_document", {"hits": [record], "error_code": None})
+    assert view == {"hits": [{"chunk_index": 42, "content": "not found in adults"}]}
     assert events[0]["chunk_id"] == "c1"
 
 
-def test_read_chunk_view_states_shared_span_metadata_once_and_drops_nulls_and_hash():
-    text = "First sentence. Second sentence on page four."
-    spans = [
-        {"span_id": "s0", "span_index": 0, "span_type": "sentence", "text": text[:15],
-         "char_start": 0, "char_end": 15, "page_number": 3, "section_title": "Results",
-         "spanizer_version": "pdf_sentence_v1"},
-        {"span_id": "s1", "span_index": 1, "span_type": "sentence", "text": text[16:],
-         "char_start": 16, "char_end": len(text), "page_number": 4, "section_title": None,
-         "spanizer_version": "pdf_sentence_v1"},
-    ]
-    raw = {"summary": "Read chunk 7.", "error_code": None, "result_bounds": None, "chunk": {
-        "chunk_id": "c7", "chunk_index": 7, "chunk_number": 8, "previous_chunk_id": None,
-        "next_chunk_id": "c8", "previous_chunk_index": None, "next_chunk_index": 8,
-        "page_number": 3, "section_title": "Results", "subsection": None, "content": text,
-        "evidence_spans": spans, "doc_items": None, "content_range": None, "span_page": None}}
-    original = deepcopy(raw)
-
-    view, _ = document_result_view("read_chunk", raw)
-
-    assert view == {"summary": "Read chunk 7.", "chunk": {
-        "chunk_index": 7, "next_chunk_index": 8, "page_number": 3, "section_title": "Results",
-        "content": text, "content_start": 0, "span_text_access": view["chunk"]["span_text_access"],
-        "span_type": "sentence", "spanizer_version": "pdf_sentence_v1",
-        "evidence_spans": [
-            {"span_index": 0, "char_start": 0, "char_end": 15},
-            # Values that differ from the chunk's stay, including an explicit null.
-            {"span_index": 1, "char_start": 16, "char_end": len(text), "page_number": 4,
-             "section_title": None},
+@pytest.mark.parametrize("tool,key", [("read_section", "section"), ("read_subsection", "subsection")])
+def test_section_view_numbers_every_passage_and_keeps_identity_out_of_the_model_view(tool, key):
+    first, second = "Wg was absent. It returned later.", "No change."
+    raw = {"summary": "Read all 2 chunks.", "error_code": None, key: {
+        "requested_section": "Results", "requested_subsection": None,
+        "matched_sections": ["Results"], "matched_subsections": None,
+        "page_numbers": [2, 3], "total_chunk_count": 2, "text_contains": None,
+        "matched_chunk_count": None, "passages": [
+            {"chunk_id": "uuid-a", "chunk_index": 5, "page_number": 2, "section": "Results",
+             "subsection": None, "content": first, "doc_items": [{"page": 2}],
+             "evidence_spans": [
+                 {"span_id": "uuid-a:s0", "span_index": 0, "text": first[:14], "char_start": 0, "char_end": 14},
+                 {"span_id": "uuid-a:s1", "span_index": 1, "text": first[15:], "char_start": 15, "char_end": len(first)}]},
+            {"chunk_id": "uuid-b", "chunk_index": 6, "page_number": 3, "section": "Results",
+             "subsection": None, "content": second, "doc_items": [{"page": 3}],
+             "evidence_spans": [
+                 {"span_id": "uuid-b:s0", "span_index": 0, "text": second, "char_start": 0, "char_end": len(second)}]},
         ]}}
-    assert "content_start" in view["chunk"]["span_text_access"]
+    original = deepcopy(raw)
+    view, events = document_result_view(tool, raw)
+    assert view == {"summary": "Read all 2 chunks.", key: {
+        "requested_section": "Results", "matched_sections": ["Results"], "page_numbers": [2, 3],
+        "total_chunk_count": 2, "passages": [
+            {"chunk_index": 5, "page_number": 2, "section": "Results",
+             "text": "[0] Wg was absent.\n[1] It returned later."},
+            {"chunk_index": 6, "page_number": 3, "section": "Results", "text": "[0] No change."},
+        ]}}
+    assert events == [{"type": "CHUNK_PROVENANCE", "message_id": events[0]["message_id"],
+                       "chunk_id": "section:Results", "doc_items": [{"page": 2}, {"page": 3}],
+                       "source_tool": tool}]
     assert raw == original
-
-
-def test_span_values_are_never_attributed_to_a_chunk_that_lacks_them():
-    text = "One sentence. Two sentence."
-    raw = {"chunk": {"chunk_id": "c", "content": text, "page_number": None, "section_title": None,
-                     "evidence_spans": [
-        {"span_id": "s0", "span_index": 0, "span_type": "sentence", "text": text[:13], "char_start": 0,
-         "char_end": 13, "page_number": 4, "section_title": None, "spanizer_version": None},
-        {"span_id": "s1", "span_index": 1, "span_type": "sentence", "text": text[14:], "char_start": 14,
-         "char_end": len(text), "page_number": 4, "section_title": None, "spanizer_version": None}]}}
-    view, _ = document_result_view("read_chunk", raw)
-    chunk = view["chunk"]
-    # Only span-only metadata moves to the chunk; the chunk's unknown page stays unknown.
-    assert "page_number" not in chunk and "section_title" not in chunk and "spanizer_version" not in chunk
-    assert chunk["span_type"] == "sentence"
-    assert chunk["evidence_spans"] == [
-        {"span_index": 0, "char_start": 0, "char_end": 13, "page_number": 4},
-        {"span_index": 1, "char_start": 14, "char_end": len(text), "page_number": 4},
-    ]
-
-
-def test_mixed_span_metadata_stays_on_each_span():
-    text = "A sentence. A caption"
-    raw = {"chunk": {"chunk_id": "c", "content": text, "evidence_spans": [
-        {"span_id": "s0", "span_index": 0, "span_type": "sentence", "text": text[:11],
-         "char_start": 0, "char_end": 11},
-        {"span_id": "s1", "span_index": 1, "span_type": "caption", "text": text[12:],
-         "char_start": 12, "char_end": len(text)}]}}
-    view, _ = document_result_view("read_chunk", raw)
-    assert "span_type" not in view["chunk"]
-    assert [span["span_type"] for span in view["chunk"]["evidence_spans"]] == ["sentence", "caption"]
 
 
 def test_invalid_offsets_fail_explicitly_instead_of_changing_evidence():
@@ -114,14 +78,27 @@ def test_invalid_offsets_fail_explicitly_instead_of_changing_evidence():
     assert "Evidence span" in str(caught.value.__cause__)
 
 
+def test_continuation_lines_of_a_sentence_are_indented_so_only_real_numbers_start_a_line():
+    from agr_ai_curation_runtime.evidence_spans import build_evidence_spans
+
+    text = "Primers\n[1] a\n[2] b"
+    spans = [span.to_dict() for span in build_evidence_spans(
+        chunk_id="c", chunk_text=text, page_number=None, section_title=None)]
+    assert [span["span_index"] for span in spans] == [0]
+    view, _ = document_result_view("read_chunk", {"chunk": {
+        "chunk_id": "c", "chunk_index": 1, "content": text, "evidence_spans": spans}})
+    assert view["chunk"]["text"] == "[0] Primers\n    [1] a\n    [2] b"
+    assert [line for line in view["chunk"]["text"].split("\n") if line.startswith("[")] == ["[0] Primers"]
+
+
 def test_large_chunk_has_one_copy_of_scientific_text_in_model_view():
     text = "This reagent was not used in the experiment. " * 200
     raw = {"chunk": {"chunk_id": "c", "content": text, "evidence_spans": [
-        {"span_id": "s", "text": text, "char_start": 0, "char_end": len(text)}]}}
+        {"span_id": "s", "span_index": 0, "text": text.strip(), "char_start": 0, "char_end": len(text) - 1}]}}
     import json
     view, _ = document_result_view("read_chunk", raw)
     assert len(json.dumps(view)) < len(json.dumps(raw)) * 0.6
-    assert view["chunk"]["content"] == text
+    assert view["chunk"]["text"] == "[0] " + text.strip()
 
 
 def test_catalog_routes_geometry_once_and_keeps_source_capture_complete(monkeypatch):
@@ -142,12 +119,6 @@ def test_catalog_routes_geometry_once_and_keeps_source_capture_complete(monkeypa
     assert len(emitted) == 2
 
 
-def test_section_provenance_identity_preserved():
-    _, events = document_result_view("read_section", {
-        "section": {"section_title": "Methods", "doc_items": [{"page": 3}]}})
-    assert events[0]["chunk_id"] == "section:Methods"
-
-
 @pytest.mark.parametrize("raw", [{"chunk": None}, "An error occurred while running the tool. Please try again."])
 def test_required_chunk_failure_is_terminal_not_a_model_result(raw):
     with pytest.raises(RuntimeError, match="required PDF"):
@@ -159,10 +130,7 @@ def test_no_search_matches_is_a_valid_result():
     assert document_result_view("search_document", raw) == (raw, [])
 
 
-@pytest.mark.parametrize("tool,key", [
-    ("read_chunk", "chunk"), ("search_document", "hits"),
-    ("read_section", "section"), ("read_subsection", "subsection"),
-])
+@pytest.mark.parametrize("tool,key", [("read_chunk", "chunk"), ("search_document", "hits")])
 @pytest.mark.parametrize("code", ["invalid_result_cursor"])
 def test_catalog_keeps_paging_and_size_errors_distinct_from_pdf_failure(tool, key, code):
     from agr_ai_curation_runtime.tool_result_bounds import full_tool_results_requested

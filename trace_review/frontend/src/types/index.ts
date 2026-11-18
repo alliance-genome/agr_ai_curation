@@ -43,6 +43,21 @@ export interface ConversationData {
   timestamp?: string;
 }
 
+// A read_section result in either recorded shape. "joined_content" is the
+// shape before the numbered-passage release; "numbered_passages" shows each
+// passage's numbered lines as the model saw them. Results parsed from the
+// oldest repr format carry no shape.
+export interface SectionReadDisplay {
+  shape?: 'joined_content' | 'numbered_passages';
+  section_title: string;
+  matched_sections?: string[];
+  page_numbers: number[];
+  chunk_count: number;
+  total_chunk_count?: number;
+  content_preview: string;
+  full_content?: string;
+}
+
 export interface ToolResultParsed {
   summary: string;
   parsed: {
@@ -57,13 +72,7 @@ export interface ToolResultParsed {
       content: string;
     }>;
     data?: Array<Record<string, any>>;
-    section?: {
-      section_title: string;
-      page_numbers: number[];
-      chunk_count: number;
-      content_preview: string;
-      full_content?: string;
-    };
+    section?: SectionReadDisplay;
     json_data?: Record<string, any> | any[];
     warnings?: string[] | null;
     message?: null;
@@ -163,6 +172,14 @@ export interface CitationNumberDiagnostics {
   mapped_numbers: number[];
   missing_marker_numbers: number[];
   ambiguous_marker_numbers: number[];
+  // Document reads left out of the analysis because their output could not be decoded.
+  undecodable_reads?: UndecodableRead[];
+}
+
+export interface UndecodableRead {
+  call_id: string;
+  tool_name: string;
+  reason: string;
 }
 
 export interface ToolCallMetadata {

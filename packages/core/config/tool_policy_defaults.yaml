@@ -1,7 +1,7 @@
 tool_policies:
   record_evidence:
     display_name: Record Evidence
-    description: Create verified evidence from read_chunk chunk_index/span_index selections, preserving exact source text and span provenance with optional envelope target refs.
+    description: Create verified evidence from chunk_index/span_index selections of numbered sentences shown by read_chunk, read_section or read_subsection, preserving exact source text and span provenance with optional envelope target refs.
     category: Document
     curator_visible: false
     allow_attach: false

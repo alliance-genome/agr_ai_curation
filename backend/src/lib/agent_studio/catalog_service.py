@@ -69,8 +69,9 @@ _HOST_RUNTIME_SRC_DIR = Path(__file__).resolve().parents[2]
 _HOST_RUNTIME_ROOT_DIR = _HOST_RUNTIME_SRC_DIR.parent
 _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "EVIDENCE VERIFICATION RULES:\n"
-    "- Call `read_chunk(chunk_index)` before recording evidence and select backend-generated "
-    "`evidence_spans[].span_index` values.\n"
+    "- Read the passage before recording evidence: `read_section`, `read_subsection` and "
+    "`read_chunk(chunk_index)` all show it as numbered sentences; select backend-generated "
+    "sentence numbers (`span_index`) from what they showed, without reading a passage again.\n"
     "- Call `record_evidence` once for each distinct evidence unit you intend to keep.\n"
     "- Multiple `selections` in one `record_evidence` call produce one evidence record; use separate records for truly disjoint evidence units.\n"
     "- Use multiple evidence records when one evidence unit alone does not fully support the retained item or claim.\n"

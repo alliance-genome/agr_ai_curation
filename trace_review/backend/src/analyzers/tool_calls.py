@@ -17,6 +17,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from .document_read_results import SECTION_READ_RESULT_KEYS, section_read_display
 from .domain_envelopes import DomainEnvelopeTraceAnalyzer
 from .compact_validators import annotate_compact_validator_calls
 
@@ -31,9 +32,12 @@ class ToolResultParser:
     """
 
     @classmethod
-    def parse(cls, raw_result: str) -> Dict[str, Any]:
+    def parse(cls, raw_result: str, tool_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Parse a Python repr string into a structured dict.
+
+        ``tool_name`` lets a section or subsection read be shown with its
+        section fields, in the shape it was recorded in.
 
         Returns:
             {
@@ -67,6 +71,14 @@ class ToolResultParser:
                 if warnings:
                     result["parsed"]["warnings"] = warnings
                 result["summary"] = cls._generate_json_summary(json_data)
+                section_reads = cls._section_reads(tool_name, json_data)
+                if section_reads:
+                    result["parsed"].update(section_reads)
+                    result["summary"] = cls._generate_summary(
+                        {"summary": json_data["summary"], **section_reads}
+                        if isinstance(json_data.get("summary"), str) else section_reads,
+                        raw_result,
+                    )
                 result["parse_status"] = "full"
                 return result
 
@@ -92,6 +104,15 @@ class ToolResultParser:
             result["parse_status"] = "unparsed"
 
         return result
+
+    @classmethod
+    def _section_reads(cls, tool_name: Optional[str], json_data: Any) -> Dict[str, Any]:
+        """Section fields of a read_section/read_subsection result, either shape."""
+        result_key = SECTION_READ_RESULT_KEYS.get(tool_name or "")
+        if result_key is None or not isinstance(json_data, dict):
+            return {}
+        display = section_read_display(result_key, json_data.get(result_key))
+        return {result_key: display} if display else {}
 
     @classmethod
     def _parse_literal_fields(cls, text: str) -> Dict[str, Any]:
@@ -837,7 +858,7 @@ class ToolCallAnalyzer:
                 output_text = tool_outputs[call_id]
 
                 # Parse the result into structured format
-                parsed_result = ToolResultParser.parse(output_text)
+                parsed_result = ToolResultParser.parse(output_text, tool_name=tc.get("name"))
 
                 tc["tool_result"] = {
                     "summary": parsed_result["summary"],

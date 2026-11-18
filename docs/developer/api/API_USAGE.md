@@ -1009,7 +1009,7 @@ Events are emitted line-by-line as `data: <json>`. Key event types:
 | `TEXT_MESSAGE_START` | Marks the beginning of the assistant’s textual reply. Contains `messageId`, `session_id`, `trace_id`. |
 | `TEXT_MESSAGE_CONTENT` | The complete assistant response (single payload) plus `trace_id`. |
 | `TEXT_MESSAGE_END` | Signals completion of text streaming. |
-| `CHUNK_PROVENANCE` | Per-chunk overlays: `{ document_id, chunk_id, doc_items: [...] }` for highlighting in the viewer. |
+| `CHUNK_PROVENANCE` | Per-chunk overlays: `{ document_id, chunk_id, doc_items: [...] }` for highlighting in the viewer. A `read_section` or `read_subsection` call emits one event for the whole read, with `chunk_id` set to `section:<requested section name>` and the geometry of every passage it returned. |
 | `RUN_ERROR` | Only emitted when upstream processing fails; contains a human-readable error `message`. |
 
 ### Document progress SSE (`GET /weaviate/documents/{id}/progress/stream`)

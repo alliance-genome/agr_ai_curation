@@ -50,7 +50,7 @@ def test_concurrent_issuance_and_restart_share_exact_definition(source_record):
     spans = [s.to_dict() for s in build_evidence_spans(chunk_id=chunk["id"], chunk_text=chunk["text"])]
     def issue(index):
         binding = refs._load_source_binding(doc, owner, scope, HistoryStore())
-        binding.retain(chunk, spans, [index % len(spans)])
+        binding.retain([(chunk, spans, [index % len(spans)])])
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(issue, range(12)))
     restarted = refs._load_source_binding(doc, owner, replace(scope, run_id=uuid4().hex), HistoryStore())

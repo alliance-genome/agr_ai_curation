@@ -41,19 +41,6 @@ def _body(result):
     return getattr(result, "section", None) or getattr(result, "subsection", None)
 
 
-async def _read_all(tool, *args, **kwargs):
-    ids, pages, offset = [], [], 0
-    while True:
-        result = await tool(*args, offset=offset, **kwargs)
-        body = _body(result)
-        pages.append(result)
-        ids.extend(source.chunk_id for source in body.source_chunks or [])
-        if body.next_offset is None:
-            return ids, pages
-        assert body.next_offset > offset
-        offset = body.next_offset
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("factory", ["section", "subsection"])
 async def test_long_passages_return_whole_requested_section(monkeypatch, factory):
@@ -66,42 +53,11 @@ async def test_long_passages_return_whole_requested_section(monkeypatch, factory
         tool = weaviate_search.create_read_subsection_tool("doc-1", "user-1")
         args = ("Results", "Expression")
 
-    ids, pages = await _read_all(tool, *args, max_chunks=100)
+    body = _body(await tool(*args))
 
-    assert ids == [chunk["id"] for chunk in chunks]
-    joined = "\n\n".join(
-        _body(page).content for page in pages
-    )
-    for chunk in chunks:
-        assert chunk["text"] in joined
-    assert len(pages) == 1
-    first = _body(pages[0])
-    assert first.page_ended_by == "end"
-
-
-@pytest.mark.asyncio
-async def test_explicit_max_chunks_has_no_context_ceiling(monkeypatch):
-    _patch_sections(monkeypatch, _chunks(20, chars=40))
-    tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
-
-    result = await tool("Results", max_chunks=10**6)
-
-    assert result.section.returned_chunk_count == 20
-    assert result.section.requested_max_chunks == 10**6
-    assert result.section.effective_max_chunks == 10**6
-    assert result.section.next_offset is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("offset", [-2, 21])
-async def test_invalid_section_offset_is_explicit(monkeypatch, offset):
-    _patch_sections(monkeypatch, _chunks(20, chars=40))
-    tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
-
-    result = await tool("Results", offset=offset)
-
-    assert result.section is None
-    assert result.error_code == "invalid_result_cursor"
+    assert [passage.chunk_id for passage in body.passages] == [chunk["id"] for chunk in chunks]
+    assert [passage.content for passage in body.passages] == [chunk["text"] for chunk in chunks]
+    assert body.total_chunk_count == 40
 
 
 @pytest.mark.asyncio
@@ -111,11 +67,30 @@ async def test_large_passage_is_preserved_inside_section(monkeypatch):
     _patch_sections(monkeypatch, chunks)
     tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
 
-    ids, pages = await _read_all(tool, "Results")
+    result = await tool("Results")
 
-    assert ids == ["chunk-0", "chunk-1", "chunk-2"]
-    assert len(pages) == 1
-    assert all(chunk["text"] in pages[0].section.content for chunk in chunks)
+    assert [passage.content for passage in result.section.passages] == [chunk["text"] for chunk in chunks]
+
+
+@pytest.mark.asyncio
+async def test_section_of_about_ninety_thousand_characters_reaches_the_model_view_whole(monkeypatch):
+    from src.lib.openai_agents.document_result_view import document_result_view
+
+    chunks = _chunks(60, chars=1500)
+    _patch_sections(monkeypatch, chunks)
+    tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
+
+    canonical = await tool("Results")
+    view, _events = document_result_view("read_section", canonical)
+
+    assert sum(len(chunk["text"]) for chunk in chunks) >= 90_000
+    passages = view["section"]["passages"]
+    assert [passage["chunk_index"] for passage in passages] == list(range(60))
+    for passage, chunk, source in zip(passages, chunks, canonical.section.passages):
+        lines = passage["text"].split("\n")
+        assert lines == [f"[{span.span_index}] {span.text}" for span in source.evidence_spans]
+        # Numbered lines carry every non-space character of the chunk, in order.
+        assert "".join(line.split("] ", 1)[1] for line in lines).replace(" ", "") == chunk["text"].replace(" ", "")
 
 
 @pytest.mark.asyncio
@@ -166,6 +141,8 @@ async def test_large_chunk_reads_complete_text_and_spans(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pdf_provenance_stays_exact_for_entire_section(monkeypatch):
+    from src.lib.openai_agents.document_result_view import document_result_view
+
     chunks = _chunks(12, chars=80)
     for chunk in chunks:
         chunk["doc_items"] = [
@@ -174,8 +151,8 @@ async def test_pdf_provenance_stays_exact_for_entire_section(monkeypatch):
         ]
     _patch_sections(monkeypatch, chunks)
     tool = weaviate_search.create_read_section_tool("doc-1", "user-1")
-    ids, pages = await _read_all(tool, "Results", max_chunks=10**6)
-    assert ids == [chunk["id"] for chunk in chunks]
-    boxes = [item for page in pages for item in page.section.doc_items]
-    assert boxes == [item for chunk in chunks for item in chunk["doc_items"]]
-    assert len(pages) == 1
+    result = await tool("Results")
+    assert [passage.doc_items for passage in result.section.passages] == [chunk["doc_items"] for chunk in chunks]
+    view, events = document_result_view("read_section", result)
+    assert [event["doc_items"] for event in events] == [[item for chunk in chunks for item in chunk["doc_items"]]]
+    assert "doc_items" not in str(view)

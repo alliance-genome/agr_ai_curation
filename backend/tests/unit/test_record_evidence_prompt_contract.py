@@ -39,6 +39,8 @@ STALE_RECORD_EVIDENCE_PHRASES = [
     "Verify a claimed quote against a specific chunk",
     "exact contiguous source text copied from that chunk",
     "omitted, inserted, changed, paraphrased, or normalized quote text returns",
+    # Reading tools show numbered sentences; no model-visible evidence_spans list.
+    "evidence_spans[]",
 ]
 
 
@@ -100,7 +102,7 @@ def test_extractor_prompts_state_span_evidence_workflow():
         content = " ".join(_effective_prompt_content(path).lower().split())
         label = str(path.relative_to(REPO_ROOT))
         for fragment in [
-            "read_chunk.evidence_spans[].span_index",
+            "numbered sentences (`span_index`)",
             'record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])',
             # One record_evidence call maps to one evidence unit. Envelope
             # prompts spell this as "...for truly disjoint evidence units" while
@@ -141,7 +143,7 @@ def test_builder_extractor_prompts_require_field_targets_and_same_id_source_upda
 
 def test_gene_expression_prompt_contract_states_span_workspace_workflow():
     required_fragments = [
-        "read_chunk.evidence_spans[].span_index",
+        "numbered sentences (`span_index`)",
         'record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])',
         "list_recorded_evidence",
         "get_recorded_evidence",

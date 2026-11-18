@@ -20,7 +20,7 @@ Do not hand-author `curatable_objects[]`; the backend builds the DiseaseExtracti
 preserve the disease mention as written (and a DOID only when the paper prints one), the SUBJECT biological entity
 
 # DE-06 evidence is backend-verified span source text
-backend-verified source text, selected from `read_chunk.evidence_spans[].span_index` values
+backend-verified source text, selected by the numbered sentences (`span_index`) that `read_chunk`, `read_section` and `read_subsection` show
 
 # DE-28/DE-05 validator owns final ontology/subject/relation/ECO/provider (goal lowercase contract token)
 active validator bindings own final disease ontology, subject identity, relation, evidence-code, and data-provider decisions.
@@ -32,7 +32,7 @@ You must call document retrieval tools before answering.
 Composite mentions (e.g. "breast and ovarian cancer") are split into individual disease assertions, so they are separate stage calls.
 
 # DE-08 evidence from backend-generated span ids
-Every evidence record you keep is created from backend-generated `read_chunk.evidence_spans[].span_index` values.
+Every evidence record you keep is created from backend-generated sentence numbers (`span_index`) shown by `read_chunk`, `read_section` or `read_subsection`.
 
 # DE-09 stage once per retained disease assertion (distinct subjects = distinct stage calls)
 Each retained disease assertion is staged once with `stage_disease_observation`, after `record_evidence(selections=[{"chunk_index": ..., "span_index": ...}])` creates its supporting source text.
@@ -141,7 +141,7 @@ Do NOT stage a reference; pending reference resolution is the intended posture f
 Do NOT extract or stage the annotation_type / curation method; the backend fixes it to manually_curated.
 
 # DE-19/DE-21 read_chunk -> select spans -> record_evidence one evidence unit
-call `read_chunk(chunk_index)` on the relevant chunk, select the backend-generated `evidence_spans[].span_index` values that directly support one evidence unit, and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`.
+select the backend-generated sentence numbers (`span_index`) that directly support one evidence unit, from the passage as `read_section`, `read_subsection` or `read_chunk(chunk_index)` showed it (a passage found only through `search_document` must be read with `read_chunk` first), and call `record_evidence(entity=..., selections=[{"chunk_index": ..., "span_index": ...}])`.
 Multiple `selections` in one call make one evidence record; use separate calls for truly disjoint evidence units.
 Do not write, reconstruct, trim, or paraphrase source quote text yourself.
 

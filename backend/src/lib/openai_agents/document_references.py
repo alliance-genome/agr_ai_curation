@@ -71,6 +71,25 @@ def _read_bindings(store: HistoryStore, scope: HistoryScope, document_id: str, *
     return result
 
 
+def _span_definition(chunk: dict, spans: list[dict]) -> dict:
+    index = chunk["chunk_index"]
+    if type(index) is not int or index < 0:
+        raise DocumentReferenceError("Stored chunk index is invalid")
+    definitions = []
+    for source_span in spans:
+        verified = resolve_evidence_span_id(span_id=source_span["span_id"],
+            chunk_text=chunk["text"], expected_chunk_id=chunk["id"])
+        if (verified.span_index != source_span["span_index"]
+                or verified.char_start != source_span["char_start"]
+                or verified.char_end != source_span["char_end"]
+                or verified.text != source_span["text"]):
+            raise DocumentReferenceError("Issued span definition changed from its canonical identity")
+        definitions.append({k: source_span[k] for k in ("span_id", "span_index", "spanizer_version")})
+    return {"chunk_index": index, "chunk_id": chunk["id"],
+            "content_sha256": hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest(),
+            "spans": definitions}
+
+
 @dataclass
 class SourceBinding:
     document_id: str
@@ -108,23 +127,23 @@ class SourceBinding:
         if not self.records:
             self.append(_SOURCE_KIND, {}, db=db)
 
-    def retain(self, chunk: dict, spans: list[dict], issued_indexes: list[int]) -> None:
-        index = chunk["chunk_index"]
-        if type(index) is not int or index < 0:
-            raise DocumentReferenceError("Stored chunk index is invalid")
-        definitions = []
-        for source_span in spans:
-            verified = resolve_evidence_span_id(span_id=source_span["span_id"],
-                chunk_text=chunk["text"], expected_chunk_id=chunk["id"])
-            if (verified.span_index != source_span["span_index"]
-                    or verified.char_start != source_span["char_start"]
-                    or verified.char_end != source_span["char_end"]
-                    or verified.text != source_span["text"]):
-                raise DocumentReferenceError("Issued span definition changed from its canonical identity")
-            definitions.append({k: source_span[k] for k in ("span_id", "span_index", "spanizer_version")})
-        definition = {"chunk_index": index, "chunk_id": chunk["id"],
-            "content_sha256": hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest(),
-            "spans": definitions}
+    def retain(self, reads: list[tuple[dict, list[dict], list[int]]]) -> None:
+        """Issue the shown spans of every chunk one read displayed, atomically.
+
+        ``reads`` holds ``(chunk, spans, issued_indexes)`` per displayed chunk.
+        One transaction and one lock cover the whole read, so a section read
+        costs one binding scan, and a failure issues nothing it displayed.
+        """
+        definitions = {}
+        for chunk, spans, issued_indexes in reads:
+            definition = _span_definition(chunk, spans)
+            index = definition["chunk_index"]
+            if index in definitions and definitions[index][0] != definition:
+                raise DocumentReferenceError("One read showed two definitions for one chunk")
+            if not set(issued_indexes) <= {s["span_index"] for s in definition["spans"]}:
+                raise DocumentReferenceError("Issued window contains an undefined span")
+            previous = definitions.get(index, (definition, set()))[1]
+            definitions[index] = (definition, previous | set(issued_indexes))
         with self.store.session_factory() as db, db.begin():
             # All reference issuers use this transaction lock. It protects a
             # definition, not model context size, and never spans async tool I/O.
@@ -133,20 +152,24 @@ class SourceBinding:
                 db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"), {"key": lock_key})
             self.records = _read_bindings(self.store, self.history_scope, self.document_id, db=db)
             self.pin_generation(db=db)
-            existing = [r for r in self.records if r["kind"] == _SPAN_KIND and r["chunk_index"] == index]
-            for record in existing:
-                if any(record[key] != value for key, value in definition.items()):
-                    raise DocumentReferenceError("Previously issued source/span definition changed")
-            if not existing:
-                self.append(_SPAN_KIND, definition, db=db)
-            issued = {i for r in self.records if r["kind"] == _WINDOW_KIND and r["chunk_index"] == index
-                      for i in r["issued_indexes"]}
-            added = set(issued_indexes) - issued
-            if added:
-                if not added <= {s["span_index"] for s in definitions}:
-                    raise DocumentReferenceError("Issued window contains an undefined span")
-                # Retain each definition once; pages add only ordinal coverage.
-                self.append(_WINDOW_KIND, {"chunk_index": index, "issued_indexes": sorted(added)}, db=db)
+            defined = {}
+            issued = {}
+            for record in self.records:
+                if record["kind"] == _SPAN_KIND:
+                    defined.setdefault(record["chunk_index"], []).append(record)
+                elif record["kind"] == _WINDOW_KIND:
+                    issued.setdefault(record["chunk_index"], set()).update(record["issued_indexes"])
+            for index, (definition, issued_indexes) in definitions.items():
+                existing = defined.get(index, [])
+                for record in existing:
+                    if any(record[key] != value for key, value in definition.items()):
+                        raise DocumentReferenceError("Previously issued source/span definition changed")
+                if not existing:
+                    self.append(_SPAN_KIND, definition, db=db)
+                added = issued_indexes - issued.get(index, set())
+                if added:
+                    # Retain each definition once; later reads add only ordinal coverage.
+                    self.append(_WINDOW_KIND, {"chunk_index": index, "issued_indexes": sorted(added)}, db=db)
 
     async def resolve(self, selections: list[DocumentSelection]) -> list[str]:
         if not selections:
@@ -258,11 +281,12 @@ async def document_reference_scope(document_id: str, user_id: str):
             _ACTIVE_SOURCE.reset(token)
 
 
-async def retain_issued_spans(chunk: dict, spans: list[dict], issued_indexes: list[int]) -> None:
+async def retain_issued_spans(reads: list[tuple[dict, list[dict], list[int]]]) -> None:
+    """Issue every span one read displayed: ``(chunk, spans, issued_indexes)`` per chunk."""
     binding = _ACTIVE_SOURCE.get()
     if binding is None:
         raise DocumentReferenceError("Missing source binding")
-    await asyncio.to_thread(binding.retain, chunk, spans, issued_indexes)
+    await asyncio.to_thread(binding.retain, reads)
 
 
 def stage_evidence_update(target: dict, replacement: dict) -> None:
@@ -376,13 +400,6 @@ def _refresh_document_guidance(payload, tool):
     payload = deepcopy(payload)
     if "summary" in payload and isinstance(payload["summary"], str) and any(name in payload["summary"] for name in ("span_id", "chunk_id")):
         payload["summary"] = "Use chunk_index and span_index selections with record_evidence. Read source in the current conversation before recording."
-    records = payload.get("hits", []) if tool == "search_document" else [payload.get(
-        {"read_chunk": "chunk", "read_section": "section", "read_subsection": "subsection"}[tool])]
-    for record in records or []:
-        if isinstance(record, dict) and "span_text_access" in record:
-            record["span_text_access"] = (
-                "Span text is content[char_start-content_start:char_end-content_start]. "
-                "Offsets count Unicode characters, end exclusive. Use chunk_index and span_index with record_evidence.")
     return payload
 
 

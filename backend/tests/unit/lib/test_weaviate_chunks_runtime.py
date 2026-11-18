@@ -207,10 +207,9 @@ async def test_get_chunks_success_parses_metadata_and_doc_items(monkeypatch):
             ),
         ]
     )
-    total_response = SimpleNamespace(objects=[SimpleNamespace(), SimpleNamespace()])
-
     chunk_collection = MagicMock()
-    chunk_collection.query.fetch_objects.side_effect = [page_response, total_response]
+    chunk_collection.query.fetch_objects.return_value = page_response
+    chunk_collection.aggregate.over_all.return_value = SimpleNamespace(total_count=2)
     pdf_collection = MagicMock()
     connection = _connection_with_client(MagicMock())
 
@@ -231,6 +230,72 @@ async def test_get_chunks_success_parses_metadata_and_doc_items(monkeypatch):
     assert second["doc_items"] == []
     assert second["metadata"]["character_count"] == len("Second chunk content")
     assert second["metadata"]["word_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_total_counts_every_chunk_above_one_thousand(monkeypatch):
+    _sync_to_thread(monkeypatch)
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+    chunk_collection.aggregate.over_all.return_value = SimpleNamespace(total_count=1500)
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        result = await chunks.get_chunks("doc-1", {"page": 30, "page_size": 50}, "user-1")
+
+    assert result["total"] == 1500
+    count_call = chunk_collection.aggregate.over_all.call_args.kwargs
+    assert count_call["total_count"] is True
+    assert count_call["filters"] is not None
+    # Only the requested page is fetched; the count never reads chunk rows.
+    assert chunk_collection.query.fetch_objects.call_count == 1
+    assert chunk_collection.query.fetch_objects.call_args.kwargs["offset"] == 29 * 50
+
+
+def _sort_keys(call):
+    return [(sort.prop, sort.ascending) for sort in call.kwargs["sort"].sorts]
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_pages_in_a_total_order(monkeypatch):
+    """Offset pages are only exact when two objects sharing a chunkIndex keep one order."""
+    _sync_to_thread(monkeypatch)
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+    chunk_collection.aggregate.over_all.return_value = SimpleNamespace(total_count=0)
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        await chunks.get_chunks("doc-1", {"page": 2, "page_size": 50}, "user-1")
+
+    assert _sort_keys(chunk_collection.query.fetch_objects.call_args) == [("chunkIndex", True), ("_id", True)]
+
+
+def test_resolution_fetch_pages_every_chunk_in_a_total_order():
+    stored = [
+        SimpleNamespace(uuid=f"uuid-{index}", properties={"chunkIndex": index // 2, "content": f"P{index}"})
+        for index in range(5)
+    ]
+
+    def _fetch_objects(**kwargs):
+        return SimpleNamespace(objects=stored[kwargs["offset"]:kwargs["offset"] + kwargs["limit"]])
+
+    chunk_collection = MagicMock()
+    chunk_collection.query.fetch_objects.side_effect = _fetch_objects
+    connection = _connection_with_client(MagicMock())
+
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())):
+        rows = chunks.fetch_document_chunks_for_resolution("doc-1", "user-1", page_size=2)
+
+    assert [row["id"] for row in rows] == [f"uuid-{index}" for index in range(5)]
+    calls = chunk_collection.query.fetch_objects.call_args_list
+    assert [call.kwargs["offset"] for call in calls] == [0, 2, 4]
+    assert all(_sort_keys(call) == [("chunkIndex", True), ("_id", True)] for call in calls)
 
 
 @pytest.mark.asyncio
@@ -314,10 +379,9 @@ async def test_get_chunks_include_metadata_false_returns_minimal_required_metada
             ),
         ]
     )
-    total_response = SimpleNamespace(objects=[SimpleNamespace()])
-
     chunk_collection = MagicMock()
-    chunk_collection.query.fetch_objects.side_effect = [page_response, total_response]
+    chunk_collection.query.fetch_objects.return_value = page_response
+    chunk_collection.aggregate.over_all.return_value = SimpleNamespace(total_count=1)
     connection = _connection_with_client(MagicMock())
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \
@@ -357,10 +421,9 @@ async def test_get_chunks_include_metadata_false_repairs_null_required_metadata(
             ),
         ]
     )
-    total_response = SimpleNamespace(objects=[SimpleNamespace()])
-
     chunk_collection = MagicMock()
-    chunk_collection.query.fetch_objects.side_effect = [page_response, total_response]
+    chunk_collection.query.fetch_objects.return_value = page_response
+    chunk_collection.aggregate.over_all.return_value = SimpleNamespace(total_count=1)
     connection = _connection_with_client(MagicMock())
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), \

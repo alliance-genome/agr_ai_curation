@@ -31,8 +31,9 @@ def scoped_document_tool(tool: Any, *, document_id: str, user_id: str) -> Any:
     return tool
 
 
-async def retain_issued_spans(chunk: dict, spans: list[dict], issued_indexes: list[int]) -> None:
-    await _implementation().retain_issued_spans(chunk, spans, issued_indexes)
+async def retain_issued_spans(reads: list[tuple[dict, list[dict], list[int]]]) -> None:
+    """Issue the spans one read displayed, as ``(chunk, spans, issued_indexes)`` per chunk."""
+    await _implementation().retain_issued_spans(reads)
 
 
 async def resolve_selections(selections: list[DocumentSelection]) -> list[str]:
