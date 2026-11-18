@@ -2516,9 +2516,11 @@ def get_all_agent_tools(
                         _sanitize_flow_extraction_candidate_payload(candidate.payload_json),
                         adapter_key=_resolve_flow_candidate_adapter_key(candidate), agent_key=candidate.agent_key,
                     )
-                except ExtractionManifestError:
-                    logger.warning("Flow result inspection manifest is unavailable", exc_info=True,
-                                   extra={"sentry_skip_event": True})
+                except ExtractionManifestError as exc:
+                    logger.warning(
+                        "Flow result inspection manifest is unavailable",
+                        extra={"error_type": type(exc).__name__, "sentry_skip_event": True},
+                    )
                     manifest_error = sanitized_runtime_error("Flow result inspection manifest is unavailable")
                     report_runtime_exception(manifest_error, component="flow_executor", operation="inspection_manifest_failed")
                 if manifest_error is not None:
@@ -2617,9 +2619,11 @@ def get_all_agent_tools(
                     )
                     if len(records) != 1:
                         raise RuntimeError("Completed extraction did not yield one saved result.")
-                except Exception:
-                    logger.warning("Completed flow extraction persistence failed", exc_info=True,
-                                   extra={"sentry_skip_event": True})
+                except Exception as exc:
+                    logger.warning(
+                        "Completed flow extraction persistence failed",
+                        extra={"error_type": type(exc).__name__, "sentry_skip_event": True},
+                    )
                     persistence_error = sanitized_runtime_error("Completed flow extraction persistence failed")
                     _report_flow_extraction_persistence_failure(
                         persistence_error, operation="extraction_persistence_failed", document_id=document_id,
@@ -2654,9 +2658,11 @@ def get_all_agent_tools(
                                 accepted["payload_json"], adapter_key=record.adapter_key,
                                 agent_key=record.agent_key,
                             )
-                        except ExtractionManifestError:
-                            logger.warning("Flow selected result inspection manifest is unavailable", exc_info=True,
-                                           extra={"sentry_skip_event": True})
+                        except ExtractionManifestError as exc:
+                            logger.warning(
+                                "Flow selected result inspection manifest is unavailable",
+                                extra={"error_type": type(exc).__name__, "sentry_skip_event": True},
+                            )
                             accepted_manifest_error = sanitized_runtime_error("Flow selected result inspection manifest is unavailable")
                             report_runtime_exception(accepted_manifest_error, component="flow_executor", operation="inspection_manifest_failed")
                         if accepted_manifest_error is not None:

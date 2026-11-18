@@ -8128,7 +8128,7 @@ def test_document_builder_requires_prepared_context_before_construction(monkeypa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("persistence_fails", [False, True])
 @pytest.mark.parametrize("session_id,run_id", [("chat-inspection", "interactive-run"), ("batch-b1-doc-22222222", "b1")])
-async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id, run_id, persistence_fails):
+async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, caplog, session_id, run_id, persistence_fails):
     """Exercise the real ordered wrapper, manifest and shared inspector together."""
     from tests.unit.lib.openai_agents.test_inspect_results import _payload, _metadata, DOCUMENT_ID
     from src.lib.openai_agents import inspect_results as inspector
@@ -8194,6 +8194,11 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id
         with pytest.raises(RuntimeError) as caught:
             await tools["ask_gene_specialist"].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
         assert str(caught.value) == "Completed flow extraction persistence failed"
+        assert str(failure) not in caplog.text
+        warning, = [r for r in caplog.records if r.getMessage() == "Completed flow extraction persistence failed"]
+        assert warning.exc_info is None
+        assert warning.error_type == "RuntimeError"
+        assert warning.sentry_skip_event is True
         assert caught.value.__cause__ is None
         assert caught.value.__context__ is None
         assert len(reports) == 1
@@ -8228,19 +8233,31 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, session_id
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("canonical", [False, True])
-async def test_inspection_manifest_eligibility_is_checked_before_persistence(monkeypatch, canonical):
-    from tests.unit.lib.openai_agents.test_inspect_results import _payload, DOCUMENT_ID
+@pytest.mark.parametrize(("result_kind", "failure_message"), [
+    ("legacy", None),
+    ("original", "Flow result inspection manifest is unavailable"),
+    ("selected", "Flow selected result inspection manifest is unavailable"),
+])
+async def test_inspection_manifest_eligibility_is_checked_before_persistence(monkeypatch, caplog, result_kind, failure_message):
+    from tests.unit.lib.openai_agents.test_inspect_results import _InspectRecord, _metadata, _payload, DOCUMENT_ID
     executor = _executor_module()
-    payload = _payload() if canonical else _structured_step_output("legacy result")
+    invalid_payload = {**_payload(), "domain_pack_id": "fake-secret-manifest-content"}
+    payload = _payload()
+    if result_kind == "original":
+        payload = invalid_payload
+    elif result_kind == "legacy":
+        payload = _structured_step_output("legacy result")
     stub_completed_review(monkeypatch, payload)
     @function_tool(name_override="ask_gene_specialist")
     async def specialist(query: str) -> str:
         return json.dumps(payload)
     monkeypatch.setattr(executor, "get_agent_by_id", lambda *a, **kw: MagicMock(spec=Agent, instructions="Base"))
     monkeypatch.setattr(executor, "_create_streaming_tool", lambda **kw: specialist)
-    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id", lambda key: None)
-    persist = MagicMock(side_effect=AssertionError("Must not persist before manifest validation"))
+    monkeypatch.setattr("src.lib.curation_workspace.adapter_registry.resolve_curation_domain_pack_by_id",
+                        lambda key: _metadata() if key == "fixture.inspect" else None)
+    monkeypatch.setattr("src.lib.openai_agents.result_inspection_views.accepted_view",
+                        lambda record, **kw: {"payload_json": invalid_payload})
+    persist = MagicMock(return_value=[_InspectRecord()])
     monkeypatch.setattr(executor, "_persist_flow_extraction_candidates", persist)
     reports = []
     monkeypatch.setattr(executor, "report_runtime_exception", lambda exc, **kw: reports.append(exc))
@@ -8250,18 +8267,27 @@ async def test_inspection_manifest_eligibility_is_checked_before_persistence(mon
         doc_context=DocumentContext(document_id=DOCUMENT_ID, user_id="owner"),
     )
     ctx = SimpleNamespace(tool_name="test", run_config=None)
-    if canonical:
-        with pytest.raises(RuntimeError, match="manifest is unavailable"):
+    if failure_message is not None:
+        with pytest.raises(RuntimeError) as caught:
             await tools[0].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
+        assert str(caught.value) == failure_message
+        assert "fake-secret-manifest-content" not in caplog.text
+        warning, = [r for r in caplog.records if r.getMessage() == failure_message]
+        assert warning.exc_info is None
+        assert warning.error_type == "ExtractionManifestError"
+        assert warning.sentry_skip_event is True
         assert state["completed_steps"] == []
-        assert len(reports) == 1
+        assert reports == [caught.value]
         assert reports[0].__context__ is None
     else:
         result = await tools[0].on_invoke_tool(ctx, json.dumps({"query": "extract"}))
         assert result == json.dumps(payload)
         assert len(state["completed_steps"]) == 1
         assert "inspection_result_ref" not in state["completed_steps"][0]
-    persist.assert_not_called()
+    if result_kind == "selected":
+        persist.assert_called_once()
+    else:
+        persist.assert_not_called()
 
 
 @pytest.mark.parametrize("groups", [[], ["TEAM_A"]])

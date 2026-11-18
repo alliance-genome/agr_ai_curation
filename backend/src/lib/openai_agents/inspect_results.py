@@ -275,9 +275,11 @@ async def inspect_results(
         )
     except _RequestError as exc:
         response = exc.response
-    except Exception:
-        logger.warning("Saved result inspection failed", exc_info=True,
-                       extra={"sentry_skip_event": True})
+    except Exception as exc:
+        logger.warning(
+            "Saved result inspection failed",
+            extra={"error_type": type(exc).__name__, "sentry_skip_event": True},
+        )
         report_runtime_exception(
             sanitized_runtime_error("Saved result inspection failed"), component="result_inspection", operation="inspect_results_failed",
             context={"action": normalized_action, "result_view": result_view},
