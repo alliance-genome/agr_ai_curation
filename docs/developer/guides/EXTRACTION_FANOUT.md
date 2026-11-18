@@ -30,6 +30,8 @@ Settings (all in `.env.example` under Operational limits, forwarded to `backend`
 | `EXTRACTION_FANOUT_MIN_ITEMS` | `0` (off) | Planned records at which the plan goes to parallel writers. Production uses 15. |
 | `EXTRACTION_FANOUT_ITEMS_PER_WRITER` | `5` | Planned records per writer. Writers = ceil(records / this), capped below. |
 | `EXTRACTION_FANOUT_MAX_WRITERS` | `8` | Most writers one extraction may start; each opens its own model connection. |
+| `EXTRACTION_FANOUT_MAX_PLAN_REMINDERS` | `1` | Extra planner calls allowed when a plan is missing. Set to 0 to skip reminders. |
+| `EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS` | `1` | Planner correction rounds allowed after failed finalization. Set to 0 for a single finalize attempt. |
 
 The planner, the writers and the check pass all run at the agent's saved reasoning
 effort. There is no separate planning effort, which also keeps the check pass on the
@@ -75,8 +77,8 @@ The split follows `AGENTS.md` section 8: code does mechanics, the model does mea
   the provider's capability gates allow them.
 - **Finalize.** Code calls the agent's own finalize tool with every retained record
   (writers' records in plan order, then the rest). Validation problems go back to the
-  planner's thread once; if the second attempt also fails, the step fails exactly as a
-  single-writer run that never finalized.
+  planner's thread while correction rounds remain. Code retries finalization after each
+  round. The step fails if the last attempt leaves the records unfinalized.
 
 The planner's thread cannot finalize on its own: its finalize tool answers that the system
 finalizes. Its last reply is the specialist explanation saved with the result.
@@ -100,7 +102,7 @@ finalizes. Its last reply is the specialist explanation saved with the result.
 - Provider and runtime errors in any writer fail the step, as they do for one writer; the
   other writers are cancelled. Document read failures during prefetch fail the step, as a
   failed `read_chunk` call does.
-- A planner that ends without a plan gets one reminder; without a plan after that, the step
+- If the planner still has no plan after its reminder budget is exhausted, the step
   fails with `extraction_plan_missing`.
 - There is no fallback to a single writer.
 

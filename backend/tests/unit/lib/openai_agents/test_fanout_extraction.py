@@ -775,7 +775,8 @@ async def test_empty_plan_takes_the_no_results_path(harness):
 
 
 @pytest.mark.asyncio
-async def test_validation_problems_go_back_to_the_planner_thread_once(harness):
+async def test_validation_problems_go_back_to_the_planner_thread_until_success(harness, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS", "3")
     model = ScriptedFanoutModel({"plan": _plan("reagent 1", "bad"), "fix_on_finalize_check": True})
 
     await harness.run(model)
@@ -795,13 +796,23 @@ async def test_validation_problems_go_back_to_the_planner_thread_once(harness):
 
 
 @pytest.mark.asyncio
-async def test_second_finalize_failure_fails_the_step_as_today(harness):
+@pytest.mark.parametrize("configured, corrections", [(None, 1), ("0", 0), ("3", 3)])
+async def test_finalize_failure_exhausts_correction_budget(harness, monkeypatch, configured, corrections):
+    key = "EXTRACTION_FANOUT_MAX_FINALIZE_CORRECTIONS"
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
     model = ScriptedFanoutModel({"plan": _plan("reagent 1", "bad")})
 
     with pytest.raises(streaming_tools.SpecialistOutputError, match="did not leave a finalized"):
         await harness.run(model)
 
-    assert len(harness.finalize_calls) == 2
+    assert harness.progress().count("Fixing the problems validation found before saving") == corrections
+    attempts = [event["output_summary"]["attempt"] for event in harness.trace
+                if event["event_type"] == "extraction_fanout.finalize_attempt"]
+    assert attempts == list(range(1, corrections + 2))
+    assert len(harness.finalize_calls) == 1 + corrections
     assert harness.workspaces[-1].finalization is None
 
 
@@ -899,28 +910,34 @@ def test_discarded_writer_sdk_capture_failure_is_private(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_missing_plan_gets_one_reminder_then_fails(harness):
+@pytest.mark.parametrize("configured, reminders", [(None, 1), ("0", 0), ("3", 3)])
+async def test_missing_plan_exhausts_reminder_budget(harness, monkeypatch, configured, reminders):
+    key = "EXTRACTION_FANOUT_MAX_PLAN_REMINDERS"
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
     model = ScriptedFanoutModel({"plan": None})
 
     with pytest.raises(streaming_tools.SpecialistOutputError, match="did not submit an extraction plan"):
         await harness.run(model)
 
-    planner_messages = [
-        _text(item) for request in model.requests for item in request["input"]
-        if isinstance(item, dict) and item.get("role") == "user" and _text(item).startswith("[Planning phase]")
-    ]
-    assert any(message.startswith("[Planning phase] You have not") for message in planner_messages)
+    assert sum(_text(request["input"][-1]) == fanout.PLAN_REMINDER_MESSAGE
+               for request in model.requests) == reminders
     assert harness.finalize_calls == []
     assert any(event.get("details", {}).get("reason") == "extraction_plan_missing" for event in harness.events)
 
 
 @pytest.mark.asyncio
-async def test_reminded_plan_is_accepted(harness):
+async def test_reminded_plan_is_accepted(harness, monkeypatch):
+    monkeypatch.setenv("EXTRACTION_FANOUT_MAX_PLAN_REMINDERS", "3")
     # The first planning run ends in text; the reminder run submits.
     model = ScriptedFanoutModel({"plan": _plan("reagent 1"), "first_run_text": True, "submit_on_reminder": True})
 
     await harness.run(model)
 
+    assert sum(_text(request["input"][-1]) == fanout.PLAN_REMINDER_MESSAGE
+               for request in model.requests) == 1
     assert _finalized_labels(harness) == ["reagent 1"]
 
 
