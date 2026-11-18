@@ -163,3 +163,30 @@ async def test_staging_owner_follows_asyncio_tasks_into_tool_threads():
 
     for n in range(3):
         assert len(workspace.candidates_staged_by(f"writer-{n}")) == 5
+
+
+def _stage_as(workspace, owner, label, *, pending_ref_id=None):
+    token = builder.set_staging_owner(owner)
+    try:
+        return _stage(workspace, label, pending_ref_id=pending_ref_id).candidate_id
+    finally:
+        builder.reset_staging_owner(token)
+
+
+def test_a_removed_attempt_cannot_stage_again_and_leaves_no_record():
+    """ALL-1558: a stage call from a failed attempt that lands after clean-up is refused."""
+    workspace = _workspace()
+    kept = _stage_as(workspace, "writer-1/a1", "a")
+    failed = _stage_as(workspace, "writer-2/a1", "b", pending_ref_id="ref-b")
+
+    removed = workspace.remove_candidates_staged_by("writer-2/a1", reason="cleanup")
+
+    assert removed == [failed] and set(workspace.candidates) == {kept}
+    before = (dict(workspace.candidates), workspace.revision)
+    with pytest.raises(builder.ExtractionBuilderClosedOwnerError, match="writer-2/a1"):
+        _stage_as(workspace, "writer-2/a1", "late b", pending_ref_id="ref-b")
+    assert (dict(workspace.candidates), workspace.revision) == before
+    assert workspace.candidates_staged_by("writer-2/a1") == []
+    # The writer's next attempt stages normally, with the same pending_ref_id, under a new ID.
+    rerun = _stage_as(workspace, "writer-2/a2", "b", pending_ref_id="ref-b")
+    assert rerun not in (kept, failed) and workspace.candidates_staged_by("writer-2/a2") == [rerun]

@@ -1133,8 +1133,31 @@ def _input_item_ids_refused(**changes):
     return ResponsesWebSocketError(payload)
 
 
+# The frame OpenAI sent on 2026-11-16 and 17 (Sentry AI-CURATION-BACKEND-PROD-38) for a
+# fan-out writer's second request, whose input[2] is the first turn's reasoning item.
+_REASONING_INPUT_REFUSED = {
+    "type": "error",
+    "error": {
+        "message": "This request does not support reasoning input in 'input[2]' with 'store=true'.",
+        "type": "invalid_request_error",
+        "param": "input[2]",
+        "code": "unsupported_parameter",
+    },
+    "status": 400,
+}
+
+
+def _reasoning_input_refused(**changes):
+    from copy import deepcopy
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    payload = deepcopy(_REASONING_INPUT_REFUSED)
+    payload["error"].update(changes)
+    return ResponsesWebSocketError(payload)
+
+
 async def _stream_with_refusals(monkeypatch, failures, *, previous_response_id=None,
-                                retries=None, before_error=()):
+                                retries=None, before_error=(), refusal=_input_item_ids_refused):
     """Run the real SDK retry loop over a request the provider refuses `failures` times.
 
     Uses the websocket model's own retry advice and a stateless request, as the
@@ -1166,7 +1189,7 @@ async def _stream_with_refusals(monkeypatch, failures, *, previous_response_id=N
             if len(sent) <= failures:
                 for event in before_error:
                     yield event
-                raise _input_item_ids_refused()
+                raise refusal()
             yield {"type": "response.completed"}
 
         return stream()
@@ -1284,6 +1307,77 @@ async def test_other_invalid_request_frames_are_still_not_retried(monkeypatch, c
         ):
             pass
     assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_a_request_refused_for_its_reasoning_input_is_resent_once_unchanged(monkeypatch, caplog):
+    with caplog.at_level("WARNING", logger="src.lib.openai_agents.config"):
+        events, sent, rewinds, error = await _stream_with_refusals(
+            monkeypatch, failures=1, refusal=_reasoning_input_refused)
+    assert error is None
+    assert events == [{"type": "response.completed"}]
+    assert len(sent) == 2 and len(rewinds) == 1
+    assert sent[1] == sent[0], "the resend keeps every replayed item exactly"
+    assert "retry attempt 1, resend window 1" in caplog.text
+    marked, = [record for record in caplog.records if getattr(record, "retry_marker", None)]
+    assert marked.retry_marker == "responses_reasoning_input_refused"
+    assert "responses_reasoning_input_refused:" in caplog.text
+    assert "responses_input_item_ids_refused" not in caplog.text, "each form keeps its own marker"
+    assert "store=true" not in caplog.text and "input[2]" not in caplog.text, "no frame content in logs"
+
+
+@pytest.mark.asyncio
+async def test_a_second_reasoning_input_refusal_is_raised(monkeypatch):
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    events, sent, _, error = await _stream_with_refusals(
+        monkeypatch, failures=5, refusal=_reasoning_input_refused)
+    assert isinstance(error, ResponsesWebSocketError) and error.code == "unsupported_parameter"
+    assert len(sent) == 2, "one resend, although OPENAI_MODEL_MAX_RETRIES allows three"
+    assert events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retries,expected_requests", [(0, 1), (2, 3)])
+async def test_reasoning_input_resends_follow_the_shared_setting(monkeypatch, retries, expected_requests):
+    _, sent, _, error = await _stream_with_refusals(
+        monkeypatch, failures=5, retries=retries, refusal=_reasoning_input_refused)
+    assert error is not None and len(sent) == expected_requests
+
+
+@pytest.mark.asyncio
+async def test_a_reasoning_input_refusal_after_a_response_event_is_not_resent(monkeypatch):
+    tool_call = {"type": "response.output_item.added",
+                 "item": {"type": "function_call", "call_id": "call_fixture", "name": "lookup_record"}}
+    events, sent, rewinds, error = await _stream_with_refusals(
+        monkeypatch, failures=1, before_error=[tool_call], refusal=_reasoning_input_refused)
+    assert error is not None and len(sent) == 1 and rewinds == []
+    assert events == [tool_call]
+
+
+@pytest.mark.asyncio
+async def test_a_stateful_request_refused_for_its_reasoning_input_is_not_replayed(monkeypatch):
+    _, sent, _, error = await _stream_with_refusals(
+        monkeypatch, failures=1, previous_response_id="resp_fixture", refusal=_reasoning_input_refused)
+    assert error is not None and len(sent) == 1, "no replay approval for previous_response_id requests"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"param": "input[]"},
+    {"param": "input[x]"},
+    {"param": "input[-1]"},
+    {"param": "input[2].content"},
+    {"param": "inputs[2]"},
+    {"param": " input[2]"},
+    {"code": "invalid_value"},
+    {"type": "server_error"},
+], ids=["no-index", "word-index", "negative-index", "nested-field", "other-name", "padded",
+        "other-code", "other-type"])
+async def test_other_indexed_param_frames_are_not_retried(monkeypatch, changes):
+    _, sent, rewinds, error = await _stream_with_refusals(
+        monkeypatch, failures=5, refusal=lambda: _reasoning_input_refused(**changes))
+    assert error is not None and len(sent) == 1 and rewinds == []
 
 
 @pytest.mark.asyncio
@@ -1447,6 +1541,36 @@ async def test_the_non_streaming_path_resends_once_over_a_fresh_connection(monke
     assert [len(connection.sent) for connection in opened] == [1, 1]
     assert opened[1].sent[0] == opened[0].sent[0], "the same request frame, item IDs included"
     assert opened[1].sent[0]["input"][0]["id"] == "fc_fixture"
+
+
+@pytest.mark.asyncio
+async def test_the_non_streaming_path_resends_a_reasoning_input_refusal_over_a_fresh_connection(monkeypatch):
+    """Fan-out writers run non-streaming; their refused second request is resent once."""
+    from agents.models.interface import ModelTracing
+    from agents.run_internal.model_retry import get_response_with_retry
+
+    model, client, opened = _ws_model_over(monkeypatch, [
+        _RecordedWebSocket([_REASONING_INPUT_REFUSED]),
+        _RecordedWebSocket([{"type": "response.completed", "sequence_number": 0, "response": _RESENT_RESPONSE}]),
+    ])
+
+    async def get_response():
+        return await model.get_response(system_instructions=None, input=list(_REPLAYED_INPUT),
+            model_settings=ModelSettings(), tools=[], output_schema=None, handoffs=[],
+            tracing=ModelTracing.DISABLED, previous_response_id=None, conversation_id=None, prompt=None)
+
+    async def rewind():
+        pass
+
+    try:
+        response = await get_response_with_retry(get_response=get_response, rewind=rewind,
+            retry_settings=build_default_model_retry(), get_retry_advice=model.get_retry_advice,
+            previous_response_id=None, conversation_id=None)
+    finally:
+        await client.close()
+    assert response.response_id == "resp_resent"
+    assert len(opened) == 2 and opened[0].closed, "the refused connection is dropped, a new one opened"
+    assert opened[1].sent[0] == opened[0].sent[0], "the same request frame"
 
 
 @pytest.mark.asyncio

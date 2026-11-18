@@ -705,6 +705,32 @@ def create_discard_recorded_evidence_tool(
     return discard_recorded_evidence
 
 
+def remove_evidence_records(
+    records: list[dict[str, Any]],
+    evidence_record_ids: list[str],
+    *,
+    document_id: str,
+) -> list[str]:
+    """Remove records by ID and document from an evidence list, in place.
+
+    For fan-out writer re-runs only (ALL-1558): the records a failed writer attempt
+    alone recorded leave the run's list before the writer runs again, so the next
+    attempt records identical evidence afresh under the same ID. Like every other
+    mutation of this list, it runs on the event loop thread (evidence tools are
+    async), so it needs no lock. An ID that is not in the list is a bookkeeping
+    error and raises before anything is removed. Returns the removed IDs.
+    """
+
+    targets = []
+    for evidence_record_id in evidence_record_ids:
+        record = _find_record(evidence_record_id, document_id=document_id, records=records)
+        if record is None:
+            raise ValueError(f"Evidence record {evidence_record_id!r} is not in the run's evidence list")
+        targets.append(record)
+    records[:] = [record for record in records if not any(record is target for target in targets)]
+    return [str(record.get("evidence_record_id")) for record in targets]
+
+
 def create_update_recorded_evidence_metadata_tool(
     document_id: str,
     user_id: str,
@@ -784,6 +810,7 @@ __all__ = [
     "find_active_evidence_record",
     "find_evidence_record_in_records",
     "get_active_evidence_records_snapshot",
+    "remove_evidence_records",
     "reset_active_evidence_records",
     "set_active_evidence_records",
 ]

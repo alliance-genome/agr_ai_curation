@@ -68,6 +68,10 @@ class ExtractionBuilderOwnershipError(ExtractionBuilderError):
     """Raised when a parallel writer would overwrite another writer's draft."""
 
 
+class ExtractionBuilderClosedOwnerError(ExtractionBuilderError):
+    """Raised when a removed fan-out writer attempt tries to change records."""
+
+
 _ACTIVE_EXTRACTION_BUILDER_WORKSPACE: ContextVar[
     "ExtractionBuilderWorkspace | None"
 ] = ContextVar(
@@ -167,6 +171,10 @@ class ExtractionBuilderWorkspace:
         self.candidates: dict[str, ExtractionBuilderCandidate] = {}
         # Runtime bookkeeping for fan-out writers; never part of the snapshot.
         self._staged_by: dict[str, str] = {}
+        # IDs of records removed with a failed writer attempt; never allocated again.
+        self._removed_ids: set[str] = set()
+        # Staging owners whose records were removed; they may not change records again.
+        self._closed_owners: set[str] = set()
         self.validation_errors: list[dict[str, Any]] = []
         self.finalization: ExtractionBuilderFinalization | None = None
         self.finalized_candidate_ids: tuple[str, ...] = ()
@@ -185,6 +193,7 @@ class ExtractionBuilderWorkspace:
     ) -> ExtractionBuilderCandidate:
         """Allocate and upsert a draft under the same lock as its journal write."""
         self._ensure_mutable()
+        self._ensure_owner_open()
         prefix = _required_string(id_prefix, "id_prefix")
         owner = _STAGING_OWNER.get()
         candidate_id = None
@@ -203,7 +212,7 @@ class ExtractionBuilderWorkspace:
         if candidate_id is None:
             number = len(self.candidates) + 1
             candidate_id = f"{prefix}-{number}"
-            while candidate_id in self.candidates:
+            while candidate_id in self.candidates or candidate_id in self._removed_ids:
                 number += 1
                 candidate_id = f"{prefix}-{number}"
         candidate = self.upsert_candidate(
@@ -223,6 +232,39 @@ class ExtractionBuilderWorkspace:
         return [candidate_id for candidate_id, staged_by in self._staged_by.items() if staged_by == owner]
 
     @_synchronized_workspace
+    def remove_candidates_staged_by(self, owner: str, *, reason: str) -> list[str]:
+        """Remove every record a fan-out writer created, before that writer runs again.
+
+        Ownership bookkeeping only (ALL-1558): a writer attempt that failed leaves
+        nothing behind, so its next attempt starts on a clean slate and can never
+        revive one of these records through a pending_ref_id. Each removal is
+        emitted as a candidate mutation, as upserts and discards are, so the trace
+        and run history show the record leaving. A removed ID is never allocated
+        again, and the owner is closed: any later change from it (a stage call of
+        the failed attempt that lands after the clean-up) raises
+        ExtractionBuilderClosedOwnerError and leaves no record. Returns the removed
+        IDs in staging order.
+        """
+        self._ensure_mutable()
+        self._closed_owners.add(owner)
+        removed = self.candidates_staged_by(owner)
+        for candidate_id in removed:
+            del self.candidates[candidate_id]
+            del self._staged_by[candidate_id]
+            self._removed_ids.add(candidate_id)
+            self.revision += 1
+            self.updated_at = _now_iso()
+            self._emit(
+                "extraction_builder.candidate_mutation",
+                output_summary={
+                    "action": "remove",
+                    "candidate_id": candidate_id,
+                    "reason": reason,
+                },
+            )
+        return removed
+
+    @_synchronized_workspace
     def upsert_candidate(
         self,
         *,
@@ -233,6 +275,7 @@ class ExtractionBuilderWorkspace:
         status: str = CANDIDATE_STATUS_DRAFT,
     ) -> ExtractionBuilderCandidate:
         self._ensure_mutable()
+        self._ensure_owner_open()
         normalized_candidate_id = _required_string(candidate_id, "candidate_id")
         if self.generic_profile is not None:
             if "curatable_objects" in staged_fields:
@@ -275,6 +318,7 @@ class ExtractionBuilderWorkspace:
     @_synchronized_workspace
     def discard_candidate(self, candidate_id: str, *, reason: str | None = None) -> None:
         self._ensure_mutable()
+        self._ensure_owner_open()
         candidate = self._candidate(candidate_id)
         candidate.status = CANDIDATE_STATUS_DISCARDED
         self._touch_candidate(candidate)
@@ -534,6 +578,14 @@ class ExtractionBuilderWorkspace:
             raise ExtractionBuilderPlanningError(
                 "Staging and corrections are disabled during planning. Do not stage records "
                 "now: finish reading and submit your plan with submit_extraction_plan."
+            )
+
+    def _ensure_owner_open(self) -> None:
+        owner = _STAGING_OWNER.get()
+        if owner is not None and owner in self._closed_owners:
+            raise ExtractionBuilderClosedOwnerError(
+                f"Staging owner {owner!r} was removed after its writer attempt failed; "
+                "its records cannot be changed."
             )
 
     def _ensure_scope_value(self, field_name: str, value: str | None) -> None:
@@ -823,6 +875,7 @@ __all__ = [
     "CANDIDATE_STATUS_NEEDS_PATCH",
     "CANDIDATE_STATUS_VALID",
     "ExtractionBuilderCandidate",
+    "ExtractionBuilderClosedOwnerError",
     "ExtractionBuilderError",
     "ExtractionBuilderFinalization",
     "ExtractionBuilderFinalizationConflict",
