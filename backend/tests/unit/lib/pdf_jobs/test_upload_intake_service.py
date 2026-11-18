@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import BackgroundTasks, UploadFile
@@ -22,6 +22,7 @@ from src.lib.document_sources.import_selection import (
 )
 from src.lib.document_sources.models import (
     DocumentSourceConfigError,
+    DocumentSourceError,
     DocumentSourceHealth,
     SourceAccessPolicy,
     SourceAccessScope,
@@ -31,6 +32,7 @@ from src.lib.document_sources.models import (
     SourceArtifactStatus,
     SourceReference,
 )
+from src.lib.observability import runtime
 from src.lib.pdf_jobs import upload_intake_service as upload_intake_module
 from src.lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
@@ -766,6 +768,67 @@ async def test_intake_upload_enabled_provider_no_match_falls_back_to_local_pdf_p
     assert record.viewer_mode is None
     assert record.source_provider is None
     assert session.commit_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reporting_fails", [False, True])
+async def test_checksum_provider_failure_reports_sanitized_503(tmp_path, monkeypatch, caplog, reporting_fails):
+    sensitive = "synthetic-private-provider-response"
+    provider = _FakeDocumentSourceProvider()
+    monkeypatch.setattr(
+        provider,
+        "find_artifacts_by_checksum",
+        AsyncMock(side_effect=DocumentSourceError(sensitive)),
+    )
+    report = Mock(side_effect=RuntimeError("synthetic-reporting-failure") if reporting_fails else None)
+    monkeypatch.setattr(runtime, "report_runtime_exception", report)
+    dispatch = _DispatchRecorder()
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=_FakeSession,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        provision_user_fn=AsyncMock(return_value=SimpleNamespace(id=42)),
+        document_source_import_enabled_fn=lambda: True,
+        document_source_provider_factory=lambda: provider,
+    )
+
+    with pytest.raises(UploadIntakeProviderDecisionError) as exc:
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+            document_source_context=DocumentSourceRequestContext(
+                bearer_kind=ProviderBearerKind.SERVICE,
+                provider_groups=(),
+                authorized_group_ids=(),
+                curator_token="synthetic-reader-token",
+            ),
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == {
+        "error": "document_source_unavailable",
+        "message": "Document-source lookup is unavailable.",
+        "suggestion": "Try again later or contact support if this persists.",
+    }
+    report.assert_called_once()
+    (reported,) = report.call_args.args
+    assert str(reported) == "Document-source checksum lookup failed"
+    assert reported.__traceback__ is not None
+    assert reported.__cause__ is None
+    assert reported.__context__ is None
+    assert report.call_args.kwargs == {
+        "component": "upload_intake",
+        "operation": "checksum_lookup_failed",
+        "context": {"exception_type": "DocumentSourceError"},
+    }
+    assert sensitive not in caplog.text
+    assert provider.closed
+    assert not any((tmp_path / "user-1").iterdir())
+    assert dispatch.calls == []
+    assert dispatch.provider_markdown_calls == []
+    assert dispatch.provider_conversion_calls == []
 
 
 @pytest.mark.asyncio

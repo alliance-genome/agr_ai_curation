@@ -40,6 +40,7 @@ from src.lib.document_sources.import_selection import (
     select_checksum_import_candidate,
 )
 from src.lib.document_sources.models import ProviderBearerKind
+from src.lib.observability import runtime
 from src.lib.packages.document_source_provider_models import (
     DevelopmentReaderCredentials,
 )
@@ -191,6 +192,8 @@ async def test_fb_only_dev_user_cannot_import_a_wb_only_paper_by_checksum(monkey
 
 @pytest.mark.asyncio
 async def test_service_reader_checksum_upload_refuses_unset_license_before_ingestion(monkeypatch, tmp_path):
+    report = Mock()
+    monkeypatch.setattr(runtime, "report_runtime_exception", report)
     context = await _dev_context(monkeypatch, "FB")
     assert context.bearer_kind is ProviderBearerKind.SERVICE
     abc = _AllAccessABC("FB")
@@ -226,6 +229,7 @@ async def test_service_reader_checksum_upload_refuses_unset_license_before_inges
 
     assert denied.value.status_code == 403
     assert denied.value.detail["error"] == "document_source_access_denied"
+    report.assert_not_called()
     assert [request.url.path for request in abc.requests] == [
         f"/api/reference/referencefile/by_md5/{checksum}",
         "/api/reference/AGRKB:101",
