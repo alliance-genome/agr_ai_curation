@@ -89,7 +89,7 @@ export default function OutputFieldEditor({ format, definition, binding, value, 
     <Button variant={selected ? 'outlined' : 'text'} onClick={() => void edit()} disabled={readOnly || sources.length === 0}>Choose output fields</Button>
     <Dialog open={open} maxWidth="lg" fullWidth aria-labelledby="output-fields-title">
       <DialogTitle id="output-fields-title">Choose output fields · {format.toUpperCase()}</DialogTitle>
-      <DialogContent dividers sx={{ display: 'grid', gap: 2 }}>
+      <DialogContent dividers sx={{ display: 'grid', gap: 2, gridAutoRows: 'max-content' }}>
         <Typography>Choose what to include from the connected steps. Each item keeps its own row; records from different steps are never joined.</Typography>
         <Typography variant="body2">{format === 'json'
           ? 'Answers with parts stay as objects, and lists stay as arrays. Missing answers are null.'

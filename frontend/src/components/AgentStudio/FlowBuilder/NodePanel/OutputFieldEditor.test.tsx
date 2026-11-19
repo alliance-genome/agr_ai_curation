@@ -65,6 +65,18 @@ describe('Output field editor', () => {
     await user.click(screen.getByRole('button', { name: 'Choose output fields' }))
     expect(await screen.findByRole('textbox', { name: 'Column 1 name' })).toHaveValue('Reported stock')
   })
+  // Style contract only: jsdom computes no layout, so this cannot show that the pick list keeps its
+  // height. It pins the grid rule that does (rows keep their natural height and the window content
+  // scrolls). The layout itself was checked in a real browser for ALL-1566.
+  it('keeps window grid rows at their natural height so chosen fields do not squeeze the pick list (style contract)', async () => {
+    const user = userEvent.setup()
+    render(<OutputFieldEditor format="tsv" definition={definition} binding={binding} value={null} onChange={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: 'Choose output fields' }))
+    const pickList = await screen.findByRole('table', { name: 'Available output fields' })
+    const content = pickList.closest('.MuiDialogContent-root')
+    expect(content).not.toBeNull()
+    expect(content).toHaveStyle({ display: 'grid', gridAutoRows: 'max-content' })
+  })
   it('shows loading and unavailable source feedback without enabling Apply', async () => {
     let resolve!: (value: unknown) => void
     mocks.validate.mockImplementation(() => new Promise((r) => { resolve = r }))
