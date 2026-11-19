@@ -29,7 +29,7 @@ def _persist_failure_notice(
     message: str, partial_response: str, trace_id: str | None,
     document_id: str | None, persisted_extraction_refs: Any,
     failure_state: str = "turn_failed",
-    flow_terminal_events: Any = None,
+    recovery_files: Sequence[Dict[str, Any]] = (),
 ) -> tuple[str, str]:
     """Keep the original request and safe failure available after a reload."""
     if persisted_extraction_refs:
@@ -39,10 +39,10 @@ def _persist_failure_notice(
         )
     # File events identify outputs already created; publish only after this
     # failed-turn transcript is durable. Never replay provisional success text.
-    recovery_events = [dict(event) for event in (flow_terminal_events or []) if event.get("type") == "FILE_READY"]
-    if recovery_events:
-        message += " Generated files from completed steps remain available below."
-    content = message
+    saved_message = message
+    if recovery_files:
+        saved_message += " Generated files from completed steps remain available below."
+    content = saved_message
     if partial_response.strip():
         content += "\n\nPartial response (the request did not finish):\n" + partial_response
     try:
@@ -51,8 +51,8 @@ def _persist_failure_notice(
             user_message=user_message, assistant_message=content,
             trace_id=trace_id, document_id=document_id,
             extraction_candidates=[], persisted_extraction_refs=persisted_extraction_refs,
-            failure_message=message, failure_state=failure_state,
-            flow_terminal_events=recovery_events,
+            failure_message=saved_message, failure_state=failure_state,
+            flow_terminal_events=recovery_files,
         )
     except ChatHistorySessionNotFoundError:
         return "session_gone", "Chat session is no longer available. Copy any visible text before leaving."
@@ -72,7 +72,7 @@ def _persist_failure_notice(
             type(exc).__name__, extra={"sentry_skip_event": True},
         )
         return "turn_save_failed", message + " This notice could not be saved to chat history; copy any visible text before leaving."
-    return failure_state, message
+    return failure_state, saved_message
 
 
 class _PreferredFlowContextResolutionError(RuntimeError):
@@ -297,7 +297,7 @@ async def chat_endpoint(
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
         validation_review = None
-        flow_terminal_events: List[Dict[str, Any]] = []
+        flow_outcome = FlowRunOutcome()
 
         with gen_ai_workflow_transaction(
             name="/api/chat",
@@ -309,6 +309,7 @@ async def chat_endpoint(
         ) as sentry_transaction:
             async for event in _run_resolved_chat_route(
                 route=resolved_route,
+                outcome=flow_outcome,
                 db=db,
                 db_user_id=db_user.id,
                 context_messages=context_messages,
@@ -328,16 +329,6 @@ async def chat_endpoint(
             ):
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
-
-                if event_type == _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE:
-                    internal = event.get("internal")
-                    raw_events = internal.get("events") if isinstance(internal, dict) else None
-                    flow_terminal_events = (
-                        [dict(item) for item in raw_events if isinstance(item, dict)]
-                        if isinstance(raw_events, list)
-                        else []
-                    )
-                    continue
 
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
@@ -427,11 +418,12 @@ async def chat_endpoint(
                     user_message=effective_user_message, message=error_message,
                     partial_response=full_response, trace_id=trace_id, document_id=document_id,
                     persisted_extraction_refs=persisted_extraction_refs,
-                    flow_terminal_events=flow_terminal_events,
+                    recovery_files=flow_outcome.retained_file_events(),
                 )
                 raise HTTPException(status_code=500, detail=error_message)
 
             if run_finished:
+                flow_terminal_events = flow_outcome.events_for_persistence()
                 set_sentry_span_status(sentry_transaction, "ok")
                 set_redacted_ai_span_data(
                     sentry_transaction,
@@ -554,7 +546,7 @@ async def chat_endpoint(
                     message="The request ended before completion. You can send the request again later.",
                     partial_response=full_response, trace_id=trace_id, document_id=document_id,
                     persisted_extraction_refs=persisted_extraction_refs,
-                    flow_terminal_events=flow_terminal_events,
+                    recovery_files=flow_outcome.retained_file_events(),
                 )
                 raise HTTPException(status_code=500, detail=error_message)
 
@@ -568,7 +560,9 @@ async def chat_endpoint(
             user_message=effective_user_message,
             message="Validation review was stopped. Saved results and history remain available for continued review.",
             partial_response=full_response, trace_id=trace_id, document_id=document_id,
-            persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted")
+            persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted",
+            recovery_files=flow_outcome.retained_file_events(include_queued=True),
+        )
         return ChatResponse(response=notice, session_id=session_id)
     except Exception as e:
         _, error_message = _persist_failure_notice(
@@ -576,7 +570,7 @@ async def chat_endpoint(
             user_message=effective_user_message, message=classify_failure(e).message,
             partial_response=full_response, trace_id=trace_id, document_id=document_id,
             persisted_extraction_refs=persisted_extraction_refs,
-            flow_terminal_events=flow_terminal_events,
+            recovery_files=flow_outcome.retained_file_events(),
         )
         raise_sanitized_http_exception(
             logger,
@@ -846,7 +840,7 @@ async def chat_stream_endpoint(
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         persisted_extraction_refs: List[PersistedExtractionResultRef] = []
         validation_review = None
-        flow_terminal_events: List[Dict[str, Any]] = []
+        flow_outcome = FlowRunOutcome()
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
         reviewable_extractions: List[Dict[str, Any]] = []
@@ -862,9 +856,32 @@ async def chat_stream_endpoint(
         )
         sentry_transaction = sentry_transaction_context_manager.__enter__()
 
+        def persist_failure_events(message: str, *, state: str, error_type: str | None = None) -> list[str]:
+            recovery_files = flow_outcome.retained_file_events(include_queued=state == "turn_interrupted")
+            terminal_type, notice = _persist_failure_notice(
+                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
+                user_message=prepared_turn.effective_user_message, message=message,
+                partial_response="" if resolved_route.mode == "flow" else full_response,
+                trace_id=trace_id, document_id=document_id,
+                persisted_extraction_refs=persisted_extraction_refs, failure_state=state,
+                recovery_files=recovery_files,
+            )
+            events = []
+            if terminal_type == state:
+                for file_event in recovery_files:
+                    events.append(_stream_event_sse({
+                        **file_event, "session_id": current_session_id, "turn_id": current_turn_id, "trace_id": trace_id,
+                    }))
+            events.append(_stream_event_sse(_build_terminal_turn_event(
+                terminal_type, assistant_rescue_allowed=False, session_id=current_session_id,
+                turn_id=current_turn_id, trace_id=trace_id, message=notice, error_type=error_type,
+            )))
+            return events
+
         try:
             async for event in _run_resolved_chat_route(
                 route=resolved_route,
+                outcome=flow_outcome,
                 db=db,
                 db_user_id=db_user.id,
                 context_messages=[
@@ -915,16 +932,6 @@ async def chat_stream_endpoint(
 
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
-
-                if event_type == _PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE:
-                    internal = event.get("internal")
-                    raw_events = internal.get("events") if isinstance(internal, dict) else None
-                    flow_terminal_events = (
-                        [dict(item) for item in raw_events if isinstance(item, dict)]
-                        if isinstance(raw_events, list)
-                        else []
-                    )
-                    continue
 
                 if "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
@@ -1074,56 +1081,21 @@ async def chat_stream_endpoint(
                 yield _stream_event_sse(flat_event)
 
             if interrupted_message:
-                terminal_type, interrupted_message = _persist_failure_notice(
-                    session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
-                    user_message=prepared_turn.effective_user_message,
-                    message=interrupted_message, partial_response=full_response,
-                    trace_id=trace_id, document_id=document_id,
-                    persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted",
-                )
                 sentry_terminal_status = "cancelled"
                 set_sentry_span_status(sentry_transaction, "cancelled")
-                yield _stream_event_sse(
-                    _build_terminal_turn_event(
-                        terminal_type,
-                    assistant_rescue_allowed=False,
-                        session_id=current_session_id,
-                        turn_id=current_turn_id,
-                        trace_id=trace_id,
-                        message=interrupted_message,
-                    )
-                )
+                for event in persist_failure_events(interrupted_message, state="turn_interrupted"):
+                    yield event
                 return
 
             if runner_error_message:
-                terminal_type, runner_error_message = _persist_failure_notice(
-                    session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
-                    user_message=prepared_turn.effective_user_message,
-                    message=runner_error_message, partial_response=full_response,
-                    trace_id=trace_id, document_id=document_id,
-                    persisted_extraction_refs=persisted_extraction_refs,
-                    flow_terminal_events=flow_terminal_events,
-                )
-                if terminal_type == "turn_failed":
-                    for saved_event in flow_terminal_events:
-                        if saved_event.get("type") == "FILE_READY":
-                            yield _stream_event_sse({**saved_event, "session_id": current_session_id, "turn_id": current_turn_id, "trace_id": trace_id})
                 sentry_terminal_status = "error"
                 set_sentry_span_status(sentry_transaction, "internal_error")
-                yield _stream_event_sse(
-                    _build_terminal_turn_event(
-                        terminal_type,
-                    assistant_rescue_allowed=False,
-                        session_id=current_session_id,
-                        turn_id=current_turn_id,
-                        trace_id=trace_id,
-                        message=runner_error_message,
-                        error_type=runner_error_type,
-                    )
-                )
+                for event in persist_failure_events(runner_error_message, state="turn_failed", error_type=runner_error_type):
+                    yield event
                 return
 
             if run_finished:
+                flow_terminal_events = flow_outcome.events_for_persistence()
                 sentry_terminal_status = "completed"
                 set_sentry_span_status(sentry_transaction, "ok")
                 if evidence_records and not evidence_summary_event_received:
@@ -1342,15 +1314,9 @@ async def chat_stream_endpoint(
         except ReviewInterrupted:
             sentry_terminal_status = "cancelled"
             set_sentry_span_status(sentry_transaction, "cancelled")
-            terminal_type, notice = _persist_failure_notice(
-                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
-                user_message=prepared_turn.effective_user_message,
-                message="Validation review was stopped. Saved results and history remain available for continued review.",
-                partial_response=full_response, trace_id=trace_id, document_id=document_id,
-                persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted")
-            yield _stream_event_sse(_build_terminal_turn_event(
-                terminal_type, assistant_rescue_allowed=False, session_id=current_session_id,
-                turn_id=current_turn_id, trace_id=trace_id, message=notice))
+            notice = "Validation review was stopped. Saved results and history remain available for continued review."
+            for event in persist_failure_events(notice, state="turn_interrupted"):
+                yield event
         except asyncio.CancelledError:
             sentry_terminal_status = "cancelled"
             set_sentry_span_status(sentry_transaction, "cancelled")
@@ -1364,12 +1330,9 @@ async def chat_stream_endpoint(
                     "turn_id": current_turn_id,
                 },
             )
-            terminal_type, interruption_notice = _persist_failure_notice(
-                session_id=current_session_id, user_id=user_id, turn_id=current_turn_id,
-                user_message=prepared_turn.effective_user_message,
-                message="The connection was interrupted before the request finished. You can send the request again later.",
-                partial_response=full_response, trace_id=trace_id, document_id=document_id,
-                persisted_extraction_refs=persisted_extraction_refs, failure_state="turn_interrupted",
+            terminal_events = persist_failure_events(
+                "The connection was interrupted before the request finished. You can send the request again later.",
+                state="turn_interrupted", error_type="StreamCancelled",
             )
             yield _stream_event_sse(
                 _stream_event_payload(
@@ -1387,17 +1350,8 @@ async def chat_stream_endpoint(
                     },
                 )
             )
-            yield _stream_event_sse(
-                _build_terminal_turn_event(
-                    terminal_type,
-                    assistant_rescue_allowed=False,
-                    session_id=current_session_id,
-                    turn_id=current_turn_id,
-                    trace_id=trace_id,
-                    message=interruption_notice,
-                    error_type="StreamCancelled",
-                )
-            )
+            for event in terminal_events:
+                yield event
         except Exception as exc:
             sentry_terminal_status = "error"
             set_sentry_span_status(sentry_transaction, "internal_error")

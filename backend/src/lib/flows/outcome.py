@@ -83,6 +83,7 @@ class FlowRunOutcome:
     persistence_status: FlowPersistenceStatus = "pending"
     persistence_result: dict[str, Any] = field(default_factory=dict)
     _success_output_events: list[dict[str, Any]] = field(default_factory=list)
+    _queued_files: dict[tuple[str, str, str], dict[str, Any]] = field(default_factory=dict)
     _run_finished_event: dict[str, Any] | None = None
     _curation_handoff_ready_event: dict[str, Any] | None = None
     _run_error_event: dict[str, Any] | None = None
@@ -101,6 +102,8 @@ class FlowRunOutcome:
         if event_type in _TYPED_SUCCESS_OUTPUT_EVENTS:
             candidate = dict(event)
             identity = self._success_output_identity(candidate)
+            if event_type == "FILE_READY":
+                self._queued_files.pop(identity, None)
             if not any(
                 self._success_output_identity(existing) == identity
                 for existing in self._success_output_events
@@ -129,7 +132,7 @@ class FlowRunOutcome:
                 in FLOW_FAILURE_REASONS_REPORTED_UPSTREAM
             )
             self.final_user_visible_text = None
-            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+            self._success_output_events = self.retained_file_events()
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             return
@@ -174,7 +177,7 @@ class FlowRunOutcome:
             self.status = cast(FlowRunStatus, terminal_status)
             self.stop_reason = str(event.get("review_reason") or "Review did not complete.")
             self.final_user_visible_text = None
-            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+            self._success_output_events = self.retained_file_events()
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             return
@@ -184,7 +187,7 @@ class FlowRunOutcome:
                 event.get("failure_reason") or self.failure_reason or "Flow execution failed."
             )
             self.final_user_visible_text = None
-            self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+            self._success_output_events = self.retained_file_events()
             self._run_finished_event = None
             self._curation_handoff_ready_event = None
             self._flow_finished_event["status"] = "failed"
@@ -220,6 +223,18 @@ class FlowRunOutcome:
     @property
     def terminal(self) -> bool:
         return self._flow_finished_event is not None or self._run_error_event is not None
+
+    def retain_queued_file(self, details: dict[str, Any]) -> None:
+        """Keep a download available if interruption preempts the executor's public yield."""
+        event = {"type": "FILE_READY", "details": dict(details)}
+        self._queued_files[self._success_output_identity(event)] = event
+
+    def retained_file_events(self, *, include_queued: bool = False) -> list[dict[str, Any]]:
+        """Include executor-buffered downloads only when recovering an interrupted turn."""
+        files = [dict(event) for event in self._success_output_events if event["type"] == "FILE_READY"]
+        if include_queued:
+            files.extend(dict(event) for event in self._queued_files.values())
+        return files
 
     def events_for_persistence(self) -> list[dict[str, Any]]:
         """Return the canonical terminal order to store for durable replay."""
@@ -282,7 +297,7 @@ class FlowRunOutcome:
         self.failure_tool = None
         self.failure_already_reported = True
         self.final_user_visible_text = None
-        self._success_output_events = [item for item in self._success_output_events if item.get("type") == "FILE_READY"]
+        self._success_output_events = self.retained_file_events()
         self._run_finished_event = None
         self._curation_handoff_ready_event = None
         self._run_error_event = None

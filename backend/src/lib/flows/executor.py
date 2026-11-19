@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Literal, Mapping, Optional, Sequence, Set, cast
+from typing import Any, AsyncGenerator, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Set, cast
 from uuid import UUID, uuid4
 
 from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
@@ -4142,6 +4142,7 @@ async def execute_flow(
     model_provider_override: str | None = None,
     benchmark_routes: Mapping[str, Any] | None = None,
     review_parent_scope_id: str | None = None,
+    on_file_queued: Callable[[dict[str, Any]], None] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -4164,6 +4165,7 @@ async def execute_flow(
         chat_route_mode: Optional server-resolved ordinary-chat route mode
         chat_route_target_id: Optional server-resolved flow identity
         inspection_context: Server-authorized prior refs for preferred-flow inspection
+        on_file_queued: Receives download details for interruption recovery before terminal delivery
 
     Yields:
         dict: Streaming events - FLOW_STARTED, then all regular chat events
@@ -4416,6 +4418,8 @@ async def execute_flow(
             if identity == existing_identity:
                 return
         pending_output_events.append(output_event)
+        if event_type == "FILE_READY" and on_file_queued is not None:
+            on_file_queued(details)
 
     runner_stream = run_agent_streamed(
         context_messages=[{"role": "user", "content": prompt}],

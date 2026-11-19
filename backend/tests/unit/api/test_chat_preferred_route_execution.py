@@ -264,9 +264,11 @@ async def test_selected_agent_receives_exact_ordinary_chat_input(monkeypatch, ag
     monkeypatch.setattr(chat_common, "get_agent_by_id", _get_agent)
     monkeypatch.setattr(chat_common, "run_agent_streamed", _runner)
     message = "For MOD:619738, assess GO:0005515 and explain the evidence."
+    outcome = FlowRunOutcome()
     events = [
         event
         async for event in chat_common._run_resolved_chat_route(
+            outcome=outcome,
             route=ResolvedChatRoute(
                 mode="agent",
                 target_id=agent_id,
@@ -347,9 +349,11 @@ async def test_selected_rgd_flow_receives_current_message_and_surfaces_distinct_
 
     monkeypatch.setattr(chat_common, "execute_flow", _execute_flow)
     message = "For MOD:619738, assess GO:0005515. " + ("x" * 2500)
+    outcome = FlowRunOutcome()
     events = [
         event
         async for event in chat_common._run_resolved_chat_route(
+            outcome=outcome,
             route=ResolvedChatRoute(
                 mode="flow",
                 target_id=str(flow_id),
@@ -395,12 +399,7 @@ async def test_selected_rgd_flow_receives_current_message_and_surfaces_distinct_
             "agent_key": "disease_extractor",
         },
     ]
-    terminal = next(
-        event
-        for event in events
-        if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE
-    )
-    assert [event["type"] for event in terminal["internal"]["events"]] == [
+    assert [event["type"] for event in outcome.events_for_persistence()] == [
         "CHAT_OUTPUT_READY",
         "FLOW_FINISHED",
     ]
@@ -445,9 +444,11 @@ async def test_failed_preferred_flow_reports_one_sanitized_terminal_failure(monk
         lambda exc, **kwargs: captures.append({"exception": exc, **kwargs}),
     )
 
+    outcome = FlowRunOutcome()
     events = [
         event
         async for event in chat_common._run_resolved_chat_route(
+            outcome=outcome,
             route=ResolvedChatRoute(
                 mode="flow",
                 target_id=str(flow_id),
@@ -484,7 +485,7 @@ async def test_failed_preferred_flow_reports_one_sanitized_terminal_failure(monk
         "provider": "openai",
         "tool_name": None,
     }
-    assert [event["type"] for event in events] == [chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE, "RUN_ERROR"]
+    assert [event["type"] for event in events] == ["RUN_ERROR"]
     assert events[-1]["data"]["message"] == (
         "provider payload that must not enter Sentry"
     )
@@ -519,9 +520,11 @@ async def test_preferred_flow_does_not_recapture_upstream_persistence_failure(mo
         lambda exc, **kwargs: captures.append({"exception": exc, **kwargs}),
     )
 
+    outcome = FlowRunOutcome()
     events = [
         event
         async for event in chat_common._run_resolved_chat_route(
+            outcome=outcome,
             route=ResolvedChatRoute(
                 mode="flow",
                 target_id=str(flow_id),
@@ -547,7 +550,7 @@ async def test_preferred_flow_does_not_recapture_upstream_persistence_failure(mo
     ]
 
     assert captures == []
-    assert [event["type"] for event in events] == ["FLOW_ERROR", chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE, "RUN_ERROR"]
+    assert [event["type"] for event in events] == ["FLOW_ERROR", "RUN_ERROR"]
 
 
 @pytest.mark.asyncio
@@ -619,9 +622,11 @@ async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch
         }
 
     async def _run_turn(*, message: str, run_id: str, inspection_context=None):
-        return [
+        outcome = FlowRunOutcome()
+        events = [
             event
             async for event in chat_common._run_resolved_chat_route(
+                outcome=outcome,
                 route=ResolvedChatRoute(
                     mode="flow",
                     target_id=str(flow_id),
@@ -646,16 +651,12 @@ async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch
                 inspection_context=inspection_context,
             )
         ]
+        return events, outcome.events_for_persistence()
 
     monkeypatch.setattr(chat_common, "execute_flow", _execute_flow)
-    first_events = await _run_turn(
+    _, first_terminal = await _run_turn(
         message="Review Cttn and MicroRNA-124-3p for GO and disease.",
         run_id="flow-run-1",
-    )
-    first_terminal = next(
-        event
-        for event in first_events
-        if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE
     )
 
     class _Repository:
@@ -663,7 +664,7 @@ async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch
             return [
                 _assistant_record(
                     turn_id="turn-1",
-                    terminal_events=first_terminal["internal"]["events"],
+                    terminal_events=first_terminal,
                 )
             ]
 
@@ -675,7 +676,7 @@ async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch
         document_id="doc-1",
     )
     followup = "What about GO:0005515 for Cttn in the prior review?"
-    second_events = await _run_turn(
+    second_events, second_terminal = await _run_turn(
         message=followup,
         run_id="flow-run-2",
         inspection_context=inspection_context,
@@ -703,12 +704,7 @@ async def test_selected_rgd_flow_followup_inspects_prior_refs_without_redispatch
         event["type"] == chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
         for event in second_events
     )
-    second_terminal = next(
-        event
-        for event in second_events
-        if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE
-    )
-    assert second_terminal["internal"]["events"][-1]["completion_mode"] == (
+    assert second_terminal[-1]["completion_mode"] == (
         "inspection_only"
     )
 
@@ -1082,9 +1078,11 @@ async def test_preferred_flow_review_stop_is_not_reported_as_server_failure(monk
             "review_reason": "PRIVATE_review_reason", "review_details": {"episode_id": "exact"}}}
     monkeypatch.setattr(chat_common, "execute_flow", execute)
     monkeypatch.setattr(chat_common, "report_runtime_exception", lambda *args, **kwargs: captures.append(kwargs))
+    outcome = FlowRunOutcome()
     events = [
         event
         async for event in chat_common._run_resolved_chat_route(
+            outcome=outcome,
             route=ResolvedChatRoute(
                 mode="flow",
                 target_id=str(flow_id),
@@ -1110,7 +1108,7 @@ async def test_preferred_flow_review_stop_is_not_reported_as_server_failure(monk
     ]
     assert captures == []
     assert not any(event["type"] == "RUN_ERROR" for event in events)
-    terminal = next(event for event in events if event["type"] == chat_common._PREFERRED_FLOW_TERMINAL_EVENTS_EVENT_TYPE)
-    assert terminal["internal"]["events"][-1]["status"] == status
-    assert terminal["internal"]["events"][-1]["review_reason"] == "PRIVATE_review_reason"
+    terminal = outcome.events_for_persistence()
+    assert terminal[-1]["status"] == status
+    assert terminal[-1]["review_reason"] == "PRIVATE_review_reason"
     assert events[-1]["data"]["flow_status"] == status

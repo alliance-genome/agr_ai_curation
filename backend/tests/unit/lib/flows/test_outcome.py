@@ -5,6 +5,27 @@ import pytest
 from src.lib.flows.outcome import FlowRunOutcome, FlowTerminalOutcomeError
 
 
+def test_executor_queue_reserves_files_for_interruption_until_yielded():
+    outcome = FlowRunOutcome()
+    first = {"type": "FILE_READY", "details": {"file_id": "first"}}
+    second = {"type": "FILE_READY", "details": {"file_id": "second"}}
+    answer = {"type": "CHAT_OUTPUT_READY", "details": {"output": "Answer"}}
+    outcome.retain_queued_file(first["details"])
+    outcome.retain_queued_file(second["details"])
+
+    outcome.observe(answer)
+    outcome.observe(first)
+    assert outcome.retained_file_events(include_queued=True) == [first, second]
+    assert outcome.retained_file_events() == [first]
+    assert outcome.publishable_terminal_events() == []
+
+    # The executor releases the independent answer first and withholds the
+    # second file. Only the released events belong in a completed transcript.
+    finished = {"type": "FLOW_FINISHED", "status": "completed"}
+    outcome.observe(finished)
+    assert outcome.events_for_persistence() == [answer, first, finished]
+
+
 @pytest.mark.parametrize("file_first", [False, True])
 @pytest.mark.parametrize("canonical", [None, "Canonical answer.", " "])
 def test_files_do_not_own_answer_precedence(file_first, canonical):
