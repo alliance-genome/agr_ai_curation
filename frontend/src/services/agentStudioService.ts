@@ -2,6 +2,8 @@
  * API service for Agent Studio feature.
  */
 
+import { sha256 } from '@noble/hashes/sha2.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { AGENT_STUDIO_CHAT_EVENT_TYPES } from '@/types/promptExplorer'
 import type {
   PromptCatalog,
@@ -138,7 +140,11 @@ export function parseAgentStudioChatEvent(value: unknown): OpusChatEvent {
   return value as unknown as OpusChatEvent
 }
 
-function reportAgentStudioStreamProtocolError(error: AgentStudioStreamProtocolError): void {
+async function reportAgentStudioStreamProtocolError(
+  reason: AgentStudioStreamProtocolReason,
+  sessionId: string | null,
+  eventType?: OpusChatEvent['type'],
+): Promise<void> {
   logger.error(
     'Agent Studio stream protocol failure',
     new Error('Agent Studio stream protocol failure'),
@@ -146,11 +152,23 @@ function reportAgentStudioStreamProtocolError(error: AgentStudioStreamProtocolEr
       component: 'agentStudioService',
       action: 'parse_chat_event',
       metadata: {
-        reason: error.reason,
-        eventType: error.eventType ?? 'unknown',
+        reason,
+        eventType: eventType ?? 'unknown',
       },
     },
   )
+  // Match the backend Sentry correlation format (first 16 hex digits of SHA-256).
+  const sessionHash = sessionId
+    ? `sha256:${bytesToHex(sha256(new TextEncoder().encode(sessionId.trim()))).slice(0, 16)}`
+    : undefined
+  await fetch(`${BASE_URL}/chat/protocol-error`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    redirect: 'error',
+    referrerPolicy: 'no-referrer',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason, session_id_hash: sessionHash }),
+  })
 }
 
 export interface AgentStudioDurableSessionResponse {
@@ -943,14 +961,20 @@ export async function* streamOpusChat(
     throw new Error(`Chat request failed: ${response.status}`)
   }
 
+  let responseSessionId: string | null = null
+  const reportProtocolError = (reason: AgentStudioStreamProtocolReason, eventType?: OpusChatEvent['type']) => {
+    void reportAgentStudioStreamProtocolError(reason, requestContext?.session_id ?? responseSessionId, eventType)
+      .catch(() => { /* Best effort. The stream consumer must receive the original error immediately. */ })
+  }
+
   const reader = response.body?.getReader()
   if (!reader) {
+    reportProtocolError('missing_terminal')
     throw new Error('No response body')
   }
 
   const decoder = new TextDecoder()
   let buffer = ''
-  let responseSessionId: string | null = null
   let responseTurnId: string | null = null
   let receivedTerminalEvent = false
 
@@ -959,28 +983,16 @@ export async function* streamOpusChat(
     try {
       decoded = JSON.parse(payload)
     } catch {
-      const error = new AgentStudioStreamProtocolError('malformed_json')
-      reportAgentStudioStreamProtocolError(error)
-      throw error
+      throw new AgentStudioStreamProtocolError('malformed_json')
     }
 
-    let event: OpusChatEvent
-    try {
-      event = parseAgentStudioChatEvent(decoded)
-    } catch (error) {
-      if (error instanceof AgentStudioStreamProtocolError) {
-        reportAgentStudioStreamProtocolError(error)
-      }
-      throw error
-    }
+    const event = parseAgentStudioChatEvent(decoded)
 
     if (responseSessionId === null) {
       responseSessionId = event.session_id
       responseTurnId = event.turn_id
     } else if (event.session_id !== responseSessionId || event.turn_id !== responseTurnId) {
-      const error = new AgentStudioStreamProtocolError('correlation_mismatch', event.type)
-      reportAgentStudioStreamProtocolError(error)
-      throw error
+      throw new AgentStudioStreamProtocolError('correlation_mismatch', event.type)
     }
     if (
       event.type === 'DONE'
@@ -1025,10 +1037,13 @@ export async function* streamOpusChat(
     }
 
     if (!receivedTerminalEvent) {
-      const error = new AgentStudioStreamProtocolError('missing_terminal')
-      reportAgentStudioStreamProtocolError(error)
-      throw error
+      throw new AgentStudioStreamProtocolError('missing_terminal')
     }
+  } catch (error) {
+    if (error instanceof AgentStudioStreamProtocolError) {
+      reportProtocolError(error.reason, error.eventType)
+    }
+    throw error
   } finally {
     reader.releaseLock()
   }
