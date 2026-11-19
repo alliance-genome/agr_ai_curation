@@ -894,7 +894,7 @@ def test_shared_tool_schema_and_description_support_both_views():
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_store_failure_is_reported_without_sensitive_response(monkeypatch):
+async def test_checkpoint_store_failure_is_reported_without_sensitive_response(monkeypatch, caplog):
     from src.lib.openai_agents import result_inspection_views as views
     _patch_records(monkeypatch, [vars(_InspectRecord())])
     failure = RuntimeError("fake-secret-document-content")
@@ -906,6 +906,11 @@ async def test_checkpoint_store_failure_is_reported_without_sensitive_response(m
     response = await inspect_results_module.inspect_results(action="summary", result_ref=f"extraction-result:{RESULT_ID}", result_view="post_validation")
     assert json.loads(response)["error_code"] == "inspection_failed"
     assert "fake-secret" not in response
+    assert str(failure) not in caplog.text
+    warning, = [r for r in caplog.records if r.getMessage() == "Saved result inspection failed"]
+    assert warning.exc_info is None
+    assert warning.error_type == "RuntimeError"
+    assert warning.sentry_skip_event is True
     assert len(reports) == 1
     assert "fake-secret" not in str(reports[0][0])
     assert reports[0][0].__cause__ is None

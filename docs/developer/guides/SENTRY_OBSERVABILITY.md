@@ -630,6 +630,12 @@ includes only exception-type context; SQL, chat content, and result references
 are omitted. The companion error log skips event promotion. Reporting failures
 preserve the existing `turn_failed` response, and missing sessions remain quiet.
 
+Saved-result inspection, original and selected flow inspection manifests, and
+completed flow extraction persistence each report a sanitized runtime exception.
+Their companion warnings use a fixed message and record the caught exception's
+class in `error_type`. This keeps exception text and tracebacks out of application
+logs. The `sentry_skip_event` flag suppresses duplicate event promotion.
+
 Agent Studio reports unexpected registered diagnostic and flow-tool handler
 exceptions with component `agent_studio`, operation `tool_handler_failed`, and
 the registered `tool_name` tag. The sanitized exception and companion log retain
