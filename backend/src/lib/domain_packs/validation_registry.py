@@ -28,6 +28,7 @@ from src.schemas.domain_pack_metadata import (
     DomainPackValidatorRouteSelector,
 )
 
+from .evidence_scope import selector_field_path
 from .registry import LoadedDomainPack
 
 
@@ -234,6 +235,21 @@ class ValidatorBinding:
         if isinstance(route_value, str) and route_value in self.routes:
             return self.for_route(route_value)
         return self
+
+    def declared_input_field_paths(self) -> tuple[str, ...]:
+        """Target-object field paths this binding's selectors read, across its routes."""
+
+        selector_sets = [self.input_fields]
+        if self.routes is not None:
+            selector_sets.extend(route.input_fields for route in self.routes.values())
+        paths = [self.route_by_path] if self.route_by_path else []
+        paths.extend(
+            path
+            for selectors in selector_sets
+            for selector in selectors.values()
+            if (path := selector_field_path(selector)) is not None
+        )
+        return tuple(dict.fromkeys(paths))
 
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
@@ -477,6 +493,10 @@ class ValidatorBindingMatch:
     element_index: int | None = None
     resolved_field_path: str | None = None
     element_index_path: tuple[int, ...] | None = None
+    # Declared field paths of every active validator binding on the matched
+    # object (empty for envelope-level matches). Evidence tagged only outside
+    # these paths belongs to no binding and goes to every binding on the record.
+    record_binding_paths: tuple[str, ...] = field(kw_only=True)
 
     @property
     def object_type(self) -> str | None:
@@ -775,6 +795,7 @@ class DomainPackValidationRegistry:
         )
         object_definitions = self.object_definitions_by_type
         policies_by_key = self.field_policies_by_key
+        record_binding_paths = self._record_binding_paths(envelope, object_definitions)
 
         matches: list[ValidatorBindingMatch] = []
         for binding in self.bindings:
@@ -795,11 +816,14 @@ class DomainPackValidationRegistry:
                 if _binding_has_target_constraints(binding):
                     continue
                 matches.append(
-                    ValidatorBindingMatch(binding=binding, envelope=envelope)
+                    ValidatorBindingMatch(
+                        binding=binding, envelope=envelope, record_binding_paths=()
+                    )
                 )
                 continue
 
             for object_envelope, object_definition in matched_objects:
+                owner_paths = record_binding_paths[id(object_envelope)]
                 matched_fields = _matching_fields(binding, object_definition)
                 if matched_fields:
                     for field_definition in matched_fields:
@@ -820,6 +844,7 @@ class DomainPackValidationRegistry:
                                     object_definition=object_definition,
                                     field_definition=field_definition,
                                     policy=policy,
+                                    record_binding_paths=owner_paths,
                                 )
                             )
                             continue
@@ -831,6 +856,7 @@ class DomainPackValidationRegistry:
                                 object_definition=object_definition,
                                 field_definition=field_definition,
                                 policy=policy,
+                                record_binding_paths=owner_paths,
                             )
                         )
                     continue
@@ -844,10 +870,43 @@ class DomainPackValidationRegistry:
                         envelope=envelope,
                         object_envelope=object_envelope,
                         object_definition=object_definition,
+                        record_binding_paths=owner_paths,
                     )
                 )
 
         return tuple(_routed_match(match) for match in matches)
+
+    def _record_binding_paths(
+        self,
+        envelope: DomainEnvelope,
+        object_definitions: Mapping[str, DomainPackObjectDefinition],
+    ) -> dict[int, tuple[str, ...]]:
+        """Declared field paths of the active validator bindings on each object.
+
+        Independent of the states a caller matches and of payload contents, so
+        every caller assigns a record's evidence to the same bindings.
+        """
+
+        paths: dict[int, list[str]] = {id(obj): [] for obj in envelope.extracted_objects}
+        for binding in self.bindings:
+            if binding.state is not ValidationBindingState.ACTIVE or not binding.validator_agents():
+                continue
+            if (
+                binding.applies_to_domain_pack_id is not None
+                and binding.applies_to_domain_pack_id != envelope.domain_pack_id
+            ):
+                continue
+            for object_envelope, object_definition in _matching_objects(
+                binding=binding, envelope=envelope, object_definitions=object_definitions,
+            ):
+                matched_fields = _matching_fields(binding, object_definition)
+                if _binding_has_field_constraints(binding) and not matched_fields:
+                    continue
+                paths[id(object_envelope)].extend(
+                    [field_definition.field_path for field_definition in matched_fields]
+                    + list(binding.declared_input_field_paths())
+                )
+        return {key: tuple(dict.fromkeys(value)) for key, value in paths.items()}
 
     def has_active_validators_for_object(self, object_type: str) -> bool:
         """Report whether any active validator applies to this object type."""
@@ -2369,6 +2428,7 @@ def _multivalued_element_matches(
     object_definition: DomainPackObjectDefinition,
     field_definition: DomainPackFieldDefinition,
     policy: FieldValidationPolicy | None,
+    record_binding_paths: tuple[str, ...],
 ) -> list[ValidatorBindingMatch]:
     """Fan one multivalued-field match out into one match per leaf list element.
 
@@ -2417,6 +2477,7 @@ def _multivalued_element_matches(
                     None if legacy_single_level else resolved_field_path
                 ),
                 element_index_path=index_path,
+                record_binding_paths=record_binding_paths,
             )
         )
 
