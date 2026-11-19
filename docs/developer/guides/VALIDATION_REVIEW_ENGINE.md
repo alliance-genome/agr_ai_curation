@@ -901,7 +901,10 @@ current blocker is one it recorded and each blocked unit keeps the head version 
 recorded. A curator deciding some of the records removes their blockers, so the rest
 stay set aside and exports still work; anything new (another decision on a set-aside
 unit, a new answer, any other blocker, a new review round) leaves the fact behind
-and the strict rule applies. A record is "set aside" only while a covering fact names
+and the strict rule applies; the export refusal then says that a curator is
+deciding records the run set aside (`selections.CURATOR_HOLDS_SET_ASIDE`), and the
+viewer returns that result with `held_by_curator: true` and no records. A record is
+"set aside" only while a covering fact names
 it; everywhere else (ordinary chat reviews, stopped flow reviews) nothing is set aside
 and previews, Review status and Review reason behave as before.
 
@@ -915,10 +918,15 @@ The published projection keeps set-aside records with their extracted values
 (`projection.read_current_projection_with_reasons` returns the pending records, by the
 `record_lifecycle.counts` lineage rule, and the covered set-aside ones). Inclusion is
 decided per source (`output_projection._shows_review_status`): a source's set-aside
-records are in an output only when the output has a Review status column (or a
-transform reading it) for that source and the source declares the field. A filter,
-sort or grouping on Review status alone does not include them, and a source with no
-declared catalog never contributes them. Otherwise `_set_aside_rows` leaves out their
+records are in an output only when the output has a plain Review status column (no
+transform) for that source and the source declares the field. A transform over the
+field (count, a label or value map, a template, a literal), a filter, a sort or a
+grouping does not include them, and a source with no declared catalog never
+contributes them. A cell override on a plain Review status column is refused
+(`_override_errors`). Objects a set-aside answer contributed (validator
+contributions hang under the envelope, so blocker lineage misses them) follow that
+answer (`projection.contributed_records`, matched by
+`metadata.selected_contribution.completion_id`). Otherwise `_set_aside_rows` leaves out their
 object rows, the evidence and finding rows naming them, and envelope-level evidence
 rows only they cite. `set_aside_included` counts the set-aside records whose rows
 reach the output after filters and limits; `set_aside_left_out` is the rest. The same rule holds for CSV, TSV,
