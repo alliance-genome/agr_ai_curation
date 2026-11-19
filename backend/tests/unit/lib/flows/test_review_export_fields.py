@@ -209,3 +209,23 @@ def test_review_fields_enter_the_bundle_catalog_like_a_declared_rationale():
     assert all(rationale in row and REVIEW_REFS <= set(row) for row in bundle.rows_for_source("object"))
     for ref in (rationale, *REVIEW_REFS):
         assert catalog[ref].non_empty_count == 0 and catalog[ref].examples == [], ref
+
+
+def test_review_reason_puts_the_records_own_reason_first_then_each_field_in_order():
+    """The record's own decision reads unprefixed; field decisions read "field: reason",
+    labelled by exact declared path, else the stored path, in the order history gives."""
+    from src.lib.flows.output_projection import _attach_review_fields
+
+    rows = [{"object.pending_ref_id": "r1"}, {"object.pending_ref_id": "r2"}]
+    items = [{"object_type": "Annotation", "metadata": {"validation_history": {"target_id": target}}}
+             for target in ("t1", "t2")]
+    reasons = {
+        "t1": [(None, "Shown in Table 1."), ("statement", "The legend says so."),
+               ("evidence_code_curies[1]", "The methods name the assay.")],
+        "t2": [("statement", "Only the abstract states it.")],
+    }
+    _attach_review_fields(rows, items, [], reasons, {("Annotation", "statement"): "Statement"})
+    assert [row[export_fields.REVIEW_REASON_REF] for row in rows] == [
+        "Shown in Table 1. | Statement: The legend says so. | evidence_code_curies[1]: The methods name the assay.",
+        "Statement: Only the abstract states it.",
+    ]

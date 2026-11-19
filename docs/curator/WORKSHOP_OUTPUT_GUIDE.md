@@ -26,11 +26,13 @@ Three optional columns hold the reasons that were saved with each record. None o
 them is added unless you choose it.
 
 - **Rationale**: why the extractor picked the item.
-- **Review reason**: why the reviewer, or you, accepted the record as a whole, in
-  their own words. If the record was decided again later, only the later reason is
-  shown. It is blank when nobody accepted the record as a whole: it was set aside
-  for later, its acceptance was withdrawn, or a validator checked its values (the
-  reviewer then decides those checked values, and their reasons are not shown here).
+- **Review reason**: why the reviewer, or you, accepted the record, in their own
+  words. When a validator checked some of the record's values, the reviewer
+  accepts each checked value on its own, and each reason is shown after the name
+  of its column, for example "Gene: The figure legend names this gene." If
+  something was decided again later, only the later reason is shown. A value that
+  was only set aside for later, or whose acceptance was withdrawn, adds nothing;
+  the cell is blank when nothing on the record has been accepted.
 - **Review uncertainty**: the fields the reviewer accepted but still had doubts
   about, each with the reviewer's explanation, for example
   "Organ: The table does not show which column this belongs to." It is blank when

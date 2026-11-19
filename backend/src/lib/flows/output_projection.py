@@ -1544,7 +1544,7 @@ def _build_artifact_from_step(
     selected_reference = None
     record_counts = None
     review_session_id = None
-    decision_reasons: dict[str, str] = {}
+    decision_reasons: dict[str, list[tuple[str | None, str]]] = {}
     if isinstance(payload, Mapping):
         source_metadata = payload.get("metadata") or {}
         selected_reference = source_metadata.get("selected_projection")
@@ -3319,7 +3319,7 @@ def _attach_review_fields(
     object_rows: Sequence[dict[str, Any]],
     object_items: Sequence[Mapping[str, Any]],
     finding_rows: Sequence[Mapping[str, Any]],
-    decision_reasons: Mapping[str, str],
+    decision_reasons: Mapping[str, Sequence[tuple[str | None, str]]],
     field_labels: Mapping[tuple[str, str], str],
 ) -> None:
     """Copy each record's review text onto its row; nothing is summarised or judged.
@@ -3328,9 +3328,10 @@ def _attach_review_fields(
     findings as "field: explanation" in finding order. The field is the column
     label the record's source declares for exactly that stored path, else the
     stored path (generic records, list elements); a finding without a field
-    reads as its explanation. ``object.review_reason`` is the reason of the
-    decision the record's own review unit stands on, keyed by the record's
-    history target; decisions on its validated fields are other units. Like a
+    reads as its explanation. ``object.review_reason`` joins the reasons of the
+    decisions the record stands on (``projection.standing_decision_reasons_in_transaction``):
+    its own decision first, unprefixed, then each validated field's as
+    "field: reason", labelled the same way. Like a
     declared pack field (for example Rationale), both are set on every row, None
     when empty.
     """
@@ -3357,7 +3358,11 @@ def _attach_review_fields(
         metadata = item.get("metadata")
         history = metadata.get("validation_history") if isinstance(metadata, Mapping) else None
         target_id = history.get("target_id") if isinstance(history, Mapping) else None
-        row[REVIEW_REASON_REF] = decision_reasons.get(target_id) if target_id else None
+        reasons = [
+            f"{field_labels.get((object_type, path)) or path}: {reason}" if path else reason
+            for path, reason in (decision_reasons.get(target_id, ()) if target_id else ())
+        ]
+        row[REVIEW_REASON_REF] = RECORD_SEPARATOR.join(reasons) or None
 
 
 def _object_keys(row: Mapping[str, Any]) -> list[str]:

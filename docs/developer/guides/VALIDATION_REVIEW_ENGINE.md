@@ -815,17 +815,24 @@ default layout, and they are offered for pack, generic and custom-profile record
   profile's `profile_path`); generic records, list elements and other undeclared
   paths show the stored path. An absence doubt without a field shows its explanation
   alone. Empty when there are none.
-- **Review reason** (`object.review_reason`) copies the `reason` of the decision the
-  record stands on: the accepting selection fact that the record's own review unit's
-  manifest entry names (`selection_id`, see `selections._selected_unit` and
-  `projection.standing_decision_reasons_in_transaction`, read in the same
-  transaction as the published projection). A later accept of the same unit
-  replaces it; a later decision that selects nothing (reject of another answer)
-  leaves it. It is blank when the record has no standing decision of its own: the
-  record was only deferred, its acceptance was revoked, it is unreviewed, or it had
-  a validator. A record with a validator binding has no record-level review unit;
-  the reviewer decides its checked values, and those field-level decisions are not
-  shown. A curator's own accept is shown like the reviewer's.
+- **Review reason** (`object.review_reason`) copies the `reason` of each decision the
+  record stands on: for every eligible manifest unit of the record, the accepting
+  selection fact its entry names (`selection_id`, see `selections._selected_unit`
+  and `projection.standing_decision_reasons_in_transaction`, read in the same
+  transaction as the published projection). The record's own unit reads first,
+  unprefixed. Each validator binding unit on the record follows in manifest order
+  as `field: reason`, labelled like Review uncertainty. A binding target names its
+  record (`object_target`) and its stable source location (`stable_path`, or
+  `absent_anchor` for an absent optional input); a declared decision unit is a
+  child target of its binding and takes the binding's location, so the units of
+  one composite binding share its label. A binding on the whole record has no
+  field and reads unprefixed. A later accept of a unit replaces its reason; a later
+  decision that selects nothing (reject of another answer) leaves it. A unit that
+  was only deferred, or whose acceptance was revoked, adds nothing, and the cell is
+  blank when no unit of the record has a standing decision (or the record is
+  unreviewed). A curator's own accept is shown like the reviewer's. Under the
+  current obligation model a record has either its own unit or binding units,
+  never both.
 
 Both are copied text only. Packaged and custom-profile sources declare them in the
 selected-fields catalog; generic sources have no declared catalog, so guided output
