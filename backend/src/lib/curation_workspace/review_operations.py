@@ -46,8 +46,6 @@ def submit(
 
     if origin not in {"curator", "bootstrap"}:
         raise ValueError("Unknown workspace review origin")
-    if guidance is not None:
-        bounded_text(guidance, ReviewLimits.configured().instruction_chars, "Guidance")
     session_id, request_id = str(UUID(session_id)), str(UUID(request_id))
     candidates = sorted(set(str(UUID(value)) for value in candidate_ids))
     identity = {
@@ -75,6 +73,9 @@ def submit(
                 "This revalidation request ID already names a different action"
             )
         return response(previous)
+    # A committed request can predate the current guidance limit.
+    if guidance is not None:
+        bounded_text(guidance, ReviewLimits.configured().instruction_chars, "Guidance")
     if not candidates:
         candidates = [
             str(value.id)

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Stack, TextField, Typography } from '@mui/material'
+import { CurationWorkspaceRequestError } from '../services/curationWorkspaceService'
 import { controlReview, fetchCandidateReviewOperation, fetchSessionReviewOperation, fetchReviewOperation, requestReview, type ReviewOperation } from '../services/validationHistoryService'
 
 // Plain words for stop reasons whose code name would read as internals. Every other
@@ -10,6 +11,8 @@ const STOP_WORDING: Record<string, string> = {
 }
 const reasonText = (reason: string) => STOP_WORDING[reason] ?? reason.replaceAll('_', ' ')
 
+type PendingRequest = { id: string; guidance: string | null }
+
 export default function RevalidationControls({ sessionId, candidateId, onChanged, beforeChange }: {
   sessionId: string; candidateId?: string; onChanged: () => void | Promise<void>; beforeChange?: () => Promise<void>
 }) {
@@ -18,7 +21,7 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
   const [busy, setBusy] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const request = useRef<{ id: string; guidance: string | null } | null>(null)
+  const request = useRef<PendingRequest | null>(null)
   const changed = useRef(onChanged)
   changed.current = onChanged
   const storageKey = `workspace-review-request:${sessionId}:${candidateId ?? 'all'}`
@@ -69,19 +72,31 @@ export default function RevalidationControls({ sessionId, candidateId, onChanged
     timer = setTimeout(() => void poll(), 1000)
     return () => { controller.abort(); clearTimeout(timer) }
   }, [active, operation?.operation_id])
+  function clearPendingRequest(submitted: PendingRequest) {
+    if (sessionStorage.getItem(storageKey) === JSON.stringify(submitted)) {
+      sessionStorage.removeItem(storageKey)
+    }
+    if (request.current?.id === submitted.id) request.current = null
+  }
   async function start() {
     setBusy(true); setError(null)
+    let submitted = request.current
     try {
-      if (!request.current) {
+      if (!submitted) {
         await beforeChange?.()
-        request.current = { id: crypto.randomUUID(), guidance: guidance.trim() || null }
+        submitted = { id: crypto.randomUUID(), guidance: guidance.trim() || null }
+        request.current = submitted
       }
-      sessionStorage.setItem(storageKey, JSON.stringify(request.current))
-      const saved = await requestReview(sessionId, candidateId ? [candidateId] : [], request.current.guidance, request.current.id)
-      sessionStorage.removeItem(storageKey)
-      request.current = null
+      sessionStorage.setItem(storageKey, JSON.stringify(submitted))
+      const saved = await requestReview(sessionId, candidateId ? [candidateId] : [], submitted.guidance, submitted.id)
+      clearPendingRequest(submitted)
       setOperation(saved)
-    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Unable to start revalidation') }
+    } catch (failure) {
+      if (submitted && failure instanceof CurationWorkspaceRequestError && failure.status === 422) {
+        clearPendingRequest(submitted)
+      }
+      setError(failure instanceof Error ? failure.message : 'Unable to start revalidation')
+    }
     finally { setBusy(false) }
   }
   async function control(action: 'cancel' | 'resume') {
