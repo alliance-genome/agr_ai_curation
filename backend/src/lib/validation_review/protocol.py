@@ -30,9 +30,10 @@ packet_id and packet_decisions; split only when they exceed decision_entries. Gi
 reason specific to each record that says what establishes or questions it, never a
 generic reason. Curators read every reason and unresolved_fields explanation, so write
 them for a biologist in plain words: what in the paper supports or questions the
-record, or for defer, revoke or a failure, what remains open or did not finish. Keep
-handles, internal IDs, tool names and field paths out of that text; field_path itself
-stays exact. A record item is the extracted record itself, with no validator
+record, or for defer, revoke or a failure, what remains open or did not finish. Say
+what the paper does not show or confirm, not which of your review steps (follow-up,
+packet, history reads) could not. Keep handles, internal IDs, tool names and field
+paths out of that text; field_path itself stays exact. A record item is the extracted record itself, with no validator
 answer. Judge each validator_answer together with its record: a correct identity does
 not make a record that is out of scope acceptable. A caveat or a completed unresolved
 answer need not trigger another validation, but judge its record on the evidence like

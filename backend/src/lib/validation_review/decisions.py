@@ -59,8 +59,8 @@ class ReviewEntry(BaseModel):
     ))
     unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
         "Only with accept of extraction-only content: exact plain payload field paths, "
-        "each with an explanation for the curator that names the scientific doubt left "
-        "after assessment and what to check in the paper. Name list "
+        "each with an explanation for the curator that names what the paper does not "
+        "show or confirm and what to check in it. Name list "
         "elements by index, e.g. classification_notes[1]. "
         "Acceptance completes review without claiming these fields are resolved. "
         "Do not use for structured validator identities or incomplete executions."
@@ -96,8 +96,8 @@ class PacketDecision(BaseModel):
     ))
     unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
         "Only when accepting a review: record item (no validator ran): exact plain payload "
-        "field paths, each with an explanation for the curator that names the scientific "
-        "doubt that remains and what to check in the paper. Name list "
+        "field paths, each with an explanation for the curator that names what the paper "
+        "does not show or confirm and what to check in it. Name list "
         "elements by index, e.g. classification_notes[1]."
     ))
 
