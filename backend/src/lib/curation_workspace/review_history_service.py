@@ -169,6 +169,14 @@ def history_page(db, candidate_id, *, owner_id, after=0):
         )
         if fact.kind == "completion":
             visible = store._fact(db, artifact_id, fact.parent_id).target_id in targets
+        elif fact.kind == "curator_revalidation_release":
+            released_overlays = select(ValidationFact.id).where(
+                ValidationFact.artifact_id == artifact_id,
+                ValidationFact.kind == "curator_value",
+                ValidationFact.id.in_(body["overlay_ids"]),
+                ValidationFact.target_id.in_(targets),
+            )
+            visible = db.scalar(select(released_overlays.exists()))
         if not visible:
             continue
         result = body.get("result") if fact.kind == "completion" else None
