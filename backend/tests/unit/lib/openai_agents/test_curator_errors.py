@@ -32,6 +32,53 @@ def test_typed_websocket_error_through_specialist_wrapper(code, category, retrya
     assert failure_for_event(result.event_fields()) == result
 
 
+def invalid_request(code, param):
+    return ResponsesWebSocketError({"type": "error", "status": 400, "error": {
+        "type": "invalid_request_error", "code": code, "param": param,
+        "message": "PRIVATE PROVIDER PAYLOAD",
+    }})
+
+
+def _through_sdk_wrapper(cause):
+    """The chain seen in Sentry for ALL-1558: ResponsesWebSocketError -> UserError."""
+    from agents.exceptions import UserError
+
+    wrapped = UserError("PRIVATE PROVIDER PAYLOAD")
+    wrapped.__cause__ = cause
+    return wrapped
+
+
+@pytest.mark.parametrize("param", ["input[2]", "input[0]", "input[17]"])
+def test_a_reasoning_input_refusal_that_ends_a_run_is_temporary(param):
+    result = classify_failure(_through_sdk_wrapper(invalid_request("unsupported_parameter", param)))
+    assert (result.category, result.retryable, result.provider) == ("provider_unavailable", True, "openai")
+    assert "will not fix" not in result.message and "PRIVATE" not in result.message
+    assert failure_for_event(result.event_fields()) == result
+
+
+@pytest.mark.parametrize("error", [
+    invalid_request("unsupported_parameter", "input"),
+    invalid_request("unsupported_parameter", "tools"),
+    invalid_request("unsupported_parameter", "input[2].content"),
+    invalid_request("unsupported_parameter", None),
+    invalid_request("invalid_value", "input[2]"),
+    websocket("something_new", "invalid_request_error"),
+    websocket(None, None),
+], ids=["item-ids-form", "other-param", "nested-param", "no-param", "other-code", "new-code", "untyped"])
+def test_unrecognised_websocket_errors_are_unknown_not_configuration(error):
+    result = classify_failure(_through_sdk_wrapper(error))
+    assert (result.category, result.retryable, result.provider) == ("unknown", True, "openai")
+    assert "will not fix" not in result.message and "PRIVATE" not in result.message
+    assert failure_for_event(result.event_fields()) == result
+
+
+@pytest.mark.parametrize("code", ["insufficient_quota", "invalid_api_key", "permission_denied"])
+def test_access_quota_and_key_websocket_errors_keep_the_configuration_message(code):
+    result = classify_failure(_through_sdk_wrapper(websocket(code, "invalid_request_error")))
+    assert (result.category, result.retryable, result.provider) == ("provider_configuration", False, "openai")
+    assert "will not fix" in result.message
+
+
 @pytest.mark.parametrize("status, code, category, retryable", [
     (429, "rate_limit_exceeded", "provider_unavailable", True),
     (429, "insufficient_quota", "provider_configuration", False),

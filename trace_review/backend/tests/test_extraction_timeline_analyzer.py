@@ -677,19 +677,23 @@ def test_fanout_plan_writers_and_finalize_are_visible(tmp_path, monkeypatch):
     monkeypatch.setenv('EXTRACTION_TRACE_EVENT_DIR', str(tmp_path))
     kinds = [
         ('plan_submitted', {'path': 'writers', 'planned_records': 7, 'writer_count': 3}),
+        ('writer_failed', {'writer': 1, 'attempt': 1, 'provider_error_code': 'unsupported_parameter', 'rerun': True}),
+        ('writer_rerun_started', {'writer': 1, 'attempt': 2, 'removed_candidate_ids': ['obj-1']}),
+        ('writer_rerun_finished', {'writer': 1, 'attempt': 2, 'outcome': 'succeeded'}),
         ('writer_completed', {'writer': 2, 'assigned_count': 2, 'staged_count': 1}),
         ('finalize_attempt', {'attempt': 1, 'finalized': True}),
     ]
     for sequence, (kind, summary) in enumerate(kinds, 1):
         _write_event(tmp_path, 'fanout', _event('fanout', sequence, 'extraction_fanout.' + kind,
                                                 output_summary=summary))
-    _write_event(tmp_path, 'fanout', _event('fanout', 4, 'extraction_builder.candidate_mutation'))
+    _write_event(tmp_path, 'fanout', _event('fanout', 7, 'extraction_builder.candidate_mutation'))
 
     result = ExtractionTimelineAnalyzer.analyze(trace_id='fanout', raw_trace={}, observations=[], include_raw_outputs=True)
 
     events = result['extraction_fanout']['events']
     assert [item['event_type'] for item in events] == ['extraction_fanout.' + kind for kind, _ in kinds]
-    assert events[1]['output'] == {'writer': 2, 'assigned_count': 2, 'staged_count': 1}
+    assert events[4]['output'] == {'writer': 2, 'assigned_count': 2, 'staged_count': 1}
+    assert events[2]['output']['removed_candidate_ids'] == ['obj-1']
 
 
 def test_review_quick_check_shadow_answers_are_visible_in_timeline_and_diagnostics(tmp_path, monkeypatch):

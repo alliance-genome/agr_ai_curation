@@ -30,6 +30,7 @@ Settings (all in `.env.example` under Operational limits, forwarded to `backend`
 | `EXTRACTION_FANOUT_MIN_ITEMS` | `0` (off) | Planned records at which the plan goes to parallel writers. Production uses 15. |
 | `EXTRACTION_FANOUT_ITEMS_PER_WRITER` | `5` | Planned records per writer. Writers = ceil(records / this), capped below. |
 | `EXTRACTION_FANOUT_MAX_WRITERS` | `8` | Most writers one extraction may start; each opens its own model connection. |
+| `EXTRACTION_FANOUT_WRITER_RERUNS` | `1` | Times a failed writer runs again from its assignment (see Failures). `0` turns re-runs off. |
 
 The planner, the writers and the check pass all run at the agent's saved reasoning
 effort. There is no separate planning effort, which also keeps the check pass on the
@@ -83,7 +84,7 @@ finalizes. Its last reply is the specialist explanation saved with the result.
 
 ## Concurrency contracts
 
-- Each writer task binds a staging owner (`set_staging_owner`). New candidates are
+- Each writer attempt binds its own staging owner (`set_staging_owner`, `writer-N/aM`). New candidates are
   attributed to it, and a writer cannot overwrite another writer's draft through a reused
   `pending_ref_id` (`ExtractionBuilderOwnershipError`). The planner's thread keeps the
   single-writer semantics.
@@ -97,9 +98,27 @@ finalizes. Its last reply is the specialist explanation saved with the result.
 
 ## Failures
 
-- Provider and runtime errors in any writer fail the step, as they do for one writer; the
-  other writers are cancelled. Document read failures during prefetch fail the step, as a
-  failed `read_chunk` call does.
+- A writer whose run raises (after its model-call retries are used up) with a failure the
+  typed curator-failure classification (`classify_failure(...).retryable`) marks retryable
+  runs again from its assignment, up to `EXTRACTION_FANOUT_WRITER_RERUNS` times, while the
+  other writers keep going. An unreadable PDF, a context limit, an invalid result, or a
+  configuration or content-policy refusal is not run again. Each attempt stages under its
+  own owner (`writer-N/aM`). Before the writer runs again, code removes everything that
+  attempt alone produced: its staged records leave the workspace (each removal is an
+  `extraction_builder.candidate_mutation` with action `remove`; removed IDs are never
+  reused) and its owner is closed, so a late stage call of that attempt is refused with
+  `ExtractionBuilderClosedOwnerError`; evidence only that attempt recorded
+  leaves the run's evidence list, and its tool times are dropped. Evidence another writer
+  or the planner also recorded stays. Records are removed rather than discarded because
+  evidence IDs are content hashes: the re-run's identical evidence gets the identical ID,
+  and a discarded record is never overwritten by a re-record. The failed attempt's tool
+  calls never reach the audit; only successful attempts are replayed. This is ownership
+  bookkeeping; code never judges a record.
+- When a writer's failure is not retryable or it has no re-run left, the step fails with
+  that writer's first error and the other writers are cancelled, as before. Cancellation is
+  not a failure and is never re-run, also when the SDK surfaces it as an ordinary tool
+  error. If the clean-up itself fails, its error is raised with the writer's error as cause.
+  Document read failures during prefetch fail the same way, as a failed `read_chunk` call does.
 - A planner that ends without a plan gets one reminder; without a plan after that, the step
   fails with `extraction_plan_missing`.
 - There is no fallback to a single writer.
@@ -116,9 +135,14 @@ audit when the writers finish, with their recorded start and end times.
 ## Observability
 
 - Extraction trace events: `extraction_fanout.plan_submitted` (path, counts, the plan),
-  `extraction_fanout.writer_completed` (assigned and staged counts per writer) and
-  `extraction_fanout.finalize_attempt`. TraceReview groups them under `extraction_fanout`,
-  which is absent when fan-out did not run.
+  `extraction_fanout.writer_completed` (assigned and staged counts per writer, and the
+  attempt), `extraction_fanout.writer_failed` (writer, assigned positions, attempt, exception
+  type, the provider's typed error type and code, the curator-failure category, whether it
+  runs again),
+  `extraction_fanout.writer_rerun_started` (the removed candidate and evidence IDs and
+  counts), `extraction_fanout.writer_rerun_finished` (`succeeded`, `failed` or `cancelled`) and
+  `extraction_fanout.finalize_attempt`. No message text or record content is traced.
+  TraceReview groups them under `extraction_fanout`, which is absent when fan-out did not run.
 - Langfuse shows the planner, check pass and each writer as separate agent runs in one
   trace.
 

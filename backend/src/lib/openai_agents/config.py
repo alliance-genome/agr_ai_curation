@@ -264,6 +264,8 @@ def get_responses_input_item_id_retries() -> int:
     unchanged while the model call's retry attempt, which counts every failed
     try of that call, is at most this value: with the default 1 it is resent
     only when the refusal is the call's first failure. 0 turns the resend off.
+    The same window applies to the refusal of one replayed input position
+    (param ``input[N]``, ALL-1558), which a resend also clears.
     ``OPENAI_MODEL_MAX_RETRIES`` still bounds every runner-managed retry.
     """
 
@@ -658,6 +660,42 @@ _DEFAULT_RETRY_HTTP_STATUSES = (408, 409, 429, 500, 502, 503, 504)
 # Stable log marker and retry reason for a resent request OpenAI refused for its
 # replayed input item IDs (ALL-1523).
 RESPONSES_INPUT_ITEM_IDS_REFUSED = "responses_input_item_ids_refused"
+# Stable log marker and retry reason for a resent request OpenAI refused for a
+# replayed reasoning item at one input position (ALL-1558).
+RESPONSES_REASONING_INPUT_REFUSED = "responses_reasoning_input_refused"
+# The provider's structured ``param`` for one input position, e.g. ``input[2]``.
+_INDEXED_INPUT_PARAM = re.compile(r"input\[(0|[1-9][0-9]*)\]")
+
+
+def unsupported_parameter_frame_param(error: object) -> Optional[str]:
+    """The ``param`` of a typed Responses websocket ``unsupported_parameter`` refusal.
+
+    Reads the error frame's structured fields only (event type ``error``,
+    ``invalid_request_error``, code ``unsupported_parameter``); never the message.
+    Returns None for any other error or a frame without a string ``param``.
+    """
+
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    if not isinstance(error, ResponsesWebSocketError):
+        return None
+    details = error.payload.get("error")
+    if not (
+        error.event_type == "error"
+        and error.error_type == "invalid_request_error"
+        and error.code == "unsupported_parameter"
+        and isinstance(details, dict)
+    ):
+        return None
+    param = details.get("param")
+    return param if isinstance(param, str) else None
+
+
+def is_reasoning_input_refusal(error: object) -> bool:
+    """Whether OpenAI refused one replayed input position (param ``input[N]``) (ALL-1558)."""
+
+    param = unsupported_parameter_frame_param(error)
+    return param is not None and _INDEXED_INPUT_PARAM.fullmatch(param) is not None
 
 
 def build_default_model_retry():
@@ -727,20 +765,9 @@ def build_default_model_retry():
         used. A stateful request (previous_response_id or conversation) is not
         approved for replay here; the runner keeps refusing to replay it.
         """
-        from agents.models.openai_responses import ResponsesWebSocketError
         from agents.retry import RetryDecision
 
-        error = context.error
-        if not isinstance(error, ResponsesWebSocketError):
-            return False
-        details = error.payload.get("error")
-        if not (
-            error.event_type == "error"
-            and error.error_type == "invalid_request_error"
-            and error.code == "unsupported_parameter"
-            and isinstance(details, dict)
-            and details.get("param") == "input"
-        ):
+        if unsupported_parameter_frame_param(context.error) != "input":
             return False
         if context.attempt > input_item_id_retries:
             return False
@@ -754,6 +781,35 @@ def build_default_model_retry():
             extra={"retry_marker": RESPONSES_INPUT_ITEM_IDS_REFUSED},
         )
         return RetryDecision(retry=True, reason=RESPONSES_INPUT_ITEM_IDS_REFUSED)
+
+    def retry_responses_reasoning_input_refused(context):
+        """Resend, unchanged, a request refused for one replayed input position (ALL-1558).
+
+        Since 2026-11-10 OpenAI sometimes refuses a fan-out writer's second request
+        with ``invalid_request_error``, ``unsupported_parameter`` and param
+        ``input[N]`` (there the turn-1 reasoning item at ``input[2]``), while sibling
+        writers sending the same kind of request succeed. Any non-negative ``N``
+        matches, because the replayed item's position depends on each agent's
+        input. Same typed-field match, resend window (the shared
+        ``OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES``), fresh connection and runner
+        safeguards as ``retry_responses_input_item_ids_refused``; only the marker
+        differs, so each form's frequency can be counted. No frame content is logged.
+        """
+        from agents.retry import RetryDecision
+
+        if not is_reasoning_input_refusal(context.error):
+            return False
+        if context.attempt > input_item_id_retries:
+            return False
+        logger.warning(
+            "%s: resending a Responses request refused for a replayed reasoning input item "
+            "(retry attempt %s, resend window %s)",
+            RESPONSES_REASONING_INPUT_REFUSED,
+            context.attempt,
+            input_item_id_retries,
+            extra={"retry_marker": RESPONSES_REASONING_INPUT_REFUSED},
+        )
+        return RetryDecision(retry=True, reason=RESPONSES_REASONING_INPUT_REFUSED)
 
     try:
         max_retries = int(os.getenv("OPENAI_MODEL_MAX_RETRIES", "3"))
@@ -771,12 +827,13 @@ def build_default_model_retry():
             retry_policies.provider_suggested(),
             retry_responses_websocket_overload,
             retry_responses_input_item_ids_refused,
+            retry_responses_reasoning_input_refused,
             retry_policies.retry_after(),
             retry_policies.network_error(),
             retry_policies.http_status(list(_DEFAULT_RETRY_HTTP_STATUSES)),
         ),
         {
-            "id": "agr.default_model_retry", "revision": 1,
+            "id": "agr.default_model_retry", "revision": 2,
             "sdk_version": version("openai-agents"),
             "any": [
                 "provider_suggested",
@@ -786,6 +843,10 @@ def build_default_model_retry():
                 {"id": "responses_input_item_ids_refused", "revision": 1,
                  "event_type": "error", "error_type": "invalid_request_error",
                  "code": "unsupported_parameter", "param": "input",
+                 "max_resends": input_item_id_retries, "approves_replay": False},
+                {"id": "responses_reasoning_input_refused", "revision": 1,
+                 "event_type": "error", "error_type": "invalid_request_error",
+                 "code": "unsupported_parameter", "param": "input[N]",
                  "max_resends": input_item_id_retries, "approves_replay": False},
                 "retry_after", "network_error",
                 {"http_status": list(_DEFAULT_RETRY_HTTP_STATUSES)},
@@ -2201,6 +2262,19 @@ def get_extraction_fanout_max_writers() -> int:
     more records instead of starting more writers. Default 8.
     """
     return max(1, _get_env_int_with_fallback("EXTRACTION_FANOUT_MAX_WRITERS", 8))
+
+
+def get_extraction_fanout_writer_reruns() -> int:
+    """Times a failed parallel writer runs again (EXTRACTION_FANOUT_WRITER_RERUNS).
+
+    A writer whose run raises after its model-call retries are used up, with a
+    failure the curator-failure classification marks retryable, has everything
+    that attempt alone staged or recorded removed and runs again from its
+    assignment while the other writers keep going. A failure that is not
+    retryable, a cancellation, or a writer with no re-run left fails the
+    extraction. 0 turns re-runs off. Default 1.
+    """
+    return max(0, _get_env_int_with_fallback("EXTRACTION_FANOUT_WRITER_RERUNS", 1))
 
 
 def get_layer2_force_tool_finalization_enabled() -> bool:
