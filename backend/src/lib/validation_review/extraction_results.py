@@ -12,7 +12,7 @@ from . import admission
 from .audit import append_fact
 from .specialist_context import reference
 from .item_relationships import validate as validate_item_relationships
-from .source_projection import apply_value, removed_fields
+from .source_projection import apply_value
 
 
 def saved_structure(db, execution_receipt):
@@ -24,14 +24,50 @@ def saved_structure(db, execution_receipt):
     return resolve_receipt_profile(db, AgentExecutionReceipt.model_validate(execution_receipt))
 
 
-def _structure_issues(structure, source_entry, proposals):
-    """Issues the whole proposal would raise against the saved output structure."""
+ISSUE_KEYS = ("candidate_id", "field_path", "reason", "expected", "message")
+
+
+def _at_or_below(path, prefix):
+    return path == prefix or path.startswith(prefix + ".") or path.startswith(prefix + "[")
+
+
+def structure_check(structure, entry_id, source_entry, proposals):
+    """Which proposed fields could never apply, from the saved structure alone.
+
+    All proposed values are applied together to the entry's payload, the same
+    way a selection applies them, and the payload is checked as the record will
+    be when published. Each issue belongs to the proposed field at or above its
+    path (paths only, never values); an issue below none of them, such as a
+    required sibling the change leaves missing, belongs to the proposed fields
+    in the same object. Returns ``({field_path: {structural_failure, issues}},
+    issues no proposed field explains)``.
+    """
     payload = deepcopy(source_entry["payload"])
-    removed = removed_fields(structure, proposals)
+    fields = {}
+
+    def refuse(path, failure, issue):
+        entry = fields.setdefault(path, {"structural_failure": failure, "issues": []})
+        entry["issues"].append({key: issue.get(key) for key in ISSUE_KEYS})
+
     for proposal in proposals:
-        apply_value(payload, proposal, removed)
-    return [{key: issue[key] for key in ("field_path", "reason", "expected", "message")}
-            for issue in structure.validate_attributes(payload.get("attributes"))]
+        try:
+            apply_value(payload, proposal, structure)
+        except ValueError:
+            refuse(proposal.field_path, "unwritable_path", {
+                "candidate_id": entry_id, "field_path": proposal.field_path, "reason": "unwritable_path",
+                "expected": "a path that exists in the record",
+                "message": "This path cannot be written in the record; its list item or parent is missing."})
+    unexplained = []
+    for issue in structure.validate_payload(payload, candidate_id=entry_id):
+        owners = [item.field_path for item in proposals if _at_or_below(issue["field_path"], item.field_path)]
+        if not owners:
+            parent = issue["field_path"].rpartition(".")[0]
+            owners = [item.field_path for item in proposals if parent and _at_or_below(item.field_path, parent)]
+        for owner in owners:
+            refuse(owner, "output_structure_conformance", issue)
+        if not owners:
+            unexplained.append({key: issue.get(key) for key in ISSUE_KEYS})
+    return fields, unexplained
 
 
 def _result_receipt(receipt):
@@ -71,7 +107,7 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
         snapshot = EvidenceSnapshot([*old_evidence, *evidence_records])
         old_ids = {record["evidence_record_id"] for record in old_evidence}
         structure = saved_structure(db, row.payload["receipt"]["execution_receipt"])
-        references = []
+        references, refused = [], []
         for item in result.entries:
             source_entry = supplied["current_selected_entries"][item.entry_id]
             relationships, evidence = {}, []
@@ -103,15 +139,16 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
                     continue
                 evidence.append({"origin": "original" if identity in old_ids else "followup",
                                  "record": record})
+            unselectable = {}
             if failure is None and structure is not None and validated.proposed_values:
-                # A proposal that could never be applied is not offered. Only the
-                # saved declaration is checked; the review still judges meaning.
-                try:
-                    issues = _structure_issues(structure, source_entry, validated.proposed_values)
-                except ValueError:
-                    failure = "invalid_proposal_structure"
-                if issues:
+                # A field that could never be applied is not offered; its siblings
+                # stay selectable. Only the saved declaration is checked; the
+                # review still judges meaning.
+                unselectable, issues = structure_check(
+                    structure, item.entry_id, source_entry, validated.proposed_values)
+                if issues or len(unselectable) == len(validated.proposed_values):
                     failure = "output_structure_conformance"
+                    issues = issues or [issue for field in unselectable.values() for issue in field["issues"]]
             fact = append_fact(db, ep.artifact_id,
                 operation_id="extraction-contribution:" + work_id + ":" + item.entry_id,
                 kind="extraction_contribution", parent_id=request.id, target_id=item.entry_id,
@@ -121,6 +158,11 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
                       "proposal": item.model_dump(mode="json"), "evidence": evidence,
                       "item_relationships": relationships,
                       "selectable": failure is None, "structural_failure": failure,
-                      "structural_issues": issues})
+                      "structural_issues": issues, "unselectable_fields": unselectable})
             references.append(reference(fact))
-        return {"contributions": references}
+            if failure is not None or unselectable:
+                refused.append({"contribution": reference(fact), "entry_id": item.entry_id,
+                                "structural_failure": failure, "structural_issues": issues,
+                                "unselectable_fields": unselectable})
+        # The review sees, in this result, which proposals or fields it cannot select and why.
+        return {"contributions": references, **({"not_selectable": refused} if refused else {})}

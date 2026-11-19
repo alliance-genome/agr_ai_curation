@@ -16,6 +16,7 @@ from functools import partial, wraps
 from typing import Literal
 from inspect import signature
 from .decisions import PacketDecision, ReviewEntry
+from .source_selection import StructuralRefusal
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,16 +31,30 @@ class EvidenceReference(BaseModel):
 
 
 def _structure_issues(error):
-    """Which saved-structure rules a refused record broke, bounded like every issue list."""
-    return [{key: issue.get(key) for key in ("field_path", "reason", "expected", "message")}
+    """Which saved-structure rules a refused record broke, bounded like every issue list.
+
+    candidate_id places an issue on its record when the check covered others too.
+    """
+    return [{key: issue.get(key) for key in ("candidate_id", "field_path", "reason", "expected", "message")}
             for issue in error.issues[:get_generic_profile_max_issues()]]
 
 
+# Issue reasons whose path ends in a key the record or proposal wrote, not one
+# the saved structure declares.
+_WRITTEN_PATH_REASONS = frozenset({"undeclared_field", "invalid_patch_path", "unwritable_path"})
+
+
 def _log_structure_issues(tool, episode_id, issues):
-    # Paths and rule names only: messages and record values stay out of the log.
+    # Declared paths and rule names only. A path that is not declared can end in
+    # extractor-written text, so it is logged as undeclared with its depth.
+    def logged_path(issue):
+        path = issue["field_path"] or ""
+        if issue["reason"] in _WRITTEN_PATH_REASONS:
+            return f"<undeclared, depth {path.count('.') + path.count('[') + 1}>"
+        return path
     LOGGER.warning("Review tool %s refused by the saved output structure (episode %s): %s",
                    tool, episode_id,
-                   [(issue["field_path"], issue["reason"], issue["expected"]) for issue in issues])
+                   [(logged_path(issue), issue["reason"], issue["expected"]) for issue in issues])
 
 
 def _recoverable_tool(function, *, lines):
@@ -100,7 +115,7 @@ def _recoverable_tool(function, *, lines):
             }
             if arguments.get("packet_decisions"):
                 result["handles"] = [d.handle for d in arguments["packet_decisions"]]
-            if isinstance(exc, ProfileConformanceError):
+            if isinstance(exc, (ProfileConformanceError, StructuralRefusal)):
                 result["issues"] = _structure_issues(exc)
                 _log_structure_issues(function.__name__, lines.episode_id, result["issues"])
             elif isinstance(exc, ProfileIdentityError):

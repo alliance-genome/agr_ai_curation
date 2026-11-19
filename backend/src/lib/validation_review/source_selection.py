@@ -16,6 +16,14 @@ from .audit import append_fact
 from .decisions import bounded_text
 
 
+class StructuralRefusal(store.HistoryConflict):
+    """A selection names a proposal or field stored as not selectable; issues say why."""
+
+    def __init__(self, message, issues):
+        super().__init__(message)
+        self.issues = issues
+
+
 def selected_entries(db, artifact_id):
     selected = {}
     for fact in db.scalars(select(ValidationFact).where(
@@ -62,7 +70,14 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
         raise store.HistoryAccessError("Source contribution is outside the requested record scope")
     body = store._content(db, contribution)
     if body.get("selectable") is False:
-        raise store.HistoryConflict("Contribution has an unresolved structural failure")
+        raise StructuralRefusal("This proposal is not selectable: " + body["structural_failure"],
+                                body.get("structural_issues") or [])
+    refused = [path for path in field_paths if path in body.get("unselectable_fields", {})]
+    if refused:
+        raise StructuralRefusal(
+            "These proposed fields are not selectable: " + "; ".join(
+                f"{path} ({body['unselectable_fields'][path]['structural_failure']})" for path in refused),
+            [issue for path in refused for issue in body["unselectable_fields"][path]["issues"]])
     proposal = FollowupEntryResult.model_validate(body["proposal"])
     if proposal.outcome == "propose_retirement":
         raise store.HistoryConflict("Use the explicit record retirement decision tool")
@@ -98,8 +113,7 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
     chosen = [offered[path] for path in field_paths]
     from .extraction_results import saved_structure
     structure = saved_structure(db, body["extractor_receipt"]["execution_receipt"])
-    planned = source_projection.plan(original, chosen, contribution_id=contribution.id,
-                                     removed=source_projection.removed_fields(structure, chosen))
+    planned = source_projection.plan(original, chosen, contribution_id=contribution.id, structure=structure)
     for addition in planned["additions"]:
         store._append(db, artifact_id, operation_id="contributed-target:" + addition["id"],
             kind="target", body=addition["body"], fact_id=addition["id"], parent_id=addition["parent_id"])

@@ -13,37 +13,42 @@ from src.schemas.domain_envelope import parse_field_path
 from .item_relationships import validate, value_at
 
 
-def removed_fields(structure, proposals):
-    """Proposed nulls the saved structure reads as "leave this field out".
+def apply_value(payload, proposal, structure):
+    """Write one proposed value as the saved structure reads it.
 
-    Only the declaration decides (may be absent, may not be null); no value is
-    read. Without a saved structure every null stays a null.
+    A null, at any depth of the value, on a field the structure declares
+    may-be-absent-but-not-null leaves that field out; only the declaration
+    decides, never the value. Without a saved structure (built-in packs) the
+    value is written as proposed. A path that cannot be written raises
+    ValueError; leaving out a field whose object parent is already absent
+    changes nothing, but a list index past the end cannot be written.
     """
+    path, value = proposal.field_path, proposal.value
     if structure is None:
-        return frozenset()
-    return frozenset(item.field_path for item in proposals
-                     if item.value is None and structure.absent_when_null(item.field_path))
-
-
-def apply_value(payload, proposal, removed):
-    """Write one proposed value, or leave its field out when it is in removed."""
-    if proposal.field_path not in removed:
-        set_payload_value(payload, proposal.field_path, deepcopy(proposal.value))
+        set_payload_value(payload, path, deepcopy(value))
         return
-    *parents, key = parse_field_path(proposal.field_path)
+    if value is not None or not structure.absent_when_null(path):
+        set_payload_value(payload, path, structure.without_absent_nulls(path, value))
+        return
+    *parents, key = parse_field_path(path)
     container = payload
     for part in parents:
         if isinstance(part, int):
-            container = container[part] if isinstance(container, list) and part < len(container) else None
+            if not isinstance(container, list) or part >= len(container):
+                raise ValueError(f"Cannot leave out '{path}' because a list index is missing")
+            container = container[part]
+        elif isinstance(container, dict):
+            container = container.get(part)
+            if container is None:
+                return  # The field's object is absent, so the field already is.
         else:
-            container = container.get(part) if isinstance(container, dict) else None
-        if container is None:
-            return
-    if isinstance(container, dict):
-        container.pop(key, None)
+            raise ValueError(f"Cannot leave out '{path}' through a non-object parent")
+    if not isinstance(container, dict):
+        raise ValueError(f"Cannot leave out '{path}' through a non-object parent")
+    container.pop(key, None)
 
 
-def plan(source_entry, proposals, *, contribution_id, removed=frozenset()):
+def plan(source_entry, proposals, *, contribution_id, structure=None):
     result = deepcopy(source_entry)
     old_refs = source_entry["metadata"]["validation_history"]
     element_parents = {target: anchor_for_path(old_refs, path)["target_id"]
@@ -65,7 +70,7 @@ def plan(source_entry, proposals, *, contribution_id, removed=frozenset()):
             raise store.HistoryConflict("Selected source fields must not overlap")
     for proposal in proposals:
         mappings.update(validate(source_entry, proposal))
-        apply_value(result["payload"], proposal, removed)
+        apply_value(result["payload"], proposal, structure)
     refs = {"target_id": old_refs["target_id"], "fields": {}, "elements": {}}
     additions = []
     relationships = []

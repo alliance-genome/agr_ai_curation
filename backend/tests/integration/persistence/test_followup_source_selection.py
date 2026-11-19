@@ -594,8 +594,11 @@ class _SavedStructure:
     def absent_when_null(self, field_path):
         return field_path in self.absent
 
-    def validate_attributes(self, attributes):
-        return [{"candidate_id": None, "actual_kind": "null", **issue} for issue in self.issues]
+    def without_absent_nulls(self, field_path, value):
+        return value
+
+    def validate_payload(self, payload, *, candidate_id=None):
+        return [{"candidate_id": candidate_id, "actual_kind": "null", **issue} for issue in self.issues]
 
 
 def _retain_null(item, monkeypatch, structure):
@@ -631,9 +634,11 @@ def test_nonconforming_proposal_is_stored_not_selectable_with_its_structure_issu
     body = store.read_fact(item.scope, item.aid, ref["fact_id"])["content"]
     assert body["selectable"] is False
     assert body["structural_failure"] == "output_structure_conformance"
-    assert body["structural_issues"] == [issue]
-    with pytest.raises(store.HistoryConflict, match="unresolved structural failure"):
+    entry_id = item.plan.envelope.extracted_objects[0].metadata["validation_history"]["target_id"]
+    assert body["structural_issues"] == [{"candidate_id": entry_id, **issue}]
+    with pytest.raises(source_selection.StructuralRefusal, match="not selectable: output_structure_conformance") as refused:
         _select(item, context, ref, [])
+    assert refused.value.issues == body["structural_issues"]
 
 
 @pytest.mark.parametrize("absent", [True, False])
@@ -642,7 +647,7 @@ def test_null_on_a_may_be_absent_field_is_selectable_and_applies_as_removal(plan
     structure = _SavedStructure(absent={"note"} if absent else ())
     context, ref = _retain_null(item, monkeypatch, structure)
     body = store.read_fact(item.scope, item.aid, ref["fact_id"])["content"]
-    assert body["selectable"] is True and body["structural_issues"] == []
+    assert body["selectable"] is True and body["structural_issues"] == [] and body["unselectable_fields"] == {}
     published = []
     assert _select(item, context, ref, published)["selection_id"]
     payload = published[0].extracted_objects[0].payload

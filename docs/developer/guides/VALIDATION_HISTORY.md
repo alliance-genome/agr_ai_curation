@@ -299,15 +299,26 @@ remain non-runnable. Existing scientific attempt allowances are unchanged.
 
 The SDK transport validates shape; application validation retains structurally
 invalid entry proposals as non-selectable history without losing valid siblings.
-For a record with a saved output structure, an entry whose proposed values, applied
-together, would not conform to that structure is retained with `selectable: false`,
-`structural_failure: output_structure_conformance` and its `structural_issues`
-(field path, reason, expected, message) (ALL-1561). A proposed null for a field the
-structure declares `required: false, nullable: false` means "leave the field out",
-both in that check and when the review selects the value; a required field stays
-refused and a nullable field keeps its null. Only the declaration decides. When
-applying a selection fails the structure anyway, the review tool result lists the
-same issues and the log records their paths and rule names, never record values.
+For a record with a saved output structure, all proposed values of an entry are
+applied together to its payload at save time and the payload is checked as it will
+be at publication (its keys, fixed identity and attributes) (ALL-1561). Each issue
+belongs to the proposed field at or above its path, or, for an issue below no
+proposed field (a required sibling left missing), to the proposed fields in the
+same object; a path that cannot be written (a missing list item) is refused as
+`unwritable_path`. Those fields are stored under `unselectable_fields` with their
+`structural_failure` and issues, and the other fields stay selectable. The entry is
+`selectable: false` with `structural_failure: output_structure_conformance` only
+when every proposed field fails or an issue belongs to none. The follow-up result
+lists both under `not_selectable`, and a selection that names such a proposal or
+field is refused with the same reason and issues. A null, at any depth of a
+proposed value, on a field the structure declares `required: false, nullable:
+false` means "leave the field out", the same at save time and when the review
+selects the value, so a change written as a dotted path or as a nested object
+gives the same result. A required field stays refused and a nullable field keeps
+its null. Only the declaration decides. When applying a selection fails the
+structure anyway, the review tool result lists the issues with their
+`candidate_id`; the log records declared paths and rule names, and an undeclared
+path only as `<undeclared, depth N>`, never record values or extractor-written keys.
 An executable extractor contract pins this transport schema. Old contracts remain
 readable but cannot perform a new targeted follow-up with the changed protocol;
 `fresh_extraction_required` is returned before provider execution or admission.
