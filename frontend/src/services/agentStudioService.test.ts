@@ -639,83 +639,88 @@ describe('agentStudioService', () => {
     ])
   })
 
-  it('rejects unknown stream events without logging their payload', async () => {
-    const errorSpy = vi.spyOn(logger, 'error')
-    const hiddenPayload = 'hidden-tool-name-that-must-not-be-logged'
-    mockFetch.mockResolvedValueOnce(new Response(
-      `data: ${JSON.stringify({
-        type: 'FUTURE_PROVIDER_EVENT',
-        session_id: 'session-1',
-        turn_id: 'turn-1',
-        provider_payload: hiddenPayload,
-      })}\n\n`,
-      { status: 200 },
-    ))
-
-    const consume = async () => {
-      for await (const _event of streamOpusChat([{ role: 'user', content: 'Hello' }])) {
-        // The unknown event must never reach UI state.
-      }
-    }
-
-    await expect(consume()).rejects.toMatchObject({
-      name: 'AgentStudioStreamProtocolError',
-      reason: 'unknown_type',
-    })
-    expect(errorSpy).toHaveBeenCalledOnce()
-    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(hiddenPayload)
-  })
-
-  it('rejects malformed and cross-turn stream events with sanitized errors', async () => {
+  it('rejects a malformed event before it reaches the UI', () => {
     expect(() => parseAgentStudioChatEvent({ type: 'TEXT_DELTA', delta: 'missing IDs' }))
       .toThrow(AgentStudioStreamProtocolError)
+  })
+})
 
-    const errorSpy = vi.spyOn(logger, 'error')
-    const body = [
-      { type: 'TEXT_DELTA', session_id: 'session-1', turn_id: 'turn-1', delta: 'First' },
-      { type: 'DONE', session_id: 'session-1', turn_id: 'turn-2' },
-    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')
-    mockFetch.mockResolvedValueOnce(new Response(body, { status: 200 }))
+describe('Studio stream protocol reporting', () => {
+  const session = 'private-chat-session'
+  const base = { session_id: session, turn_id: 'private-turn' }
+  const partial = { ...base, type: 'TEXT_DELTA', delta: 'private response' }
+  const frame = (event: unknown) => 'data: ' + JSON.stringify(event) + '\n\n'
+  const messages = [{ role: 'user' as const, content: 'private prompt' }]
 
-    const consume = async () => {
-      for await (const _event of streamOpusChat([{ role: 'user', content: 'Hello' }])) {
-        // Consume until correlation validation fails.
-      }
-    }
-
-    await expect(consume()).rejects.toMatchObject({
-      reason: 'correlation_mismatch',
-    })
-    expect(errorSpy).toHaveBeenCalledOnce()
-    expect(errorSpy.mock.calls[0][2]?.metadata).toEqual({
-      reason: 'correlation_mismatch',
-      eventType: 'DONE',
-    })
+  beforeEach(() => {
+    mockFetch.mockReset()
+    vi.clearAllMocks()
   })
 
-  it('treats a stream that closes without a terminal event as interrupted', async () => {
+  async function consume(sessionId?: string) {
+    const received = []
+    for await (const event of streamOpusChat(messages, undefined, sessionId)) received.push(event)
+    return received
+  }
+
+  it.each([
+    { reason: 'malformed_json', body: 'data: {private exception text', sessionId: session, correlated: true },
+    { reason: 'invalid_shape', body: frame({ ...base, type: 'TOOL_USE', tool_input: 'private arguments' }), correlated: false },
+    { reason: 'unknown_type', body: frame({ ...base, type: 'private event type', result: 'private result' }), correlated: false },
+    { reason: 'correlation_mismatch', body: frame(partial) + frame({ ...base, type: 'DONE', turn_id: 'private-other-turn' }), correlated: true },
+    { reason: 'missing_terminal', body: frame(partial), correlated: true },
+  ])('reports $reason once with only the allowed fields', async ({ reason, body, sessionId, correlated }) => {
     const errorSpy = vi.spyOn(logger, 'error')
-    mockFetch.mockResolvedValueOnce(new Response(
-      `data: ${JSON.stringify({
-        type: 'TEXT_DELTA',
-        session_id: 'session-1',
-        turn_id: 'turn-1',
-        delta: 'Partial response',
-      })}\n\n`,
-      { status: 200 },
-    ))
+    mockFetch.mockResolvedValueOnce(new Response(body)).mockResolvedValueOnce(new Response(null, { status: 204 }))
 
-    const consume = async () => {
-      for await (const _event of streamOpusChat([{ role: 'user', content: 'Hello' }])) {
-        // Consume through the unexpected end of stream.
-      }
-    }
-
-    await expect(consume()).rejects.toMatchObject({
-      name: 'AgentStudioStreamProtocolError',
-      reason: 'missing_terminal',
+    await expect(consume(sessionId)).rejects.toMatchObject({
+      name: 'AgentStudioStreamProtocolError', reason,
+      message: 'AI Chat received an unexpected stream response. Please retry.',
     })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const [url, init] = mockFetch.mock.calls[1]
+    expect(url).toBe('/api/agent-studio/chat/protocol-error')
+    expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin', referrerPolicy: 'no-referrer' })
+    expect(JSON.parse(init.body)).toEqual(correlated
+      ? { reason, session_id_hash: 'sha256:6d1f9522aea16f66' }
+      : { reason })
     expect(errorSpy).toHaveBeenCalledOnce()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('private')
+    if (reason === 'correlation_mismatch') {
+      expect(errorSpy.mock.calls[0][2]?.metadata).toEqual({ reason, eventType: 'DONE' })
+    }
+  })
+
+  it.each([
+    { type: 'DONE' },
+    { type: 'REFUSAL', message: 'Declined' },
+    { type: 'CONTEXT_OVERFLOW', message: 'Too long' },
+    { type: 'INCOMPLETE', message: 'Turn incomplete' },
+    { type: 'INCOMPLETE', message: 'Stopped', error_source: 'cancelled' },
+    { type: 'ERROR', message: 'Provider failure' },
+  ])('yields the terminal $type without a report', async terminal => {
+    const event = { ...base, ...terminal }
+    mockFetch.mockResolvedValueOnce(new Response(frame(event)))
+    expect(await consume()).toEqual([event])
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays quiet when the consumer closes the iterator', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(frame(partial)))
+    const stream = streamOpusChat(messages)
+    expect((await stream.next()).value).toEqual(partial)
+    await stream.return(undefined)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['network rejection', () => Promise.reject(new Error('private network failure'))],
+    ['HTTP failure', () => Promise.resolve(new Response('private response', { status: 503 }))],
+    ['pending report', () => new Promise<Response>(() => {})],
+  ] as const)('preserves stream recovery on %s', async (_name, report) => {
+    mockFetch.mockResolvedValueOnce(new Response('data: {')).mockImplementationOnce(report)
+    await expect(consume()).rejects.toMatchObject({ name: 'AgentStudioStreamProtocolError', reason: 'malformed_json' })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 })
 

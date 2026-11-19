@@ -64,7 +64,7 @@ _TRACE_CONTEXT_KEYS = {
 }
 _TRACE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 _SPAN_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{16}$")
-_HASHED_IDENTIFIER_PATTERN = re.compile(r"^sha256:[0-9a-f]{16}$")
+SENTRY_IDENTIFIER_HASH_PATTERN = re.compile(r"^sha256:[0-9a-f]{16}$")
 _SAFE_TRACE_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/-]{1,100}$")
 _SAFE_GEN_AI_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/() -]{1,160}$")
 _TRACE_TEXT_KEYS = {"op", "origin", "status", "type"}
@@ -978,7 +978,7 @@ def _hash_identifier(value: Any) -> str | None:
     text = value.strip()
     if not text:
         return None
-    if _HASHED_IDENTIFIER_PATTERN.fullmatch(text):
+    if SENTRY_IDENTIFIER_HASH_PATTERN.fullmatch(text):
         return text
     if _scrub_string(text) != text:
         return _REDACTED
@@ -1549,7 +1549,7 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
                 if (
                     canonical_key not in raw_tags
                     and isinstance(value, str)
-                    and _HASHED_IDENTIFIER_PATTERN.fullmatch(value)
+                    and SENTRY_IDENTIFIER_HASH_PATTERN.fullmatch(value)
                 ):
                     scrubbed_tags[canonical_key] = value
             for tag_key in _SENTRY_CORRELATION_TAG_KEYS.values():
@@ -1559,7 +1559,7 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
                 scrubbed_tags[tag_key] = (
                     tag_value
                     if isinstance(tag_value, str)
-                    and _HASHED_IDENTIFIER_PATTERN.fullmatch(tag_value)
+                    and SENTRY_IDENTIFIER_HASH_PATTERN.fullmatch(tag_value)
                     else _REDACTED
                 )
 
