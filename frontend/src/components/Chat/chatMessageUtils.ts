@@ -1,3 +1,4 @@
+import type { OutputSetAsideNotice } from '@/features/curation/setAside/setAsideSummary'
 import { debug } from '@/utils/env'
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 import type { EvidenceRecord } from '@/features/curation/types'
@@ -272,6 +273,21 @@ export function upsertAssistantTurnMessage(
   const nextMessages = [...messages]
   nextMessages[existingIndex] = nextMessage
   return nextMessages
+}
+
+/** Adds a chat table's set-aside notice to the assistant message of its turn, once per output. */
+export function addAssistantSetAsideNotice(
+  messages: Message[],
+  turnId: string,
+  notice: OutputSetAsideNotice,
+): Message[] {
+  const index = findAssistantMessageIndex(messages, turnId)
+  if (index === -1) return messages
+  const existing = messages[index].setAsideNotices ?? []
+  if (existing.some((item) => item.outputKey === notice.outputKey)) return messages
+  const next = [...messages]
+  next[index] = { ...messages[index], setAsideNotices: [...existing, notice] }
+  return next
 }
 
 export function getAssistantStatusNotice(message: Message): {

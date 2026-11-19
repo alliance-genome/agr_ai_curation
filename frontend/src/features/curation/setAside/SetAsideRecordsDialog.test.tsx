@@ -5,6 +5,7 @@ import type { FlowRunSetAsideRecordsResponse } from '@/features/curation/types'
 import SetAsideRecordsDialog, { type SetAsidePaper } from './SetAsideRecordsDialog'
 import {
   SET_ASIDE_ALREADY_IN_FILE,
+  SET_ASIDE_HELD_BY_CURATOR_NOTE,
   SET_ASIDE_INCLUDE_ADVICE,
   SET_ASIDE_UNPROFILED_NOTE,
 } from './setAsideSummary'
@@ -37,6 +38,7 @@ function response(
       step: 1,
       agent_name: 'Reagent extractor',
       review_fields_available: true,
+      held_by_curator: false,
       records: [{
         extraction_result_id: `result-${documentId}`,
         label,
@@ -167,6 +169,40 @@ describe('SetAsideRecordsDialog', () => {
     fireEvent.click(second)
     expect(second).toHaveAttribute('aria-expanded', 'true')
     expect(await within(dialog).findByText('UAS-frzw-RNAi line', { selector: 'span' })).toBeInTheDocument()
+  })
+
+  it('shows a result a curator is deciding, with a plain note in place of its records', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({
+      ...response('doc-1', { held_by_curator: true, records: [] }),
+      set_aside_count: 0,
+    }))
+
+    renderDialog([paper()])
+
+    const dialog = screen.getByRole('dialog', { name: '1 record set aside' })
+    expect(await within(dialog).findByText(SET_ASIDE_HELD_BY_CURATOR_NOTE)).toBeInTheDocument()
+    expect(within(dialog).queryByRole('region', { name: 'Record 1' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(SET_ASIDE_INCLUDE_ADVICE)).not.toBeInTheDocument()
+    expect(within(dialog).queryByText(/No set-aside records are waiting/)).not.toBeInTheDocument()
+  })
+
+  it('lists the other results of a paper when a curator holds one of them', async () => {
+    const listed = response('doc-1')
+    mockFetch.mockResolvedValue(jsonResponse({
+      ...listed,
+      results: [
+        { ...listed.results[0], extraction_result_id: 'held', agent_name: 'Stock extractor', held_by_curator: true, records: [] },
+        listed.results[0],
+      ],
+    }))
+
+    renderDialog([paper()])
+
+    expect(await screen.findByText(SET_ASIDE_HELD_BY_CURATOR_NOTE)).toBeInTheDocument()
+    expect(screen.getByText('Stock extractor')).toBeInTheDocument()
+    expect(screen.getByText('Reagent extractor')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Record 1' })).toBeInTheDocument()
+    expect(screen.getByText(SET_ASIDE_INCLUDE_ADVICE)).toBeInTheDocument()
   })
 
   it('closes from the close icon and the Close button', async () => {

@@ -70,6 +70,7 @@ import {
   sanitizeStoredMessage,
   shouldShowCurationDbWarning,
   upsertAssistantTurnMessage,
+  addAssistantSetAsideNotice,
   withEvidenceRecords,
   withFlowStepEvidenceMessage,
   withMissingEvidenceReviewAndCurateTargets,
@@ -87,7 +88,7 @@ import type {
   StoredChatData,
 } from './types'
 import type { FileInfo } from './FileDownloadCard'
-import { readFileSetAside } from '@/features/curation/setAside/setAsideSummary'
+import { type OutputSetAsideNotice, readOutputSetAside } from '@/features/curation/setAside/setAsideSummary'
 
 type ChatStreamEvent = SSEEvent & {
   session_id?: unknown
@@ -863,6 +864,19 @@ export function useChatController({
       // Emit an assistant message so the user sees the actual flow result text.
       if (parsed.type === 'CHAT_OUTPUT_READY' && parsed.details) {
         const outputText = String(parsed.details.output || parsed.details.output_preview || '').trim()
+        const setAsideCounts = readOutputSetAside(parsed.details.set_aside)
+        const setAsideNotice: OutputSetAsideNotice | null = setAsideCounts
+          ? {
+            outputKey: String(parsed.details.formatter_node_id || 'output'),
+            counts: setAsideCounts,
+            flowRunId: typeof parsed.details.flow_run_id === 'string' && parsed.details.flow_run_id
+              ? parsed.details.flow_run_id
+              : null,
+            documentId: typeof parsed.details.document_id === 'string' && parsed.details.document_id
+              ? parsed.details.document_id
+              : null,
+          }
+          : null
         if (outputText) {
           if (turnId) {
             const formatterNodeId = String(parsed.details.formatter_node_id || '').trim()
@@ -884,15 +898,18 @@ export function useChatController({
               ]),
             }
             assistantBuffersRef.current[turnId] = combinedOutput
-            setMessages((prev) => upsertAssistantTurnMessage(prev, {
-              turnId,
-              content: combinedOutput,
-              timestamp: messageTimestamp,
-              traceId: parsed.trace_id,
-              terminalState: null,
-              terminalMessage: null,
-              rescueState: null,
-            }))
+            setMessages((prev) => {
+              const next = upsertAssistantTurnMessage(prev, {
+                turnId,
+                content: combinedOutput,
+                timestamp: messageTimestamp,
+                traceId: parsed.trace_id,
+                terminalState: null,
+                terminalMessage: null,
+                rescueState: null,
+              })
+              return setAsideNotice ? addAssistantSetAsideNotice(next, turnId, setAsideNotice) : next
+            })
           } else {
             setMessages((prev) => {
               const lastMsg = prev[prev.length - 1]
@@ -907,6 +924,7 @@ export function useChatController({
                   timestamp: messageTimestamp,
                   id: `msg-${Date.now()}`,
                   traceIds: [...sessionTraceIds.current],
+                  ...(setAsideNotice ? { setAsideNotices: [setAsideNotice] } : {}),
                 },
               ]
             })
@@ -934,7 +952,7 @@ export function useChatController({
           source_envelope_ids: parsed.details.source_envelope_ids,
           flow_run_id: typeof parsed.details.flow_run_id === 'string' ? parsed.details.flow_run_id : undefined,
           document_id: typeof parsed.details.document_id === 'string' ? parsed.details.document_id : undefined,
-          set_aside: readFileSetAside(parsed.details.set_aside) ?? undefined,
+          set_aside: readOutputSetAside(parsed.details.set_aside) ?? undefined,
         }
         debug.log('[FILE_READY] File ready for download:', fileData.filename)
 

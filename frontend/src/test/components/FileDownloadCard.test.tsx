@@ -273,7 +273,7 @@ describe('FileDownloadCard - records set aside by the review (ALL-1561)', () => 
       flow_run_id: 'run-1', document_id: 'doc-1', set_aside_count: 2,
       results: [{
         extraction_result_id: 'r-1', node_id: 'extract', step: 1, agent_name: 'Gene extractor',
-        review_fields_available: true,
+        review_fields_available: true, held_by_curator: false,
         records: [{
           extraction_result_id: 'r-1', label: 'plim', review_status: 'set aside',
           review_reason: 'Accepted earlier: named in Table 1 | Set aside later: the figure names a different allele',

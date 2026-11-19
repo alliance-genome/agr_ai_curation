@@ -1042,6 +1042,11 @@ export interface SetAsideResult {
   agent_name: string | null
   /** False for general results with no saved output fields: files never include their records. */
   review_fields_available: boolean
+  /**
+   * True when a curator has deferred or rejected one of these records in Review &
+   * Curate: records is empty, and the result's files wait for the curator.
+   */
+  held_by_curator: boolean
   records: SetAsideRecord[]
 }
 

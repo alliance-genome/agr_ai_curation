@@ -551,7 +551,7 @@ describe('records set aside by the review (ALL-1561)', () => {
           flow_run_id: 'flow-run-123', document_id: 'document-123', set_aside_count: 1,
           results: [{
             extraction_result_id: 'extract-1', node_id: 'extract', step: 1, agent_name: 'Gene extractor',
-            review_fields_available: true,
+            review_fields_available: true, held_by_curator: false,
             records: [{
               extraction_result_id: 'extract-1', label: 'plim', review_status: 'set aside',
               review_reason: 'The gene is named only in a figure legend.',

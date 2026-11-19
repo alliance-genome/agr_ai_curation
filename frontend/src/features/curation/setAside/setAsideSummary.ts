@@ -102,26 +102,41 @@ export function isOutputSetAsideCounts(value: unknown): value is OutputSetAsideC
 }
 
 /**
- * A file's set-aside counts from FILE_READY details or a saved file message:
- * null when the file's sources hold none. A malformed value is reported and
- * not shown, like other malformed stream payloads.
+ * One output's set-aside counts from FILE_READY / CHAT_OUTPUT_READY details or a
+ * saved file message: null when its sources hold none. A malformed value is
+ * reported and not shown, like other malformed stream payloads.
  */
-export function readFileSetAside(value: unknown): OutputSetAsideCounts | null {
+export function readOutputSetAside(value: unknown): OutputSetAsideCounts | null {
   if (value === null || value === undefined) return null
   if (isOutputSetAsideCounts(value)) return value
-  console.warn('[set-aside] Ignoring a malformed set-aside count on a file', value)
+  console.warn('[set-aside] Ignoring a malformed set-aside count on an output', value)
   return null
+}
+
+/**
+ * A chat output (text table) whose sources hold set-aside records, kept on the
+ * assistant message that shows it. Without a document id the viewer cannot open.
+ */
+export interface OutputSetAsideNotice {
+  /** The output's formatter node, so a repeated event does not add a second line. */
+  outputKey: string
+  counts: OutputSetAsideCounts
+  flowRunId: string | null
+  documentId: string | null
 }
 
 export function outputSetAsidePlacement(counts: OutputSetAsideCounts): SetAsidePlacement {
   return placementFromCounts(counts.left_out, counts.included)
 }
 
-/** Line on a chat file card whose sources hold set-aside records. */
-export function fileSetAsideLabel(counts: OutputSetAsideCounts): string {
+/** What the output is called in its one-line notice. */
+export type SetAsideOutputNoun = 'file' | 'table'
+
+/** One line under a chat file card or chat table whose sources hold set-aside records. */
+export function outputSetAsideLabel(counts: OutputSetAsideCounts, noun: SetAsideOutputNoun): string {
   return counts.left_out > 0
-    ? `${recordCountText(counts.left_out)} set aside by review, not in this file`
-    : `${recordCountText(counts.included)} set aside by review, in this file`
+    ? `${recordCountText(counts.left_out)} set aside by review, not in this ${noun}`
+    : `${recordCountText(counts.included)} set aside by review, in this ${noun}`
 }
 
 /** True when some output left the records out, so the curator may want to add them. */
@@ -185,4 +200,5 @@ export function setAsidePlacementTag(placement: SetAsidePlacement): string | nul
 export const SET_ASIDE_INCLUDE_ADVICE = 'You can include these records in your files. Open your flow, choose output fields, and add Review status, Review reason and Review uncertainty.'
 export const SET_ASIDE_ALREADY_IN_FILE = 'These records are already in your file, marked "set aside" in the Review status column.'
 export const SET_ASIDE_UNPROFILED_NOTE = 'These records come from a general extraction that has no saved output fields. They cannot be added to this flow\'s files yet, so they are shown here only.'
+export const SET_ASIDE_HELD_BY_CURATOR_NOTE = 'A curator is deciding these records in Review & Curate. They are not listed here until that is finished.'
 export const SET_ASIDE_READ_ONLY_NOTE = 'Read only. Nothing here changes your results.'

@@ -33,6 +33,7 @@ import type {
 import {
   type SetAsidePlacement,
   SET_ASIDE_ALREADY_IN_FILE,
+  SET_ASIDE_HELD_BY_CURATOR_NOTE,
   SET_ASIDE_INCLUDE_ADVICE,
   SET_ASIDE_READ_ONLY_NOTE,
   SET_ASIDE_UNPROFILED_NOTE,
@@ -193,7 +194,10 @@ function PaperRecords({
                 {heading}
               </Typography>
             )}
-            {!result.review_fields_available && (
+            {result.held_by_curator && (
+              <Alert severity="info">{SET_ASIDE_HELD_BY_CURATOR_NOTE}</Alert>
+            )}
+            {!result.held_by_curator && !result.review_fields_available && (
               <Alert severity="info">{SET_ASIDE_UNPROFILED_NOTE}</Alert>
             )}
             {result.records.map((record, index) => (
@@ -266,10 +270,11 @@ export default function SetAsideRecordsDialog({
     const load = loads[paperKey(paper)]
     return load?.state === 'loaded' ? load.data.results : []
   })
-  const anyLoaded = papers.some((paper) => loads[paperKey(paper)]?.state === 'loaded')
-  const anyCanInclude = loadedResults.some((result) => result.review_fields_available)
-  const showAdvice = anyLoaded && placements.some(isLeftOutSomewhere) && anyCanInclude
-  const showAlreadyInFile = placements.every((placement) => placement === 'included')
+  // Results a curator holds list no records, so the notes speak only for listed ones.
+  const listedResults = loadedResults.filter((result) => !result.held_by_curator)
+  const anyCanInclude = listedResults.some((result) => result.review_fields_available)
+  const showAdvice = placements.some(isLeftOutSomewhere) && anyCanInclude
+  const showAlreadyInFile = listedResults.length > 0 && placements.every((placement) => placement === 'included')
 
   const retry = (paper: SetAsidePaper) => {
     if (controllerRef.current) loadPaper(paper, controllerRef.current.signal)

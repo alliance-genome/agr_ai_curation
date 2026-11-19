@@ -14,14 +14,9 @@ import type { Theme } from '@mui/material/styles'
 import DownloadIcon from '@mui/icons-material/Download'
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 
-import SetAsideRecordsDialog from '@/features/curation/setAside/SetAsideRecordsDialog'
-import {
-  type OutputSetAsideCounts,
-  fileSetAsideLabel,
-  outputSetAsidePlacement,
-} from '@/features/curation/setAside/setAsideSummary'
+import OutputSetAsideNotice from '@/features/curation/setAside/OutputSetAsideNotice'
+import type { OutputSetAsideCounts } from '@/features/curation/setAside/setAsideSummary'
 
 /**
  * FileInfo structure matching backend FileInfo model
@@ -103,14 +98,6 @@ function FileDownloadCard({
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const resetDownloadCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [setAsideViewerOpen, setSetAsideViewerOpen] = useState(false)
-  const setAside = file.set_aside ?? null
-  const setAsideLeftOut = setAside !== null && setAside.left_out > 0
-  // The viewer reads a run's records for one paper; both identities come with FILE_READY.
-  const setAsideViewer = setAside && file.flow_run_id && file.document_id
-    ? { flowRunId: file.flow_run_id, documentId: file.document_id }
-    : null
-
   useEffect(() => {
     return () => {
       if (resetDownloadCompleteTimerRef.current !== null) {
@@ -277,53 +264,17 @@ function FileDownloadCard({
               </Button>
             ) : null}
           </Box>
-          {setAside && (
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.75,
-                mt: 1,
-                pt: 1,
-                borderTop: 1,
-                borderColor: 'divider',
-                color: setAsideLeftOut ? 'warning.main' : 'text.secondary',
-              }}
-            >
-              <InfoOutlinedIcon aria-hidden sx={{ fontSize: '1rem' }} />
-              <Typography variant="caption" sx={{ flex: 1, fontWeight: setAsideLeftOut ? 600 : 400 }}>
-                {fileSetAsideLabel(setAside)}
-              </Typography>
-              {setAsideViewer && (
-                <Button
-                  size="small"
-                  variant="text"
-                  color={setAsideLeftOut ? 'warning' : 'primary'}
-                  aria-label={`View set-aside records for ${file.filename}`}
-                  onClick={() => setSetAsideViewerOpen(true)}
-                  sx={{ textTransform: 'none', fontWeight: 600, minWidth: 0, py: 0 }}
-                >
-                  View
-                </Button>
-              )}
-            </Box>
+          {file.set_aside && (
+            <OutputSetAsideNotice
+              counts={file.set_aside}
+              noun="file"
+              outputName={file.filename}
+              flowRunId={file.flow_run_id ?? null}
+              documentId={file.document_id ?? null}
+            />
           )}
         </CardContent>
       </Card>
-
-      {setAside && setAsideViewer && (
-        <SetAsideRecordsDialog
-          open={setAsideViewerOpen}
-          onClose={() => setSetAsideViewerOpen(false)}
-          flowName={null}
-          papers={[{
-            ...setAsideViewer,
-            title: file.filename,
-            count: setAside.left_out + setAside.included,
-            placement: outputSetAsidePlacement(setAside),
-          }]}
-        />
-      )}
 
       {allowDownload ? (
         <Snackbar

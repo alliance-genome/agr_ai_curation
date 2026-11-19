@@ -656,13 +656,25 @@ describe('BatchPage', () => {
       included_in_outputs: included,
     })
     const resultFile = (id: string) => ({ file_id: id, filename: `${id}.tsv`, download_url: `/api/files/${id}/download` })
-    const viewerResponse = (documentId: string, label: string) => ({
+    let heldDocumentIds: string[] = []
+    beforeEach(() => {
+      heldDocumentIds = []
+    })
+    const viewerResponse = (documentId: string, label: string) => heldDocumentIds.includes(documentId) ? ({
+      flow_run_id: 'batch-set-aside',
+      document_id: documentId,
+      set_aside_count: 0,
+      results: [{
+        extraction_result_id: `result-${documentId}`, node_id: 'extract', step: 1, agent_name: 'Reagent extractor',
+        review_fields_available: true, held_by_curator: true, records: [],
+      }],
+    }) : ({
       flow_run_id: 'batch-set-aside',
       document_id: documentId,
       set_aside_count: 1,
       results: [{
         extraction_result_id: `result-${documentId}`, node_id: 'extract', step: 1, agent_name: 'Reagent extractor',
-        review_fields_available: true,
+        review_fields_available: true, held_by_curator: false,
         records: [{
           extraction_result_id: `result-${documentId}`, label, review_status: 'set aside',
           review_reason: 'Named only in the acknowledgements.',
@@ -752,6 +764,24 @@ describe('BatchPage', () => {
       expect(await within(dialog).findByText('anti-plim', { selector: 'span' })).toBeInTheDocument()
       fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('keeps the paper counts and explains a paper whose records a curator is deciding', async () => {
+      heldDocumentIds = ['doc-1']
+      mockSetAsideBatch()
+      renderPage()
+      fireEvent.click(await screen.findByText('Reagent table'))
+      await screen.findByText('Batch Complete')
+
+      // The run set the record aside; the label and chip keep that count while a curator decides it.
+      expect(screen.getByText('Finished, 1 record set aside, not in the file')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '3 records set aside' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'View set-aside record for Alpha paper' }))
+      const dialog = await screen.findByRole('dialog', { name: '1 record set aside' })
+      expect(await within(dialog).findByText(
+        'A curator is deciding these records in Review & Curate. They are not listed here until that is finished.',
+      )).toBeInTheDocument()
+      expect(within(dialog).queryByText(/0 record/)).not.toBeInTheDocument()
     })
 
     it('writes an audit line when a live paper finishes with records set aside', async () => {
