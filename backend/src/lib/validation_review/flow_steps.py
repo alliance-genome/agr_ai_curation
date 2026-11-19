@@ -65,18 +65,56 @@ def bind(scope, step_id, *, artifact_id, episode_id, history_scope=None):
         return snapshot(row)
 
 
-def finish(scope, step_id, *, outcome):
-    """No downstream completion on model prose: require current recorded readiness."""
+def _bound_episode(db, scope, step_id):
+    """The step's saved episode, locked under the owner's history scope of its source."""
+    saved = _owned(db, scope, step_id, lock=False)
+    if saved.episode_id is None:
+        raise store.HistoryConflict("Flow step has no saved review episode")
+    from src.models.sql.validation_history import ValidationArtifact
+    artifact = db.get(ValidationArtifact, saved.artifact_id)
+    if artifact is None or (artifact.owner_id, artifact.document_id) != (scope.owner_id, scope.document_id):
+        raise store.HistoryAccessError("Flow source is unavailable")
+    bound_scope = store.HistoryScope(scope.owner_id, scope.document_id, artifact.session_id)
+    ep, _ = admission.lock_episode(db, bound_scope, saved.episode_id, require_open=False)
+    return bound_scope, ep
+
+
+def record_set_aside(scope, step_id, *, set_aside):
+    """Record that this run finishes with the records its review set aside (ALL-1561).
+
+    ``set_aside`` is the review outcome's structural flag
+    (``continuation.set_aside``). The fact is bookkeeping, not a decision: the
+    records keep their pending decisions and the manifest keeps its blockers.
+    It is written only against the exact manifest the flag was read from;
+    anything that changed since stops the step as before.
+    """
     with store.SessionLocal.begin() as db:
-        saved = _owned(db, scope, step_id, lock=False)
-        if saved.episode_id is None:
-            raise store.HistoryConflict("Flow step has no saved review episode")
-        from src.models.sql.validation_history import ValidationArtifact
-        artifact = db.get(ValidationArtifact, saved.artifact_id)
-        if artifact is None or (artifact.owner_id, artifact.document_id) != (scope.owner_id, scope.document_id):
-            raise store.HistoryAccessError("Flow source is unavailable")
-        bound_scope = store.HistoryScope(scope.owner_id, scope.document_id, artifact.session_id)
-        ep, _ = admission.lock_episode(db, bound_scope, saved.episode_id, require_open=False)
+        bound_scope, ep = _bound_episode(db, scope, step_id)
+        row = _owned(db, scope, step_id)
+        if row.state != "review_pending":
+            raise store.HistoryConflict("Stopped flow steps cannot complete automatically")
+        selections._lock_artifact(db, bound_scope, ep.artifact_id, write=True)
+        manifest = selections.manifest_in_transaction(db, bound_scope, ep.artifact_id, episode_id=ep.id)
+        if manifest["ready"] or manifest["sha256"] != set_aside["manifest_sha256"]:
+            raise admission.ReviewStopped("flow_review_pending", resource=step_id)
+        from .audit import append_fact
+        append_fact(db, ep.artifact_id,
+            operation_id=f"review-set-aside:{step_id}:{manifest['sha256']}",
+            kind=selections.SET_ASIDE_KIND, parent_id=ep.id,
+            body={"episode_id": ep.id, "step_id": step_id, "manifest_sha256": manifest["sha256"],
+                  "record_target_ids": set_aside["record_target_ids"],
+                  "unit_target_ids": set_aside["unit_target_ids"],
+                  "blockers": manifest["blockers"]})
+
+
+def finish(scope, step_id, *, outcome):
+    """No downstream completion on model prose: require current recorded readiness.
+
+    A run whose review set records aside completes only while its recorded
+    set-aside fact covers the exact current manifest (``record_set_aside``).
+    """
+    with store.SessionLocal.begin() as db:
+        bound_scope, ep = _bound_episode(db, scope, step_id)
         row = _owned(db, scope, step_id)
         if row.state == "completed":
             if row.outcome != outcome:
@@ -85,7 +123,7 @@ def finish(scope, step_id, *, outcome):
         if row.state != "review_pending":
             raise store.HistoryConflict("Stopped flow steps cannot complete automatically")
         manifest = selections.manifest_in_transaction(db, bound_scope, ep.artifact_id, episode_id=ep.id)
-        if not manifest["ready"]:
+        if not manifest["ready"] and selections.set_aside_in_transaction(db, ep.artifact_id, manifest) is None:
             raise admission.ReviewStopped("flow_review_pending", resource=step_id)
         row.state, row.outcome = "completed", store.canonical(outcome)[1]
         return snapshot(row)

@@ -633,8 +633,15 @@ def _projection_plan_from_tool_payload(
     return plan.model_copy(update={"format": output_format})
 
 
+def _set_aside_summary(projections: Sequence[FlowOutputProjectionResult]) -> dict[str, int] | None:
+    """Records the review set aside in these outputs' sources: in the output, or left out (ALL-1561)."""
+    included = sum(projection.set_aside_included for projection in projections)
+    left_out = sum(projection.set_aside_left_out for projection in projections)
+    return {"included": included, "left_out": left_out} if included or left_out else None
+
+
 def _is_intentional_empty_projection(projection: FlowOutputProjectionResult) -> bool:
-    if projection.empty_reason == "all_records_retired":
+    if projection.empty_reason in {"all_records_retired", "all_records_set_aside"}:
         return True
     accounting = projection.export_accounting
     return bool(accounting and accounting.candidate_row_count > 0
@@ -1458,7 +1465,7 @@ def build_output_formatter_tools(
             )
         return errors, warnings
 
-    def render_chat_report(report_json: str) -> tuple[str, dict[str, Any]]:
+    def render_chat_report(report_json: str) -> tuple[str, dict[str, Any], dict[str, int] | None]:
         """Validate/render all sections without delivering any partial report."""
         if not is_chat:
             raise ValueError("Reports are supported only for chat output.")
@@ -1497,6 +1504,7 @@ def build_output_formatter_tools(
 
         contents: list[str] = []
         summaries: list[dict[str, Any]] = []
+        projections: list[FlowOutputProjectionResult] = []
         total_rows = 0
         all_sections_filtered_from_source = True
         total_chars = 0
@@ -1508,6 +1516,7 @@ def build_output_formatter_tools(
             except Exception as exc:
                 raise ValueError(f"Section {index}: {exc}") from exc
             all_sections_filtered_from_source &= _is_intentional_empty_projection(projection)
+            projections.append(projection)
             total_rows += projection.total_count
             row_limit = get_flow_projection_max_rows()
             if total_rows > row_limit:
@@ -1531,7 +1540,7 @@ def build_output_formatter_tools(
             raise ValueError("Report matched no saved rows; inspect the bundle or call formatter_cannot_complete.")
         return "\n\n".join(contents), {
             "section_count": len(plans), "total_count": total_rows, "sections": summaries,
-        }
+        }, _set_aside_summary(projections)
 
     saver = save_projected_output
     finalization_lock = asyncio.Lock()
@@ -1972,7 +1981,7 @@ def build_output_formatter_tools(
             if report_json.strip():
                 if plan_json.strip() or cursor:
                     raise ValueError("Use report_json alone for complete report validation; preview individual section plans separately.")
-                _, summary = render_chat_report(report_json)
+                _, summary, _ = render_chat_report(report_json)
                 return _tool_json({"status": "ok", "report_summary": summary})
             plan = resolve_final_plan(plan_json)
             return plan_response(plan, cursor)
@@ -2194,6 +2203,7 @@ def build_output_formatter_tools(
             file_info["projection_summary"] = _projection_summary(projection)
             file_info["export_accounting"] = compact_accounting(projection)
             file_info["export_details"] = export_details_reference(file_info["file_id"], projection)
+            file_info["set_aside"] = _set_aside_summary([projection])
             finalized_file_info = {
                 key: _jsonable(value)
                 for key, value in file_info.items()
@@ -2206,6 +2216,7 @@ def build_output_formatter_tools(
                     "projection_summary",
                     "export_accounting",
                     "export_details",
+                    "set_aside",
                 }
             }
             return _tool_json(
@@ -2264,7 +2275,7 @@ def build_output_formatter_tools(
                 if report_json.strip():
                     if plan_json.strip():
                         raise ValueError("Supply either plan_json or report_json, not both.")
-                    content, report_summary = render_chat_report(report_json)
+                    content, report_summary, set_aside = render_chat_report(report_json)
                     receipt_summary = {"report_summary": report_summary}
                     row_count = report_summary["total_count"]
                 else:
@@ -2296,6 +2307,7 @@ def build_output_formatter_tools(
                         )
                     content = str(projection.chat_output or "")
                     receipt_summary = {"projection_summary": _projection_summary(projection)}
+                    set_aside = _set_aside_summary([projection])
                     row_count = projection.total_count
             except FlowOutputOperationalCeilingError as exc:
                 diagnostic = _report_delivery_failure(
@@ -2358,6 +2370,8 @@ def build_output_formatter_tools(
                 "output_chars": len(content),
                 "notes_included": bool(note_text),
                 **receipt_summary,
+                # Only when the sources hold records the review set aside (ALL-1561).
+                **({"set_aside": set_aside} if set_aside else {}),
             }
             try:
                 delivered = dict(

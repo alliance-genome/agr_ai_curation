@@ -80,6 +80,9 @@ class FlowRunOutcome:
     failure_already_reported: bool = False
     final_user_visible_text: str | None = None
     output_status: str | None = None
+    # Records the run's reviews set aside (ALL-1561): FLOW_FINISHED's
+    # ``set_aside`` summary on a completed run, else None.
+    set_aside: dict[str, Any] | None = None
     persistence_status: FlowPersistenceStatus = "pending"
     persistence_result: dict[str, Any] = field(default_factory=dict)
     _success_output_events: list[dict[str, Any]] = field(default_factory=list)
@@ -200,6 +203,8 @@ class FlowRunOutcome:
             self.failure_phase = self.failure_phase or "flow_finalization"
         else:
             self.status = "completed"
+            # Inspection-only completions carry no review summary.
+            self.set_aside = event.get("set_aside")
             self.failure_reason = None
             self.failure_type = None
             self.failure_category = None

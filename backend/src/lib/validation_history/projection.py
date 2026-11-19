@@ -296,14 +296,21 @@ def pin_publication_in_transaction(
     return envelope.model_copy(update={"metadata": metadata})
 
 
-def read_published_projection(scope, reference, *, current=False, finalized=False):
+def read_published_projection(scope, reference, *, current=False, finalized=False, set_aside_ok=False):
     """Exact old reads never reinterpret content using today's selection heads."""
     with store.SessionLocal.begin() as db:
-        return read_published_projection_in_transaction(db, scope, reference, current=current, finalized=finalized)
+        return read_published_projection_in_transaction(db, scope, reference, current=current,
+                                                        finalized=finalized, set_aside_ok=set_aside_ok)
 
 
-def read_published_projection_in_transaction(db, scope, reference, *, current=False, finalized=False):
-    """Read under a caller's existing checkpoint lock, including uncommitted publication."""
+def read_published_projection_in_transaction(db, scope, reference, *, current=False, finalized=False,
+                                             set_aside_ok=False):
+    """Read under a caller's existing checkpoint lock, including uncommitted publication.
+
+    ``set_aside_ok`` is for exports only: a finalized read also accepts the
+    current publication a flow run finished with while its review had set
+    records aside (``selections.require_ready_or_set_aside``).
+    """
     artifact_id = reference["artifact_id"]
     selections._lock_artifact(db, scope, artifact_id)
     fact = store._fact(db, artifact_id, reference["fact_id"], kind="selected_projection")
@@ -338,25 +345,48 @@ def read_published_projection_in_transaction(db, scope, reference, *, current=Fa
                     or live["source_state_sha256"] != manifest["source_state_sha256"]):
                 raise store.SelectionNotReady("Published projection is no longer current")
             manifest = live
-    if finalized:
+    if finalized and set_aside_ok:
+        selections.require_ready_or_set_aside(db, artifact_id, manifest)
+    elif finalized:
         selections.require_ready(manifest)
     projection = DomainEnvelope.model_validate(body["projection"])
     projection.metadata["selected_projection"] = deepcopy(reference)
     return projection, deepcopy(manifest)
 
 
-def read_current_projection_with_reasons(scope, reference):
-    """The current published projection and the standing decision reasons of each record.
+def read_current_projection_with_reasons(scope, reference, *, reasons=True):
+    """The current published projection, each record's review reasons and its pending records.
 
-    One read under the projection's own lock: the reasons come from the same
-    manifest snapshot as the values. See ``standing_decision_reasons_in_transaction``.
+    One read under the projection's own lock: the reasons and pending records
+    come from the same manifest snapshot as the values. See
+    ``standing_decision_reasons_in_transaction`` and ``pending_records_in_transaction``.
+    ``reasons=False`` skips the reason read when the caller's output cannot
+    show it.
     """
     with store.SessionLocal.begin() as db:
         projection, manifest = read_published_projection_in_transaction(db, scope, reference, current=True)
         records = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
                    for obj in projection.extracted_objects if "validation_history" in obj.metadata}
-        return projection, manifest, standing_decision_reasons_in_transaction(
-            db, reference["artifact_id"], manifest, records)
+        return projection, manifest, (
+            standing_decision_reasons_in_transaction(db, reference["artifact_id"], manifest, records)
+            if reasons else {}
+        ), pending_records_in_transaction(db, reference["artifact_id"], manifest, records)
+
+
+def pending_records_in_transaction(db, artifact_id, manifest, records):
+    """The records (of ``records``, by target id) that a manifest blocker reaches.
+
+    The same structural rule as ``record_lifecycle.counts``: a blocker on a
+    unit reaches the records in its target lineage, and an envelope-level
+    blocker reaches every record. A finished flow run calls these records set
+    aside; nothing here reads why they are pending.
+    """
+    pending: set[str] = set()
+    for blocker in manifest["blockers"]:
+        if blocker["target_id"] is None:
+            return set(records)
+        pending.update(set(records).intersection(store._target_lineage(db, artifact_id, blocker["target_id"])))
+    return pending
 
 
 def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records):
@@ -368,6 +398,10 @@ def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records)
     again moves it, so a replaced decision is never read, and a decision that
     selects nothing (defer, reject of another answer) leaves it in place. Only
     eligible units are read, the ones whose selection the projection applies.
+    A unit that is still pending because the review deferred it or did not
+    accept it (ALL-1561: the record is set aside) reads the reason of that
+    current decision instead; only units with a blocker read their current
+    decision.
 
     Each record gets ``(None, reason)`` for its own unit first, then
     ``(field_path, reason)`` for each unit of a validator binding on the record,
@@ -379,12 +413,19 @@ def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records)
     """
     from .curator_authority import anchored_path
 
+    blocked = {blocker["target_id"] for blocker in manifest["blockers"]}
     own: dict[str, list] = {}
     fields: dict[str, list] = {}
     for unit in manifest["units"]:
-        if unit["selection_id"] is None or not unit["eligible"]:
-            continue
-        reason = store._content(db, store._fact(db, artifact_id, unit["selection_id"], kind="selection"))["reason"]
+        reason = None
+        if unit["target_id"] in blocked:
+            current = store._current(db, artifact_id, unit["target_id"])
+            if current.get("action") in selections.SET_ASIDE_DECISIONS:
+                reason = current["reason"]
+        if reason is None:
+            if unit["selection_id"] is None or not unit["eligible"]:
+                continue
+            reason = store._content(db, store._fact(db, artifact_id, unit["selection_id"], kind="selection"))["reason"]
         if unit["target_id"] in records:
             own.setdefault(unit["target_id"], []).append((None, reason))
             continue

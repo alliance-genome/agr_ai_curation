@@ -421,6 +421,41 @@ def require_ready(manifest):
         raise store.SelectionNotReady("Selected output is not ready for finalization")
 
 
+# A flow run that finished while its review had set records aside (ALL-1561).
+SET_ASIDE_KIND = "review_set_aside"
+# Pending decisions that set a record aside: the reviewer left it for a person
+# (defer) or did not accept it (reject). A check that could not run
+# (acknowledge_failure) is not a decision about the record and still stops.
+SET_ASIDE_DECISIONS = frozenset({"reject", "defer"})
+
+
+def set_aside_in_transaction(db, artifact_id, manifest):
+    """The episode's latest set-aside fact when it covers exactly this manifest, else None.
+
+    The fact pins the manifest hash it was recorded against, so any later change
+    (a curator edit, a new answer, another decision) leaves it behind and the
+    strict readiness rule applies again.
+    """
+    fact = db.scalar(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact_id,
+        ValidationFact.kind == SET_ASIDE_KIND,
+        ValidationFact.parent_id == manifest["episode_id"],
+    ).order_by(ValidationFact.sequence.desc()).limit(1))
+    if fact is None:
+        return None
+    body = store._content(db, fact)
+    return body if body["manifest_sha256"] == manifest["sha256"] else None
+
+
+def require_ready_or_set_aside(db, artifact_id, manifest):
+    """Exports of a finished flow run only: the not-ready manifest the run finished with is accepted.
+
+    Submission, curator restore and curation preparation keep ``require_ready``.
+    """
+    if not manifest["ready"] and set_aside_in_transaction(db, artifact_id, manifest) is None:
+        raise store.SelectionNotReady("Selected output is not ready for finalization")
+
+
 def selected_prerequisites(manifest, target_ids):
     """Supply only eligible exact selected versions, never prior completion hints."""
     units = {unit["target_id"]: unit for unit in manifest["units"]}
