@@ -669,3 +669,74 @@ def test_every_manifest_blocker_code_says_what_clears_it():
             assert (code, mode) in _CLEARED_BY or code in _CLEARED_BY, (code, mode)
     assert all("nothing" not in text for key, text in _CLEARED_BY.items() if key != "document_retired")
     assert "acknowledge_failure" in _CLEARED_BY["execution_pending"]
+
+
+@pytest.mark.asyncio
+async def test_refused_selection_names_each_structure_issue_and_logs_no_values(monkeypatch, caplog):
+    import json
+    import logging
+    from unittest.mock import AsyncMock
+    from agents.tool_context import ToolContext
+    from src.lib.agent_studio.profile_conformance import ProfileConformanceError
+
+    monkeypatch.setenv("GENERIC_PROFILE_MAX_ISSUES", "2")
+    issues = [{"candidate_id": None, "field_path": f"attributes.field_{index}", "reason": "wrong_type",
+               "expected": "string", "actual_kind": "null",
+               "message": "Supply a string supported by evidence; values are not coerced."}
+              for index in range(3)]
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    selection = AsyncMock(side_effect=ProfileConformanceError(issues))
+    tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
+        request_extraction=AsyncMock(), select_source=selection, assess_source=AsyncMock())}
+    tool = tools["select_extraction_contribution"]
+    encoded = json.dumps({"operation_id": "pick", "contribution": {"fact_id": "f", "sha256": "s"},
+                          "field_paths": ["attributes.field_0"], "evidence_ids": [],
+                          "expected_source_sha": "sha", "reason": "Supported by the Methods"})
+    with caplog.at_level(logging.WARNING, logger="src.lib.validation_review.tools"):
+        result = await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name,
+            tool_call_id="pick", tool_arguments=encoded), encoded)
+    assert result["state"] == "conflict" and result["code"] == "ProfileConformanceError"
+    assert result["issues"] == [
+        {"candidate_id": None, "field_path": f"attributes.field_{index}", "reason": "wrong_type",
+         "expected": "string", "message": "Supply a string supported by evidence; values are not coerced."}
+        for index in range(2)]
+    logged = [record.getMessage() for record in caplog.records]
+    assert len(logged) == 1
+    assert "attributes.field_0" in logged[0] and "attributes.field_1" in logged[0]
+    assert "attributes.field_2" not in logged[0] and "Supply a string" not in logged[0]
+    assert "Supported by the Methods" not in logged[0]
+
+
+@pytest.mark.asyncio
+async def test_refusal_log_names_undeclared_paths_without_their_written_keys(caplog):
+    import json
+    import logging
+    from unittest.mock import AsyncMock
+    from agents.tool_context import ToolContext
+    from src.lib.validation_review.source_selection import StructuralRefusal
+
+    issues = [
+        {"candidate_id": "record-1", "field_path": "attributes.details.Smith et al lost the stock",
+         "reason": "undeclared_field", "expected": "declared canonical field", "message": "Remove it."},
+        {"candidate_id": "record-1", "field_path": "attributes.stage", "reason": "invalid_enum",
+         "expected": "enum", "message": "Choose one of the declared values: embryo, larva"},
+    ]
+    context = ReviewContext(HistoryScope("owner", "00000000-0000-0000-0000-000000000001", "session"),
+                            "episode", "reviewer")
+    selection = AsyncMock(side_effect=StructuralRefusal(
+        "These proposed fields are not selectable: attributes.details (output_structure_conformance)", issues))
+    tools = {tool.name: tool for tool in create_tools(context, checkpoint_provider=Mock(),
+        request_extraction=AsyncMock(), select_source=selection, assess_source=AsyncMock())}
+    tool = tools["select_extraction_contribution"]
+    encoded = json.dumps({"operation_id": "pick", "contribution": {"fact_id": "f", "sha256": "s"},
+                          "field_paths": ["attributes.details"], "evidence_ids": [],
+                          "expected_source_sha": "sha", "reason": "Supported"})
+    with caplog.at_level(logging.WARNING, logger="src.lib.validation_review.tools"):
+        result = await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name,
+            tool_call_id="pick", tool_arguments=encoded), encoded)
+    assert result["code"] == "StructuralRefusal"
+    assert result["issues"] == issues  # the review sees the field and its reason
+    logged, = [record.getMessage() for record in caplog.records]
+    assert "Smith" not in logged and "<undeclared, depth 3>" in logged
+    assert "attributes.stage" in logged and "embryo" not in logged

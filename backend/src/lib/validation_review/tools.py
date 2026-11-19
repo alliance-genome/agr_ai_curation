@@ -1,10 +1,13 @@
 """Bound tool adapters shared by direct/workspace and named supervisors."""
 
 import asyncio
+import logging
 from time import perf_counter
 
 from agents import function_tool
 
+from src.lib.agent_studio.profile_conformance import ProfileConformanceError, ProfileIdentityError
+from src.lib.openai_agents.config import get_generic_profile_max_issues
 from . import decisions, quick_check, reads, scheduling
 from .admission import ReviewStopped
 from .progress import ReviewLines
@@ -13,15 +16,44 @@ from functools import partial, wraps
 from typing import Literal
 from inspect import signature
 from .decisions import PacketDecision, ReviewEntry
-
+from .source_selection import StructuralRefusal
 
 from pydantic import BaseModel, ConfigDict, StrictStr
+
+LOGGER = logging.getLogger(__name__)
 
 
 class EvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     fact_id: StrictStr
     sha256: StrictStr
+
+
+def _structure_issues(error):
+    """Which saved-structure rules a refused record broke, bounded like every issue list.
+
+    candidate_id places an issue on its record when the check covered others too.
+    """
+    return [{key: issue.get(key) for key in ("candidate_id", "field_path", "reason", "expected", "message")}
+            for issue in error.issues[:get_generic_profile_max_issues()]]
+
+
+# Issue reasons whose path ends in a key the record or proposal wrote, not one
+# the saved structure declares.
+_WRITTEN_PATH_REASONS = frozenset({"undeclared_field", "invalid_patch_path", "unwritable_path", "overlapping_fields"})
+
+
+def _log_structure_issues(tool, episode_id, issues):
+    # Declared paths and rule names only. A path that is not declared can end in
+    # extractor-written text, so it is logged as undeclared with its depth.
+    def logged_path(issue):
+        path = issue["field_path"] or ""
+        if issue["reason"] in _WRITTEN_PATH_REASONS:
+            return f"<undeclared, depth {path.count('.') + path.count('[') + 1}>"
+        return path
+    LOGGER.warning("Review tool %s refused by the saved output structure (episode %s): %s",
+                   tool, episode_id,
+                   [(logged_path(issue), issue["reason"], issue["expected"]) for issue in issues])
 
 
 def _recoverable_tool(function, *, lines):
@@ -82,6 +114,13 @@ def _recoverable_tool(function, *, lines):
             }
             if arguments.get("packet_decisions"):
                 result["handles"] = [d.handle for d in arguments["packet_decisions"]]
+            if isinstance(exc, (ProfileConformanceError, StructuralRefusal)):
+                result["issues"] = _structure_issues(exc)
+                _log_structure_issues(function.__name__, lines.episode_id, result["issues"])
+            elif isinstance(exc, ProfileIdentityError):
+                # Its fixed message names the identity rule; it carries no issue list.
+                LOGGER.warning("Review tool %s refused by the saved output structure identity (episode %s): %s",
+                               function.__name__, lines.episode_id, exc)
         finally:
             lines.finish(function.__name__, result)
 

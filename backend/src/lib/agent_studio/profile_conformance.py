@@ -135,6 +135,11 @@ def _declared_schema(fields: list[ProfileField], path: str) -> ValueSchema | Non
     return schema
 
 
+# Keys a profile-bound record payload may carry; everything else is undeclared.
+PAYLOAD_KEYS = frozenset({"label", "class_key", "source_label", "description", "confidence",
+                          "classification_notes", "rationale", "semantic_class", "attributes"})
+
+
 class ProfileIdentityError(ValueError):
     """The provided contract does not match the invocation's immutable receipt."""
 
@@ -203,6 +208,55 @@ class ResolvedGenericProfile:
 
     def validator_owned_paths(self) -> set[str]:
         return validator_owned_paths(self.contract)
+
+    def absent_when_null(self, field_path: str) -> bool:
+        """Whether the declared field at this concrete path may be left out but may not be null.
+
+        Read from the saved declaration only (``required: false, nullable: false``);
+        a null for such a field means "leave the field out" (ALL-1561).
+        """
+        parent, _, key = field_path.rpartition(".")
+        if not parent or "[" in key:
+            return False
+        fields = self.contract.fields
+        schema = (ObjectValueSchema(kind="object", fields=fields) if parent == "attributes"
+                  else _declared_schema(fields, declared_value_path(parent)))
+        if not isinstance(schema, ObjectValueSchema):
+            return False
+        field = next((field for field in schema.fields if field.key == key), None)
+        return field is not None and not field.required and not field.nullable
+
+    def without_absent_nulls(self, field_path: str, value: Any) -> Any:
+        """A copy of a value written at this concrete path, minus every nested null
+        on a field declared ``required: false, nullable: false``.
+
+        The same rule as ``absent_when_null``, applied at every depth of an object
+        or list value, so a change written as a dotted path and as a nested
+        object gives the same result. Only the declaration decides; undeclared
+        keys and other values are kept as written for the structure check.
+        """
+        fields = self.contract.fields
+        schema = (ObjectValueSchema(kind="object", fields=fields) if field_path == "attributes"
+                  else _declared_schema(fields, declared_value_path(field_path)))
+
+        def strip(item: Any, item_schema: ValueSchema | None) -> Any:
+            if isinstance(item_schema, ObjectValueSchema) and type(item) is dict:
+                declared = {field.key: field for field in item_schema.fields}
+                kept = {}
+                for key, child in item.items():
+                    field = declared.get(key)
+                    if field is None:
+                        kept[key] = deepcopy(child)
+                    elif child is None and not field.required and not field.nullable:
+                        continue
+                    else:
+                        kept[key] = strip(child, field.value_schema)
+                return kept
+            if isinstance(item_schema, ArrayValueSchema) and type(item) is list:
+                return [strip(child, item_schema.items) for child in item]
+            return deepcopy(item)
+
+        return strip(value, schema)
 
     def _extractor_shape(self) -> "_ExtractorShape":
         return _ExtractorShape(self.resolvable_objects(), self.validator_owned_paths())
@@ -287,7 +341,7 @@ class ResolvedGenericProfile:
         return {"type": "array", "minItems": 1, "items": {"anyOf": variants}}
 
     def validate_attributes(self, attributes: Any, *, candidate_id: str | None = None,
-                            extractor_input: bool = False) -> list[dict[str, Any]]:
+                            extractor_input: bool = False, bounded: bool = True) -> list[dict[str, Any]]:
         """Check a record against the closed profile.
 
         A stored record's resolvable values may carry their resolution state,
@@ -298,7 +352,9 @@ class ResolvedGenericProfile:
         issues: list[dict[str, Any]] = []
         resolvable = self.resolvable_objects()
         validator_owned = self.validator_owned_paths()
-        issue_limit = get_generic_profile_max_issues()
+        # bounded=False lists every issue (the record value limit still bounds the
+        # walk) for a caller that decides from all of them and bounds what it shows.
+        issue_limit = get_generic_profile_max_issues() if bounded else math.inf
         value_limit = get_generic_profile_max_record_values()
         visited = 0
 
@@ -458,6 +514,31 @@ class ResolvedGenericProfile:
         if issues:
             raise ProfileConformanceError(issues)
 
+    def validate_payload(self, payload: dict[str, Any], *, candidate_id: str | None = None,
+                         bounded: bool = True) -> list[dict[str, Any]]:
+        """Check one stored record payload: its keys, its fixed identity and its attributes.
+
+        Paths are relative to the payload. ``require_envelope`` runs this for
+        every record after checking the record's identity, so a payload checked
+        here and one checked there meet the same rules.
+        """
+        issues = []
+        for key in sorted(set(payload) - PAYLOAD_KEYS):
+            issues.append({"candidate_id": candidate_id, "field_path": key,
+                           "reason": "undeclared_field", "expected": "canonical payload field",
+                           "actual_kind": _kind(payload[key]),
+                           "message": "Do not store undeclared claims in auxiliary payload fields."})
+        identity = {"semantic_class": self.contract.semantic_class, "class_key": "generic:generic_object"}
+        for key, expected in identity.items():
+            if key in payload and payload[key] != expected:
+                issues.append({"candidate_id": candidate_id, "field_path": key,
+                               "reason": "profile_identity_violation", "expected": expected,
+                               "actual_kind": _kind(payload[key]),
+                               "message": "The saved profile fixes this identity; it cannot be changed."})
+        issues.extend(self.validate_attributes(payload.get("attributes", {}), candidate_id=candidate_id,
+                                               bounded=bounded))
+        return issues[:get_generic_profile_max_issues()] if bounded else issues
+
     def require_envelope(self, envelope: dict[str, Any], *, execution_receipt: dict[str, Any] | None = None,
                          agent_key: str | None = None) -> None:
         """Validate materialized or subsequently edited output without coercing data.
@@ -488,8 +569,6 @@ class ResolvedGenericProfile:
         if agent_key is not None and provenance.get("produced_by") != agent_key:
             raise ProfileIdentityError("Envelope producer does not match the canonical agent")
         issues = []
-        payload_keys = {"label", "class_key", "source_label", "description", "confidence",
-                        "classification_notes", "rationale", "semantic_class", "attributes"}
         for index, obj in enumerate(envelope.get("curatable_objects", [])):
             candidate_id = obj.get("pending_ref_id")
             self.require_receipt(obj.get("metadata", {}).get("generic_profile_ref"))
@@ -499,14 +578,7 @@ class ResolvedGenericProfile:
                     or payload.get("class_key", "generic:generic_object") != "generic:generic_object"
                     or obj.get("metadata", {}).get("generic_extraction", {}).get("class_key") != "generic:generic_object"):
                 raise ProfileIdentityError("Envelope record identity does not match the bound profile")
-            unknown = set(payload) - payload_keys
-            for key in sorted(unknown):
-                issues.append({"candidate_id": candidate_id,
-                               "field_path": f"curatable_objects[{index}].payload.{key}",
-                               "reason": "undeclared_field", "expected": "canonical payload field",
-                               "actual_kind": _kind(payload[key]),
-                               "message": "Do not store undeclared claims in auxiliary payload fields."})
-            for issue in self.validate_attributes(payload.get("attributes", {}), candidate_id=candidate_id):
+            for issue in self.validate_payload(payload, candidate_id=candidate_id):
                 issues.append({**issue, "field_path": f"curatable_objects[{index}].payload." + issue["field_path"]})
             if len(issues) >= get_generic_profile_max_issues():
                 break

@@ -88,8 +88,10 @@ def test_malformed_incident_is_retained_but_cannot_retire(planned):
     assert retained["structural_failure"] == "invalid_proposal_structure"
     assert retained["proposal"]["remaining_uncertainty"]
     with store.SessionLocal.begin() as db:
-        with pytest.raises(store.HistoryConflict, match="structural failure"):
+        from src.lib.validation_review.source_selection import StructuralRefusal
+        with pytest.raises(StructuralRefusal) as refused:
             decide(db, item, context, ref, "approve")
+        assert refused.value.issues == retained["structural_issues"]
         assert store._current(db, item.aid, target)["active"] is True
 
 

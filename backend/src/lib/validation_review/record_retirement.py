@@ -204,7 +204,9 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
         raise store.HistoryConflict(CURATOR_ROUND_REFUSAL)
     body = store._content(db, contribution)
     if body.get("selectable") is False:
-        raise store.HistoryConflict("Contribution has an unresolved structural failure")
+        from .source_selection import StructuralRefusal
+        raise StructuralRefusal("This proposal is not selectable (structural failure: " + body["structural_failure"] + ")",
+                                body.get("structural_issues") or [])
     proposal = FollowupEntryResult.model_validate(body["proposal"])
     if proposal.outcome != "propose_retirement" or proposal.entry_id != root.id:
         raise store.HistoryConflict("A whole-record extractor retirement proposal is required")

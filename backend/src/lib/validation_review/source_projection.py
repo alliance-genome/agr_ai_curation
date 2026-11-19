@@ -13,7 +13,42 @@ from src.schemas.domain_envelope import parse_field_path
 from .item_relationships import validate, value_at
 
 
-def plan(source_entry, proposals, *, contribution_id):
+def apply_value(payload, proposal, structure):
+    """Write one proposed value as the saved structure reads it.
+
+    A null, at any depth of the value, on a field the structure declares
+    may-be-absent-but-not-null leaves that field out; only the declaration
+    decides, never the value. Without a saved structure (built-in packs) the
+    value is written as proposed. A path that cannot be written raises
+    ValueError; leaving out a field whose object parent is already absent
+    changes nothing, but a list index past the end cannot be written.
+    """
+    path, value = proposal.field_path, proposal.value
+    if structure is None:
+        set_payload_value(payload, path, deepcopy(value))
+        return
+    if value is not None or not structure.absent_when_null(path):
+        set_payload_value(payload, path, structure.without_absent_nulls(path, value))
+        return
+    *parents, key = parse_field_path(path)
+    container = payload
+    for part in parents:
+        if isinstance(part, int):
+            if not isinstance(container, list) or part >= len(container):
+                raise ValueError(f"Cannot leave out '{path}' because a list index is missing")
+            container = container[part]
+        elif isinstance(container, dict):
+            container = container.get(part)
+            if container is None:
+                return  # The field's object is absent, so the field already is.
+        else:
+            raise ValueError(f"Cannot leave out '{path}' through a non-object parent")
+    if not isinstance(container, dict):
+        raise ValueError(f"Cannot leave out '{path}' through a non-object parent")
+    container.pop(key, None)
+
+
+def plan(source_entry, proposals, *, contribution_id, structure=None):
     result = deepcopy(source_entry)
     old_refs = source_entry["metadata"]["validation_history"]
     element_parents = {target: anchor_for_path(old_refs, path)["target_id"]
@@ -35,7 +70,7 @@ def plan(source_entry, proposals, *, contribution_id):
             raise store.HistoryConflict("Selected source fields must not overlap")
     for proposal in proposals:
         mappings.update(validate(source_entry, proposal))
-        set_payload_value(result["payload"], proposal.field_path, deepcopy(proposal.value))
+        apply_value(result["payload"], proposal, structure)
     refs = {"target_id": old_refs["target_id"], "fields": {}, "elements": {}}
     additions = []
     relationships = []

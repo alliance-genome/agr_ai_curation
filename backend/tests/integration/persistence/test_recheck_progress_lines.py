@@ -57,7 +57,7 @@ async def test_recheck_paper_lines_arrive_in_order_through_real_execution(planne
              documents.create_record_evidence_tool({'document_id': doc, 'user_id': owner})]
     agent = Agent(name='Saved extractor', model='test', instructions='Extract evidence', tools=tools)
     args = request_args(item)
-    args['receipt'] = {'contract': extractor_phase.contract(agent, max_turns=17)}
+    args['receipt'] = {'execution_receipt': None, 'contract': extractor_phase.contract(agent, max_turns=17)}
     wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, 'supervisor'), **args)
 
     async def provider(phase, input_value, **kwargs):
