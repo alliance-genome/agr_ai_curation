@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, it, expect, vi } from 'vitest'
 import RetiredRecordsPanel from './RetiredRecordsPanel'
 import { fetchRecordHistory, restoreRecord } from '../services/validationHistoryService'
@@ -39,5 +39,35 @@ describe('RetiredRecordsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restore for review' }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce())
     expect(restoreRecord).toHaveBeenLastCalledWith('env', 'target', 3, 'Keep it', expect.any(String))
+  })
+
+  it('keeps paged history and every record’s restoration controls in the bounded panel', async () => {
+    const firstPage = 'Original extraction line\n'.repeat(80)
+    const lastPage = 'Final extraction line'
+    const totalBytes = firstPage.length + lastPage.length
+    vi.mocked(fetchRecordHistory)
+      .mockResolvedValueOnce({ content: firstPage, next_offset: firstPage.length, total_bytes: totalBytes })
+      .mockResolvedValueOnce({ content: lastPage, next_offset: null, total_bytes: totalBytes })
+    const otherRecord = { ...record, target_id: 'second-target' }
+    render(<RetiredRecordsPanel records={[record, otherRecord]} beforeChange={vi.fn()} onChanged={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retired records (2)' }))
+    const panel = screen.getByRole('region', { name: 'Retired records' })
+    expect(panel).toHaveStyle({ maxHeight: '50%', overflowY: 'auto' })
+    const history = within(panel)
+    fireEvent.click(history.getAllByRole('button', { name: 'Original extraction' })[0])
+    const readMore = await history.findByRole('button', { name: 'Read more: Original extraction' })
+    fireEvent.click(readMore)
+    await waitFor(() => expect(readMore).not.toBeInTheDocument())
+    expect(fetchRecordHistory).toHaveBeenLastCalledWith('env', record.original, firstPage.length)
+    expect(panel.querySelector('pre')?.textContent).toBe(firstPage + lastPage)
+
+    const reasons = history.getAllByRole('textbox', { name: 'Reason for restoring' })
+    const actions = history.getAllByRole('button', { name: 'Restore for review' })
+    expect(reasons).toHaveLength(2)
+    expect(actions).toHaveLength(2)
+    fireEvent.change(reasons[1], { target: { value: 'Restore the second record' } })
+    expect(actions[0]).toBeDisabled()
+    expect(actions[1]).toBeEnabled()
   })
 })
