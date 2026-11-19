@@ -1,8 +1,12 @@
 """Emit committed review facts into the existing durable TraceReview timeline."""
 
+import logging
+
 from sqlalchemy import event
 
 from src.lib.validation_history import store
+
+logger = logging.getLogger(__name__)
 
 
 def report_operational_failure(error, *, operation="execute_review_work", **details):
@@ -39,6 +43,27 @@ def report_operational_failure(error, *, operation="execute_review_work", **deta
         )
     if captured:
         error._ai_curation_sentry_captured = True
+
+
+def report_discarded_task_failure(task, propagated_error):
+    """Report an independent child failure while preserving the owner's outcome."""
+    from .stops import review_stop
+
+    if not task.done() or task.cancelled():
+        return
+    error = task.exception()
+    if (
+        isinstance(error, Exception)
+        and error is not propagated_error
+        and review_stop(error) is None
+    ):
+        try:
+            report_operational_failure(error)
+        except Exception:
+            logger.warning(
+                "Failed to report discarded review task failure",
+                extra={"sentry_skip_event": True},
+            )
 
 
 def append_fact(db, artifact_id, **kwargs):

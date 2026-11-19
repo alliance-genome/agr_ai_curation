@@ -623,6 +623,12 @@ names only the exception class; validation messages and record content are omitt
 and the companion ERROR log, which names the raw identifiers and the failing
 reference locations, skips event promotion.
 
+When cancellation interrupts chat or flow validation review, cleanup reports
+any independent work failure through `validation_review` / `execute_review_work`.
+The event carries only the exception class in a fixed, chain-free message.
+Expected review stops stay quiet, and propagated work errors retain their
+existing reporting owner.
+
 Chat partial-result recovery reports failures saving access to durable extraction
 results after a summary failure with component `chat_stream` and operation
 `partial_result_recovery_persistence_failed`. The fixed, chain-free exception
