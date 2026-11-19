@@ -84,38 +84,35 @@ class ChatReview:
 
         task = asyncio.ensure_future(awaitable)
         watcher = asyncio.create_task(watch())
-        primary_error = None
         try:
-            done, _ = await asyncio.wait(
-                (task, watcher), return_when=asyncio.FIRST_COMPLETED
-            )
-            if watcher in done:
-                watcher.result()
-                self.interrupted = True
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                from .stops import ReviewInterrupted
-
-                raise ReviewInterrupted("Curator stopped validation review")
-            return await task
-        except BaseException as error:
-            primary_error = error
-            raise
-        finally:
-            shutdown.set()
-            watcher.cancel()
-            if not task.done():
-                task.cancel()
             try:
-                await asyncio.gather(task, watcher, return_exceptions=True)
+                done, _ = await asyncio.wait(
+                    (task, watcher), return_when=asyncio.FIRST_COMPLETED
+                )
+                if watcher in done:
+                    watcher.result()
+                    self.interrupted = True
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    from .stops import ReviewInterrupted
+
+                    raise ReviewInterrupted("Curator stopped validation review")
+                result = await task
             finally:
-                report_discarded_task_failure(task, primary_error)
-            # A close failure can arrive after the work finished. Reported by
-            # watch(), it must not turn into successful review completion.
-            if primary_error is None and not watcher.cancelled():
-                error = watcher.exception()
-                if error is not None:
-                    raise error
+                shutdown.set()
+                watcher.cancel()
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, watcher, return_exceptions=True)
+        except BaseException as error:
+            # Cancellation during the drain can supersede a work failure.
+            report_discarded_task_failure(task, error)
+            raise
+
+        # A reader close failure still takes precedence over successful work.
+        if not watcher.cancelled():
+            watcher.result()
+        return result
 
     async def direct_action(self, extractor, input_items):
         """The supervisor interprets intent; code can invoke only the bound extractor.

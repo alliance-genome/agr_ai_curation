@@ -149,6 +149,48 @@ async def test_watcher_failure_uses_existing_sanitized_reporter(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cancel_during_reader_close_reports_discarded_work_failure(monkeypatch):
+    closing = asyncio.Event()
+    release_close = asyncio.Event()
+
+    class SlowCloseClient(LoopBoundClient):
+        async def aclose(self):
+            closing.set()
+            await release_close.wait()
+            await super().aclose()
+
+    client = SlowCloseClient()
+    monkeypatch.setattr(redis_client, "_create_redis_client", lambda: client)
+    capture = Mock(return_value=True)
+    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", capture)
+
+    async def work():
+        await client.entered.wait()
+        raise RuntimeError("FAKE sensitive database parameters")
+
+    context = ChatReview("owner", "doc", "session", "turn", None, (), "review")
+    owner = asyncio.create_task(context.until_stop(work()))
+    try:
+        await asyncio.wait_for(closing.wait(), 2)
+        owner.cancel()
+        release_close.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(owner, 2)
+    finally:
+        release_close.set()
+        if not owner.done():
+            owner.cancel()
+        await asyncio.gather(owner, return_exceptions=True)
+
+    assert client.closed == 1
+    capture.assert_called_once()
+    (safe,), details = capture.call_args
+    assert str(safe) == "Validation review operational failure (RuntimeError)"
+    assert safe.__context__ is safe.__cause__ is None
+    assert details == {"component": "validation_review", "operation": "execute_review_work"}
+
+
+@pytest.mark.asyncio
 async def test_cancellation_during_close_still_joins_connection_cleanup(monkeypatch):
     closing = asyncio.Event()
     release_close = asyncio.Event()
