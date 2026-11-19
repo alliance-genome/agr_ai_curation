@@ -55,7 +55,7 @@ function RetiredItem({ record, beforeChange, onChanged }: { record: RetiredRecor
 }
 export default function RetiredRecordsPanel({ records, beforeChange, onChanged }: { records: RetiredRecord[]; beforeChange: () => Promise<void>; onChanged: () => Promise<void> }) {
   if (!records.length) return null
-  return <Accordion>
+  return <Accordion component="section" aria-label="Retired records" sx={{ maxHeight: '50%', overflowY: 'auto' }}>
     <AccordionSummary>Retired records ({records.length})</AccordionSummary>
     <AccordionDetails>
       <Typography>These records are excluded from current results. Their extraction and review history remain available. Restoring a record requires review before export; it does not start another model run.</Typography>
