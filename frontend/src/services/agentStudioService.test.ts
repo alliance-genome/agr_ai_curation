@@ -705,6 +705,25 @@ describe('Studio stream protocol reporting', () => {
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
+  it('reports a bodyless success once and preserves the original error when reporting fails', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockRejectedValueOnce(new Error('private reporting failure'))
+
+    await expect(consume(session)).rejects.toMatchObject({ name: 'Error', message: 'No response body' })
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    const [url, init] = mockFetch.mock.calls[1]
+    expect(url).toBe('/api/agent-studio/chat/protocol-error')
+    expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin', referrerPolicy: 'no-referrer' })
+    expect(JSON.parse(init.body)).toEqual({ reason: 'missing_terminal', session_id_hash: 'sha256:6d1f9522aea16f66' })
+  })
+
+  it('keeps a bodyless HTTP failure out of protocol reporting', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(null, { status: 503 }))
+
+    await expect(consume()).rejects.toThrow('Chat request failed: 503')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
   it('stays quiet when the consumer closes the iterator', async () => {
     mockFetch.mockResolvedValueOnce(new Response(frame(partial)))
     const stream = streamOpusChat(messages)

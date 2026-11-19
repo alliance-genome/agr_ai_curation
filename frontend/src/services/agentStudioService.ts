@@ -141,8 +141,9 @@ export function parseAgentStudioChatEvent(value: unknown): OpusChatEvent {
 }
 
 async function reportAgentStudioStreamProtocolError(
-  error: AgentStudioStreamProtocolError,
+  reason: AgentStudioStreamProtocolReason,
   sessionId: string | null,
+  eventType?: OpusChatEvent['type'],
 ): Promise<void> {
   logger.error(
     'Agent Studio stream protocol failure',
@@ -151,8 +152,8 @@ async function reportAgentStudioStreamProtocolError(
       component: 'agentStudioService',
       action: 'parse_chat_event',
       metadata: {
-        reason: error.reason,
-        eventType: error.eventType ?? 'unknown',
+        reason,
+        eventType: eventType ?? 'unknown',
       },
     },
   )
@@ -166,7 +167,7 @@ async function reportAgentStudioStreamProtocolError(
     redirect: 'error',
     referrerPolicy: 'no-referrer',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ reason: error.reason, session_id_hash: sessionHash }),
+    body: JSON.stringify({ reason, session_id_hash: sessionHash }),
   })
 }
 
@@ -960,14 +961,20 @@ export async function* streamOpusChat(
     throw new Error(`Chat request failed: ${response.status}`)
   }
 
+  let responseSessionId: string | null = null
+  const reportProtocolError = (reason: AgentStudioStreamProtocolReason, eventType?: OpusChatEvent['type']) => {
+    void reportAgentStudioStreamProtocolError(reason, requestContext?.session_id ?? responseSessionId, eventType)
+      .catch(() => { /* Best effort. The stream consumer must receive the original error immediately. */ })
+  }
+
   const reader = response.body?.getReader()
   if (!reader) {
+    reportProtocolError('missing_terminal')
     throw new Error('No response body')
   }
 
   const decoder = new TextDecoder()
   let buffer = ''
-  let responseSessionId: string | null = null
   let responseTurnId: string | null = null
   let receivedTerminalEvent = false
 
@@ -1034,8 +1041,7 @@ export async function* streamOpusChat(
     }
   } catch (error) {
     if (error instanceof AgentStudioStreamProtocolError) {
-      void reportAgentStudioStreamProtocolError(error, requestContext?.session_id ?? responseSessionId)
-        .catch(() => { /* Best effort. The stream consumer must receive the original error immediately. */ })
+      reportProtocolError(error.reason, error.eventType)
     }
     throw error
   } finally {
