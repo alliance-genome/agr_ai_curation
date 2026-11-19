@@ -7,6 +7,7 @@ from typing import Awaitable, Callable
 from src.lib.validation_history import store
 from src.models.sql.validation_review import ValidationReviewWork
 from . import admission, work
+from .audit import report_discarded_task_failure
 from .provider import ExecutionBudget, budget_scope, guarded_await
 from .protocol import RECONSIDERATION_PROTOCOL
 
@@ -220,15 +221,5 @@ async def _while_owned(awaitable, scope, work_id, token, lease_seconds):
         finally:
             # A heartbeat stop or parent cancellation can win while the worker
             # independently fails. Draining must not discard that real fault.
-            from .audit import report_operational_failure
-            from .stops import review_stop
-
             for child in (task, heartbeat):
-                if child.done() and not child.cancelled():
-                    error = child.exception()
-                    if (
-                        isinstance(error, Exception)
-                        and error is not propagated_error
-                        and review_stop(error) is None
-                    ):
-                        report_operational_failure(error)
+                report_discarded_task_failure(child, propagated_error)

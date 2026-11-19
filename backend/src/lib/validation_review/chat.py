@@ -20,6 +20,7 @@ from sqlalchemy import select
 from src.lib.validation_history import store, runtime
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from . import admission, quick_check, reviewer
+from .audit import report_discarded_task_failure
 from .decisions import ReviewContext
 from .validator_adapter import ValidatorAdapter, save_plan
 
@@ -105,7 +106,10 @@ class ChatReview:
             watcher.cancel()
             if not task.done():
                 task.cancel()
-            await asyncio.gather(task, watcher, return_exceptions=True)
+            try:
+                await asyncio.gather(task, watcher, return_exceptions=True)
+            finally:
+                report_discarded_task_failure(task, primary_error)
             # A close failure can arrive after the work finished. Reported by
             # watch(), it must not turn into successful review completion.
             if primary_error is None and not watcher.cancelled():
