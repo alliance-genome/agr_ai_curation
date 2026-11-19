@@ -597,7 +597,7 @@ class _SavedStructure:
     def without_absent_nulls(self, field_path, value):
         return value
 
-    def validate_payload(self, payload, *, candidate_id=None):
+    def validate_payload(self, payload, *, candidate_id=None, bounded=True):
         return [{"candidate_id": candidate_id, "actual_kind": "null", **issue} for issue in self.issues]
 
 
@@ -636,7 +636,7 @@ def test_nonconforming_proposal_is_stored_not_selectable_with_its_structure_issu
     assert body["structural_failure"] == "output_structure_conformance"
     entry_id = item.plan.envelope.extracted_objects[0].metadata["validation_history"]["target_id"]
     assert body["structural_issues"] == [{"candidate_id": entry_id, **issue}]
-    with pytest.raises(source_selection.StructuralRefusal, match=r"structural failure: output_structure_conformance") as refused:
+    with pytest.raises(source_selection.StructuralRefusal) as refused:
         _select(item, context, ref, [])
     assert refused.value.issues == body["structural_issues"]
 

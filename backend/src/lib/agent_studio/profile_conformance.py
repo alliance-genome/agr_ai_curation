@@ -341,7 +341,7 @@ class ResolvedGenericProfile:
         return {"type": "array", "minItems": 1, "items": {"anyOf": variants}}
 
     def validate_attributes(self, attributes: Any, *, candidate_id: str | None = None,
-                            extractor_input: bool = False) -> list[dict[str, Any]]:
+                            extractor_input: bool = False, bounded: bool = True) -> list[dict[str, Any]]:
         """Check a record against the closed profile.
 
         A stored record's resolvable values may carry their resolution state,
@@ -352,7 +352,9 @@ class ResolvedGenericProfile:
         issues: list[dict[str, Any]] = []
         resolvable = self.resolvable_objects()
         validator_owned = self.validator_owned_paths()
-        issue_limit = get_generic_profile_max_issues()
+        # bounded=False lists every issue (the record value limit still bounds the
+        # walk) for a caller that decides from all of them and bounds what it shows.
+        issue_limit = get_generic_profile_max_issues() if bounded else math.inf
         value_limit = get_generic_profile_max_record_values()
         visited = 0
 
@@ -512,7 +514,8 @@ class ResolvedGenericProfile:
         if issues:
             raise ProfileConformanceError(issues)
 
-    def validate_payload(self, payload: dict[str, Any], *, candidate_id: str | None = None) -> list[dict[str, Any]]:
+    def validate_payload(self, payload: dict[str, Any], *, candidate_id: str | None = None,
+                         bounded: bool = True) -> list[dict[str, Any]]:
         """Check one stored record payload: its keys, its fixed identity and its attributes.
 
         Paths are relative to the payload. ``require_envelope`` runs this for
@@ -532,8 +535,9 @@ class ResolvedGenericProfile:
                                "reason": "profile_identity_violation", "expected": expected,
                                "actual_kind": _kind(payload[key]),
                                "message": "The saved profile fixes this identity; it cannot be changed."})
-        issues.extend(self.validate_attributes(payload.get("attributes", {}), candidate_id=candidate_id))
-        return issues[:get_generic_profile_max_issues()]
+        issues.extend(self.validate_attributes(payload.get("attributes", {}), candidate_id=candidate_id,
+                                               bounded=bounded))
+        return issues[:get_generic_profile_max_issues()] if bounded else issues
 
     def require_envelope(self, envelope: dict[str, Any], *, execution_receipt: dict[str, Any] | None = None,
                          agent_key: str | None = None) -> None:

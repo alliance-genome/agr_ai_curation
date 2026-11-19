@@ -5,6 +5,7 @@ from sqlalchemy import select
 from pydantic import ValidationError
 
 from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
+from src.lib.openai_agents.config import get_generic_profile_max_issues
 from src.lib.validation_history import store
 from src.models.sql.validation_review import ValidationReviewWork as Work
 from src.schemas.validation_followup import TargetedFollowupSubmission, FollowupEntryResult
@@ -31,43 +32,80 @@ def _at_or_below(path, prefix):
     return path == prefix or path.startswith(prefix + ".") or path.startswith(prefix + "[")
 
 
+def _related(left, right):
+    """One path is at or below the other, compared by whole path segments."""
+    return _at_or_below(left, right) or _at_or_below(right, left)
+
+
 def structure_check(structure, entry_id, source_entry, proposals):
     """Which proposed fields could never apply, from the saved structure alone.
 
-    All proposed values are applied together to the entry's payload, the same
-    way a selection applies them, and the payload is checked as the record will
-    be when published. Each issue belongs to the proposed field at or above its
-    path (paths only, never values); an issue below none of them, such as a
-    required sibling the change leaves missing, belongs to the proposed fields
-    in the same object. Returns ``({field_path: {structural_failure, issues}},
-    issues no proposed field explains)``.
+    Proposed values are applied to the entry's payload the way a selection
+    applies them, and the payload is checked as the record will be when
+    published, with every issue listed so none is lost to the display bound.
+    Each issue belongs to the proposed fields at, above or below its path (paths
+    only, never values); an issue related to none of them, such as a required
+    sibling the change leaves missing, belongs to the proposed fields in the same
+    object. A selection never takes two overlapping fields together, so each
+    overlapping field is checked on its own over the other fields, which keeps
+    the result independent of proposal order, and the overlap is reported.
+
+    Returns ``(fields, unexplained, overlaps)``: ``{field_path:
+    {structural_failure, issues}}`` for the fields that cannot apply, the issues
+    no proposed field explains, and the groups of overlapping fields. Shown issue
+    lists are bounded by GENERIC_PROFILE_MAX_ISSUES; selectability is not.
     """
-    payload = deepcopy(source_entry["payload"])
-    fields = {}
+    limit = get_generic_profile_max_issues()
+    fields, unexplained = {}, []
+
+    def shown(issue):
+        return {key: issue.get(key) for key in ISSUE_KEYS}
 
     def refuse(path, failure, issue):
         entry = fields.setdefault(path, {"structural_failure": failure, "issues": []})
-        entry["issues"].append({key: issue.get(key) for key in ISSUE_KEYS})
+        if len(entry["issues"]) < limit:
+            entry["issues"].append(shown(issue))
 
-    for proposal in proposals:
-        try:
-            apply_value(payload, proposal, structure)
-        except ValueError:
-            refuse(proposal.field_path, "unwritable_path", {
-                "candidate_id": entry_id, "field_path": proposal.field_path, "reason": "unwritable_path",
-                "expected": "a path that exists in the record",
-                "message": "This path cannot be written in the record; its list item or parent is missing."})
-    unexplained = []
-    for issue in structure.validate_payload(payload, candidate_id=entry_id):
-        owners = [item.field_path for item in proposals if _at_or_below(issue["field_path"], item.field_path)]
+    paths = [item.field_path for item in proposals]
+    overlapping = {path for path in paths if any(other != path and _related(path, other) for other in paths)}
+    overlaps = sorted({tuple(sorted(other for other in paths if _related(path, other))) for path in overlapping})
+    base = [item for item in proposals if item.field_path not in overlapping]
+
+    def check(chosen):
+        payload = deepcopy(source_entry["payload"])
+        for proposal in chosen:
+            try:
+                apply_value(payload, proposal, structure)
+            except ValueError:
+                refuse(proposal.field_path, "unwritable_path", {
+                    "candidate_id": entry_id, "field_path": proposal.field_path, "reason": "unwritable_path",
+                    "expected": "a path that exists in the record",
+                    "message": "This path cannot be written in the record; its list item or parent is missing."})
+        return structure.validate_payload(payload, candidate_id=entry_id, bounded=False)
+
+    def assign(issue, chosen):
+        owners = [item.field_path for item in chosen if _related(issue["field_path"], item.field_path)]
         if not owners:
             parent = issue["field_path"].rpartition(".")[0]
-            owners = [item.field_path for item in proposals if parent and _at_or_below(item.field_path, parent)]
+            owners = [item.field_path for item in chosen if parent and _at_or_below(item.field_path, parent)]
         for owner in owners:
             refuse(owner, "output_structure_conformance", issue)
-        if not owners:
-            unexplained.append({key: issue.get(key) for key in ISSUE_KEYS})
-    return fields, unexplained
+        return bool(owners)
+
+    base_issues = check(base)
+    for issue in base_issues:
+        if not assign(issue, base) and len(unexplained) < limit:
+            unexplained.append(shown(issue))
+    seen = {store.canonical(shown(issue))[0] for issue in base_issues}
+    for item in proposals:
+        if item.field_path not in overlapping:
+            continue
+        for issue in check([*base, item]):
+            if store.canonical(shown(issue))[0] in seen:
+                continue  # Already explained by the fields checked together.
+            if not assign(issue, [item]):
+                refuse(item.field_path, "output_structure_conformance", issue)
+    return fields, unexplained, overlaps
 
 
 def _result_receipt(receipt):
@@ -139,16 +177,17 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
                     continue
                 evidence.append({"origin": "original" if identity in old_ids else "followup",
                                  "record": record})
-            unselectable = {}
+            unselectable, overlaps = {}, []
             if failure is None and structure is not None and validated.proposed_values:
                 # A field that could never be applied is not offered; its siblings
                 # stay selectable. Only the saved declaration is checked; the
                 # review still judges meaning.
-                unselectable, issues = structure_check(
+                unselectable, issues, overlaps = structure_check(
                     structure, item.entry_id, source_entry, validated.proposed_values)
                 if issues or len(unselectable) == len(validated.proposed_values):
                     failure = "output_structure_conformance"
-                    issues = issues or [issue for field in unselectable.values() for issue in field["issues"]]
+                    issues = issues or [issue for field in unselectable.values()
+                                        for issue in field["issues"]][:get_generic_profile_max_issues()]
             fact = append_fact(db, ep.artifact_id,
                 operation_id="extraction-contribution:" + work_id + ":" + item.entry_id,
                 kind="extraction_contribution", parent_id=request.id, target_id=item.entry_id,
@@ -158,11 +197,13 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
                       "proposal": item.model_dump(mode="json"), "evidence": evidence,
                       "item_relationships": relationships,
                       "selectable": failure is None, "structural_failure": failure,
-                      "structural_issues": issues, "unselectable_fields": unselectable})
+                      "structural_issues": issues, "unselectable_fields": unselectable,
+                      "overlapping_fields": [list(group) for group in overlaps]})
             references.append(reference(fact))
-            if failure is not None or unselectable:
+            if failure is not None or unselectable or overlaps:
                 refused.append({"contribution": reference(fact), "entry_id": item.entry_id,
                                 "structural_failure": failure, "structural_issues": issues,
-                                "unselectable_fields": unselectable})
+                                "unselectable_fields": unselectable,
+                                "overlapping_fields": [list(group) for group in overlaps]})
         # The review sees, in this result, which proposals or fields it cannot select and why.
         return {"contributions": references, **({"not_selectable": refused} if refused else {})}

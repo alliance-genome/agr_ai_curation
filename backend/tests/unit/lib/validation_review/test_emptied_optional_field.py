@@ -84,12 +84,15 @@ def test_reference_case_applies_fully_and_leaves_the_emptied_field_out():
     entry = _entry()
     proposals = _proposals(("attributes.name", "new name"), ("attributes.note", "new note"),
                            ("attributes.source", None))
-    assert structure_check(structure, "t-record", entry, proposals) == ({}, [])
+    assert structure_check(structure, "t-record", entry, proposals) == ({}, [], [])
     planned = plan(entry, proposals, contribution_id="contribution", structure=structure)
     attributes = planned["entry"]["payload"]["attributes"]
-    assert "source" not in attributes and attributes["name"] == "new name" and attributes["note"] == "new note"
+    expected = {**_attributes(), "name": "new name", "note": "new note"}
+    del expected["source"]
+    assert attributes == expected
     assert structure.validate_attributes(attributes) == []
     assert planned["retired_ids"] == ["t-source"]
+    assert "attributes.source" not in planned["entry"]["metadata"]["validation_history"]["fields"]
     assert entry["payload"]["attributes"]["source"] == "a supplier"  # the original is untouched
 
 
@@ -112,7 +115,7 @@ def test_null_on_a_required_field_is_refused_with_field_detail_at_any_depth():
     structure = _structure()
     proposals = _proposals(("attributes.note", "new note"), ("attributes.name", None),
                            ("attributes.details", {"lab": "x", "code": None}))
-    fields, unexplained = structure_check(structure, "t-record", _entry(), proposals)
+    fields, unexplained, _ = structure_check(structure, "t-record", _entry(), proposals)
     assert unexplained == []
     assert set(fields) == {"attributes.name", "attributes.details"}
     assert fields["attributes.name"] == {"structural_failure": "output_structure_conformance", "issues": [{
@@ -124,7 +127,7 @@ def test_null_on_a_required_field_is_refused_with_field_detail_at_any_depth():
 def test_null_on_a_nullable_field_stays_a_null():
     structure = _structure()
     proposals = _proposals(("attributes.remark", None))
-    assert structure_check(structure, "t-record", _entry(), proposals) == ({}, [])
+    assert structure_check(structure, "t-record", _entry(), proposals) == ({}, [], [])
     planned = plan(_entry(), proposals, contribution_id="contribution", structure=structure)
     assert planned["entry"]["payload"]["attributes"]["remark"] is None
 
@@ -134,7 +137,7 @@ def test_one_bad_field_leaves_its_siblings_selectable_and_they_apply():
     entry = _entry()
     proposals = _proposals(("attributes.name", "new name"), ("attributes.note", "new note"),
                            ("attributes.stage", "adult"))
-    fields, unexplained = structure_check(structure, "t-record", entry, proposals)
+    fields, unexplained, _ = structure_check(structure, "t-record", entry, proposals)
     assert unexplained == [] and list(fields) == ["attributes.stage"]
     assert fields["attributes.stage"]["issues"][0]["reason"] == "invalid_enum"
     chosen = [item for item in proposals if item.field_path not in fields]
@@ -147,7 +150,7 @@ def test_removal_at_a_missing_list_index_cannot_be_written():
         _applied(("attributes.genes[5].note", None))
     structure = _structure()
     proposals = _proposals(("attributes.genes[5].note", None), ("attributes.note", "new note"))
-    fields, unexplained = structure_check(structure, "t-record", _entry(), proposals)
+    fields, unexplained, _ = structure_check(structure, "t-record", _entry(), proposals)
     assert unexplained == [] and list(fields) == ["attributes.genes[5].note"]
     assert fields["attributes.genes[5].note"]["structural_failure"] == "unwritable_path"
 
@@ -162,7 +165,7 @@ def test_removal_under_an_absent_object_changes_nothing():
 
 def test_payload_keys_outside_attributes_are_checked_as_at_publication():
     structure = _structure()
-    fields, unexplained = structure_check(structure, "t-record", _entry(),
+    fields, unexplained, _ = structure_check(structure, "t-record", _entry(),
                                           _proposals(("unknown_bag", "x"), ("attributes.note", "new note")))
     assert unexplained == [] and list(fields) == ["unknown_bag"]
     assert fields["unknown_bag"]["issues"][0]["reason"] == "undeclared_field"
@@ -173,7 +176,77 @@ def test_a_missing_required_sibling_belongs_to_the_fields_written_in_its_object(
     attributes = _attributes()
     del attributes["details"]
     entry = {**_entry(), "payload": {"attributes": attributes}}
-    fields, unexplained = structure_check(structure, "t-record", entry,
+    fields, unexplained, _ = structure_check(structure, "t-record", entry,
                                           _proposals(("attributes.details.lab", "a lab"), ("attributes.note", "n")))
     assert unexplained == [] and list(fields) == ["attributes.details.lab"]
     assert fields["attributes.details.lab"]["issues"][0]["field_path"] == "attributes.details.code"
+
+
+def _resolvable_structure():
+    from tests.unit.lib.domain_packs.test_profile_validation import example, resolve
+    raw, _, _ = example.__wrapped__()
+    raw["fields"] = [
+        {"key": "gene", "required": True, "value_schema": {"kind": "object", "fields": [
+            {"key": "mention", "required": True, "value_schema": {"kind": "string"}},
+            {"key": "curie", "value_schema": {"kind": "string"}}]}},
+        {"key": "note", "value_schema": {"kind": "string"}},
+    ]
+    raw["validator_mappings"][0].update(inputs={"mention": {"field_path": "attributes.gene.mention"}},
+                                        outputs={"identifier": "attributes.gene.curie"})
+    return resolve(raw)[1]
+
+
+def _resolvable_entry(structure):
+    attributes = structure.unresolved_attributes({"gene": {"mention": "abc"}, "note": "old note"})
+    return {"payload": {"attributes": attributes},
+            "metadata": {"validation_history": {"target_id": "t-record", "fields": {}, "elements": {}}}}
+
+
+def test_an_issue_on_the_object_above_a_proposed_field_blocks_only_that_field():
+    structure = _resolvable_structure()
+    entry = _resolvable_entry(structure)
+    assert structure.validate_attributes(entry["payload"]["attributes"]) == []
+    # An identity written into a value that is still unresolved breaks the value
+    # as a whole: the issue is reported on attributes.gene, above the field.
+    proposals = _proposals(("attributes.gene.curie", "ID:1"), ("attributes.note", "new note"))
+    fields, unexplained, overlaps = structure_check(structure, "t-record", entry, proposals)
+    assert unexplained == [] and overlaps == []
+    assert list(fields) == ["attributes.gene.curie"]
+    assert [(issue["field_path"], issue["reason"]) for issue in fields["attributes.gene.curie"]["issues"]] == [
+        ("attributes.gene", "invalid_resolution")]
+
+
+def test_an_issue_below_a_proposed_object_blocks_that_object_only():
+    structure = _structure()
+    proposals = _proposals(("attributes.details", {"lab": 7, "code": "c1"}), ("attributes.note", "new note"))
+    fields, unexplained, _ = structure_check(structure, "t-record", _entry(), proposals)
+    assert unexplained == [] and list(fields) == ["attributes.details"]
+    assert fields["attributes.details"]["issues"][0]["field_path"] == "attributes.details.lab"
+
+
+@pytest.mark.parametrize("order", [1, -1])
+def test_overlapping_proposals_are_reported_and_checked_each_on_its_own(order):
+    structure = _structure()
+    attributes = _attributes()
+    del attributes["details"]
+    entry = {**_entry(), "payload": {"attributes": attributes}}
+    proposals = _proposals(("attributes.details", {"lab": "x"}), ("attributes.details.code", "c2"),
+                           ("attributes.note", "new note"))[::order]
+    fields, unexplained, overlaps = structure_check(structure, "t-record", entry, proposals)
+    assert unexplained == []
+    assert overlaps == [("attributes.details", "attributes.details.code")]
+    # Each overlapping field is checked alone, whatever the proposal order: the
+    # object without its required code cannot apply, the code alone can.
+    assert set(fields) == {"attributes.details"}
+    assert [issue["reason"] for issue in fields["attributes.details"]["issues"]] == ["missing_required"]
+
+
+def test_selectability_uses_every_issue_and_only_the_shown_list_is_bounded(monkeypatch):
+    monkeypatch.setenv("GENERIC_PROFILE_MAX_ISSUES", "2")
+    structure = _structure()
+    proposals = _proposals(("attributes.details", {"lab": 1, "room": 2, "code": 3}),
+                           ("attributes.genes", [{"symbol": 5}]), ("attributes.note", "new note"))
+    fields, unexplained, _ = structure_check(structure, "t-record", _entry(), proposals)
+    assert unexplained == []
+    assert set(fields) == {"attributes.details", "attributes.genes"}  # genes' issue comes after the first two
+    assert len(fields["attributes.details"]["issues"]) == 2

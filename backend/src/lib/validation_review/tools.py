@@ -41,7 +41,7 @@ def _structure_issues(error):
 
 # Issue reasons whose path ends in a key the record or proposal wrote, not one
 # the saved structure declares.
-_WRITTEN_PATH_REASONS = frozenset({"undeclared_field", "invalid_patch_path", "unwritable_path"})
+_WRITTEN_PATH_REASONS = frozenset({"undeclared_field", "invalid_patch_path", "unwritable_path", "overlapping_fields"})
 
 
 def _log_structure_issues(tool, episode_id, issues):

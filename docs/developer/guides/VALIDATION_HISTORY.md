@@ -299,25 +299,39 @@ remain non-runnable. Existing scientific attempt allowances are unchanged.
 
 The SDK transport validates shape; application validation retains structurally
 invalid entry proposals as non-selectable history without losing valid siblings.
-For a record with a saved output structure, all proposed values of an entry are
-applied together to its payload at save time and the payload is checked as it will
-be at publication (its keys, fixed identity and attributes) (ALL-1561). Each issue
-belongs to the proposed field at or above its path, or, for an issue below no
-proposed field (a required sibling left missing), to the proposed fields in the
-same object; a path that cannot be written (a missing list item) is refused as
-`unwritable_path`. Those fields are stored under `unselectable_fields` with their
-`structural_failure` and issues, and the other fields stay selectable. The entry is
-`selectable: false` with `structural_failure: output_structure_conformance` only
-when every proposed field fails or an issue belongs to none. The follow-up result
-lists both under `not_selectable`, and a selection that names such a proposal or
-field is refused with the same reason and issues. A null, at any depth of a
-proposed value, on a field the structure declares `required: false, nullable:
-false` means "leave the field out", the same at save time and when the review
-selects the value, so a change written as a dotted path or as a nested object
-gives the same result. A required field stays refused and a nullable field keeps
-its null. Only the declaration decides. When applying a selection fails the
-structure anyway, the review tool result lists the issues with their
-`candidate_id`; the log records declared paths and rule names, and an undeclared
+For a record with a saved output structure, an entry's proposed values are applied
+at save time to its payload the way a selection applies them, and the payload is
+checked as it will be at publication (its keys, fixed identity and attributes)
+(ALL-1561). Each issue belongs to the proposed fields at, above or below its path,
+compared by whole path segments; an issue related to none (a required sibling left
+missing) belongs to the proposed fields in the same object. A path that cannot be
+written (a missing list item) is refused as `unwritable_path`. Selectability is
+decided from every issue; only the issue lists shown are bounded by
+`GENERIC_PROFILE_MAX_ISSUES`. A selection never takes two overlapping fields (one
+contains the other) together, so each overlapping field is checked on its own over
+the other fields, which keeps the result independent of proposal order, and the
+group is stored as `overlapping_fields`. Fields that cannot apply are stored under
+`unselectable_fields` (`{field_path: {structural_failure, issues}}`) and the other
+fields stay selectable. The entry is `selectable: false` with `structural_failure:
+output_structure_conformance` only when every proposed field fails or an issue
+belongs to none.
+
+The follow-up tool result (`request_targeted_extraction`) carries `not_selectable`
+when anything in it cannot be selected: one item per contribution with its
+`contribution` reference, `entry_id`, the entry-level `structural_failure` and
+`structural_issues`, `unselectable_fields` and `overlapping_fields`. A selection or
+retirement that names such a proposal, field or overlapping pair is refused as a
+`StructuralRefusal` conflict whose `issues` list each field and its reason. Every
+issue the review sees has `candidate_id` (the record: its entry id at save time),
+`field_path`, `reason`, `expected` and `message`.
+
+A null, at any depth of a proposed value, on a field the structure declares
+`required: false, nullable: false` means "leave the field out", the same at save
+time and when the review selects the value, so a change written as a dotted path or
+as a nested object gives the same result. A required field stays refused and a
+nullable field keeps its null. Only the declaration decides. When applying a
+selection fails the structure anyway, the review tool result lists the issues; the
+log records declared paths and rule names, and an undeclared or proposal-written
 path only as `<undeclared, depth N>`, never record values or extractor-written keys.
 An executable extractor contract pins this transport schema. Old contracts remain
 readable but cannot perform a new targeted follow-up with the changed protocol;

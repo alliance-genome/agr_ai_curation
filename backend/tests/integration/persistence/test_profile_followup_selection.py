@@ -156,3 +156,21 @@ async def test_a_wholly_bad_proposal_is_not_selectable(profiled):
     refused, = result["not_selectable"]
     assert refused["structural_failure"] == "output_structure_conformance"
     assert [issue["field_path"] for issue in refused["structural_issues"]] == ["attributes.paper_name"]
+
+
+@pytest.mark.asyncio
+async def test_overlapping_proposals_are_reported_and_cannot_be_selected_together(profiled):
+    item = profiled
+    context, target, result = _retain(item, [("attributes.details", {"lab": "x", "room": "y"}),
+                                             ("attributes.details.room", "z")])
+    refused, = result["not_selectable"]
+    assert refused["overlapping_fields"] == [["attributes.details", "attributes.details.room"]]
+    assert refused["unselectable_fields"] == {} and refused["structural_failure"] is None
+    checkpoint = _checkpoint(item)
+    with pytest.raises(StructuralRefusal) as error:
+        await _select(item, context, checkpoint, result["contributions"][0],
+                      ["attributes.details", "attributes.details.room"])
+    assert [(issue["field_path"], issue["reason"]) for issue in error.value.issues] == [
+        ("attributes.details", "overlapping_fields"), ("attributes.details.room", "overlapping_fields")]
+    await _select(item, context, checkpoint, result["contributions"][0], ["attributes.details.room"])
+    assert checkpoint().envelope.extracted_objects[0].payload["attributes"]["details"]["room"] == "z"

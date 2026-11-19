@@ -78,6 +78,14 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
             "These proposed fields are not selectable: " + "; ".join(
                 f"{path} ({body['unselectable_fields'][path]['structural_failure']})" for path in refused),
             [issue for path in refused for issue in body["unselectable_fields"][path]["issues"]])
+    together = [path for path in field_paths if any(
+        other != path and _overlap(parse_field_path(path), parse_field_path(other)) for other in field_paths)]
+    if together:
+        raise StructuralRefusal("These proposed fields overlap and cannot be selected together: "
+                                + "; ".join(together), [
+            {"candidate_id": contribution.target_id, "field_path": path, "reason": "overlapping_fields",
+             "expected": "fields that do not contain one another",
+             "message": "Select one of the overlapping fields, not both."} for path in together])
     proposal = FollowupEntryResult.model_validate(body["proposal"])
     if proposal.outcome == "propose_retirement":
         raise store.HistoryConflict("Use the explicit record retirement decision tool")

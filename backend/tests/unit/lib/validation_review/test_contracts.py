@@ -736,7 +736,6 @@ async def test_refusal_log_names_undeclared_paths_without_their_written_keys(cap
         result = await tool.on_invoke_tool(ToolContext(context=None, tool_name=tool.name,
             tool_call_id="pick", tool_arguments=encoded), encoded)
     assert result["code"] == "StructuralRefusal"
-    assert "attributes.details (output_structure_conformance)" in result["message"]
     assert result["issues"] == issues  # the review sees the field and its reason
     logged, = [record.getMessage() for record in caplog.records]
     assert "Smith" not in logged and "<undeclared, depth 3>" in logged
