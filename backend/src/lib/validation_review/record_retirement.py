@@ -205,7 +205,7 @@ def decide_in_transaction(db, context, *, operation_id, contribution_ref,
     body = store._content(db, contribution)
     if body.get("selectable") is False:
         from .source_selection import StructuralRefusal
-        raise StructuralRefusal("This proposal is not selectable: " + body["structural_failure"],
+        raise StructuralRefusal("This proposal is not selectable (structural failure: " + body["structural_failure"] + ")",
                                 body.get("structural_issues") or [])
     proposal = FollowupEntryResult.model_validate(body["proposal"])
     if proposal.outcome != "propose_retirement" or proposal.entry_id != root.id:

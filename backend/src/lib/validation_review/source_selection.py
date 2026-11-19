@@ -70,7 +70,7 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
         raise store.HistoryAccessError("Source contribution is outside the requested record scope")
     body = store._content(db, contribution)
     if body.get("selectable") is False:
-        raise StructuralRefusal("This proposal is not selectable: " + body["structural_failure"],
+        raise StructuralRefusal("This proposal is not selectable (structural failure: " + body["structural_failure"] + ")",
                                 body.get("structural_issues") or [])
     refused = [path for path in field_paths if path in body.get("unselectable_fields", {})]
     if refused:

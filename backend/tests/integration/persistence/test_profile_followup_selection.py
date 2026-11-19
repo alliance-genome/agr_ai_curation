@@ -45,7 +45,7 @@ def profiled(scope, monkeypatch):
         lambda package, agent: AgentDefinition(folder_name=agent, agent_id=agent, name=agent, package_id=package))
     source = runtime.capture_extraction(scope=scope, producer_id=uuid4().hex,
         typed=source.model_dump(mode="json"), envelope=source, provenance={})
-    groups = ("WB",)
+    groups = ()  # The fixture capability is not group-scoped.
     plan = prepare_validator_dispatch(source, pack, runtime_context=ValidatorRuntimeContext(
         user_id=scope.owner_id, document_id=scope.document_id, authenticated_groups=groups))
     plan_ref = save_plan(plan, context=ValidatorRuntimeContext(
