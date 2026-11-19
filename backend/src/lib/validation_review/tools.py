@@ -18,10 +18,9 @@ from inspect import signature
 from .decisions import PacketDecision, ReviewEntry
 from .source_selection import StructuralRefusal
 
-LOGGER = logging.getLogger(__name__)
-
-
 from pydantic import BaseModel, ConfigDict, StrictStr
+
+LOGGER = logging.getLogger(__name__)
 
 
 class EvidenceReference(BaseModel):
