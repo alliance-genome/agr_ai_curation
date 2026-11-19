@@ -365,7 +365,7 @@ import sys
 
 settings = [line.split("|") for line in Path(sys.argv[1]).read_text().splitlines()
             if line and not line.startswith("#")]
-assert len(settings) == 4
+assert len(settings) == 5
 for index, path in enumerate(sys.argv[2:]):
     services = json.loads(Path(path).read_text())["services"]
     for key, default, override in settings:

@@ -31,6 +31,16 @@ Settings (all in `.env.example` under Operational limits, forwarded to `backend`
 | `EXTRACTION_FANOUT_ITEMS_PER_WRITER` | `5` | Planned records per writer. Writers = ceil(records / this), capped below. |
 | `EXTRACTION_FANOUT_MAX_WRITERS` | `8` | Most writers one extraction may start; each opens its own model connection. |
 | `EXTRACTION_FANOUT_WRITER_RERUNS` | `1` | Times a failed writer runs again from its assignment (see Failures). `0` turns re-runs off. |
+| `EXTRACTION_FANOUT_WRITER_STORE_RESPONSES` | `false` | Whether writers keep their responses at OpenAI. With `false`, writers on a native OpenAI provider send `store=false` (see below). `true` leaves `store` as the planner has it. |
+
+Writers do not store their responses at OpenAI by default (KANBAN-2081 / ALL-1564): each
+writer's own copy of the model settings carries `store=False` (`ModelSettings.store`)
+when the agent's model resolves to a native OpenAI provider (`driver: openai_native`).
+Other providers never receive the field. The planner's settings object is not changed, so
+the planner thread, the check pass and every other agent keep the provider default. The
+cost: writer responses do not appear in the OpenAI dashboard and cannot be retrieved by
+ID. Nothing in the backend reads stored responses back, and Langfuse, TraceReview and
+our logs are unaffected. Encrypted reasoning items are replayed inline as before.
 
 The planner, the writers and the check pass all run at the agent's saved reasoning
 effort. There is no separate planning effort, which also keeps the check pass on the
@@ -138,7 +148,7 @@ audit when the writers finish, with their recorded start and end times.
   `extraction_fanout.writer_completed` (assigned and staged counts per writer, and the
   attempt), `extraction_fanout.writer_failed` (writer, assigned positions, attempt, exception
   type, the provider's typed error type and code, the curator-failure category, whether it
-  runs again),
+  runs again); both carry `store_off`, true when that writer attempt sent `store=false`,
   `extraction_fanout.writer_rerun_started` (the removed candidate and evidence IDs and
   counts), `extraction_fanout.writer_rerun_finished` (`succeeded`, `failed` or `cancelled`) and
   `extraction_fanout.finalize_attempt`. No message text or record content is traced.

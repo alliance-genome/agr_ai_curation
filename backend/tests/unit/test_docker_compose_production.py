@@ -1200,13 +1200,17 @@ FANOUT_CONTRACT = [
 ]
 
 
+def _fanout_value(raw):
+    return {"true": True, "false": False}[raw] if raw in {"true", "false"} else int(raw)
+
+
 @pytest.mark.parametrize("key,default,override", FANOUT_CONTRACT)
 def test_extraction_fanout_settings_reach_every_extraction_consumer(key, default, override, monkeypatch):
     from src.lib.openai_agents import config
 
     getter = getattr(config, "get_" + key.lower())
     monkeypatch.delenv(key, raising=False)
-    assert getter() == int(default)
+    assert getter() == _fanout_value(default)
     expected = "${" + key + ":-" + default + "}"
     for path in (DEV_COMPOSE_PATH, COMPOSE_PATH):
         services = yaml.safe_load(path.read_text())["services"]
@@ -1217,7 +1221,7 @@ def test_extraction_fanout_settings_reach_every_extraction_consumer(key, default
             assert env[key] == expected
     assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
     monkeypatch.setenv(key, override)
-    assert getter() == int(override)
+    assert getter() == _fanout_value(override)
 
 
 def test_extraction_fanout_contract_covers_every_getter():
