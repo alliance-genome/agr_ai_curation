@@ -37,6 +37,10 @@ class SetAsideResult(BaseModel):
     # False for general results with no saved output structure: no review
     # fields are offered, so files of this source never include these records.
     review_fields_available: bool
+    # True when a curator has since deferred, rejected or otherwise changed one of
+    # these records in Review & Curate: records is empty, and exports of this
+    # result wait until the curator accepts or removes them.
+    held_by_curator: bool
     records: list[SetAsideRecord]
 
 

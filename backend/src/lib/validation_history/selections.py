@@ -441,14 +441,9 @@ def set_aside_in_transaction(db, artifact_id, manifest):
     """
     if manifest["ready"]:
         return None
-    fact = db.scalar(select(ValidationFact).where(
-        ValidationFact.artifact_id == artifact_id,
-        ValidationFact.kind == SET_ASIDE_KIND,
-        ValidationFact.parent_id == manifest["episode_id"],
-    ).order_by(ValidationFact.sequence.desc()).limit(1))
-    if fact is None:
+    body = set_aside_fact_in_transaction(db, artifact_id, manifest["episode_id"])
+    if body is None:
         return None
-    body = store._content(db, fact)
     if any(blocker not in body["blockers"] for blocker in manifest["blockers"]):
         return None
     for target_id in {blocker["target_id"] for blocker in manifest["blockers"]}:
@@ -457,13 +452,36 @@ def set_aside_in_transaction(db, artifact_id, manifest):
     return body
 
 
+def set_aside_fact_in_transaction(db, artifact_id, episode_id):
+    """The episode's latest ``review_set_aside`` fact body, whether or not it still covers, else None."""
+    fact = db.scalar(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact_id,
+        ValidationFact.kind == SET_ASIDE_KIND,
+        ValidationFact.parent_id == episode_id,
+    ).order_by(ValidationFact.sequence.desc()).limit(1))
+    return None if fact is None else store._content(db, fact)
+
+
+# Why an export of a finished run's result is refused once a curator holds one of
+# its set-aside records (ALL-1561); curator-facing.
+CURATOR_HOLDS_SET_ASIDE = (
+    "A curator is deciding records this run's review set aside. Exports of this result "
+    "wait until those records are accepted or removed in Review & Curate."
+)
+
+
 def require_ready_or_set_aside(db, artifact_id, manifest):
     """Exports of a finished flow run only: a manifest its set-aside fact still covers is accepted.
 
     Submission, curator restore and curation preparation keep ``require_ready``.
+    When the run's fact no longer covers the manifest (a curator deferred,
+    rejected or otherwise changed a set-aside record), the refusal says so.
     """
-    if not manifest["ready"] and set_aside_in_transaction(db, artifact_id, manifest) is None:
-        raise store.SelectionNotReady("Selected output is not ready for finalization")
+    if manifest["ready"] or set_aside_in_transaction(db, artifact_id, manifest) is not None:
+        return
+    if set_aside_fact_in_transaction(db, artifact_id, manifest["episode_id"]) is not None:
+        raise store.SelectionNotReady(CURATOR_HOLDS_SET_ASIDE)
+    raise store.SelectionNotReady("Selected output is not ready for finalization")
 
 
 def selected_prerequisites(manifest, target_ids):

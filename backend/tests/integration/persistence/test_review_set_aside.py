@@ -464,3 +464,95 @@ async def test_a_set_aside_record_whose_accepted_value_stands_shows_both_reasons
     listed = list_set_aside_records(user_id=item.scope.owner_id, flow_run_id=flow.flow_run_id,
                                     document_id=item.scope.document_id)
     assert [record.review_reason for record in listed.results[0].records] == [both]
+
+
+THREE = (("kept", "eco:1"), ("aside", "eco:2"), ("later", "eco:3"))
+
+
+@pytest.mark.asyncio
+async def test_every_accepted_view_listing_marks_the_set_aside_records(planned, monkeypatch):
+    """R2: the mark is part of the accepted view, so later manifest pages and inspect_results carry it."""
+    import json
+    from src.lib.context import _current_session_id, _current_user_id
+    from src.lib.openai_agents.extraction_manifest import build_extraction_manifest_page
+    from src.lib.openai_agents.result_inspection_tool import make_result_inspection_tool
+    from src.lib.openai_agents.result_inspection_views import accepted_view
+
+    item = planned
+    definition = item.pack.metadata.object_definitions[0]
+    definition.metadata.update({"object_role": "curatable_unit",
+                                "supervisor_manifest": {"summary_fields": ["evidence_code_curies[0]"]}})
+    definition.fields.append(definition.fields[0].model_copy(
+        update={"field_path": "evidence_code_curies[0]", "metadata": {}}))
+    flow, _, _ = await _finished(item, monkeypatch, "defer", aside=("aside", "later"), codes=THREE)
+    await flow.finish_review()
+    accepted = accepted_view(flow.record, user_id=item.scope.owner_id)
+
+    # One object per page: the set-aside records sit on pages 2 and 3.
+    marks = {}
+    for cursor in ("0", "1", "2"):
+        page = build_extraction_manifest_page(accepted["payload_json"], limit=1, cursor=cursor)
+        [listed] = page["objects"]
+        marks[listed["object_ref"]] = listed.get("review_status")
+    assert marks == {"kept": None, "aside": "set aside", "later": "set aside"}
+
+    result_ref = "extraction-result:" + str(flow.record.extraction_result_id)
+    scope = {"user_id": item.scope.owner_id, "origin_session_id": flow.session_id,
+             "document_id": item.scope.document_id, "flow_run_id": flow.flow_run_id,
+             "metadata": {key: flow.record.metadata[key] for key in ("idempotency_key", "flow_step_key")},
+             "post_validation_checkpoint": flow.record.metadata["inspection_checkpoint"]}
+    inspector = make_result_inspection_tool(scope_provider=lambda: {result_ref: scope})
+    session_token = _current_session_id.set(flow.session_id)
+    user_token = _current_user_id.set(item.scope.owner_id)
+    try:
+        response = json.loads(await inspector.on_invoke_tool(
+            SimpleNamespace(tool_name="inspect_results", run_config=None),
+            json.dumps({"action": "objects", "result_ref": result_ref, "result_view": "accepted"})))
+    finally:
+        _current_user_id.reset(user_token)
+        _current_session_id.reset(session_token)
+    assert response["status"] == "ok", response
+    assert {row["object_ref"]: row.get("review_status") for row in response["objects"]} == marks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("curator_action", ["defer", "reject"])
+async def test_a_curator_holding_a_set_aside_record_is_shown_not_dropped(planned, monkeypatch, curator_action):
+    """R3: the result is returned as held by the curator, and re-export gives the specific reason.
+
+    The curator decides through Review & Curate's own decide() wrapper.
+    """
+    from uuid import uuid4 as new_id
+    from src.lib.curation_workspace.models import CurationReviewSession
+    from src.lib.curation_workspace.review_history_service import decide
+    from src.lib.flows.output_projection import finalize_output_projection
+    from src.lib.flows.set_aside_records import list_set_aside_records
+    from src.lib.validation_history.selections import CURATOR_HOLDS_SET_ASIDE
+    from src.schemas.workspace_review import WorkspaceReviewDecisionRequest
+    from uuid import UUID
+
+    item = planned
+    item.pack.metadata.object_definitions[0].metadata.update({"object_role": "curatable_unit"})
+    flow, _, records = await _finished(item, monkeypatch, "defer", aside=("aside", "later"), codes=THREE)
+    await flow.finish_review()
+    session_id = await _bootstrap(flow, item, monkeypatch)
+    artifact_id = flow.reference(flow.record)["artifact_id"]
+    with store.SessionLocal() as db:
+        candidate = next(candidate for candidate in db.get(CurationReviewSession, UUID(str(session_id))).candidates
+                         if candidate.object_id == "later")
+        entries = [{**entry, "action": curator_action, "reason": "I will check the supplement myself."}
+                   for entry in entries_for(SimpleNamespace(aid=artifact_id), "accept")
+                   if store._content(db, store._fact(db, artifact_id, entry["target_id"], kind="target"))[
+                       "object_target"] == records["later"]]
+    assert len(entries) == 1
+    decide(candidate.id, owner_id=item.scope.owner_id, groups=(), request=WorkspaceReviewDecisionRequest(
+        request_id=new_id(), episode_id=UUID(flow.reference(flow.record)["episode_id"]), entries=entries))
+
+    listed = list_set_aside_records(user_id=item.scope.owner_id, flow_run_id=flow.flow_run_id,
+                                    document_id=item.scope.document_id)
+    [result] = listed.results
+    assert result.held_by_curator and result.records == [] and listed.set_aside_count == 0
+    with pytest.raises(store.SelectionNotReady, match="A curator is deciding records"):
+        finalize_output_projection(_bundle(flow, item, monkeypatch),
+                                   _plan("tsv", [("record", "object.pending_ref_id")]))
+    assert CURATOR_HOLDS_SET_ASIDE.startswith("A curator is deciding records")
