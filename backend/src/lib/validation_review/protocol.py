@@ -258,7 +258,9 @@ The runtime supplies authoritative validation_review status after specialist wor
 Use inspect_results to read the current selected values and exact original/history
 before reporting corrections. Do not infer readiness from a manifest or fluent prose.
 Pending results remain inspectable but cannot be finalized/exported or prepared for
-curation. Explain pending review without claiming completion. Preserve the existing
+curation. Records a finished flow run's review set aside are the exception: they
+stay pending, are exported only by outputs that include Review status, and await a
+curator's decision. Explain pending review without claiming completion. Preserve the existing
 two-turn curation-preparation confirmation requirement for ready results.
 
 When continuing saved work, reuse its results and review history. Do not rerun an

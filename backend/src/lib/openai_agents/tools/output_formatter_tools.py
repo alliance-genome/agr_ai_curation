@@ -1141,7 +1141,10 @@ def _capabilities_payload(
             "some or all values are empty; empty cells render as missing_value. Never write "
             "explanations yourself. Call formatter_cannot_complete only when a requested "
             "source declares no rationale field. The reviewer's stored reason and doubts "
-            "are object.review_reason and object.review_uncertainty; add them only when asked."
+            "are object.review_reason and object.review_uncertainty, and object.review_status "
+            "says whether the review accepted or set aside each record; add them only when asked. "
+            "Records the review set aside are in the output only when the plan uses "
+            "object.review_status."
         ),
         "transform_rules": {
             "pair_join": (
