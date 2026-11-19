@@ -14,8 +14,9 @@ Species must be supported by the paper; your selected group does not establish i
 
 In CSV, TSV and chat, a resolved value normally appears as **label (ID)**. A value
 the validator could not resolve appears as **UNRESOLVED**, or as its name followed
-by **(unresolved)**. That is the only mark added to a value, and it comes from what
-was saved for that value, not from the reviewer's doubts. Ask for paper wording in a
+by **(unresolved)**. That mark comes from what was saved for that value, not from
+the reviewer's doubts. One other mark exists: a saved word that is not one of a
+field's allowed values appears as **Invalid value (word)**. Ask for paper wording in a
 separate column if you need to compare it with the checked answer. The application
 does not fill a missing checked value with a different field. All other values
 appear exactly as they were saved.
