@@ -262,9 +262,11 @@ def test_compiled_nullable_constant_survives_review_plan_serialization(example):
     assert "value" in saved["bindings"][0]["input_fields"]["mention"]
     assert REGISTRY.validate_python(saved) == context.registry
     match, = context.registry.match_bindings(envelope({"paper_name": "original"}))
+    from tests.unit.lib.validation_review.test_saved_matches import assert_reads_as_before
     plan_envelope = match.envelope.model_dump(mode="json")
     serialized = saved_matches.encode({"target": match}, plan_envelope=plan_envelope)
     assert saved_matches.decode({**serialized, "envelope": plan_envelope}) == {"target": match}
+    assert_reads_as_before({"target": match}, plan_envelope)
     binding_key = serialized["matches"]["target"]["binding"]
     assert serialized["match_parts"]["bindings"][binding_key]["raw"] == compiled.raw
 

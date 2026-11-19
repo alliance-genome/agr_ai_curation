@@ -42,6 +42,32 @@ def plan_matches(records):
     return envelope, {f"target-{index}": match for index, match in enumerate(matches)}
 
 
+def previous_reader(match):
+    """What the pre-change plan saved for one match (serialize_match) and read back."""
+    value = saved_matches.MATCH.dump_python(match, mode="json")
+    value["binding"] = saved_matches.serialize_binding(match.binding)
+    return saved_matches.MATCH.validate_python(store.canonical(value)[1])
+
+
+def assert_reads_as_before(matches, plan_envelope):
+    saved = store.canonical(saved_matches.encode(matches, plan_envelope=plan_envelope))[1]
+    restored = saved_matches.decode({**saved, "envelope": plan_envelope})
+    assert restored.keys() == matches.keys()
+    for target, match in matches.items():
+        before = previous_reader(match)
+        assert restored[target] == before
+        assert type(restored[target]) is type(before)
+        for name in ("binding", "object_definition", "field_definition", "policy"):
+            assert type(getattr(restored[target], name)) is type(getattr(before, name))
+        assert (restored[target].object_envelope.model_dump(mode="json")
+                if restored[target].object_envelope is not None else None) == (
+                    before.object_envelope.model_dump(mode="json")
+                    if before.object_envelope is not None else None)
+        assert (saved_matches.MATCH.dump_python(restored[target], mode="json")
+                == saved_matches.MATCH.dump_python(before, mode="json"))
+    return restored
+
+
 def body_size(body):
     return len(json.dumps(body, sort_keys=True, separators=(",", ":")))
 
@@ -66,6 +92,33 @@ def test_saved_matches_read_back_equal_to_the_originals():
     assert all(match.object_envelope is None
                or any(match.object_envelope is obj for obj in first.envelope.extracted_objects)
                for match in restored.values())
+
+
+def test_a_many_object_many_binding_plan_reads_back_as_the_previous_reader_did():
+    envelope, matches = plan_matches(6)
+    assert len({match.binding.binding_id for match in matches.values()}) > 1
+    assert len({id(match.object_envelope) for match in matches.values()}) > 1
+    assert_reads_as_before(matches, envelope.model_dump(mode="json"))
+
+
+def test_element_indexed_matches_read_back_as_the_previous_reader_did(tmp_path):
+    from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
+    from src.schemas.domain_envelope import CuratableObjectEnvelope
+    from tests.unit.lib.domain_packs.test_validator_dispatch import _multivalued_dispatch_pack
+
+    pack = _multivalued_dispatch_pack(tmp_path)
+    envelope = DomainEnvelope(envelope_id="fanout", domain_pack_id=pack.pack_id, extracted_objects=[
+        CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=f"record-{index}",
+                                payload={"evidence_code_curies": [f"eco:{index}a", f"eco:{index}b"]})
+        for index in range(3)])
+    found = DomainPackValidationRegistry.from_domain_pack(pack).match_bindings(
+        envelope, states=[ValidationBindingState.ACTIVE])
+    matches = {f"target-{index}": match for index, match in enumerate(found)}
+    assert sum(match.element_index is not None for match in matches.values()) == 6
+
+    restored = assert_reads_as_before(matches, envelope.model_dump(mode="json"))
+    assert {match.field_path for match in restored.values()} == {
+        "evidence_code_curies[0]", "evidence_code_curies[1]"}
 
 
 def test_a_match_envelope_that_differs_from_the_plan_envelope_is_stored_once():
