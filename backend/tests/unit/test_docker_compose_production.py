@@ -1218,8 +1218,12 @@ def test_review_quick_check_settings_reject_invalid_values(key, value, monkeypat
 @pytest.mark.parametrize("configured,expected", [(None, 8), ("3", 3)])
 def test_validator_worker_capacity_reaches_all_consumers(monkeypatch, configured, expected):
     key = "MAX_PARALLEL_VALIDATORS"
-    for service in ("backend", "benchmark_worker"):
-        assert _load_compose()["services"][service]["environment"][key] == "${MAX_PARALLEL_VALIDATORS:-8}"
+    for compose in (_load_compose(), _load_dev_compose()):
+        for service in ("backend", "benchmark_worker"):
+            env = compose["services"][service]["environment"]
+            if isinstance(env, list):
+                env = _list_environment(env)
+            assert env[key] == "${MAX_PARALLEL_VALIDATORS:-8}"
     assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == "8"
     if configured is None:
         monkeypatch.delenv(key, raising=False)
