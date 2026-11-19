@@ -435,7 +435,8 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
             documentId: run.documentId,
             flowRunId: run.flowRunId,
             title: null,
-            summary: setAside,
+            count: setAside.count,
+            placement: setAsidePlacement(setAside),
           }]}
         />
       )}

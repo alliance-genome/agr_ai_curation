@@ -1236,7 +1236,13 @@ const BatchPage: React.FC = () => {
         : '';
   const setAsidePapers: SetAsidePaper[] = activeBatchId
     ? setAsideViewer.documents.flatMap((doc) => (doc.set_aside
-      ? [{ documentId: doc.document_id, flowRunId: activeBatchId, title: doc.title, summary: doc.set_aside }]
+      ? [{
+        documentId: doc.document_id,
+        flowRunId: activeBatchId,
+        title: doc.title,
+        count: doc.set_aside.count,
+        placement: setAsidePlacement(doc.set_aside),
+      }]
       : []))
     : [];
 

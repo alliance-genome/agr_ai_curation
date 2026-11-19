@@ -87,6 +87,7 @@ import type {
   StoredChatData,
 } from './types'
 import type { FileInfo } from './FileDownloadCard'
+import { readFileSetAside } from '@/features/curation/setAside/setAsideSummary'
 
 type ChatStreamEvent = SSEEvent & {
   session_id?: unknown
@@ -931,6 +932,9 @@ export function useChatController({
           source_extraction_result_ids: parsed.details.source_extraction_result_ids,
           source_keys: parsed.details.source_keys,
           source_envelope_ids: parsed.details.source_envelope_ids,
+          flow_run_id: typeof parsed.details.flow_run_id === 'string' ? parsed.details.flow_run_id : undefined,
+          document_id: typeof parsed.details.document_id === 'string' ? parsed.details.document_id : undefined,
+          set_aside: readFileSetAside(parsed.details.set_aside) ?? undefined,
         }
         debug.log('[FILE_READY] File ready for download:', fileData.filename)
 

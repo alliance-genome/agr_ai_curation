@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   type FlowSetAsideSummary,
+  fileSetAsideLabel,
   isFlowSetAsideSummary,
+  readFileSetAside,
   setAsideAuditMessage,
   setAsideFinishedLabel,
   setAsidePlacement,
@@ -49,5 +51,12 @@ describe('setAsideSummary', () => {
     expect(isFlowSetAsideSummary({ ...summary(1, 1, 0), count: 0 })).toBe(false)
     expect(isFlowSetAsideSummary({ ...summary(1, 1, 0), outputs: [{ type: 'FILE_READY' }] })).toBe(false)
     expect(isFlowSetAsideSummary({ ...summary(1, 1, 0), left_out_of_outputs: '1' })).toBe(false)
+  })
+
+  it('reads the counts of one file and words its line', () => {
+    expect(readFileSetAside(undefined)).toBeNull()
+    expect(readFileSetAside({ included: 0, left_out: 1 })).toEqual({ included: 0, left_out: 1 })
+    expect(fileSetAsideLabel({ included: 0, left_out: 1 })).toBe('1 record set aside by review, not in this file')
+    expect(fileSetAsideLabel({ included: 3, left_out: 0 })).toBe('3 records set aside by review, in this file')
   })
 })

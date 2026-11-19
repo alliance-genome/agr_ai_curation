@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FlowRunSetAsideRecordsResponse } from '@/features/curation/types'
 import SetAsideRecordsDialog, { type SetAsidePaper } from './SetAsideRecordsDialog'
 import {
-  type FlowSetAsideSummary,
   SET_ASIDE_ALREADY_IN_FILE,
   SET_ASIDE_INCLUDE_ADVICE,
   SET_ASIDE_UNPROFILED_NOTE,
@@ -12,35 +11,13 @@ import {
 
 const mockFetch = vi.fn()
 
-function summary(overrides: Partial<FlowSetAsideSummary> = {}): FlowSetAsideSummary {
-  return {
-    count: 1,
-    results: [{ extraction_result_id: 'result-1', node_id: 'extract', episode_id: 'ep-1', count: 1 }],
-    outputs: [{
-      type: 'FILE_READY', formatter_node_id: 'tsv-out', file_id: 'file-1', filename: 'reagents.tsv',
-      included: 0, left_out: 1,
-    }],
-    left_out_of_outputs: 1,
-    included_in_outputs: 0,
-    ...overrides,
-  }
-}
-
-const INCLUDED = summary({
-  outputs: [{
-    type: 'FILE_READY', formatter_node_id: 'tsv-out', file_id: 'file-1', filename: 'reagents.tsv',
-    included: 1, left_out: 0,
-  }],
-  left_out_of_outputs: 0,
-  included_in_outputs: 1,
-})
-
 function paper(overrides: Partial<SetAsidePaper> = {}): SetAsidePaper {
   return {
     documentId: 'doc-1',
     flowRunId: 'run-1',
     title: 'Plimsoll signalling in wing discs',
-    summary: summary(),
+    count: 1,
+    placement: 'left_out',
     ...overrides,
   }
 }
@@ -150,7 +127,7 @@ describe('SetAsideRecordsDialog', () => {
   it('says the records are already in the file when the output uses Review status', async () => {
     mockFetch.mockResolvedValue(jsonResponse(response('doc-1')))
 
-    renderDialog([paper({ summary: INCLUDED })])
+    renderDialog([paper({ placement: 'included' })])
 
     expect(await screen.findByText('In the file')).toBeInTheDocument()
     expect(screen.getByText(SET_ASIDE_ALREADY_IN_FILE)).toBeInTheDocument()
@@ -172,7 +149,7 @@ describe('SetAsideRecordsDialog', () => {
       paper({
         documentId: 'doc-2',
         title: 'Frizzlewort controls eye size',
-        summary: summary({ count: 2 }),
+        count: 2,
       }),
     ])
 

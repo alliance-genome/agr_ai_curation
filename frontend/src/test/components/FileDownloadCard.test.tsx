@@ -261,3 +261,55 @@ describe('FileDownloadCard - File Size Formatting', () => {
     expect(screen.getByText('2.5 MB')).toBeInTheDocument()
   })
 })
+
+describe('FileDownloadCard - records set aside by the review (ALL-1561)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFetch.mockReset()
+  })
+
+  it('says when set-aside records were left out of the file and opens the viewer', async () => {
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside_count: 2,
+      results: [{
+        extraction_result_id: 'r-1', node_id: 'extract', step: 1, agent_name: 'Gene extractor',
+        review_fields_available: true,
+        records: [{
+          extraction_result_id: 'r-1', label: 'plim', review_status: 'set aside',
+          review_reason: 'Accepted earlier: named in Table 1 | Set aside later: the figure names a different allele',
+          fields: [{ field_ref: 'object.gene', label: 'Gene', value: 'plim' }],
+        }],
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    render(<FileDownloadCard file={createTestFileInfo({
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 0, left_out: 2 },
+    })} />)
+
+    expect(screen.getByText('2 records set aside by review, not in this file')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'View set-aside records for genes_20250107T123456Z.csv' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '2 records set aside' })
+    expect(dialog).toHaveTextContent('genes_20250107T123456Z.csv')
+    expect(await screen.findByText(/Accepted earlier: named in Table 1 \| Set aside later/)).toBeInTheDocument()
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/curation-workspace/flow-runs/run-1/set-aside-records?document_id=doc-1',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+  })
+
+  it('says when set-aside records are in the file', () => {
+    render(<FileDownloadCard file={createTestFileInfo({
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 1, left_out: 0 },
+    })} />)
+
+    expect(screen.getByText('1 record set aside by review, in this file')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /View set-aside records/ })).toHaveTextContent('View')
+  })
+
+  it('shows nothing extra when the file holds no set-aside records', () => {
+    render(<FileDownloadCard file={createTestFileInfo()} />)
+
+    expect(screen.queryByText(/set aside/)).not.toBeInTheDocument()
+  })
+})

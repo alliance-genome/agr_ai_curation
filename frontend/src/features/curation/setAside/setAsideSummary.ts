@@ -79,11 +79,49 @@ export function isFlowSetAsideSummary(value: unknown): value is FlowSetAsideSumm
     && isCount(candidate.included_in_outputs)
 }
 
+function placementFromCounts(leftOut: number, included: number): SetAsidePlacement {
+  if (leftOut > 0) return included > 0 ? 'mixed' : 'left_out'
+  return included > 0 ? 'included' : 'no_output'
+}
+
 export function setAsidePlacement(summary: FlowSetAsideSummary): SetAsidePlacement {
-  if (summary.left_out_of_outputs > 0) {
-    return summary.included_in_outputs > 0 ? 'mixed' : 'left_out'
-  }
-  return summary.included_in_outputs > 0 ? 'included' : 'no_output'
+  return placementFromCounts(summary.left_out_of_outputs, summary.included_in_outputs)
+}
+
+/** One output's own counts (FILE_READY / CHAT_OUTPUT_READY `details.set_aside`). */
+export interface OutputSetAsideCounts {
+  included: number
+  left_out: number
+}
+
+export function isOutputSetAsideCounts(value: unknown): value is OutputSetAsideCounts {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Record<string, unknown>
+  return isCount(candidate.included) && isCount(candidate.left_out)
+    && candidate.included + candidate.left_out > 0
+}
+
+/**
+ * A file's set-aside counts from FILE_READY details or a saved file message:
+ * null when the file's sources hold none. A malformed value is reported and
+ * not shown, like other malformed stream payloads.
+ */
+export function readFileSetAside(value: unknown): OutputSetAsideCounts | null {
+  if (value === null || value === undefined) return null
+  if (isOutputSetAsideCounts(value)) return value
+  console.warn('[set-aside] Ignoring a malformed set-aside count on a file', value)
+  return null
+}
+
+export function outputSetAsidePlacement(counts: OutputSetAsideCounts): SetAsidePlacement {
+  return placementFromCounts(counts.left_out, counts.included)
+}
+
+/** Line on a chat file card whose sources hold set-aside records. */
+export function fileSetAsideLabel(counts: OutputSetAsideCounts): string {
+  return counts.left_out > 0
+    ? `${recordCountText(counts.left_out)} set aside by review, not in this file`
+    : `${recordCountText(counts.included)} set aside by review, in this file`
 }
 
 /** True when some output left the records out, so the curator may want to add them. */

@@ -31,7 +31,6 @@ import type {
   SetAsideResult,
 } from '@/features/curation/types'
 import {
-  type FlowSetAsideSummary,
   type SetAsidePlacement,
   SET_ASIDE_ALREADY_IN_FILE,
   SET_ASIDE_INCLUDE_ADVICE,
@@ -39,7 +38,6 @@ import {
   SET_ASIDE_UNPROFILED_NOTE,
   isLeftOutSomewhere,
   recordCountText,
-  setAsidePlacement,
   setAsidePlacementTag,
 } from './setAsideSummary'
 
@@ -49,13 +47,16 @@ export interface SetAsidePaper {
   flowRunId: string
   /** The paper's title; null where the page shows only one paper and has no title for it. */
   title: string | null
-  summary: FlowSetAsideSummary
+  /** Records the run set aside for this paper (or this file). */
+  count: number
+  placement: SetAsidePlacement
 }
 
 interface SetAsideRecordsDialogProps {
   open: boolean
   onClose: () => void
-  flowName: string
+  /** Null where the page has no flow name (a chat file card). */
+  flowName: string | null
   papers: SetAsidePaper[]
 }
 
@@ -138,7 +139,7 @@ function RecordPanel({
       <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
         Review reason
       </Typography>
-      <Typography variant="body2">
+      <Typography variant="body2" sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-line' }}>
         {record.review_reason ?? 'The review saved no reason for this record.'}
       </Typography>
     </Paper>
@@ -252,15 +253,15 @@ export default function SetAsideRecordsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, papersKey, loadPaper])
 
-  const totalCount = papers.reduce((sum, paper) => sum + paper.summary.count, 0)
+  const totalCount = papers.reduce((sum, paper) => sum + paper.count, 0)
   const title = papers.length > 1
     ? `${recordCountText(totalCount)} set aside in ${papers.length} papers`
     : `${recordCountText(totalCount)} set aside`
-  const subtitle = papers.length === 1 && papers[0].title
-    ? `${papers[0].title} · Flow: ${flowName}`
-    : `Flow: ${flowName}`
+  const flowText = flowName ? `Flow: ${flowName}` : null
+  const paperText = papers.length === 1 ? papers[0].title : null
+  const subtitle = [paperText, flowText].filter((part): part is string => Boolean(part)).join(' · ')
 
-  const placements = papers.map((paper) => setAsidePlacement(paper.summary))
+  const placements = papers.map((paper) => paper.placement)
   const loadedResults = papers.flatMap((paper) => {
     const load = loads[paperKey(paper)]
     return load?.state === 'loaded' ? load.data.results : []
@@ -282,9 +283,11 @@ export default function SetAsideRecordsDialog({
             <Typography id={titleId} variant="h6" component="h2">
               {title}
             </Typography>
-            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
-              {subtitle}
-            </Typography>
+            {subtitle && (
+              <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                {subtitle}
+              </Typography>
+            )}
           </Box>
           <IconButton onClick={onClose} size="small" aria-label="Close set-aside records">
             <Close fontSize="small" />
@@ -330,7 +333,7 @@ export default function SetAsideRecordsDialog({
                         size="small"
                         variant="outlined"
                         color="warning"
-                        label={`${paper.summary.count} set aside`}
+                        label={`${paper.count} set aside`}
                       />
                     </Stack>
                   </AccordionSummary>
