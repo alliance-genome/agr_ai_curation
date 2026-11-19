@@ -1237,6 +1237,25 @@ async def test_missing_plan_gets_one_reminder_then_fails(harness):
 
 
 @pytest.mark.asyncio
+async def test_a_run_keeping_more_than_fifty_records_finalizes_all_of_them_in_one_call(harness):
+    """KANBAN-2100 / ALL-1583: code finalizes every retained record at once, in plan order."""
+    labels = [f"reagent {n}" for n in range(1, 56)]
+    model = ScriptedFanoutModel({"plan": _plan(*labels)})
+
+    await harness.run(model)
+
+    workspace = harness.workspaces[-1]
+    assert workspace.finalization is not None
+    call, = harness.finalize_calls
+    assert len(call) == 55 and len(set(call)) == 55
+    assert workspace.finalization.source_candidate_ids == tuple(call)
+    assert sorted(_finalized_labels(harness)) == sorted(labels)
+    attempt, = [event["output_summary"] for event in harness.trace
+                if event["event_type"] == "extraction_fanout.finalize_attempt"]
+    assert (attempt["candidate_count"], attempt["finalized"]) == (55, True)
+
+
+@pytest.mark.asyncio
 async def test_reminded_plan_is_accepted(harness):
     # The first planning run ends in text; the reminder run submits.
     model = ScriptedFanoutModel({"plan": _plan("reagent 1"), "first_run_text": True, "submit_on_reminder": True})

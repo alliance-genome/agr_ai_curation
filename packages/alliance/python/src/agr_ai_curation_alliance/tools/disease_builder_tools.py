@@ -465,7 +465,7 @@ class DiseaseFindInput(_StrictToolModel):
 
 
 class DiseaseFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(max_length=50)
+    candidate_ids: List[StrictStr]
 
 
 def _emit_disease_builder_event(

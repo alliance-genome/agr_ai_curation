@@ -399,7 +399,7 @@ class PhenotypeFindInput(_StrictToolModel):
 
 
 class PhenotypeFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(max_length=50)
+    candidate_ids: List[StrictStr]
 
 
 def _emit_phenotype_builder_event(

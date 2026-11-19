@@ -459,7 +459,7 @@ class GeneExpressionFindInput(_StrictToolModel):
 
 
 class GeneExpressionFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(max_length=50)
+    candidate_ids: List[StrictStr]
 
 
 # Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
@@ -4535,7 +4535,7 @@ def _materialize_gene_expression_with_events(
 
 
 def _finalize_gene_expression_extraction_impl(
-    candidate_ids: Annotated[List[str], Field(max_length=50)],
+    candidate_ids: List[str],
 ) -> AgrQueryResult:
     """Finalize staged gene-expression candidates through the builder handoff contract.
 

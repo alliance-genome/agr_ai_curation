@@ -184,7 +184,7 @@ class GeneFindInput(_StrictToolModel):
 
 
 class GeneFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(max_length=50)
+    candidate_ids: List[StrictStr]
 
 
 def _emit_gene_builder_event(
