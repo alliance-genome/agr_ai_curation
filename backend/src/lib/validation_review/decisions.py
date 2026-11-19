@@ -43,7 +43,8 @@ class ReviewEntry(BaseModel):
     action: Literal["accept", "reject", "defer", "acknowledge_failure", "revoke"]
     reason: StrictStr = Field(description=(
         "Curators read this: in plain words, what in the paper establishes or questions this "
-        "decision. No handles, internal IDs, tool names or field paths."
+        "decision; for defer, revoke or a failure, what remains open or did not finish. No "
+        "handles, internal IDs, tool names or field paths in this text."
     ))
     logical_attempt_id: StrictStr | None = Field(default=None, description=(
         "Exact attempt_ref fact_id for the answer, not its completion_ref fact_id. "
@@ -82,8 +83,9 @@ class PacketDecision(BaseModel):
     ))
     reason: StrictStr = Field(description=(
         "Curators read this: in plain words, what in the paper establishes or questions this "
-        "specific record; for retire, why it does not answer the question. No handles, "
-        "internal IDs, tool names or field paths."
+        "specific record; for retire, why it does not answer the question; for defer, revoke "
+        "or a failure, what remains open or did not finish. No handles, internal IDs, tool "
+        "names or field paths in this text."
     ))
     evidence: list[StrictStr] | None = Field(default=None, description=(
         "Only with retire: E handles from this packet that show the record does not answer the question."

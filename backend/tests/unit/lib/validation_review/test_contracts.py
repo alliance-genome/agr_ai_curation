@@ -420,14 +420,18 @@ def test_reasons_and_field_doubts_are_worded_for_the_curator():
     protocol = " ".join(REVIEW_PROTOCOL.split())
     for text in ("Curators read every reason and unresolved_fields explanation",
                  "what in the paper supports or questions the record",
-                 "without handles, internal IDs, tool names or field paths",
+                 "or for defer, revoke or a failure, what remains open or did not finish",
+                 "Keep handles, internal IDs, tool names and field paths out of that text",
+                 "field_path itself stays exact",
                  "each explanation naming the doubt and what the curator should check"):
         assert text in protocol, text
     save = next(tool for tool in runtime_tool_contract() if tool["name"] == "record_validation_review")
     definitions = save["parameters"]["$defs"]
     for model in ("PacketDecision", "ReviewEntry"):
         fields = definitions[model]["properties"]
-        assert fields["reason"]["description"].startswith("Curators read this: in plain words"), model
+        reason = fields["reason"]["description"]
+        assert reason.startswith("Curators read this: in plain words"), model
+        assert "what remains open or did not finish" in reason and "in this text" in reason, model
         doubts = " ".join(item.get("description", "") for item in [fields["unresolved_fields"]])
         assert "what to check in the paper" in doubts, model
 

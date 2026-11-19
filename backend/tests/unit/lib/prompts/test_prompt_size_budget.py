@@ -28,8 +28,9 @@ CORE_GENERATED_BUDGET = 2500
 # round, follow_up_available, the blocking list, the evidence-of-scope rule and no
 # retirement of curator-requested records): 1153 characters, about 11058.
 # ALL-1565 asks for reasons and field doubts a curator can read, since exports now
-# show them (plain words, what in the paper, what to check): 11332 measured.
-AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 11430}
+# show them (plain words, what in the paper, what to check, and for defer, revoke
+# or a failure what remains open; field_path itself stays exact): 11446 measured.
+AGENT_CORE_GENERATED_BUDGETS = {"validation_reviewer": 11540}
 
 
 def test_core_generated_within_budget_for_all_agents():
