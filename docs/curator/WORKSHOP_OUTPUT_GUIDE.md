@@ -13,20 +13,43 @@ A name or identifier printed in the paper is not automatically a confirmed match
 Species must be supported by the paper; your selected group does not establish it.
 
 In CSV, TSV and chat, a resolved value normally appears as **label (ID)**. A value
-that has not been resolved appears as **UNRESOLVED**. Ask for paper wording in a
+the validator could not resolve appears as **UNRESOLVED**, or as its name followed
+by **(unresolved)**. That mark comes from what was saved for that value, not from
+the reviewer's doubts. One other mark exists: a saved word that is not one of a
+field's allowed values appears as **Invalid value (word)**. Ask for paper wording in a
 separate column if you need to compare it with the checked answer. The application
-does not fill a missing checked value with a different field. An unresolved marker
-on one part of a compound answer does not mean every part failed.
+does not fill a missing checked value with a different field. All other values
+appear exactly as they were saved.
+
+## Why a record looks the way it does
+
+Three optional columns hold the reasons that were saved with each record. None of
+them is added unless you choose it.
+
+- **Rationale**: why the extractor picked the item.
+- **Review reason**: why the reviewer, or you, accepted the record, in their own
+  words. When a validator checked some of the record's values, the reviewer
+  accepts each checked value on its own, and each reason is shown after the name
+  of its column, for example "Gene: The figure legend names this gene." If
+  something was decided again later, only the later reason is shown. A value that
+  was only set aside for later, or whose acceptance was withdrawn, adds nothing;
+  the cell is blank when nothing on the record has been accepted.
+- **Review uncertainty**: the fields the reviewer accepted but still had doubts
+  about, each with the reviewer's explanation, for example
+  "Organ: The table does not show which column this belongs to." It is blank when
+  the reviewer had no doubt. Confirming the field in the curation
+  workspace settles the doubt, and it no longer appears.
 
 Useful requests:
 
 - “Show the paper's wording beside the resolved term and its validation result.”
 - “Explain why this term is unresolved, using this run's evidence.”
 - “Show the stored reason this item was selected.”
+- “Add the review reason and the review uncertainty as the last two columns.”
 
-The **Rationale** is the extractor's stored explanation, not a new explanation
-written by the output agent or proof that validation passed. Older results may not
-have a recorded rationale. Review the evidence separately. A curator validation
+These reasons are stored text, not new explanations written by the output agent,
+and not proof that validation passed. Older results may not have a recorded
+rationale. Review the evidence separately. A curator validation
 override records your deliberate decision; it is not a fresh database confirmation.
 
 ## One cell or several columns

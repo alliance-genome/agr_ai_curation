@@ -789,10 +789,57 @@ Missing executions, unreviewed records and pending investigation remain incomple
 The immutable accepting decision owns the assessment. Its current selected
 projection derives `validation_review.assessment_unresolved` findings, preserving
 actor, decision, selection and source provenance without changing extracted data.
-Review may complete and export its requested TSV columns: nonempty plain cells use
-`value (unresolved)`, explicitly uncertain empty cells use `UNRESOLVED`, and unflagged
-blanks and ordinary structural missing-field findings retain the requested missing-value display. Unsettled findings block external
-submission. They do not create a new automatic-retry or unfinished-flow recovery UI.
+Review may complete and export its requested TSV columns. CSV and TSV cells hold
+each value as stored: an open finding of any kind never adds a mark to a value, and
+a flagged empty value shows the requested missing-value display like any other
+blank. Unsettled findings block external submission. They do not create a new
+automatic-retry or unfinished-flow recovery UI.
+
+One kind of mark remains in values, and it never comes from a finding: a validated
+value whose own stored state says the validator did not resolve it. A declared
+resolvable value reads `UNRESOLVED`; a value with a declared label and identifier
+reads `label (unresolved)` (or `label (ID, unresolved)`) when its declared `state`
+leaf is not a resolved state or its declared identifier is empty beside a label
+(`value_display._resolvable_text`, `_mapping_text`). Separately, a stored word
+outside its controlled vocabulary reads `Invalid value (word)`.
+
+Two optional record-row export fields carry the review's own text; neither is in any
+default layout, and they are offered for pack, generic and custom-profile records
+(`export_fields.REVIEW_FIELDS`):
+
+- **Review uncertainty** (`object.review_uncertainty`) joins the record's open
+  `validation_review.assessment_unresolved` findings in finding order, each as
+  `field: explanation`, separated by ` | ` (explanations are free text and may
+  themselves contain ` | `). The field is the column label the record's source
+  declares for exactly that stored path (a pack field's `payload_path`, a custom
+  profile's `profile_path`); generic records, list elements and other undeclared
+  paths show the stored path. An absence doubt without a field shows its explanation
+  alone. Empty when there are none.
+- **Review reason** (`object.review_reason`) copies the `reason` of each decision the
+  record stands on: for every eligible manifest unit of the record, the accepting
+  selection fact its entry names (`selection_id`, see `selections._selected_unit`
+  and `projection.standing_decision_reasons_in_transaction`, read in the same
+  transaction as the published projection). The record's own unit reads first,
+  unprefixed. Each validator binding unit on the record follows in manifest order
+  as `field: reason`, labelled like Review uncertainty. A binding target names its
+  record (`object_target`) and its stable source location (`stable_path`, or
+  `absent_anchor` for an absent optional input); a declared decision unit is a
+  child target of its binding and takes the binding's location, so the units of
+  one composite binding share its label. A binding on the whole record has no
+  field and reads unprefixed. A later accept of a unit replaces its reason; a later
+  decision that selects nothing (reject of another answer) leaves it. A unit that
+  was only deferred, or whose acceptance was revoked, adds nothing, and the cell is
+  blank when no unit of the record has a standing decision (or the record is
+  unreviewed). A curator's own accept is shown like the reviewer's. Under the
+  current obligation model a record has either its own unit or binding units,
+  never both.
+
+Both are copied text only. Packaged and custom-profile sources declare them in the
+selected-fields catalog; generic sources have no declared catalog, so guided output
+reads them as row fields, like `object.payload.rationale`. Like a declared pack
+field, both are on every object row (None when empty), so a JSON bundle's field
+catalog lists them, with examples only of stored text. They are left out of a
+source's `schema_fingerprint`, so saved field layouts stay current.
 
 In the existing curator field editor, **Save and confirm** explicitly acknowledges
 an uncertain field even when its value is unchanged. Changed values or explicit

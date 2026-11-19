@@ -41,7 +41,11 @@ class ReviewEntry(BaseModel):
         "Current version of this decision unit in the manifest, not selection_generation."
     ))
     action: Literal["accept", "reject", "defer", "acknowledge_failure", "revoke"]
-    reason: StrictStr
+    reason: StrictStr = Field(description=(
+        "Curators read this: in plain words, what in the paper establishes or questions this "
+        "decision; for defer, revoke or a failure, what remains open or did not finish. No "
+        "handles, internal IDs, tool names or field paths in this text."
+    ))
     logical_attempt_id: StrictStr | None = Field(default=None, description=(
         "Exact attempt_ref fact_id for the answer, not its completion_ref fact_id. "
         "Name exactly one attempt, authorized extraction_ref or applicability_ref except for revoke."
@@ -54,8 +58,9 @@ class ReviewEntry(BaseModel):
         "Required when accepting applicability: optional absence permits omission_supported or unresolved; unsupported lookups require unresolved. Explain the reason."
     ))
     unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
-        "Only with accept of extraction-only content: exact plain payload field paths "
-        "and explanations of remaining scientific uncertainty after assessment. Name list "
+        "Only with accept of extraction-only content: exact plain payload field paths, "
+        "each with an explanation for the curator that names what the paper does not "
+        "show or confirm and what to check in it. Name list "
         "elements by index, e.g. classification_notes[1]. "
         "Acceptance completes review without claiming these fields are resolved. "
         "Do not use for structured validator identities or incomplete executions."
@@ -77,7 +82,10 @@ class PacketDecision(BaseModel):
         "revoke: withdraws an earlier acceptance."
     ))
     reason: StrictStr = Field(description=(
-        "What establishes or questions this specific record; for retire, why it does not answer the question."
+        "Curators read this: in plain words, what in the paper establishes or questions this "
+        "specific record; for retire, why it does not answer the question; for defer, revoke "
+        "or a failure, what remains open or did not finish. No handles, internal IDs, tool "
+        "names or field paths in this text."
     ))
     evidence: list[StrictStr] | None = Field(default=None, description=(
         "Only with retire: E handles from this packet that show the record does not answer the question."
@@ -88,7 +96,8 @@ class PacketDecision(BaseModel):
     ))
     unresolved_fields: list[UnresolvedFieldAssessment] | None = Field(default=None, description=(
         "Only when accepting a review: record item (no validator ran): exact plain payload "
-        "field paths and explanations of scientific uncertainty that remains. Name list "
+        "field paths, each with an explanation for the curator that names what the paper "
+        "does not show or confirm and what to check in it. Name list "
         "elements by index, e.g. classification_notes[1]."
     ))
 

@@ -1133,7 +1133,8 @@ def _capabilities_payload(
             "custom profiles: object.payload.rationale) and add it as a column even when "
             "some or all values are empty; empty cells render as missing_value. Never write "
             "explanations yourself. Call formatter_cannot_complete only when a requested "
-            "source declares no rationale field."
+            "source declares no rationale field. The reviewer's stored reason and doubts "
+            "are object.review_reason and object.review_uncertainty; add them only when asked."
         ),
         "transform_rules": {
             "pair_join": (
@@ -1173,9 +1174,11 @@ def _capabilities_payload(
             "with \" | \", lists inside a record with \", \"), a validated value "
             "(one with resolution_state) as \"label (ID)\" when resolved and the word "
             "UNRESOLVED otherwise, never its paper wording; its paper wording is the "
-            "separate <field>.mention field (\"<Field> (paper wording)\"). Other values are "
-            "marked \"(unresolved)\" from open validation findings on that field or on the "
-            "object it references, or a declared ID that is missing. map_value matches a "
+            "separate <field>.mention field (\"<Field> (paper wording)\"). Other values read "
+            "as stored: open validation findings never mark them; only a declared value's own "
+            "unresolved state (such as its declared ID missing beside its label) is marked "
+            "\"(unresolved)\". A reviewer's doubts are the "
+            "separate object.review_uncertainty field. map_value matches a "
             "structured value by that display text without the marker. Select the parent "
             "structured field instead of composing leaves. JSON keeps raw values."
         ),
