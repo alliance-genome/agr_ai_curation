@@ -810,9 +810,10 @@ outside its controlled vocabulary reads `Invalid value (word)`.
 Three optional record-row export fields carry the review's own state and text; none is
 in any default layout (`export_fields.REVIEW_FIELDS`):
 
-- **Review status** (`object.review_status`): `accepted`, or `set aside` when a
-  manifest blocker still reaches the record. Selecting it is what puts set-aside
-  records in an output. It is a row field only for sources that declare a field
+- **Review status** (`object.review_status`): `accepted` when no manifest blocker
+  reaches the record, `set aside` while a finished flow run's set-aside fact covers it,
+  and blank otherwise (unreviewed, revoked, or pending in a review that has not
+  finished). A Review status column is what puts set-aside records in an output. It is a row field only for sources that declare a field
   catalog (pack and custom-profile records); unprofiled general results offer no
   review fields, so their set-aside records are always left out of files.
 
@@ -838,10 +839,10 @@ in any default layout (`export_fields.REVIEW_FIELDS`):
   child target of its binding and takes the binding's location, so the units of
   one composite binding share its label. A binding on the whole record has no
   field and reads unprefixed. A later accept of a unit replaces its reason; a later
-  decision that selects nothing (reject of another answer) leaves it. A unit still
-  pending because the reviewer's current decision deferred or rejected it (the
-  record is set aside) reads that decision's reason instead; only units with a
-  blocker read their current decision. A unit whose acceptance was revoked adds
+  decision that selects nothing (reject of another answer) leaves it. A unit a
+  finished flow run's set-aside fact covers reads the reason of its current defer or
+  reject instead, even when an earlier accepted value still stands; no other unit
+  reads its current decision. A unit whose acceptance was revoked adds
   nothing, and the cell is blank when no unit of the record has a standing or
   set-aside decision (or the record is unreviewed). The reason read is skipped when a
   step's saved selected fields do not use Review reason (`executor._shows_review_reason`). A curator's own accept is shown like the reviewer's. Under the
@@ -886,15 +887,23 @@ decision, an operational or unknown state, exhaustion, interruption, a stall, or
 unit on the whole extraction) stops as before. `continuation.terminal` returns the
 records as `set_aside` with the manifest hash they were read from.
 
-`FlowReview.finish_review` then records one immutable `review_set_aside` fact (an
-episode child: manifest hash, record and unit targets, the blockers) through
-`flow_steps.record_set_aside`, which writes it only against that exact manifest, and
-finishes the step with `set_aside_record_target_ids` in its outcome. Nothing is
+`FlowReview.finish_review` then passes the flag to `flow_steps.finish`, which, in
+the same transaction that completes the step, accepts the not-ready manifest only
+when its hash is the one the flag was read from and records one immutable
+`review_set_aside` fact (an episode child: manifest hash, record and unit targets,
+the blockers, and each blocked unit's head version). A fact therefore exists only for
+a completed step. The step outcome gains `set_aside_record_target_ids`. Nothing is
 decided for the records: their heads keep the reviewer's defer or reject, the
-manifest keeps its blockers and `ready` stays false. `flow_steps.finish` accepts a
-not-ready manifest only while the episode's latest set-aside fact covers its exact
-hash (`selections.set_aside_in_transaction`), so any later change restores the strict
-rule.
+manifest keeps its blockers and `ready` stays false.
+
+The fact covers a later manifest (`selections.set_aside_in_transaction`) while every
+current blocker is one it recorded and each blocked unit keeps the head version it
+recorded. A curator deciding some of the records removes their blockers, so the rest
+stay set aside and exports still work; anything new (another decision on a set-aside
+unit, a new answer, any other blocker, a new review round) leaves the fact behind
+and the strict rule applies. A record is "set aside" only while a covering fact names
+it; everywhere else (ordinary chat reviews, stopped flow reviews) nothing is set aside
+and previews, Review status and Review reason behave as before.
 
 Readiness relaxes in one place: `finalize_output_projection` reads the publication
 with `set_aside_ok=True` (`selections.require_ready_or_set_aside`). Submission, curator
@@ -903,12 +912,16 @@ set-aside records as undecided candidates and sending the paper stays blocked
 (`domain_envelope.machine_review_pending`) until a curator decides them.
 
 The published projection keeps set-aside records with their extracted values
-(`projection.pending_records_in_transaction` finds them by blocker lineage, the
-`record_lifecycle.counts` rule). An output includes them only when its plan uses
-`object.review_status` (a column, filter, sort or transform); otherwise
-`output_projection._set_aside_rows` leaves out their object rows, the evidence and
-finding rows naming them, and envelope-level evidence rows only they cite, and counts
-them (`set_aside_included` / `set_aside_left_out`). The same rule holds for CSV, TSV,
+(`projection.read_current_projection_with_reasons` returns the pending records, by the
+`record_lifecycle.counts` lineage rule, and the covered set-aside ones). Inclusion is
+decided per source (`output_projection._shows_review_status`): a source's set-aside
+records are in an output only when the output has a Review status column (or a
+transform reading it) for that source and the source declares the field. A filter,
+sort or grouping on Review status alone does not include them, and a source with no
+declared catalog never contributes them. Otherwise `_set_aside_rows` leaves out their
+object rows, the evidence and finding rows naming them, and envelope-level evidence
+rows only they cite. `set_aside_included` counts the set-aside records whose rows
+reach the output after filters and limits; `set_aside_left_out` is the rest. The same rule holds for CSV, TSV,
 JSON and chat tables. When every record is set aside the empty output is intentional
 (`empty_reason: all_records_set_aside`). FILE_READY and CHAT_OUTPUT_READY carry
 `set_aside: {included, left_out}`; a completed FLOW_FINISHED carries the run summary

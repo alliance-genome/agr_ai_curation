@@ -39,6 +39,8 @@ with each record. None of them is added unless you choose it.
   of its column, for example "Gene: The figure legend names this gene." If
   something was decided again later, only the later reason is shown. For a record
   that was set aside, it shows the reason the reviewer gave for setting it aside.
+  If the value in the file is one the reviewer accepted before setting the record
+  aside, both reasons are shown: "Accepted earlier: ... | Set aside later: ...".
   A value whose acceptance was withdrawn adds nothing; the cell is blank when
   nothing on the record has been accepted or set aside.
 - **Review uncertainty**: the fields the reviewer accepted but still had doubts
