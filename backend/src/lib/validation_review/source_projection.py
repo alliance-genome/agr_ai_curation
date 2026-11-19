@@ -13,7 +13,37 @@ from src.schemas.domain_envelope import parse_field_path
 from .item_relationships import validate, value_at
 
 
-def plan(source_entry, proposals, *, contribution_id):
+def removed_fields(structure, proposals):
+    """Proposed nulls the saved structure reads as "leave this field out".
+
+    Only the declaration decides (may be absent, may not be null); no value is
+    read. Without a saved structure every null stays a null.
+    """
+    if structure is None:
+        return frozenset()
+    return frozenset(item.field_path for item in proposals
+                     if item.value is None and structure.absent_when_null(item.field_path))
+
+
+def apply_value(payload, proposal, removed):
+    """Write one proposed value, or leave its field out when it is in removed."""
+    if proposal.field_path not in removed:
+        set_payload_value(payload, proposal.field_path, deepcopy(proposal.value))
+        return
+    *parents, key = parse_field_path(proposal.field_path)
+    container = payload
+    for part in parents:
+        if isinstance(part, int):
+            container = container[part] if isinstance(container, list) and part < len(container) else None
+        else:
+            container = container.get(part) if isinstance(container, dict) else None
+        if container is None:
+            return
+    if isinstance(container, dict):
+        container.pop(key, None)
+
+
+def plan(source_entry, proposals, *, contribution_id, removed=frozenset()):
     result = deepcopy(source_entry)
     old_refs = source_entry["metadata"]["validation_history"]
     element_parents = {target: anchor_for_path(old_refs, path)["target_id"]
@@ -35,7 +65,7 @@ def plan(source_entry, proposals, *, contribution_id):
             raise store.HistoryConflict("Selected source fields must not overlap")
     for proposal in proposals:
         mappings.update(validate(source_entry, proposal))
-        set_payload_value(result["payload"], proposal.field_path, deepcopy(proposal.value))
+        apply_value(result["payload"], proposal, removed)
     refs = {"target_id": old_refs["target_id"], "fields": {}, "elements": {}}
     additions = []
     relationships = []

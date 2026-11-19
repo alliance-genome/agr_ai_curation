@@ -299,6 +299,15 @@ remain non-runnable. Existing scientific attempt allowances are unchanged.
 
 The SDK transport validates shape; application validation retains structurally
 invalid entry proposals as non-selectable history without losing valid siblings.
+For a record with a saved output structure, an entry whose proposed values, applied
+together, would not conform to that structure is retained with `selectable: false`,
+`structural_failure: output_structure_conformance` and its `structural_issues`
+(field path, reason, expected, message) (ALL-1561). A proposed null for a field the
+structure declares `required: false, nullable: false` means "leave the field out",
+both in that check and when the review selects the value; a required field stays
+refused and a nullable field keeps its null. Only the declaration decides. When
+applying a selection fails the structure anyway, the review tool result lists the
+same issues and the log records their paths and rule names, never record values.
 An executable extractor contract pins this transport schema. Old contracts remain
 readable but cannot perform a new targeted follow-up with the changed protocol;
 `fresh_extraction_required` is returned before provider execution or admission.

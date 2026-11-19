@@ -583,3 +583,69 @@ async def test_explicit_curator_round_is_not_suppressed_by_prior_selected_source
     after = len(calls)
     await adapter.initial()
     assert len(calls) == after
+
+
+class _SavedStructure:
+    """Stands in for a pinned output structure; the real rules are unit-tested."""
+
+    def __init__(self, *, absent=(), issues=()):
+        self.absent, self.issues = set(absent), list(issues)
+
+    def absent_when_null(self, field_path):
+        return field_path in self.absent
+
+    def validate_attributes(self, attributes):
+        return [{"candidate_id": None, "actual_kind": "null", **issue} for issue in self.issues]
+
+
+def _retain_null(item, monkeypatch, structure):
+    monkeypatch.setattr(extraction_results, "saved_structure", lambda db, receipt: structure)
+    args = request_args(item)
+    refs = item.plan.envelope.extracted_objects[0].metadata["validation_history"]
+    context = ReviewContext(item.scope, item.ep, "supervisor")
+    wid = extraction_scheduling.request(context, **args)
+    claim = work.claim(item.scope, wid)
+    work.mark_submitted(item.scope, wid, claim["lease_token"])
+    result = {"entries": [{"entry_id": refs["target_id"], "outcome": "proposed_correction",
+        "assessment": "The supplier is not supported", "remaining_uncertainty": "", "evidence_record_ids": [],
+        "proposed_values": [{"field_path": "note", "value": None, "evidence_record_ids": []}]}]}
+    result = extraction_results.retain(item.scope, wid, claim["lease_token"], result, evidence_records=[])
+    work.finish(item.scope, wid, claim["lease_token"], outcome=result)
+    return context, result["contributions"][0]
+
+
+def _select(item, context, ref, published):
+    with store.SessionLocal.begin() as db:
+        return source_selection.select_in_transaction(db, context, operation_id=uuid4().hex,
+            contribution_ref=ref, field_paths=["note"], evidence_ids=[],
+            expected_source_sha=selections.source_state_digest(db, item.aid), reason="Unsupported supplier",
+            source_envelope=item.plan.envelope, rebuild_inputs=lambda db, envelope: {},
+            publish=lambda db, env, reqs, changed, selection_id: published.append(env) or {})
+
+
+def test_nonconforming_proposal_is_stored_not_selectable_with_its_structure_issues(planned, monkeypatch):
+    item = planned
+    issue = {"field_path": "attributes.name", "reason": "wrong_type", "expected": "string",
+             "message": "Supply a string supported by evidence; values are not coerced."}
+    context, ref = _retain_null(item, monkeypatch, _SavedStructure(issues=[issue]))
+    body = store.read_fact(item.scope, item.aid, ref["fact_id"])["content"]
+    assert body["selectable"] is False
+    assert body["structural_failure"] == "output_structure_conformance"
+    assert body["structural_issues"] == [issue]
+    with pytest.raises(store.HistoryConflict, match="unresolved structural failure"):
+        _select(item, context, ref, [])
+
+
+@pytest.mark.parametrize("absent", [True, False])
+def test_null_on_a_may_be_absent_field_is_selectable_and_applies_as_removal(planned, monkeypatch, absent):
+    item = planned
+    structure = _SavedStructure(absent={"note"} if absent else ())
+    context, ref = _retain_null(item, monkeypatch, structure)
+    body = store.read_fact(item.scope, item.aid, ref["fact_id"])["content"]
+    assert body["selectable"] is True and body["structural_issues"] == []
+    published = []
+    assert _select(item, context, ref, published)["selection_id"]
+    payload = published[0].extracted_objects[0].payload
+    # Left out when the structure says the field may be absent; a plain null otherwise.
+    assert ("note" not in payload) if absent else (payload["note"] is None)
+    assert payload["evidence_code_curies"] == ["eco:1", "eco:2"]

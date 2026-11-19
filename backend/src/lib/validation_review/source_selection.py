@@ -95,7 +95,11 @@ def select_in_transaction(db, context, *, operation_id, contribution_ref, field_
                 if any(_overlap(parse_field_path(path), protected) for path in field_paths):
                     raise store.HistoryConflict("Source proposal overlaps an authoritative curator edit")
     before_inputs = rebuild_inputs(db, source_envelope)
-    planned = source_projection.plan(original, [offered[path] for path in field_paths], contribution_id=contribution.id)
+    chosen = [offered[path] for path in field_paths]
+    from .extraction_results import saved_structure
+    structure = saved_structure(db, body["extractor_receipt"]["execution_receipt"])
+    planned = source_projection.plan(original, chosen, contribution_id=contribution.id,
+                                     removed=source_projection.removed_fields(structure, chosen))
     for addition in planned["additions"]:
         store._append(db, artifact_id, operation_id="contributed-target:" + addition["id"],
             kind="target", body=addition["body"], fact_id=addition["id"], parent_id=addition["parent_id"])

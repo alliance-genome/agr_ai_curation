@@ -204,6 +204,23 @@ class ResolvedGenericProfile:
     def validator_owned_paths(self) -> set[str]:
         return validator_owned_paths(self.contract)
 
+    def absent_when_null(self, field_path: str) -> bool:
+        """Whether the declared field at this concrete path may be left out but may not be null.
+
+        Read from the saved declaration only (``required: false, nullable: false``);
+        a null for such a field means "leave the field out" (ALL-1561).
+        """
+        parent, _, key = field_path.rpartition(".")
+        if not parent or "[" in key:
+            return False
+        fields = self.contract.fields
+        schema = (ObjectValueSchema(kind="object", fields=fields) if parent == "attributes"
+                  else _declared_schema(fields, declared_value_path(parent)))
+        if not isinstance(schema, ObjectValueSchema):
+            return False
+        field = next((field for field in schema.fields if field.key == key), None)
+        return field is not None and not field.required and not field.nullable
+
     def _extractor_shape(self) -> "_ExtractorShape":
         return _ExtractorShape(self.resolvable_objects(), self.validator_owned_paths())
 

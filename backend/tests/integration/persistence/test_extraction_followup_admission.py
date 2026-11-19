@@ -133,7 +133,7 @@ async def test_executor_uses_shared_budget_without_reviewer_tool_charge_and_neve
     item = planned
     agent = Agent(name="Saved extractor", model="gpt-test", instructions="Saved policy")
     args = request_args(item)
-    args["receipt"] = {"contract": extractor_phase.contract(agent, max_turns=17)}
+    args["receipt"] = {"execution_receipt": None, "contract": extractor_phase.contract(agent, max_turns=17)}
     work_id = extraction_scheduling.request(ReviewContext(item.scope, item.ep, "supervisor"), **args)
     calls = []
 
@@ -181,7 +181,7 @@ async def test_followup_workspace_cannot_mutate_original_and_failure_is_sanitize
     item = planned
     agent = Agent(name='Saved extractor', model='test', instructions='Saved')
     args = request_args(item)
-    args['receipt'] = {'contract': extractor_phase.contract(agent, max_turns=17)}
+    args["receipt"] = {"execution_receipt": None, "contract": extractor_phase.contract(agent, max_turns=17)}
     wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, 'supervisor'), **args)
     reports = []
     monkeypatch.setattr('src.lib.observability.runtime.report_runtime_exception', lambda error, **kw: reports.append(error) or True)
@@ -254,7 +254,7 @@ async def test_followup_reads_real_paper_tools_and_retains_exact_new_evidence(pl
              documents.create_record_evidence_tool({'document_id': doc, 'user_id': owner})]
     agent = Agent(name='Saved extractor', model='test', instructions='Extract evidence', tools=tools)
     args = request_args(item)
-    args['receipt'] = {'contract': extractor_phase.contract(agent, max_turns=17)}
+    args["receipt"] = {"execution_receipt": None, "contract": extractor_phase.contract(agent, max_turns=17)}
     wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, 'supervisor'), **args)
     async def provider(phase, input_value, **kwargs):
         available = {tool.name: tool for tool in phase.tools}
@@ -289,7 +289,7 @@ async def test_malformed_followup_transport_reports_once_without_sensitive_value
     monkeypatch.setattr("src.lib.prompts.assembly.get_all_active_prompts", lambda: {})
     agent = Agent(name="Saved extractor", model="test", instructions="Saved policy")
     args = request_args(item)
-    args["receipt"] = {"contract": extractor_phase.contract(agent, max_turns=17)}
+    args["receipt"] = {"execution_receipt": None, "contract": extractor_phase.contract(agent, max_turns=17)}
     wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, "supervisor"), **args)
     reports = []
     monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception",
