@@ -542,7 +542,10 @@ completed answer whose inputs are still current. A unit whose latest
 decision in this episode is the reviewer's reject, defer or acknowledge-failure,
 with no newer saved answer, follow-up request, contribution or source input for its
 lineage and no follow-up or reconsideration left, stops with the typed cause
-`reviewer_left_pending` (flow status `review_pending`). A curator's reject, defer or
+`reviewer_left_pending`. When every current cause is a `reviewer_left_pending` defer or
+reject of a record and nothing can still be decided, the outcome names those records
+as set aside (`continuation.set_aside`, see "Records set aside by the review" below);
+any other cause, including acknowledge-failure, keeps flow status `review_pending`. A curator's reject, defer or
 acknowledge-failure in this episode stops reviewer runs for that unit with
 `curator_authority_required`, since the reviewer cannot override it. The check uses decision history, actors, sequences and
 counts only, never the decision's reason. A targeted follow-up counts as left only
@@ -724,8 +727,9 @@ and profile choices compile from the saved flow into a binding allowlist. Custom
 validators keep their saved revision/receipt. The review supervisor cannot dispatch
 agents outside that configured set. Profile mappings must remain exactly pinned.
 
-The step stays open until recorded selections make the current episode ready.
-The next configured step, formatter and curation handoff cannot advance on prose.
+The step stays open until recorded selections make the current episode ready, or
+until its review sets the remaining records aside (below). The next configured step,
+formatter and curation handoff cannot advance on prose.
 Repeated calls and recovery do not rerun initial extraction or validation. An
 interrupted/pending step keeps its source/episode references available for inspection.
 The flow emits distinct review_pending, review_exhausted or interrupted terminal
@@ -803,9 +807,14 @@ leaf is not a resolved state or its declared identifier is empty beside a label
 (`value_display._resolvable_text`, `_mapping_text`). Separately, a stored word
 outside its controlled vocabulary reads `Invalid value (word)`.
 
-Two optional record-row export fields carry the review's own text; neither is in any
-default layout, and they are offered for pack, generic and custom-profile records
-(`export_fields.REVIEW_FIELDS`):
+Three optional record-row export fields carry the review's own state and text; none is
+in any default layout (`export_fields.REVIEW_FIELDS`):
+
+- **Review status** (`object.review_status`): `accepted`, or `set aside` when a
+  manifest blocker still reaches the record. Selecting it is what puts set-aside
+  records in an output. It is a row field only for sources that declare a field
+  catalog (pack and custom-profile records); unprofiled general results offer no
+  review fields, so their set-aside records are always left out of files.
 
 - **Review uncertainty** (`object.review_uncertainty`) joins the record's open
   `validation_review.assessment_unresolved` findings in finding order, each as
@@ -813,8 +822,10 @@ default layout, and they are offered for pack, generic and custom-profile record
   themselves contain ` | `). The field is the column label the record's source
   declares for exactly that stored path (a pack field's `payload_path`, a custom
   profile's `profile_path`); generic records, list elements and other undeclared
-  paths show the stored path. An absence doubt without a field shows its explanation
-  alone. Empty when there are none.
+  paths show the stored path, except that a list element whose list field declares a
+  label shows that label and its position counted from 1 (`items[2]` reads
+  `Items 3`; `_uncertainty_field_label`). An absence doubt without a field shows its
+  explanation alone. Empty when there are none.
 - **Review reason** (`object.review_reason`) copies the `reason` of each decision the
   record stands on: for every eligible manifest unit of the record, the accepting
   selection fact its entry names (`selection_id`, see `selections._selected_unit`
@@ -827,19 +838,23 @@ default layout, and they are offered for pack, generic and custom-profile record
   child target of its binding and takes the binding's location, so the units of
   one composite binding share its label. A binding on the whole record has no
   field and reads unprefixed. A later accept of a unit replaces its reason; a later
-  decision that selects nothing (reject of another answer) leaves it. A unit that
-  was only deferred, or whose acceptance was revoked, adds nothing, and the cell is
-  blank when no unit of the record has a standing decision (or the record is
-  unreviewed). A curator's own accept is shown like the reviewer's. Under the
+  decision that selects nothing (reject of another answer) leaves it. A unit still
+  pending because the reviewer's current decision deferred or rejected it (the
+  record is set aside) reads that decision's reason instead; only units with a
+  blocker read their current decision. A unit whose acceptance was revoked adds
+  nothing, and the cell is blank when no unit of the record has a standing or
+  set-aside decision (or the record is unreviewed). The reason read is skipped when a
+  step's saved selected fields do not use Review reason (`executor._shows_review_reason`). A curator's own accept is shown like the reviewer's. Under the
   current obligation model a record has either its own unit or binding units,
   never both.
 
-Both are copied text only. Packaged and custom-profile sources declare them in the
-selected-fields catalog; generic sources have no declared catalog, so guided output
-reads them as row fields, like `object.payload.rationale`. Like a declared pack
-field, both are on every object row (None when empty), so a JSON bundle's field
-catalog lists them, with examples only of stored text. They are left out of a
-source's `schema_fingerprint`, so saved field layouts stay current.
+Review uncertainty and Review reason are copied text only. Packaged and
+custom-profile sources declare all three in the selected-fields catalog; generic
+sources have no declared catalog, so guided output reads the two text fields as row
+fields, like `object.payload.rationale`. Like a declared pack field, they are on every
+object row (None when empty), so a JSON bundle's field catalog lists them, with
+examples only of stored text. All three are left out of a source's
+`schema_fingerprint`, so saved field layouts stay current.
 
 In the existing curator field editor, **Save and confirm** explicitly acknowledges
 an uncertain field even when its value is unchanged. Changed values or explicit
@@ -859,6 +874,50 @@ Typed `review_pending`, `review_exhausted` and `interrupted` flow outcomes retai
 their reasons through persistence and replay. They do not become generic server
 failures or imply a completed export. Genuine provider and persistence failures
 retain their reporting owner and cannot be hidden by a later review-stop event.
+
+### Records set aside by the review (ALL-1561)
+
+A record the reviewer deferred (left for a person) or rejected (did not accept) no
+longer stops a flow run. `continuation.set_aside` reads the typed causes only: every
+current cause is `reviewer_left_pending` with decision `defer` or `reject`
+(`selections.SET_ASIDE_DECISIONS`), no unit is still eligible, and every pending unit
+belongs to a record. Anything else (an outage, acknowledge-failure, a curator's
+decision, an operational or unknown state, exhaustion, interruption, a stall, or a
+unit on the whole extraction) stops as before. `continuation.terminal` returns the
+records as `set_aside` with the manifest hash they were read from.
+
+`FlowReview.finish_review` then records one immutable `review_set_aside` fact (an
+episode child: manifest hash, record and unit targets, the blockers) through
+`flow_steps.record_set_aside`, which writes it only against that exact manifest, and
+finishes the step with `set_aside_record_target_ids` in its outcome. Nothing is
+decided for the records: their heads keep the reviewer's defer or reject, the
+manifest keeps its blockers and `ready` stays false. `flow_steps.finish` accepts a
+not-ready manifest only while the episode's latest set-aside fact covers its exact
+hash (`selections.set_aside_in_transaction`), so any later change restores the strict
+rule.
+
+Readiness relaxes in one place: `finalize_output_projection` reads the publication
+with `set_aside_ok=True` (`selections.require_ready_or_set_aside`). Submission, curator
+restore and curation preparation keep `require_ready`, so Review & Curate shows the
+set-aside records as undecided candidates and sending the paper stays blocked
+(`domain_envelope.machine_review_pending`) until a curator decides them.
+
+The published projection keeps set-aside records with their extracted values
+(`projection.pending_records_in_transaction` finds them by blocker lineage, the
+`record_lifecycle.counts` rule). An output includes them only when its plan uses
+`object.review_status` (a column, filter, sort or transform); otherwise
+`output_projection._set_aside_rows` leaves out their object rows, the evidence and
+finding rows naming them, and envelope-level evidence rows only they cite, and counts
+them (`set_aside_included` / `set_aside_left_out`). The same rule holds for CSV, TSV,
+JSON and chat tables. When every record is set aside the empty output is intentional
+(`empty_reason: all_records_set_aside`). FILE_READY and CHAT_OUTPUT_READY carry
+`set_aside: {included, left_out}`; a completed FLOW_FINISHED carries the run summary
+(`executor._build_set_aside_summary`), which batch stores in
+`BatchDocument.review_details["set_aside"]` and preferred chat flows repeat on
+RUN_FINISHED. `GET /api/curation-workspace/flow-runs/{flow_run_id}/set-aside-records?document_id=`
+lists them read only (`flows.set_aside_records`). Benchmarks score such a run as
+completed from its saved extraction, set-aside records included. Runs saved before
+this change have no set-aside fact and stay as they stopped.
 
 ### Work ownership and cancellation
 

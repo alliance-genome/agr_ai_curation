@@ -23,22 +23,38 @@ appear exactly as they were saved.
 
 ## Why a record looks the way it does
 
-Three optional columns hold the reasons that were saved with each record. None of
-them is added unless you choose it.
+Four optional columns hold the review's decision and the reasons that were saved
+with each record. None of them is added unless you choose it.
 
 - **Rationale**: why the extractor picked the item.
+- **Review status**: "accepted", or "set aside" when the reviewer left the record
+  for a person to check or did not accept it. The paper still finishes and its
+  file is still written. Records that were set aside are in your file only when
+  your output includes Review status; otherwise they are left out, and the run
+  tells you how many were left out. You can always read them, with the
+  reviewer's reason, from the run's set-aside records view.
 - **Review reason**: why the reviewer, or you, accepted the record, in their own
   words. When a validator checked some of the record's values, the reviewer
   accepts each checked value on its own, and each reason is shown after the name
   of its column, for example "Gene: The figure legend names this gene." If
-  something was decided again later, only the later reason is shown. A value that
-  was only set aside for later, or whose acceptance was withdrawn, adds nothing;
-  the cell is blank when nothing on the record has been accepted.
+  something was decided again later, only the later reason is shown. For a record
+  that was set aside, it shows the reason the reviewer gave for setting it aside.
+  A value whose acceptance was withdrawn adds nothing; the cell is blank when
+  nothing on the record has been accepted or set aside.
 - **Review uncertainty**: the fields the reviewer accepted but still had doubts
   about, each with the reviewer's explanation, for example
-  "Organ: The table does not show which column this belongs to." It is blank when
+  "Organ: The table does not show which column this belongs to." An item in a
+  list is named by its column and its position, for example "Evidence code 2",
+  when the column has a name. It is blank when
   the reviewer had no doubt. Confirming the field in the curation
   workspace settles the doubt, and it no longer appears.
+
+General PDF extraction results with no saved output structure offer none of the
+review columns, so records the reviewer set aside are always left out of their
+files. They are still listed in the run's set-aside records view.
+
+In Review & Curate, records that were set aside appear undecided. The paper cannot
+be sent to the curation database until you decide them.
 
 Useful requests:
 
@@ -46,6 +62,7 @@ Useful requests:
 - “Explain why this term is unresolved, using this run's evidence.”
 - “Show the stored reason this item was selected.”
 - “Add the review reason and the review uncertainty as the last two columns.”
+- “Include the records the review set aside, with their review status and reason.”
 
 These reasons are stored text, not new explanations written by the output agent,
 and not proof that validation passed. Older results may not have a recorded
