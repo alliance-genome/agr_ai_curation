@@ -79,39 +79,15 @@ def _bound_episode(db, scope, step_id):
     return bound_scope, ep
 
 
-def record_set_aside(scope, step_id, *, set_aside):
-    """Record that this run finishes with the records its review set aside (ALL-1561).
-
-    ``set_aside`` is the review outcome's structural flag
-    (``continuation.set_aside``). The fact is bookkeeping, not a decision: the
-    records keep their pending decisions and the manifest keeps its blockers.
-    It is written only against the exact manifest the flag was read from;
-    anything that changed since stops the step as before.
-    """
-    with store.SessionLocal.begin() as db:
-        bound_scope, ep = _bound_episode(db, scope, step_id)
-        row = _owned(db, scope, step_id)
-        if row.state != "review_pending":
-            raise store.HistoryConflict("Stopped flow steps cannot complete automatically")
-        selections._lock_artifact(db, bound_scope, ep.artifact_id, write=True)
-        manifest = selections.manifest_in_transaction(db, bound_scope, ep.artifact_id, episode_id=ep.id)
-        if manifest["ready"] or manifest["sha256"] != set_aside["manifest_sha256"]:
-            raise admission.ReviewStopped("flow_review_pending", resource=step_id)
-        from .audit import append_fact
-        append_fact(db, ep.artifact_id,
-            operation_id=f"review-set-aside:{step_id}:{manifest['sha256']}",
-            kind=selections.SET_ASIDE_KIND, parent_id=ep.id,
-            body={"episode_id": ep.id, "step_id": step_id, "manifest_sha256": manifest["sha256"],
-                  "record_target_ids": set_aside["record_target_ids"],
-                  "unit_target_ids": set_aside["unit_target_ids"],
-                  "blockers": manifest["blockers"]})
-
-
-def finish(scope, step_id, *, outcome):
+def finish(scope, step_id, *, outcome, set_aside=None):
     """No downstream completion on model prose: require current recorded readiness.
 
-    A run whose review set records aside completes only while its recorded
-    set-aside fact covers the exact current manifest (``record_set_aside``).
+    ``set_aside`` is the review outcome's structural flag
+    (``continuation.set_aside``, ALL-1561). A not-ready manifest completes the
+    step only when the flag was read from exactly this manifest. The same
+    transaction then records one ``review_set_aside`` fact: bookkeeping, not a
+    decision. The records keep their pending decisions, the manifest keeps its
+    blockers, and the fact exists only for a step that completed.
     """
     with store.SessionLocal.begin() as db:
         bound_scope, ep = _bound_episode(db, scope, step_id)
@@ -122,9 +98,25 @@ def finish(scope, step_id, *, outcome):
             return snapshot(row)
         if row.state != "review_pending":
             raise store.HistoryConflict("Stopped flow steps cannot complete automatically")
+        if set_aside is not None:
+            selections._lock_artifact(db, bound_scope, ep.artifact_id, write=True)
         manifest = selections.manifest_in_transaction(db, bound_scope, ep.artifact_id, episode_id=ep.id)
-        if not manifest["ready"] and selections.set_aside_in_transaction(db, ep.artifact_id, manifest) is None:
-            raise admission.ReviewStopped("flow_review_pending", resource=step_id)
+        if not manifest["ready"]:
+            if set_aside is None or manifest["sha256"] != set_aside["manifest_sha256"]:
+                raise admission.ReviewStopped("flow_review_pending", resource=step_id)
+            from .audit import append_fact
+            append_fact(db, ep.artifact_id,
+                operation_id=f"review-set-aside:{step_id}:{manifest['sha256']}",
+                kind=selections.SET_ASIDE_KIND, parent_id=ep.id,
+                body={"episode_id": ep.id, "step_id": step_id, "manifest_sha256": manifest["sha256"],
+                      "record_target_ids": set_aside["record_target_ids"],
+                      "unit_target_ids": set_aside["unit_target_ids"],
+                      "blockers": manifest["blockers"],
+                      # Each blocked unit's decision version, so a later curator
+                      # decision on some records leaves the rest covered.
+                      "unit_versions": {
+                          blocker["target_id"]: store._current(db, ep.artifact_id, blocker["target_id"])["version"]
+                          for blocker in manifest["blockers"]}})
         row.state, row.outcome = "completed", store.canonical(outcome)[1]
         return snapshot(row)
 

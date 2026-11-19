@@ -15,7 +15,7 @@ import pytest
 
 from src.lib.flows import export_fields
 from src.lib.flows.output_projection import (
-    FlowOutputFilterSpec, _uncertainty_field_label, apply_projection_plan, build_flow_output_artifact_bundle,
+    FlowOutputFilterSpec, FlowOutputSortSpec, _uncertainty_field_label, apply_projection_plan, build_flow_output_artifact_bundle,
     default_projection_plan, set_aside_record_views,
 )
 from src.lib.openai_agents.tools.file_output_tools import _projection_content_for_file_type
@@ -37,10 +37,10 @@ def _object(key, statement):
             "metadata": {"validation_history": {"target_id": f"target-{key}"}}}
 
 
-def _reviewed_step(objects, pack=PACK, agent="gene_expression"):
-    step = _envelope_step(agent, pack, objects)
+def _reviewed_step(objects, pack=PACK, agent="gene_expression", node_id="node_1"):
+    step = _envelope_step(agent, pack, objects, node_id=node_id)
     step["candidate"].payload_json["metadata"] = {
-        "validation_history": {"artifact_id": "artifact-1", "session_id": "history-session"},
+        "validation_history": {"artifact_id": f"artifact-{node_id}", "session_id": "history-session"},
         # The envelope's evidence inventory; records cite it by ID.
         "evidence_records": [{"evidence_record_id": f"ev-{item['pending_ref_id']}",
                               "quote": f"Quote for {item['pending_ref_id']}."} for item in objects]}
@@ -49,29 +49,32 @@ def _reviewed_step(objects, pack=PACK, agent="gene_expression"):
 
 @pytest.fixture
 def reviewed(monkeypatch):
-    """The current publication sets ``state['set_aside']`` aside, with ``state['reasons']``."""
+    """The current publication: ``state['pending']`` records are pending, of which a
+    finished run's set-aside fact covers ``state['set_aside']``; reasons are ``state['reasons']``."""
 
-    state = {"set_aside": set(), "reasons": {}, "reads": []}
+    state = {"set_aside": set(), "pending": set(), "reasons": {}, "reads": []}
 
     def read(scope, reference, *, reasons=True):
         state["reads"].append(reasons)
-        payload = state["payload"]
+        payload = state["payloads"][reference["fact_id"]]
         return (DomainEnvelope.model_validate(payload), {"blockers": []},
-                state["reasons"] if reasons else {}, set(state["set_aside"]))
+                state["reasons"] if reasons else {}, set(state["pending"]), set(state["set_aside"]))
 
     monkeypatch.setattr("src.lib.validation_history.projection.latest_publication_reference",
-                        lambda scope, artifact_id: {"fact_id": "publication"})
+                        lambda scope, artifact_id: {"fact_id": artifact_id})
     monkeypatch.setattr("src.lib.validation_history.projection.read_current_projection_with_reasons", read)
     return state
 
 
-def _bundle(state, objects, *, aside, reasons=None, review_reasons=True, pack=PACK, agent="gene_expression"):
-    step = _reviewed_step(objects, pack, agent)
-    state.update(payload=step["candidate"].payload_json, set_aside={f"target-{key}" for key in aside},
-                 reasons=reasons or {})
+def _bundle(state, objects, *, aside, pending=(), reasons=None, review_reasons=True, pack=PACK,
+            agent="gene_expression", extra_steps=()):
+    steps = [_reviewed_step(objects, pack, agent), *extra_steps]
+    state.update(payloads={f"artifact-{step['node_id']}": step["candidate"].payload_json for step in steps},
+                 set_aside={f"target-{key}" for key in aside},
+                 pending={f"target-{key}" for key in (*aside, *pending)}, reasons=reasons or {})
     return build_flow_output_artifact_bundle(
         user_id="curator", document_id="00000000-0000-0000-0000-000000000001",
-        completed_steps=[step], flow_name="Set aside", output_format="tsv", review_reasons=review_reasons)
+        completed_steps=steps, flow_name="Set aside", output_format="tsv", review_reasons=review_reasons)
 
 
 def _cells(content, output_format):
@@ -139,10 +142,56 @@ def test_evidence_rows_of_a_set_aside_record_are_left_out_with_it(reviewed):
     plan = _object_plan("csv", [("quote", "evidence.quote")]).model_copy(update={"row_source": "evidence"})
     rows = apply_projection_plan(bundle, plan).rows
     assert rows == [{"quote": "Quote for kept."}]
-    # A filter on Review status counts as selecting it.
-    filtered = _object_plan("csv", [("statement", STATEMENT)]).model_copy(update={
+
+
+
+def test_a_filter_or_sort_on_review_status_alone_neither_includes_nor_counts_as_included(reviewed):
+    """Only a Review status column includes set-aside records; the counts say what reached the output."""
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
+    only_aside = _object_plan("csv", [("statement", STATEMENT)]).model_copy(update={
         "filters": [FlowOutputFilterSpec(field_ref=STATUS, op="eq", value="set aside")]})
-    assert apply_projection_plan(bundle, filtered).rows == [{"statement": "near the gut"}]
+    result = apply_projection_plan(bundle, only_aside)
+    assert result.rows == []
+    assert (result.set_aside_included, result.set_aside_left_out) == (0, 1)
+    sorted_plan = _object_plan("csv", [("statement", STATEMENT)]).model_copy(update={
+        "sort": [FlowOutputSortSpec(field_ref=STATUS, direction="desc")]})
+    result = apply_projection_plan(bundle, sorted_plan)
+    assert result.rows == [{"statement": "in the gut"}]
+    assert (result.set_aside_included, result.set_aside_left_out) == (0, 1)
+    # With the column, a filter that keeps accepted records only leaves the set-aside one out.
+    accepted_only = _object_plan("csv", [("statement", STATEMENT), ("status", STATUS)]).model_copy(update={
+        "filters": [FlowOutputFilterSpec(field_ref=STATUS, op="eq", value="accepted")]})
+    result = apply_projection_plan(bundle, accepted_only)
+    assert result.rows == [{"statement": "in the gut", "status": "accepted"}]
+    assert (result.set_aside_included, result.set_aside_left_out) == (0, 1)
+
+
+def test_a_source_without_review_status_never_contributes_set_aside_records(reviewed):
+    """M1: decided per source. The unprofiled source's set-aside record stays out even when a
+    profiled source in the same output selects Review status, and counts as left out."""
+    general = [{"object_type": "generic_object", "pending_ref_id": key,
+                "payload": {"label": label, "attributes": {"source": label}},
+                "metadata": {"validation_history": {"target_id": f"target-{key}"}}}
+               for key, label in (("g-kept", "VT1"), ("g-aside", "VT2"))]
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")],
+                     aside={"aside", "g-aside"},
+                     extra_steps=[_reviewed_step(general, "generic", "pdf", node_id="node_2")])
+    plan = _object_plan("json", [("statement", STATEMENT), ("label", "object.label"), ("status", STATUS)])
+    result = apply_projection_plan(bundle, plan.model_copy(update={"missing_value": None}))
+    assert [row["status"] for row in result.rows if row["statement"]] == ["accepted", "set aside"]
+    assert [row["label"] for row in result.rows if row["statement"] is None] == ["VT1"]
+    assert (result.set_aside_included, result.set_aside_left_out) == (1, 1)
+    assert _set_aside_summary([result]) == {"included": 1, "left_out": 1}
+
+
+def test_review_status_is_blank_for_a_pending_record_no_finished_run_set_aside(reviewed):
+    """Outside a finished run's set-aside fact nothing is set aside: previews keep pending
+    records, and Review status says nothing about them."""
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("open", "near the gut")],
+                     aside=set(), pending={"open"})
+    rows = apply_projection_plan(bundle, _object_plan("json", [("statement", STATEMENT), ("status", STATUS)]).model_copy(
+        update={"missing_value": None})).rows
+    assert rows == [{"statement": "in the gut", "status": "accepted"}, {"statement": "near the gut", "status": None}]
 
 
 def test_when_every_record_is_set_aside_the_empty_output_is_intentional(reviewed):
@@ -156,8 +205,8 @@ def test_when_every_record_is_set_aside_the_empty_output_is_intentional(reviewed
 def test_review_reason_carries_the_set_aside_reason(reviewed):
     """Chris, decision 7: Review reason also carries the set-aside reason for set-aside rows."""
     bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"},
-                     reasons={"target-kept": [(None, "The figure legend names the gut.")],
-                              "target-aside": [(None, "The paper does not say which tissue.")]})
+                     reasons={"target-kept": [(None, None, "The figure legend names the gut.")],
+                              "target-aside": [(None, None, "The paper does not say which tissue.")]})
     rows = apply_projection_plan(bundle, _object_plan("tsv", [("status", STATUS), ("reason", REASON)])).rows
     assert rows == [{"status": "accepted", "reason": "The figure legend names the gut."},
                     {"status": "set aside", "reason": "The paper does not say which tissue."}]
@@ -186,7 +235,7 @@ def test_a_saved_selected_fields_plan_decides_whether_reasons_are_read():
 
 def test_viewer_lists_each_set_aside_record_with_its_default_values_and_reason(reviewed):
     bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"},
-                     reasons={"target-aside": [(None, "The paper does not say which tissue.")]})
+                     reasons={"target-aside": [(None, None, "The paper does not say which tissue.")]})
     [view] = set_aside_record_views(bundle)
     assert view["review_status"] == "set aside"
     assert view["review_reason"] == "The paper does not say which tissue."
@@ -223,3 +272,29 @@ def test_a_list_items_doubt_reads_its_list_fields_declared_label_and_position():
     assert _uncertainty_field_label(labels, "Gene", "notes[1]") == "notes[1]"
     assert _uncertainty_field_label(labels, "Gene", "evidence_codes[x]") == "evidence_codes[x]"
     assert _uncertainty_field_label(labels, "Other", "evidence_codes[0]") == "evidence_codes[0]"
+
+
+def test_a_set_aside_record_with_a_standing_accepted_value_shows_both_reasons():
+    """Chris (19 Nov): "Accepted earlier: ... | Set aside later: ...", per field after its name."""
+    from src.lib.flows.output_projection import _attach_review_fields
+    from src.lib.validation_history.projection import ACCEPTED_EARLIER, SET_ASIDE_LATER
+
+    rows = [{"object.pending_ref_id": key} for key in ("own", "fields", "plain")]
+    items = [{"object_type": "Annotation", "metadata": {"validation_history": {"target_id": key}}}
+             for key in ("own", "fields", "plain")]
+    reasons = {
+        "own": [(None, ACCEPTED_EARLIER, "Table 1 lists it."), (None, SET_ASIDE_LATER, "A second reading did not hold up.")],
+        "fields": [("statement", None, "The legend says so."),
+                   ("evidence_code_curies[0]", ACCEPTED_EARLIER, "Table 2 gives this code."),
+                   ("evidence_code_curies[0]", SET_ASIDE_LATER, "The new answer names another code.")],
+        "plain": [(None, None, "The supplement is not available.")],
+    }
+    _attach_review_fields(rows, items, [], reasons, {("Annotation", "statement"): "Statement"})
+    assert [row[REASON] for row in rows] == [
+        "Accepted earlier: Table 1 lists it. | Set aside later: A second reading did not hold up.",
+        "Statement: The legend says so. | evidence_code_curies[0]: Accepted earlier: Table 2 gives this code. | "
+        "evidence_code_curies[0]: Set aside later: The new answer names another code.",
+        "The supplement is not available.",
+    ]
+    assert export_fields.REVIEW_REASON_ACCEPTED_EARLIER_LABEL == "Accepted earlier"
+    assert export_fields.REVIEW_REASON_SET_ASIDE_LATER_LABEL == "Set aside later"

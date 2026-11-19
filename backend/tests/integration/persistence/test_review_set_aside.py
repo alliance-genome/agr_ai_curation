@@ -26,13 +26,17 @@ from tests.integration.persistence.test_chat_review_adapter import (
 STATUS = "object.review_status"
 REASON = "object.review_reason"
 ASIDE_REASON = "The figure shows two codes and the text names neither."
+ACCEPTED_REASON = "The legend names this code."
 
 
-async def _finished(item, monkeypatch, action, *, outcome=None):
-    """Run one configured flow step whose review accepts record "kept" and decides "aside" with ``action``.
+async def _finished(item, monkeypatch, action, *, outcome=None, aside=("aside",),
+                    codes=(("kept", "eco:1"), ("aside", "eco:2")), accepted_first=False):
+    """Run one configured flow step whose review accepts the other records and decides ``aside`` with ``action``.
 
     The review outcome is the real continuation view of the saved decisions
-    (as reviewer.run returns it), unless ``outcome`` replaces it.
+    (as reviewer.run returns it), unless ``outcome`` replaces it. With
+    ``accepted_first`` the reviewer accepts every answer, then decides the
+    ``aside`` answers with ``action``, so their accepted value still stands.
     """
     from agents import Agent
     from src.lib.validation_review.flow import FlowReview
@@ -63,7 +67,7 @@ async def _finished(item, monkeypatch, action, *, outcome=None):
     source_scope = store.HistoryScope(item.scope.owner_id, item.scope.document_id, uuid4().hex)
     env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=item.pack.pack_id, extracted_objects=[
         CuratableObjectEnvelope(object_type="Annotation", pending_ref_id=key, payload={"evidence_code_curies": [code]})
-        for key, code in (("kept", "eco:1"), ("aside", "eco:2"))])
+        for key, code in codes])
     env = runtime.capture_extraction(scope=source_scope, producer_id=uuid4().hex,
         envelope=env, typed=env.model_dump(mode="json"), provenance={})
     monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
@@ -82,16 +86,36 @@ async def _finished(item, monkeypatch, action, *, outcome=None):
 
     async def review(record):
         context = flow.context(record)
-        entries = entries_for(fixture, "accept")
-        with store.SessionLocal() as db:
-            for entry in entries:
-                target = store._content(db, store._fact(db, ref["artifact_id"], entry["target_id"], kind="target"))
-                if target["object_target"] == records["aside"]:
-                    entry.update(action=action, reason=ASIDE_REASON)
+
+        def entries(aside_action):
+            found = entries_for(fixture, "accept")
+            with store.SessionLocal() as db:
+                for entry in found:
+                    target = store._content(db, store._fact(db, ref["artifact_id"], entry["target_id"], kind="target"))
+                    entry["aside"] = target["object_target"] in {records[key] for key in aside}
+            for entry in found:
+                if entry.pop("aside"):
+                    entry.update(action=aside_action, reason=ASIDE_REASON if aside_action != "accept"
+                                 else ACCEPTED_REASON)
                 else:
                     entry["reason"] = "Table 2 gives this evidence code."
-        decisions.record_decisions(context, checkpoint_request=flow.checkpoint(record),
-                                   operation_id="decide", entries=entries)
+            return found
+
+        if accepted_first:
+            # Accept the set-aside answers, decide them again with ``action`` while
+            # the round is still open, then accept the rest.
+            accepted = [entry for entry in entries("accept") if entry["reason"] == ACCEPTED_REASON]
+            decisions.record_decisions(context, checkpoint_request=flow.checkpoint(record),
+                                       operation_id="accept-first", entries=accepted)
+            later = [entry for entry in entries(action) if entry["action"] == action]
+            decisions.record_decisions(context, checkpoint_request=flow.checkpoint(record),
+                                       operation_id="decide-later", entries=later)
+            rest = [entry for entry in entries(action) if entry["action"] == "accept"]
+            decisions.record_decisions(context, checkpoint_request=flow.checkpoint(record),
+                                       operation_id="accept-rest", entries=rest)
+        else:
+            decisions.record_decisions(context, checkpoint_request=flow.checkpoint(record),
+                                       operation_id="decide", entries=entries(action))
         if outcome is not None:
             return outcome
         view = continuation.inspect(context, {"record_validation_review"})
@@ -170,20 +194,34 @@ async def test_a_check_that_could_not_run_still_stops_the_paper(planned, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_the_set_aside_fact_pins_the_exact_state_it_was_recorded_in(planned, monkeypatch):
-    from src.lib.validation_review import continuation, decisions
+async def test_the_set_aside_fact_is_written_with_the_step_and_pins_the_state_it_covers(planned, monkeypatch):
+    from src.lib.flows.output_projection import finalize_output_projection
+    from src.lib.validation_history import selections
+    from src.lib.validation_review import decisions
+    from src.models.sql.validation_history import ValidationFact
 
     item = planned
     flow, step, records = await _finished(item, monkeypatch, "defer")
     outcome = await flow.review_result(flow.record)
     scope = store.HistoryScope(item.scope.owner_id, item.scope.document_id, item.scope.session_id)
+    artifact_id = flow.reference(flow.record)["artifact_id"]
+
+    def facts():
+        with store.SessionLocal() as db:
+            return list(db.scalars(select(ValidationFact).where(
+                ValidationFact.artifact_id == artifact_id, ValidationFact.kind == selections.SET_ASIDE_KIND)))
+
+    # A flag read from another state stops the step and writes no fact.
     stale = {**outcome["set_aside"], "manifest_sha256": "0" * 64}
     with pytest.raises(admission.ReviewStopped, match="flow_review_pending"):
-        flow_steps.record_set_aside(scope, step["step_id"], set_aside=stale)
-    flow_steps.record_set_aside(scope, step["step_id"], set_aside=outcome["set_aside"])
-    # A later decision changes the manifest: the fact no longer covers it.
+        flow_steps.finish(scope, step["step_id"], outcome={"done": True}, set_aside=stale)
+    assert facts() == [] and _step_row(step).state == "review_pending"
+    flow_steps.finish(scope, step["step_id"], outcome={"done": True}, set_aside=outcome["set_aside"])
+    assert _step_row(step).state == "completed" and len(facts()) == 1
+    finalize_output_projection(_bundle(flow, item, monkeypatch), _plan("tsv", [("record", "object.pending_ref_id")]))
+
+    # The reviewer deciding the set-aside unit again leaves the fact behind: strict again.
     context = flow.context(flow.record)
-    artifact_id = flow.reference(flow.record)["artifact_id"]
     with store.SessionLocal() as db:
         later = [{**entry, "action": "defer", "reason": "Still unclear after a second look."}
                  for entry in entries_for(SimpleNamespace(aid=artifact_id), "defer")
@@ -192,10 +230,47 @@ async def test_the_set_aside_fact_pins_the_exact_state_it_was_recorded_in(planne
     assert len(later) == 1
     decisions.record_decisions(context, checkpoint_request=flow.checkpoint(flow.record),
                                operation_id="defer-again-later", entries=later)
-    assert continuation.inspect(context, {"record_validation_review"})["manifest_sha256"] != (
-        outcome["set_aside"]["manifest_sha256"])
-    with pytest.raises(admission.ReviewStopped, match="flow_review_pending"):
-        flow_steps.finish(scope, step["step_id"], outcome={})
+    with pytest.raises(store.SelectionNotReady):
+        finalize_output_projection(_bundle(flow, item, monkeypatch),
+                                   _plan("tsv", [("record", "object.pending_ref_id")]))
+
+
+@pytest.mark.asyncio
+async def test_a_curator_deciding_one_set_aside_record_keeps_the_other_set_aside(planned, monkeypatch):
+    """S5: the viewer lists what is still set aside, and re-export works under the same rule."""
+    from dataclasses import replace
+    from src.lib.flows.output_projection import finalize_output_projection
+    from src.lib.flows.set_aside_records import list_set_aside_records
+    from src.lib.validation_review import decisions
+
+    item = planned
+    flow, _, records = await _finished(item, monkeypatch, "defer", aside=("aside", "later"),
+                                       codes=(("kept", "eco:1"), ("aside", "eco:2"), ("later", "eco:3")))
+    await flow.finish_review()
+    artifact_id = flow.reference(flow.record)["artifact_id"]
+    with store.SessionLocal() as db:
+        decided = [{**entry, "action": "accept", "reason": "Figure 3 shows this code."}
+                   for entry in entries_for(SimpleNamespace(aid=artifact_id), "accept")
+                   if store._content(db, store._fact(db, artifact_id, entry["target_id"], kind="target"))[
+                       "object_target"] == records["later"]]
+    assert len(decided) == 1
+    curator = replace(flow.context(flow.record), actor_id=item.scope.owner_id, actor_type="curator")
+    decisions.record_decisions(curator, checkpoint_request=flow.checkpoint(flow.record),
+                               operation_id="curator-accepts-later", entries=decided)
+
+    listed = list_set_aside_records(user_id=item.scope.owner_id, flow_run_id=flow.flow_run_id,
+                                    document_id=item.scope.document_id)
+    assert listed.set_aside_count == 1
+    assert [record.review_reason for record in listed.results[0].records] == [
+        f"evidence_code_curies[0]: {ASIDE_REASON}"]
+    bundle = _bundle(flow, item, monkeypatch)
+    plain = finalize_output_projection(bundle, _plan("tsv", [("record", "object.pending_ref_id")]))
+    assert plain.rows == [{"record": "kept"}, {"record": "later"}] and plain.set_aside_left_out == 1
+    marked = finalize_output_projection(bundle, _plan("tsv", [("record", "object.pending_ref_id"),
+                                                             ("status", STATUS)]))
+    assert marked.rows == [{"record": "kept", "status": "accepted"}, {"record": "aside", "status": "set aside"},
+                           {"record": "later", "status": "accepted"}]
+    assert (marked.set_aside_included, marked.set_aside_left_out) == (1, 0)
 
 
 @pytest.mark.asyncio
@@ -305,6 +380,7 @@ async def test_review_and_curate_shows_set_aside_records_undecided_and_blocks_su
     """Chris, decision 3: the record is an undecided candidate; sending stays blocked until a curator decides."""
     from src.lib.curation_workspace.session_queries import get_session_workspace
     from src.lib.curation_workspace.session_submission_service import _build_domain_envelope_submission_context
+    from src.lib.curation_workspace.review_history_service import history_page
     from uuid import UUID
     from src.lib.curation_workspace.models import CurationReviewSession
     from src.schemas.curation_workspace import CurationCandidateStatus
@@ -327,6 +403,14 @@ async def test_review_and_curate_shows_set_aside_records_undecided_and_blocks_su
         for candidate_id in candidates:
             assert any(blocker.code == "domain_envelope.machine_review_pending"
                        for blocker in context.blockers_for(candidate_id))
+        # The candidate's review history tells the set-aside record from the accepted one.
+        reviews = {}
+        for candidate in session_row.candidates:
+            page = history_page(db, candidate.id, owner_id=item.scope.owner_id)
+            reviews[candidate.object_id] = {unit["review"] for unit in page["record"]["selections"]}
+        # The accepted record's checked value reads "accept"; the set-aside one has none.
+        assert "accept" in reviews["kept"]
+        assert "accept" not in reviews["aside"]
 
 
 async def _bootstrap(flow, item, monkeypatch):
@@ -357,3 +441,26 @@ async def _bootstrap(flow, item, monkeypatch):
             adapter_key="fixture", flow_run_id=flow.flow_run_id, origin_session_id=flow.session_id),
             current_user_id=item.scope.owner_id, active_groups=(), db=db)
         return created.session.session_id
+
+
+@pytest.mark.asyncio
+async def test_a_set_aside_record_whose_accepted_value_stands_shows_both_reasons(planned, monkeypatch):
+    """Chris (19 Nov): the accepted reason of the value shown, then the reason that set it aside."""
+    from src.lib.flows.output_projection import finalize_output_projection
+    from src.lib.flows.set_aside_records import list_set_aside_records
+
+    item = planned
+    flow, step, records = await _finished(item, monkeypatch, "reject", accepted_first=True)
+    await flow.finish_review()
+    assert _step_row(step).outcome["set_aside_record_target_ids"] == [records["aside"]]
+    both = (f"evidence_code_curies[0]: Accepted earlier: {ACCEPTED_REASON} | "
+            f"evidence_code_curies[0]: Set aside later: {ASIDE_REASON}")
+    projection = finalize_output_projection(_bundle(flow, item, monkeypatch), _plan("csv", [
+        ("record", "object.pending_ref_id"), ("status", STATUS), ("reason", REASON)]))
+    assert projection.rows == [
+        {"record": "kept", "status": "accepted", "reason": "evidence_code_curies[0]: Table 2 gives this evidence code."},
+        {"record": "aside", "status": "set aside", "reason": both},
+    ]
+    listed = list_set_aside_records(user_id=item.scope.owner_id, flow_run_id=flow.flow_run_id,
+                                    document_id=item.scope.document_id)
+    assert [record.review_reason for record in listed.results[0].records] == [both]

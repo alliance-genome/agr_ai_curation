@@ -205,11 +205,8 @@ def test_review_reason_is_the_decision_that_stands_never_a_replaced_one(scope, t
 
 
 def test_review_reason_after_reject_defer_revoke_and_a_curator_accept(scope, tmp_path, monkeypatch):
-    """A curator's own accept is the decision that stands; a revoke leaves none.
-
-    ALL-1561: a record still pending under the reviewer's reject or defer is set
-    aside, and Review reason gives the reason that set it aside. Pending records
-    are in an output only when it selects Review status."""
+    """Reject of a later answer keeps the accept; defer and revoke leave no standing
+    decision; a curator's own accept is the decision that stands."""
     from dataclasses import replace as replaced
     from src.lib.validation_review.decisions import record_decisions
 
@@ -230,14 +227,19 @@ def test_review_reason_after_reject_defer_revoke_and_a_curator_accept(scope, tmp
     decide(3, 0, "accept", "Confirmed against Figure 2.", "curator-3", context=curator, **baseline)
 
     _, projected = _review_export(scope, item.checkpoint().envelope, [
-        ("statement", "object.pack.Annotation.statement"), ("reason", "object.review_reason"),
-        ("status", "object.review_status")], finalized=False)
+        ("statement", "object.pack.Annotation.statement"), ("reason", "object.review_reason")], finalized=False)
     assert projected.rows == [
-        {"statement": "S0", "reason": "A second reading did not hold up.", "status": "set aside"},
-        {"statement": "S1", "reason": "Needs a look at the supplement.", "status": "set aside"},
-        {"statement": "S2", "reason": "", "status": "set aside"},
-        {"statement": "S3", "reason": "Confirmed against Figure 2.", "status": "accepted"},
+        {"statement": "S0", "reason": "Table 1 lists it for this cohort."},
+        {"statement": "S1", "reason": ""},
+        {"statement": "S2", "reason": ""},
+        {"statement": "S3", "reason": "Confirmed against Figure 2."},
     ]
-    _, without_status = _review_export(scope, item.checkpoint().envelope, [
-        ("statement", "object.pack.Annotation.statement")], finalized=False)
-    assert without_status.rows == [{"statement": "S3"}] and without_status.set_aside_left_out == 3
+    # ALL-1561: outside a finished flow run nothing is set aside. Pending records
+    # stay in previews and their Review status is blank.
+    _, statuses = _review_export(scope, item.checkpoint().envelope, [
+        ("statement", "object.pack.Annotation.statement"), ("status", "object.review_status")], finalized=False)
+    assert statuses.rows == [
+        {"statement": "S0", "status": ""}, {"statement": "S1", "status": ""},
+        {"statement": "S2", "status": ""}, {"statement": "S3", "status": "accepted"},
+    ]
+    assert statuses.set_aside_left_out == 0 and statuses.set_aside_included == 0

@@ -68,8 +68,7 @@ async def test_a_validated_record_lists_each_fields_standing_reason(planned, mon
 
 
 @pytest.mark.asyncio
-async def test_a_field_the_review_deferred_shows_the_reason_that_set_it_aside(planned, monkeypatch):
-    """ALL-1561 (Chris, decision 7): a deferred field's decision is what the set-aside record stands on."""
+async def test_a_field_decided_only_by_defer_contributes_nothing(planned, monkeypatch):
     item = planned
     packet, (first, second) = await _validated(item, monkeypatch)
     _save(item, packet, [
@@ -78,9 +77,8 @@ async def test_a_field_the_review_deferred_shows_the_reason_that_set_it_aside(pl
     ], "accept-and-defer")
     rows, _ = _reason_cells(item, monkeypatch, [("reason", "object.review_reason"),
                                                 ("status", "object.review_status")])
-    assert rows == [{"reason": "evidence_code_curies[0]: Table 2 gives this evidence code. | "
-                               "evidence_code_curies[1]: The supplement is not available yet.",
-                     "status": "set aside"}]
+    # ALL-1561: no finished flow run set the record aside, so its status is blank.
+    assert rows == [{"reason": "evidence_code_curies[0]: Table 2 gives this evidence code.", "status": ""}]
 
 
 @pytest.mark.parametrize("planned", ["optional-composite-absence"], indirect=True)

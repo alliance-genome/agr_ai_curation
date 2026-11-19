@@ -146,9 +146,6 @@ class FlowReview(ChatReview):
             if set_aside is None or status["state"] != "pending":
                 raise admission.ReviewStopped((outcome or {}).get("reason") or "flow_review_pending",
                                               resource=self.step_id)
-            await asyncio.to_thread(flow_steps.record_set_aside,
-                store.HistoryScope(self.owner_id, self.document_id, self.session_id), self.step_id,
-                set_aside=set_aside)
         checkpoint = await asyncio.to_thread(self.checkpoint, self.record)
         result_id = self.record.extraction_result_id
         def retain_checkpoint():
@@ -166,6 +163,7 @@ class FlowReview(ChatReview):
                   "episode_id": ref["episode_id"], "checkpoint_revision": checkpoint.expected_revision,
                   "set_aside_record_target_ids": set_aside["record_target_ids"] if set_aside else []}
         await asyncio.to_thread(flow_steps.finish,
-            store.HistoryScope(self.owner_id, self.document_id, self.session_id), self.step_id, outcome=result)
+            store.HistoryScope(self.owner_id, self.document_id, self.session_id), self.step_id,
+            outcome=result, set_aside=set_aside)
         self.set_aside_record_target_ids = result["set_aside_record_target_ids"]
         return checkpoint.envelope

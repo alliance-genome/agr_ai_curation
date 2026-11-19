@@ -430,12 +430,17 @@ SET_ASIDE_DECISIONS = frozenset({"reject", "defer"})
 
 
 def set_aside_in_transaction(db, artifact_id, manifest):
-    """The episode's latest set-aside fact when it covers exactly this manifest, else None.
+    """The finished run's set-aside fact while it still covers this pending manifest, else None.
 
-    The fact pins the manifest hash it was recorded against, so any later change
-    (a curator edit, a new answer, another decision) leaves it behind and the
+    Covered means every current blocker is one the run recorded, and each
+    blocked unit still has the decision it had then (its head version). A
+    curator deciding some of the records removes their blockers and leaves the
+    rest covered. Anything new (a new answer, another decision on a set-aside
+    unit, any other blocker, a new review round) leaves the fact behind, and the
     strict readiness rule applies again.
     """
+    if manifest["ready"]:
+        return None
     fact = db.scalar(select(ValidationFact).where(
         ValidationFact.artifact_id == artifact_id,
         ValidationFact.kind == SET_ASIDE_KIND,
@@ -444,11 +449,16 @@ def set_aside_in_transaction(db, artifact_id, manifest):
     if fact is None:
         return None
     body = store._content(db, fact)
-    return body if body["manifest_sha256"] == manifest["sha256"] else None
+    if any(blocker not in body["blockers"] for blocker in manifest["blockers"]):
+        return None
+    for target_id in {blocker["target_id"] for blocker in manifest["blockers"]}:
+        if store._current(db, artifact_id, target_id)["version"] != body["unit_versions"][target_id]:
+            return None
+    return body
 
 
 def require_ready_or_set_aside(db, artifact_id, manifest):
-    """Exports of a finished flow run only: the not-ready manifest the run finished with is accepted.
+    """Exports of a finished flow run only: a manifest its set-aside fact still covers is accepted.
 
     Submission, curator restore and curation preparation keep ``require_ready``.
     """
