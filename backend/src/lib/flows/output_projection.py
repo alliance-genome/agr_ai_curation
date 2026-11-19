@@ -415,6 +415,10 @@ class FlowOutputArtifact(BaseModel):
     # them, and the evidence and findings rows naming them, out unless it
     # selects Review status.
     set_aside_records: list[list[str]] = Field(default_factory=list)
+    # The source's own declared fields (its export catalog without the common
+    # and review fields every source gets), in catalog order: ref, label and,
+    # for pack fields, the object type they belong to.
+    source_fields: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -1967,6 +1971,8 @@ def _build_artifact_from_step(
         default_object_refs=default_object_refs,
         default_object_types=default_object_types,
         set_aside_records=set_aside_records,
+        source_fields=[{"ref": field["ref"], "label": field["label"], "object_type": field.get("object_type")}
+                       for field in export_fields],
     )
 
 
@@ -3793,28 +3799,40 @@ def apply_projection_plan(
 
 
 def set_aside_record_views(bundle: FlowOutputArtifactBundle) -> list[dict[str, Any]]:
-    """Each set-aside record of a bundle, read only, as a default CSV export would show it.
+    """Each set-aside record of a bundle, read only, with the curator's own fields.
 
     One entry per record the review set aside (``FlowOutputArtifact.set_aside_records``):
-    its label, its values in the source's default layout rendered by the same
-    display specs as files, and the stored Review reason (the reason of the
-    decision that set it aside; ``_attach_review_fields``). Nothing is decided,
-    summarised or saved.
+    its label, the stored Review reason (``_attach_review_fields``) and its
+    fields, rendered by the same display specs as files. The fields are the
+    source's own declared fields (``FlowOutputArtifact.source_fields``: the
+    export catalog the Studio offers, without the common bookkeeping and review
+    fields every source gets), with their declared labels, in catalog order; a
+    pack field of another object type, and a group field whose parts are also
+    listed, are skipped. A general result with no declared catalog shows its
+    saved attributes (``object.attribute.*``) as a default file names them.
+    Nothing is decided, summarised or saved.
     """
 
-    from src.lib.flows.export_fields import REVIEW_FIELDS
-
-    review_refs = {field["ref"] for field in REVIEW_FIELDS}
-    plan = default_projection_plan(bundle, output_format="csv", row_source="object")
-    columns = [column for column in plan.columns if column.field_ref not in review_refs]
     specs = {field.ref: field.display for field in bundle.field_catalog if field.row_source == "object"}
     render = _display_renderer(specs)
+    attribute_columns = [
+        column for column in default_projection_plan(bundle, output_format="csv", row_source="object").columns
+        if (column.field_ref or "").startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+    ]
     views = []
     for artifact in bundle.artifacts:
         keys = {key for record in artifact.set_aside_records for key in record}
+        refs = [field["ref"] for field in artifact.source_fields]
         for row in artifact.rows_by_source.get("object") or []:
             if not keys.intersection(_object_keys(row)):
                 continue
+            object_type = str(row.get("object.object_type") or "")
+            columns = [
+                FlowOutputColumnSpec(key=field["ref"], header=field["label"], field_ref=field["ref"])
+                for field in artifact.source_fields
+                if field["object_type"] in (None, object_type)
+                and not any(other.startswith((field["ref"] + ".", field["ref"] + "[].")) for other in refs)
+            ] if artifact.source_fields else attribute_columns
             values = _project_row(row, columns, missing_value=None, render=render)
             views.append({
                 "extraction_result_id": artifact.extraction_result_id,

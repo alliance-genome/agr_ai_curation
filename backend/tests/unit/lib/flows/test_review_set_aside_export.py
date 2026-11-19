@@ -355,3 +355,78 @@ def test_objects_a_set_aside_answer_contributed_are_set_aside_with_it():
                           {"target_id": "unit-c", "selected": None}]}
     assert contributed_records(projection, manifest, {"unit-a", "unit-c"}) == {"target-from-blocked"}
     assert contributed_records(projection, manifest, set()) == set()
+
+
+def test_viewer_fields_of_a_custom_profile_use_its_declared_labels_without_bookkeeping():
+    """Fix round 3: the source's own declared fields, as the Studio column picker names them."""
+    from uuid import uuid4
+    from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
+    from src.lib.flows.output_projection import _object_keys
+    from src.schemas.agent_execution_revision import AgentExecutionReceipt
+    from src.schemas.generic_extraction_profile import GenericProfileContract
+
+    contract = GenericProfileContract.model_validate({
+        "name": "Reagents", "semantic_class": "genetic_reagent_inventory_item", "fields": [
+            {"key": "reagent_names", "display_name": "Names used in paper",
+             "value_schema": {"kind": "array", "items": {"kind": "string"}}},
+            {"key": "detail", "display_name": "Detail", "value_schema": {"kind": "object", "fields": [
+                {"key": "associated_gene", "display_name": "Associated gene", "value_schema": {"kind": "string"}},
+                {"key": "reagent_type", "display_name": "Reagent type", "value_schema": {"kind": "string"}},
+            ]}},
+        ],
+    })
+    receipt = AgentExecutionReceipt(
+        agent_id=uuid4(), agent_key="ca_reagents", agent_revision_id=uuid4(), revision=1,
+        fingerprint="sha256:" + "b" * 64,
+        output_contract={"output_state": "structured_extraction", "output_mode": "profile_bound_generic",
+                         "generic_profile_ref": {"profile_id": uuid4(), "profile_revision_id": uuid4(),
+                                                 "revision": 1, "fingerprint": contract.fingerprint()}})
+    pin = receipt.output_contract.generic_profile_ref
+    payload = {
+        "curatable_objects": [{"object_type": "generic_object", "pending_ref_id": "generic-object-1",
+                               "evidence_record_ids": ["evidence-1", "evidence-2"],
+                               "payload": {"label": "UAS-GFP", "semantic_class": "genetic_reagent_inventory_item",
+                                           "attributes": {"reagent_names": ["UAS-GFP", "UAS-mCD8::GFP"],
+                                                          "detail": {"associated_gene": "GFP",
+                                                                     "reagent_type": "transgene"}}},
+                               "metadata": {"generic_profile_ref": pin.model_dump(mode="json"),
+                                            "generic_extraction": {"class_key": "generic:generic_object"}}}],
+        "metadata": {"provenance": {"produced_by": receipt.agent_key,
+                                    "execution_receipt": receipt.model_dump(mode="json"),
+                                    "generic_profile_ref": pin.model_dump(mode="json")}},
+    }
+    bundle = build_flow_output_artifact_bundle(
+        completed_steps=[{"step": 1, "agent_id": receipt.agent_key, "candidate": {
+            "agent_key": receipt.agent_key, "adapter_key": "generic", "candidate_count": 1,
+            "execution_receipt": receipt, "payload_json": payload}}],
+        flow_name="Reagents", profile_resolver=lambda _: ResolvedGenericProfile(pin, contract))
+    [artifact] = bundle.artifacts
+    [row] = artifact.rows_by_source["object"]
+    artifact.set_aside_records = [_object_keys(row)]
+    [view] = set_aside_record_views(bundle)
+    catalog = {field["ref"]: field["label"] for field in export_fields.source_catalog(
+        [{"ref": f["ref"], "label": f["label"], "value_type": "string"} for f in artifact.source_fields])["fields"]}
+    assert [(field["label"], field["value"]) for field in view["fields"]] == [
+        ("Names used in paper", "UAS-GFP; UAS-mCD8::GFP"),
+        ("Associated gene", "GFP"),
+        ("Reagent type", "transgene"),
+        ("Rationale", None),
+    ]
+    assert all(catalog[field["field_ref"]] == field["label"] for field in view["fields"])
+    refs = {field["field_ref"] for field in view["fields"]}
+    assert not refs & {"object.label", "object.object_id", "object.payload.semantic_class",
+                       "object.evidence_record_ids", STATUS, REASON, export_fields.REVIEW_UNCERTAINTY_REF}
+
+
+def test_viewer_fields_of_a_pack_record_are_its_declared_pack_fields(reviewed):
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
+    [artifact] = bundle.artifacts
+    [view] = set_aside_record_views(bundle)
+    declared = [(field["ref"], field["label"]) for field in artifact.source_fields
+                if field["object_type"] == "GeneExpressionAnnotation"]
+    shown = [(field["field_ref"], field["label"]) for field in view["fields"]]
+    assert shown and set(shown) <= set(declared)
+    assert [ref for ref, _ in shown] == [ref for ref, _ in declared if ref in {r for r, _ in shown}]
+    assert (STATEMENT, dict(declared)[STATEMENT]) in shown
+    common = {field["ref"] for field in export_fields.COMMON_FIELDS + export_fields.REVIEW_FIELDS}
+    assert not common & {ref for ref, _ in shown}
