@@ -372,14 +372,31 @@ def read_current_projection_with_reasons(scope, reference, *, reasons=True):
         records = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
                    for obj in projection.extracted_objects if "validation_history" in obj.metadata}
         covered = selections.set_aside_in_transaction(db, artifact_id, manifest)
-        pending = pending_records_in_transaction(db, artifact_id, manifest, records)
-        set_aside = pending.intersection(covered["record_target_ids"]) if covered else set()
-        set_aside_units = {blocker["target_id"] for blocker in manifest["blockers"]} if covered else set()
+        blocked_units = {blocker["target_id"] for blocker in manifest["blockers"]}
+        contributed = contributed_records(projection, manifest, blocked_units)
+        pending = pending_records_in_transaction(db, artifact_id, manifest, records) | contributed
+        set_aside = (pending.intersection(covered["record_target_ids"]) | contributed) if covered else set()
+        set_aside_units = blocked_units if covered else set()
         return projection, manifest, (
             standing_decision_reasons_in_transaction(db, artifact_id, manifest, records,
                                                      set_aside_units=set_aside_units)
             if reasons else {}
         ), pending, set_aside
+
+
+def contributed_records(projection, manifest, unit_target_ids):
+    """Objects a still-selected answer of one of these units contributed, by target id.
+
+    A validator answer can add objects; they hang under the envelope, not under
+    the record whose unit is blocked, so blocker lineage does not reach them.
+    Each keeps ``metadata.selected_contribution.completion_id``, the answer it
+    came from; a unit's ``selected`` names its selected answer. Pure structure.
+    """
+    answers = {unit["selected"] for unit in manifest["units"]
+               if unit["target_id"] in unit_target_ids and unit["selected"] is not None}
+    return {obj.metadata["validation_history"]["target_id"] for obj in projection.extracted_objects
+            if "selected_contribution" in obj.metadata
+            and obj.metadata["selected_contribution"]["completion_id"] in answers}
 
 
 def pending_records_in_transaction(db, artifact_id, manifest, records):
@@ -397,6 +414,9 @@ def pending_records_in_transaction(db, artifact_id, manifest, records):
     return pending
 
 
+# Object metadata mark of a record a finished flow run's review set aside, in
+# the supervisor's accepted view (ALL-1561).
+SET_ASIDE_REVIEW_STATUS = "set aside"
 # Roles of the two reasons a set-aside unit with a standing accepted value shows (ALL-1561).
 ACCEPTED_EARLIER = "accepted_earlier"
 SET_ASIDE_LATER = "set_aside_later"

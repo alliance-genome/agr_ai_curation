@@ -2813,6 +2813,10 @@ def _override_errors(
             # Expanded split columns are checked against the data at render time.
             column_keys.add(str(override.column_key))
     excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
+    # The review's own state is never rewritten: a set-aside row must keep
+    # reading "set aside" in the column that brought it in (ALL-1561).
+    status_keys = {column.key for column in columns
+                   if column.field_ref == REVIEW_STATUS_REF and column.transform is None}
     seen: set[tuple[str, str | None]] = set()
     for index, override in enumerate(plan.overrides, start=1):
         context = f"Override {index}"
@@ -2836,6 +2840,11 @@ def _override_errors(
         elif override.row_ref in excluded_refs:
             errors.append(
                 f"{context}: row_ref '{override.row_ref}' is excluded, so its cells cannot be edited."
+            )
+        elif override.column_key in status_keys:
+            errors.append(
+                f"{context}: column '{override.column_key}' shows Review status, which is the "
+                "review's own state and cannot be overridden."
             )
         identity = (override.row_ref, None if override.exclude else override.column_key)
         if identity in seen:
@@ -3456,9 +3465,11 @@ def _plan_artifacts(
 
 
 def _shows_review_status(plan: FlowOutputProjectionPlan, artifact: FlowOutputArtifact) -> bool:
-    """Whether the output has a Review status column for this artifact's rows, and the artifact carries it.
+    """Whether the output has a plain Review status column for this artifact's rows, and the artifact carries it.
 
-    A filter, sort or grouping on Review status alone does not count. A source
+    Only a column that copies ``object.review_status`` as is counts: a transform
+    over it (count, a label or value map, a template, a literal) may not show
+    "set aside", and a filter, sort or grouping alone shows nothing. A source
     with no declared catalog (unprofiled general results) never carries the
     field, so its set-aside records are never in an output.
     """
@@ -3466,8 +3477,7 @@ def _shows_review_status(plan: FlowOutputProjectionPlan, artifact: FlowOutputArt
     if not any(field.ref == REVIEW_STATUS_REF for field in artifact.declared_fields):
         return False
     return any(
-        (column.field_ref == REVIEW_STATUS_REF
-         or (column.transform is not None and REVIEW_STATUS_REF in _transform_refs(column.transform)))
+        column.field_ref == REVIEW_STATUS_REF and column.transform is None
         and (not column.source_node_id or column.source_node_id == artifact.node_id)
         for column in plan.columns
     )

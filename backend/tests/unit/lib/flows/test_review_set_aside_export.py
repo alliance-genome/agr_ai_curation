@@ -298,3 +298,60 @@ def test_a_set_aside_record_with_a_standing_accepted_value_shows_both_reasons():
     ]
     assert export_fields.REVIEW_REASON_ACCEPTED_EARLIER_LABEL == "Accepted earlier"
     assert export_fields.REVIEW_REASON_SET_ASIDE_LATER_LABEL == "Set aside later"
+
+
+@pytest.mark.parametrize("transform", [
+    {"type": "count", "field_ref": STATUS},
+    {"type": "boolean_label", "field_ref": STATUS},
+    {"type": "map_value", "field_ref": STATUS, "mapping": {"accepted": "Yes"}},
+    {"type": "format_elements", "field_refs": [STATEMENT, STATUS], "default": "{1}"},
+    {"type": "literal", "value": "x", "field_ref": STATUS},
+])
+def test_a_transform_over_review_status_does_not_bring_set_aside_records_in(reviewed, transform):
+    """R1: only a plain Review status column shows "set aside", so only it includes the records."""
+    from src.lib.flows.output_projection import FlowOutputColumnSpec
+
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
+    plan = _object_plan("csv", [("statement", STATEMENT)])
+    plan = plan.model_copy(update={"columns": [*plan.columns, FlowOutputColumnSpec(
+        key="accepted", transform=transform)]})
+    result = apply_projection_plan(bundle, plan)
+    assert [row["statement"] for row in result.rows] == ["in the gut"]
+    assert (result.set_aside_included, result.set_aside_left_out) == (0, 1)
+
+
+def test_a_cell_override_cannot_rewrite_review_status(reviewed):
+    """R1 note: overrides are validated, so an edit of the Review status column is refused."""
+    from src.lib.flows.output_projection import FlowOutputOverrideSpec, bundle_row_refs
+
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
+    aside_ref = next(ref for row_id, ref in bundle_row_refs(bundle, "object").items()
+                     for row in bundle.rows_for_source("object")
+                     if id(row) == row_id and row["object.pending_ref_id"] == "aside")
+    plan = _object_plan("csv", [("statement", STATEMENT), ("status", STATUS)]).model_copy(update={
+        "overrides": [FlowOutputOverrideSpec(row_ref=aside_ref, column_key="status", value="accepted")]})
+    with pytest.raises(ValueError, match="shows Review status"):
+        apply_projection_plan(bundle, plan)
+    # Other cells of the same row can still be edited.
+    edited = plan.model_copy(update={
+        "overrides": [FlowOutputOverrideSpec(row_ref=aside_ref, column_key="statement", value="edited")]})
+    assert apply_projection_plan(bundle, edited).rows[1] == {"statement": "edited", "status": "set aside"}
+
+
+def test_objects_a_set_aside_answer_contributed_are_set_aside_with_it():
+    """R4: contributed objects hang under the envelope, not the blocked record; they follow their answer."""
+    from src.lib.validation_history.projection import contributed_records
+
+    def obj(key, completion=None):
+        metadata = {"validation_history": {"target_id": f"target-{key}"}}
+        if completion:
+            metadata["selected_contribution"] = {"completion_id": completion, "selected_result_slots": []}
+        return {"object_type": "GeneExpressionAnnotation", "pending_ref_id": key, "payload": {}, "metadata": metadata}
+
+    projection = DomainEnvelope.model_validate({"envelope_id": "e", "domain_pack_id": PACK, "extracted_objects": [
+        obj("record"), obj("from-blocked", "answer-a"), obj("from-accepted", "answer-b")]})
+    manifest = {"units": [{"target_id": "unit-a", "selected": "answer-a"},
+                          {"target_id": "unit-b", "selected": "answer-b"},
+                          {"target_id": "unit-c", "selected": None}]}
+    assert contributed_records(projection, manifest, {"unit-a", "unit-c"}) == {"target-from-blocked"}
+    assert contributed_records(projection, manifest, set()) == set()
