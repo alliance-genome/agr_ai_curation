@@ -136,7 +136,7 @@ from src.lib.openai_agents.export_details_tool import make_export_details_tool
 from src.lib.export_accounting import EXPORT_ACCOUNTING_GUIDANCE
 from src.lib.openai_agents.extraction_manifest import (
     build_extraction_manifest_page, bind_extraction_manifest_reference,
-    render_extraction_manifest_page, ExtractionManifestError,
+    render_extraction_manifest_page, ExtractionManifestError, mark_set_aside_objects,
 )
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
@@ -2738,6 +2738,11 @@ def get_all_agent_tools(
                             manifest_header += (
                                 f"The review set aside {set_aside_count} {noun} it deferred or did not "
                                 "accept. They are listed here but are not accepted; a curator decides them.\n"
+                            )
+                            # Each listed set-aside record carries review=set aside.
+                            inspection_manifest = mark_set_aside_objects(
+                                inspection_manifest, accepted["payload_json"],
+                                set(flow_review.set_aside_record_target_ids),
                             )
                 result = manifest_header + render_extraction_manifest_page(bind_extraction_manifest_reference(
                     inspection_manifest, str(record.extraction_result_id), result_view=manifest_view,

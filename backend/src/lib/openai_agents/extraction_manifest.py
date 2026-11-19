@@ -129,6 +129,24 @@ def bind_extraction_manifest_reference(
     return bound
 
 
+def mark_set_aside_objects(page: Mapping[str, Any], payload: Mapping[str, Any],
+                           target_ids: set[str] | frozenset[str]) -> dict[str, Any]:
+    """Mark the listed objects a finished flow review set aside (ALL-1561).
+
+    Matched by the saved history target of each object, never by label. Each
+    marked object gets ``review_status: "set aside"``, which the rendered page
+    shows beside its status.
+    """
+    envelope = _canonical_envelope(payload)
+    refs = {_object_ref(domain_object) for domain_object in envelope.extracted_objects
+            if domain_object.metadata["validation_history"]["target_id"] in target_ids}
+    marked = deepcopy(dict(page))
+    for item in marked["objects"]:
+        if item["object_ref"] in refs:
+            item["review_status"] = "set aside"
+    return marked
+
+
 def build_extraction_manifest_object(
     payload: Mapping[str, Any],
     *,
@@ -256,6 +274,8 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
         lines.append(line)
 
         details: list[str] = [f"status={status}"]
+        if item.get("review_status"):
+            details.append(f"review={_text(item.get('review_status'))}")
         raw_fields = item.get("fields")
         fields: list[Any] = raw_fields if isinstance(raw_fields, list) else []
         for field in fields:
@@ -797,6 +817,7 @@ __all__ = [
     "build_and_render_extraction_manifest",
     "build_extraction_manifest_object",
     "build_extraction_manifest_page",
+    "mark_set_aside_objects",
     "render_extraction_manifest_page",
     "supervisor_manifest_objects",
     "validator_result_entries",

@@ -175,7 +175,7 @@ def test_discovered_batch_credits_are_shared_and_never_refill(planned):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('accept', [True, False, 'empty', 'no_publication', 'unset', 'unresolved', 'accepted_manifest_failure', 'commit_failure', 'budget_exhausted', 'extractor_turns', 'extractor_timeout'])
+@pytest.mark.parametrize('accept', [True, False, 'empty', 'no_publication', 'unset', 'unresolved', 'accepted_manifest_failure', 'commit_failure', 'budget_exhausted', 'extractor_turns', 'extractor_timeout', 'set_aside'])
 async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned, monkeypatch, accept):
     """Real wrapper, source persistence, validators and decisions; only providers are fake."""
     import json
@@ -255,6 +255,15 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
                 for row in rows]
             decisions.record_decisions(review_context, checkpoint_request=self.checkpoint(record),
                 operation_id='accept-empty', entries=entries)
+        elif accept == 'set_aside':
+            # ALL-1561: the second code is deferred; the real continuation view sets the record aside.
+            from src.lib.validation_review import continuation
+            entries = entries_for(fixture(self), 'accept')
+            entries[1].update(action='defer', reason='The supplement is not available.')
+            decisions.record_decisions(self.context(record), checkpoint_request=self.checkpoint(record),
+                operation_id='accept-and-defer', entries=entries)
+            return continuation.terminal(
+                continuation.inspect(self.context(record), {'record_validation_review'}), [], 'Reviewed')
         elif accept and accept != 'no_publication':
             from sqlalchemy import event
             from sqlalchemy.orm import Session
@@ -419,6 +428,21 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         with pytest.raises(InspectionViewUnavailable, match='awaiting explicit review'):
             accepted_view(state['pending_review'].record, user_id=item.scope.owner_id)
         assert calls == ['extract', 'review']
+    elif accept == 'set_aside':
+        handoff = await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
+        assert ('The review set aside 1 record it deferred or did not accept. They are listed here '
+                'but are not accepted; a curator decides them.') in handoff
+        # The listing marks which record that is.
+        listed = [line for line in handoff.splitlines() if line.startswith('   status=')]
+        assert len(listed) == 1 and 'review=set aside' in listed[0]
+        completed = state['completed_steps'][0]
+        record_target = completed['validated_candidate'].payload_json['extracted_objects'][0][
+            'metadata']['validation_history']['target_id']
+        assert completed['validation_review']['ready'] is False
+        assert completed['validation_review']['set_aside_record_target_ids'] == [record_target]
+        assert state['next_tool_index'] == 1
+        await tools[1].on_invoke_tool(context, json.dumps({'query': 'next'}))
+        assert calls == ['extract', 'validate', 'validate', 'review', 'next']
     elif accept == 'empty':
         handoff = await tools[0].on_invoke_tool(context, json.dumps({'query': 'extract'}))
         assert 'Current selected result (result_view="accepted")' in handoff
