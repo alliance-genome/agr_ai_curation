@@ -30,11 +30,11 @@ from src.lib.domain_packs.validator_dispatch import (
     _normalized_authenticated_groups,
     group_dispatch_context,
 )
-from src.lib.domain_packs.validation_registry import ValidatorBinding, ValidatorBindingMatch, DomainPackValidationRegistry
+from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.lib.validation_history import store, runtime
 from src.schemas.domain_envelope import DomainEnvelope
 from src.schemas.domain_validator import DomainValidationRequest
-from . import admission, execution, scheduling
+from . import admission, execution, saved_matches, scheduling
 from .audit import append_fact
 from src.lib.openai_agents.config import get_max_parallel_validators
 
@@ -48,9 +48,7 @@ _VALIDATOR_POOL = ThreadPoolExecutor(
 RECONSIDERATION_INPUT: ContextVar[dict | None] = ContextVar(
     "review_reconsideration_input", default=None
 )
-MATCH = TypeAdapter(ValidatorBindingMatch)
 REGISTRY = TypeAdapter(DomainPackValidationRegistry)
-BINDING = TypeAdapter(ValidatorBinding)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -168,34 +166,11 @@ def binding_contract(match):
     })[1]
 
 
-def _serialize_binding(binding):
-    """Preserve selector field presence without stripping scientific null values."""
-    value = BINDING.dump_python(binding, mode="json")
-    value["input_fields"] = {
-        key: selector.model_dump(mode="json", exclude_unset=True)
-        for key, selector in binding.input_fields.items()
-    }
-    if binding.routes is not None:
-        for key, route in binding.routes.items():
-            value["routes"][key]["input_fields"] = {
-                name: selector.model_dump(mode="json", exclude_unset=True)
-                for name, selector in route.input_fields.items()
-            }
-    if binding.custom_profile_reuse is not None:
-        for name, specification in binding.custom_profile_reuse.inputs.items():
-            if specification.context_selector is not None:
-                value["custom_profile_reuse"]["inputs"][name]["context_selector"] = (
-                    specification.context_selector.model_dump(mode="json", exclude_unset=True)
-                )
-    return value
-
-
-def serialize_match(match):
-    # Envelope and raw metadata retain their complete representation.
-    value = MATCH.dump_python(match, mode="json")
-    value["binding"] = _serialize_binding(match.binding)
-    MATCH.validate_python(value)
-    return value
+def _checked_matches(matches, *, plan_envelope):
+    """Encode saved matches and prove the saved form reads back."""
+    saved = saved_matches.encode(matches, plan_envelope=plan_envelope)
+    saved_matches.decode({**saved, "envelope": plan_envelope})
+    return saved
 
 
 def save_plan(plan, *, context):
@@ -206,17 +181,19 @@ def save_plan(plan, *, context):
     with store.SessionLocal.begin() as db:
         targets = [runtime.binding_target(binding, match, db=db) for match in plan.matches]
         initial_requests = runtime.frozen_job_requests(binding, plan.initial_jobs, db=db)
+    envelope = plan.envelope.model_dump(mode="json")
     matches = require_source_integrity(
-        lambda: {tid: serialize_match(match) for tid, match in zip(targets, plan.matches, strict=True)},
+        lambda: _checked_matches(dict(zip(targets, plan.matches, strict=True)), plan_envelope=envelope),
         artifact_id=binding.artifact_id, episode_id=plan.envelope.metadata["review_episode_id"],
         stage="saved_plan_match")
     registry = REGISTRY.dump_python(plan.registry, mode="json")
-    registry["bindings"] = [_serialize_binding(binding_definition) for binding_definition in plan.registry.bindings]
+    registry["bindings"] = [saved_matches.serialize_binding(binding_definition)
+                            for binding_definition in plan.registry.bindings]
     REGISTRY.validate_python(registry)
     body = {
         "registry": registry,
-        "envelope": plan.envelope.model_dump(mode="json"),
-        "matches": matches,
+        "envelope": envelope,
+        **matches,
         "contracts": {
             definition.binding_id: binding_contract(SimpleNamespace(binding=definition))
             for definition in plan.registry.bindings
@@ -258,7 +235,8 @@ class ValidatorAdapter:
         if saved["kind"] != "review_chat_plan":
             raise store.HistoryConflict("Invalid saved review plan")
         self.plan = saved["content"]
-        self.original_matches = dict(self.plan["matches"])
+        # The chat plan's own matches; a refreshed source plan replaces self.plan's.
+        self._chat_plan = self.plan
         if self.plan["envelope"]["metadata"]["review_episode_id"] != episode_id:
             raise store.HistoryConflict("Review plan belongs to another episode")
         self.context = ValidatorRuntimeContext(
@@ -270,12 +248,16 @@ class ValidatorAdapter:
         # Facts are immutable, so the latest source plan's fact id identifies its body.
         self._source_plan_fact_id = None
         self._source_plan_lock = threading.Lock()
+        # id(plan body) -> (body, its rebuilt matches) for the chat plan and the
+        # current plan, so each body's matches are rebuilt once.
+        self._decoded = {}
+        self._decode_lock = threading.Lock()
 
     def refresh_source_plan(self):
         """Adopt the latest selected-source plan, loading its body only when it changed.
 
-        The body can be many megabytes (every match carries the envelope), and
-        callers refresh once per target, so reloading it each time stalled saves.
+        Callers refresh once per target, and the body holds the whole source
+        envelope, so reloading it each time stalled saves.
         """
         from sqlalchemy import select
         from src.models.sql.validation_history import ValidationFact
@@ -290,7 +272,8 @@ class ValidatorAdapter:
             body = store._content(db, fact)
             if body["plan_ref"] != self.plan_ref:
                 raise store.HistoryConflict("Source plan changed its configured validator authority")
-            self.plan = {**self.plan, "matches": body["matches"], "envelope": body["envelope"]}
+            self.plan = {**self.plan, "matches": body["matches"], "match_parts": body["match_parts"],
+                         "envelope": body["envelope"]}
             self._source_plan_fact_id = fact.id
 
     async def select_source(self, context, checkpoint_provider, **arguments):
@@ -322,7 +305,7 @@ class ValidatorAdapter:
             selected_envelope = None
             jobs = []
             absences = {}
-            original_matches = [MATCH.validate_python(item) for item in self.original_matches.values()]
+            original_matches = list(self._plan_matches(self._chat_plan).values())
             roots = {item.object_envelope.metadata["validation_history"]["target_id"] for item in original_matches if item.object_envelope is not None}
             if "restore_target_id" in arguments:
                 roots.add(arguments["restore_target_id"])
@@ -412,13 +395,13 @@ class ValidatorAdapter:
                     obligations.append(item)
             selections.revise_coverage_in_transaction(db, self.scope, self.artifact_id,
                 episode_id=self.episode_id, source_selection_id=selection_id, obligations=obligations)
+            source_json = envelope.model_dump(mode="json")
             matches = require_source_integrity(
-                lambda: {target: serialize_match(match) for target, match in resolved_matches.items()},
+                lambda: _checked_matches(resolved_matches, plan_envelope=source_json),
                 artifact_id=self.artifact_id, episode_id=self.episode_id, stage="published_match")
             append_fact(db, self.artifact_id, operation_id="source-plan:" + selection_id,
                 kind="review_source_plan", parent_id=self.episode_id,
-                body={"plan_ref": self.plan_ref, "envelope": envelope.model_dump(mode="json"),
-                      "matches": matches})
+                body={"plan_ref": self.plan_ref, "envelope": source_json, **matches})
             manifest = selections.manifest_in_transaction(db, self.scope, self.artifact_id, episode_id=self.episode_id)
             from src.lib.domain_packs.profile_validation import resolve_envelope_profile_validation
             profile = resolve_envelope_profile_validation(envelope, domain_pack,
@@ -545,12 +528,24 @@ class ValidatorAdapter:
     def _current_match(self, target_id):
         return self._plan_match(self.plan, target_id)
 
+    def _plan_matches(self, plan):
+        """Every match of one plan body, rebuilt once on shared parsed parts."""
+        with self._decode_lock:
+            cached = self._decoded.get(id(plan))
+            if cached is not None and cached[0] is plan:
+                return cached[1]
+            matches = saved_matches.decode(plan)
+            self._decoded = {key: value for key, value in self._decoded.items()
+                             if value[0] is self._chat_plan}
+            self._decoded[id(plan)] = (plan, matches)
+            return matches
+
     def _plan_match(self, plan, target_id):
         if target_id not in plan["matches"]:
             raise store.HistoryAccessError(
                 "Target is outside configured review bindings"
             )
-        match = MATCH.validate_python(plan["matches"][target_id])
+        match = self._plan_matches(plan)[target_id]
         required = match.binding.required_any_active_group
         if required and not set(required).intersection(
             self.context.authenticated_groups or ()

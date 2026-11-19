@@ -242,7 +242,8 @@ def test_compilation_retains_complete_provider_scope_and_selector(example, const
 
 
 def test_compiled_nullable_constant_survives_review_plan_serialization(example):
-    from src.lib.validation_review.validator_adapter import REGISTRY, MATCH, _serialize_binding, serialize_match
+    from src.lib.validation_review import saved_matches
+    from src.lib.validation_review.validator_adapter import REGISTRY
     raw, cap, pack = example
     reuse = cap.binding.custom_profile_reuse.model_copy(deep=True)
     reuse.inputs["mention"] = reuse.inputs["mention"].model_copy(
@@ -256,14 +257,16 @@ def test_compiled_nullable_constant_survives_review_plan_serialization(example):
     assert not context.unavailable
     compiled, = context.registry.bindings
     saved = REGISTRY.dump_python(context.registry, mode="json")
-    saved["bindings"] = [_serialize_binding(compiled)]
+    saved["bindings"] = [saved_matches.serialize_binding(compiled)]
     assert saved["bindings"][0]["input_fields"]["mention"]["value"] is None
     assert "value" in saved["bindings"][0]["input_fields"]["mention"]
     assert REGISTRY.validate_python(saved) == context.registry
     match, = context.registry.match_bindings(envelope({"paper_name": "original"}))
-    serialized = serialize_match(match)
-    assert MATCH.validate_python(serialized) == match
-    assert serialized["binding"]["raw"] == compiled.raw
+    plan_envelope = match.envelope.model_dump(mode="json")
+    serialized = saved_matches.encode({"target": match}, plan_envelope=plan_envelope)
+    assert saved_matches.decode({**serialized, "envelope": plan_envelope}) == {"target": match}
+    binding_key = serialized["matches"]["target"]["binding"]
+    assert serialized["match_parts"]["bindings"][binding_key]["raw"] == compiled.raw
 
 
 def test_real_packaged_gene_mapping_builds_existing_request(example):

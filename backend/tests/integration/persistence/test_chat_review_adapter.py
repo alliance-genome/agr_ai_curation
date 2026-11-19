@@ -10,12 +10,10 @@ from sqlalchemy import select
 from agents import Agent
 
 from src.lib.validation_history import runtime, store
-from src.lib.validation_review import admission, decisions, chat_dispatch
+from src.lib.validation_review import admission, decisions, chat_dispatch, saved_matches
 from src.lib.validation_review.validator_adapter import (
     ValidatorAdapter,
     save_plan,
-    MATCH,
-    serialize_match,
 )
 from src.lib.domain_packs.validator_dispatch import (
     prepare_validator_dispatch,
@@ -321,7 +319,9 @@ async def test_real_adapter_retains_candidates_and_replay_never_calls_provider_a
 
 def test_saved_match_round_trip_and_agent_substitution_refused(planned):
     job = planned.plan.initial_jobs[0]
-    assert MATCH.validate_python(serialize_match(job.match)) == job.match
+    envelope = job.match.envelope.model_dump(mode="json")
+    saved = saved_matches.encode({"target": job.match}, plan_envelope=envelope)
+    assert saved_matches.decode({**saved, "envelope": envelope}) == {"target": job.match}
     frozen = runtime.frozen_job_requests(planned.plan.history_binding, [job])[0]
     frozen["request"]["validator_binding_id"] = "unconfigured"
     with pytest.raises(store.HistoryAccessError):
