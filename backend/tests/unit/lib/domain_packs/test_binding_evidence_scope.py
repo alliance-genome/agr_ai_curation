@@ -164,7 +164,7 @@ PAYLOAD = {
     "notes": "draft",
     "site": {"anatomy": {"mention": "gut"}, "component": {"mention": "nucleus"}},
     "stage": {"mention": "stage 5"},
-    "provider": {"mention": "FB"},
+    "provider": {"mention": "provider-one"},
     "terms": ["t0", "t1"],
     "relations": [
         {"relation_type": {"mention": "has condition"},
