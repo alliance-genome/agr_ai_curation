@@ -123,6 +123,7 @@ assert_rejected_with() {
 }
 
 write_test_env
+unset MAX_PARALLEL_VALIDATORS
 grep -Ev '^(MAX_PARALLEL_VALIDATORS=|LANGFUSE_TIMEOUT=|OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES=|WORKSPACE_REVIEW_CONCURRENCY=|VALIDATION_REVIEW_|EXTRACTION_FANOUT_|VALIDATION_HISTORY_PAGE_SIZE=|VITE_(CHAT_STREAM_RECOVERY_|PDF_PROGRESS_|BENCHMARK_PORTAL_URL=)|ABSTRACT_EXTRACTION_INPUT_MAX_CHARS=|BATCH_STREAM_POLL_INTERVAL_SECONDS=|CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS=|PDF_JOB_RECOVERY_|PDF_EXTRACTION_QUEUE_TIMEOUT_SECONDS=|PDF_EXTRACTION_STATUS_REQUEST_TIMEOUT_SECONDS=|WEAVIATE_CHUNK_FETCH_PAGE_SIZE=)' "${env_file}" >"${default_env_file}"
 printf '%s\n' '{"schema_version":1,"vite_dev_mode":false,"git_sha":"abcdef1"}' \
   >"${frontend_build_metadata_file}"
@@ -181,7 +182,8 @@ PY
 
 # Exercise the environment created by a fresh `make setup` and the effective
 # development Compose interpolation, without starting containers.
-cp "${repo_root}/.env.example" "${development_env_file}"
+# Omit the pool capacity so this render exercises its Compose default.
+grep -v '^MAX_PARALLEL_VALIDATORS=' "${repo_root}/.env.example" >"${development_env_file}"
 cat >>"${development_env_file}" <<'ENV'
 SENTRY_DEV_DSN=http://dev-public-key@dev-ingest.example.internal/3
 SENTRY_ENVIRONMENT=dev
@@ -215,15 +217,20 @@ env \
   --env-file "${development_env_file}" \
   -f "${repo_root}/docker-compose.yml" \
   config --format json >"${development_rendered_file}"
-python3 - "${development_rendered_file}" <<'PY'
+# The host capacity must win over the service env file's value of 3.
+MAX_PARALLEL_VALIDATORS=2 AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
+  -f "${repo_root}/docker-compose.yml" config --format json >"${development_override_file}"
+python3 - "${development_rendered_file}" "${development_override_file}" <<'PY'
 import json
 import sys
 
 config = json.load(open(sys.argv[1], encoding="utf-8"))
 services = config["services"]
 backend_env = services["backend"]["environment"]
+override_services = json.load(open(sys.argv[2], encoding="utf-8"))["services"]
 for service in ("backend", "benchmark_worker"):
     assert str(services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "8"
+    assert str(override_services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == "2"
 frontend_env = services["frontend"]["environment"]
 trace_review = services["trace_review_backend"]
 trace_review_env = trace_review["environment"]
@@ -337,8 +344,6 @@ for raw_line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
 PY
 
 # Exercise every review limit in both consumers and both supported deployments.
-AGR_DEV_ENV_FILE="${env_file}" docker compose --env-file "${env_file}" \
-  -f "${repo_root}/docker-compose.yml" config --format json >"${development_override_file}"
 python3 - "${review_limit_contract}" "${default_rendered_file}" "${development_rendered_file}" \
   "${rendered_file}" "${development_override_file}" <<'PY'
 import json
@@ -353,7 +358,6 @@ assert len(settings) == 15
 for index, path in enumerate(sys.argv[2:]):
     services = json.loads(Path(path).read_text())["services"]
     for service in ("backend", "benchmark_worker"):
-        assert str(services[service]["environment"]["MAX_PARALLEL_VALIDATORS"]) == ("8" if index < 2 else "3")
         assert str(services[service]["environment"]["LANGFUSE_TIMEOUT"]) == ("5" if index < 2 else "9")
     for key, default, override in settings:
         expected = default if index < 2 else override
