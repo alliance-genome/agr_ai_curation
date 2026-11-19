@@ -49,6 +49,48 @@ the paper or manage source evidence, and return resolutions/questions separately
 Database/ontology lookup tools remain available. Missing context is reported to
 the supervisor without an automatic extraction retry.
 
+### Which request evidence a binding receives (ALL-1584)
+
+A request's `evidence` list holds the record's evidence that belongs to that
+binding, not the whole record's. Code decides this from stored structure only:
+the field tags on each evidence record (`field_path`, `field_paths`,
+`envelope_targets[].field_path`) and the binding's declared paths. It never
+reads quote text. The rule lives in `backend/src/lib/domain_packs/evidence_scope.py`.
+
+- A binding's own paths are its target field (resolved to the element it
+  validates), its `applies_to.field_paths`, its `route_by` path and every path
+  its selectors read (`payload` and `payload_keyed_literal` `path`;
+  `evidence_record` and `object_ref` `field_path`), including `context_only`
+  inputs. Paths of a fanned-out element carry the engine's indexes the same way
+  `selected_inputs` do.
+- A tag matches an own path when one path equals, contains or lies inside the
+  other, segment by segment on field names (`site` and `site.anatomy.mention`
+  both match `site.anatomy`; `site.component` and `site.anat` do not). A list
+  index matters only where both paths give one for the same segment, so an
+  unindexed tag reaches every element and `terms[0]` reaches only element 0.
+- Untagged evidence goes to every binding on the record.
+- Evidence whose tags match no declared path of any active validator binding on
+  the record (for example a free-text statement field that no validator reads)
+  also goes to every binding on the record. Ownership is computed per object from
+  the registry's active validator bindings, independent of the states a caller
+  matches, the payload and group or flow filtering.
+- A record with at least one claimed tag goes only to the bindings whose own
+  paths match one of its tags, even if it also carries an unclaimed tag.
+- A binding with an `evidence_record` selector that has no `field_path` reads the
+  whole record's evidence by its own configuration and receives all of it.
+- Field-scoped `evidence_quotes` are always a subset of the request evidence, so
+  compact decision evidence checks keep accepting them.
+
+This applies to every request: initial validation, reconsideration and
+re-validation after a source selection. The record itself keeps every evidence
+reference; exports, the review packet's record evidence, quick checks and
+follow-up extractor context read the record and are unchanged. The review
+packet's per-answer `evidence` shows what that validator was sent.
+
+Because the binding's source input identity includes its request evidence,
+evidence appended for one field gives a new input version only to the bindings
+that receive it. Sibling bindings keep their current input and their answers.
+
 ### What the validator model sees
 
 The persisted request keeps every evidence record whole. The model input
