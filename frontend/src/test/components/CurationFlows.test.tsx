@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -523,4 +523,79 @@ it('hides an owned routed shortcut without deleting the saved flow', async () =>
   expect(await screen.findByText('Your flow list is empty')).toBeInTheDocument()
   expect(mockFetch.mock.calls.some(([, options]) => options?.method === 'DELETE')).toBe(false)
   expect(screen.getByRole('button', { name: 'Flows workspace' })).toBeEnabled()
+})
+
+describe('records set aside by the review (ALL-1561)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+    mockFetch.mockImplementation(async () => flowListResponse())
+  })
+
+  const setAside = (leftOut: number, included: number, count = 1) => ({
+    count,
+    results: [{ extraction_result_id: 'extract-1', node_id: 'extract', episode_id: 'ep-1', count }],
+    outputs: [{
+      type: 'CHAT_OUTPUT_READY', formatter_node_id: 'chat-out', file_id: null, filename: null,
+      included, left_out: leftOut,
+    }],
+    left_out_of_outputs: leftOut,
+    included_in_outputs: included,
+  })
+
+  it('adds a notice strip that asks for nothing and opens the read-only viewer', async () => {
+    const user = userEvent.setup()
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/curation-workspace/flow-runs/flow-run-123/set-aside-records?document_id=document-123')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          flow_run_id: 'flow-run-123', document_id: 'document-123', set_aside_count: 1,
+          results: [{
+            extraction_result_id: 'extract-1', node_id: 'extract', step: 1, agent_name: 'Gene extractor',
+            review_fields_available: true,
+            records: [{
+              extraction_result_id: 'extract-1', label: 'plim', review_status: 'set aside',
+              review_reason: 'The gene is named only in a figure legend.',
+              fields: [{ field_ref: 'object.gene', label: 'Gene', value: 'plim' }],
+            }],
+          }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      }
+      return Promise.resolve(flowListResponse())
+    })
+
+    renderComponent([completedRunEvent({ set_aside: setAside(1, 0) })])
+
+    const strip = await screen.findByRole('region', { name: 'Records set aside by the review' })
+    expect(within(strip).getByText('Finished, 1 record set aside, not in the file')).toBeInTheDocument()
+    expect(within(strip).getByText('The AI review wants a person to look at it.')).toBeInTheDocument()
+    expect(screen.getByText(/The review set aside 1 record\./)).toBeInTheDocument()
+    expect(screen.getByText('Completed')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Review & Curate/i })).toBeEnabled()
+
+    await user.click(within(strip).getByRole('button', { name: 'View set-aside record' }))
+    const dialog = await screen.findByRole('dialog', { name: '1 record set aside' })
+    expect(within(dialog).getByText('Flow: Evidence Flow')).toBeInTheDocument()
+    expect(await within(dialog).findByText('The gene is named only in a figure legend.')).toBeInTheDocument()
+  })
+
+  it('words the strip for records already in the output', async () => {
+    renderComponent([completedRunEvent({ set_aside: setAside(0, 2, 2) })])
+
+    const strip = await screen.findByRole('region', { name: 'Records set aside by the review' })
+    expect(within(strip).getByText('Finished, 2 records set aside by review')).toBeInTheDocument()
+    expect(within(strip).getByText('They are in your file, marked "set aside".')).toBeInTheDocument()
+    expect(within(strip).getByRole('button', { name: 'View set-aside records' })).toHaveTextContent(/^View$/)
+  })
+
+  it('shows no strip when the review set nothing aside', async () => {
+    renderComponent([completedRunEvent()])
+
+    expect(await screen.findByText('Latest flow run')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Records set aside by the review' })).not.toBeInTheDocument()
+    expect(mapFlowFinishedEvent(completedRunEvent(), 'session-123')?.setAside).toBeNull()
+  })
+
+  it('treats a corrupted set-aside summary as a non-canonical event', () => {
+    expect(mapFlowFinishedEvent(completedRunEvent({ set_aside: { count: 'one' } }), 'session-123')).toBeNull()
+  })
 })

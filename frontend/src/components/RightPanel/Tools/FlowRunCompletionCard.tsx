@@ -3,6 +3,7 @@ import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlin
 import DownloadRoundedIcon from '@mui/icons-material/DownloadRounded'
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded'
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import {
   Alert,
   Box,
@@ -17,6 +18,15 @@ import {
 import { alpha, useTheme } from '@mui/material/styles'
 
 import AuthoritativeReviewAndCurateButton from '@/features/curation/components/AuthoritativeReviewAndCurateButton'
+import SetAsideRecordsDialog from '@/features/curation/setAside/SetAsideRecordsDialog'
+import {
+  type FlowSetAsideSummary,
+  type SetAsidePlacement,
+  isLeftOutSomewhere,
+  recordCountText,
+  setAsideFinishedLabel,
+  setAsidePlacement,
+} from '@/features/curation/setAside/setAsideSummary'
 
 export type FlowEvidenceExportFormat = 'csv' | 'tsv' | 'json'
 
@@ -33,6 +43,8 @@ export interface FlowRunCompletionSummary {
   reviewSessionIds: string[]
   status: string
   totalEvidenceRecords: number
+  /** Records the run's review set aside; null when it set none aside. */
+  setAside: FlowSetAsideSummary | null
 }
 
 interface FlowRunCompletionCardProps {
@@ -88,6 +100,19 @@ function parseAttachmentFilename(headerValue: string | null): string {
   throw new Error('Could not parse attachment filename from download response.')
 }
 
+function setAsideNoticeDetail(placement: SetAsidePlacement, count: number): string {
+  const one = count === 1
+  if (isLeftOutSomewhere(placement)) {
+    return one ? 'The AI review wants a person to look at it.' : 'The AI review wants a person to look at them.'
+  }
+  if (placement === 'included') {
+    return one ? 'It is in your file, marked "set aside".' : 'They are in your file, marked "set aside".'
+  }
+  return one
+    ? 'It waits for a curator\'s decision in Review & Curate.'
+    : 'They wait for a curator\'s decision in Review & Curate.'
+}
+
 function hasCompleteFlowBootstrapScope(run: FlowRunCompletionSummary): boolean {
   const adapterKeys = [...new Set(run.adapterKeys.map((value) => value.trim()).filter(Boolean))]
   const extractionResultIds = new Set(
@@ -129,6 +154,11 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
   const [menuAnchorEl, setMenuAnchorEl] = useState<HTMLElement | null>(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [setAsideViewerOpen, setSetAsideViewerOpen] = useState(false)
+  const setAside = run.status === 'completed' ? run.setAside : null
+  const setAsidePlacementValue = setAside ? setAsidePlacement(setAside) : null
+  const setAsideLeftOut = setAsidePlacementValue !== null && isLeftOutSomewhere(setAsidePlacementValue)
+  const setAsideTone = setAsideLeftOut ? theme.palette.warning.main : theme.palette.info.main
 
   const exportReady = run.status === 'completed' && run.totalEvidenceRecords > 0
   const hasAuthoritativeReviewSession = run.reviewSessionIds.length > 0
@@ -285,7 +315,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
             sx={{ color: theme.palette.text.secondary, display: 'block', mt: 0.5 }}
           >
             {run.status === 'completed'
-              ? `${run.totalEvidenceRecords} evidence record${run.totalEvidenceRecords === 1 ? '' : 's'} ready from the latest completed run.`
+              ? `${run.totalEvidenceRecords} evidence record${run.totalEvidenceRecords === 1 ? '' : 's'} ready from the latest completed run.${setAside ? ` The review set aside ${recordCountText(setAside.count)}.` : ''}`
               : run.failureReason || 'This flow run did not complete successfully.'}
           </Typography>
         </Box>
@@ -356,6 +386,59 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           </Button>
         </Stack>
       </Stack>
+
+      {setAside && setAsidePlacementValue && (
+        <Box
+          component="section"
+          aria-label="Records set aside by the review"
+          sx={{
+            mt: 1.5,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 1,
+            p: 1.25,
+            borderRadius: '6px',
+            border: `1px solid ${alpha(setAsideTone, 0.4)}`,
+            backgroundColor: alpha(setAsideTone, 0.08),
+          }}
+        >
+          <InfoOutlinedIcon aria-hidden sx={{ color: setAsideTone, fontSize: '1.1rem', mt: '2px' }} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2" sx={{ color: theme.palette.text.primary, fontWeight: setAsideLeftOut ? 600 : 500 }}>
+              {setAsideFinishedLabel(setAside)}
+            </Typography>
+            <Typography variant="caption" sx={{ color: theme.palette.text.secondary, display: 'block' }}>
+              {setAsideNoticeDetail(setAsidePlacementValue, setAside.count)}
+            </Typography>
+          </Box>
+          {run.documentId && (
+            <Button
+              size="small"
+              variant={setAsideLeftOut ? 'outlined' : 'text'}
+              color={setAsideLeftOut ? 'warning' : 'primary'}
+              aria-label={setAside.count === 1 ? 'View set-aside record' : 'View set-aside records'}
+              onClick={() => setSetAsideViewerOpen(true)}
+              sx={{ textTransform: 'none', fontWeight: 600, flexShrink: 0 }}
+            >
+              View
+            </Button>
+          )}
+        </Box>
+      )}
+
+      {setAside && run.documentId && (
+        <SetAsideRecordsDialog
+          open={setAsideViewerOpen}
+          onClose={() => setSetAsideViewerOpen(false)}
+          flowName={run.flowName}
+          papers={[{
+            documentId: run.documentId,
+            flowRunId: run.flowRunId,
+            title: null,
+            summary: setAside,
+          }]}
+        />
+      )}
 
       {!reviewReady && run.status === 'completed' && (
         <Alert

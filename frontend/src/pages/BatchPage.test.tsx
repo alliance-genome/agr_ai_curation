@@ -1,8 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import BatchPage, { mapBatchDocument, requireBatchResultFiles } from './BatchPage'
+import BatchPage, { mapBatchDocument, readBatchSetAside, requireBatchResultFiles } from './BatchPage'
 import { DEFAULT_FLOW_LIST_PAGE_SIZE } from '@/services/agentStudioService'
 import { submitFeedback } from '@/services/feedbackService'
 
@@ -19,7 +19,13 @@ vi.mock('@/features/curation/navigation/openCurationWorkspace', async () => {
 })
 
 vi.mock('@/components/AuditPanel', () => ({
-  default: () => <div data-testid="audit-panel" />,
+  default: ({ initialEvents }: { initialEvents: Array<{ id: string; type: string; details: { message?: string } }> }) => (
+    <div data-testid="audit-panel">
+      {initialEvents
+        .filter((event) => event.type === 'DOMAIN_WARNING')
+        .map((event) => <div key={event.id} data-testid="audit-warning">{event.details.message}</div>)}
+    </div>
+  ),
 }))
 
 vi.mock('@/services/feedbackService', () => ({
@@ -636,6 +642,165 @@ describe('BatchPage', () => {
         feedback_text: 'Batch document trace feedback',
         trace_ids: ['trace-batch-doc-1'],
       })
+    })
+  })
+  describe('records set aside by the review (ALL-1561)', () => {
+    const setAside = (count: number, leftOut: number, included: number) => ({
+      count,
+      results: [{ extraction_result_id: 'result-1', node_id: 'extract', episode_id: 'ep-1', count }],
+      outputs: [{
+        type: 'FILE_READY', formatter_node_id: 'tsv-out', file_id: 'file-1', filename: 'reagents.tsv',
+        included, left_out: leftOut,
+      }],
+      left_out_of_outputs: leftOut,
+      included_in_outputs: included,
+    })
+    const resultFile = (id: string) => ({ file_id: id, filename: `${id}.tsv`, download_url: `/api/files/${id}/download` })
+    const viewerResponse = (documentId: string, label: string) => ({
+      flow_run_id: 'batch-set-aside',
+      document_id: documentId,
+      set_aside_count: 1,
+      results: [{
+        extraction_result_id: `result-${documentId}`, node_id: 'extract', step: 1, agent_name: 'Reagent extractor',
+        review_fields_available: true,
+        records: [{
+          extraction_result_id: `result-${documentId}`, label, review_status: 'set aside',
+          review_reason: 'Named only in the acknowledgements.',
+          fields: [{ field_ref: 'object.pack.Reagent.name', label: 'Name', value: label }],
+        }],
+      }],
+    })
+
+    function mockSetAsideBatch() {
+      const batch = {
+        id: 'batch-set-aside', flow_id: 'flow-1', flow_name: 'Reagent table', status: 'completed',
+        total_documents: 3, completed_documents: 3, failed_documents: 0,
+        review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
+        created_at: '2026-11-19T00:00:00Z',
+      }
+      mockFetch.mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.startsWith('/api/flows?')) {
+          return Promise.resolve(jsonResponse({ flows: [], total: 0, page: 1, page_size: DEFAULT_FLOW_LIST_PAGE_SIZE }))
+        }
+        if (url === '/api/batches' || url === '/api/batches?status=active') {
+          return Promise.resolve(jsonResponse({ batches: [batch] }))
+        }
+        if (url === '/api/batches/batch-set-aside') {
+          return Promise.resolve(jsonResponse({ ...batch, documents: [
+            {
+              id: 'bd-1', document_id: 'doc-1', document_title: 'Alpha paper', position: 0, status: 'completed',
+              result_files: [resultFile('alpha')], review_details: { set_aside: setAside(1, 1, 0) },
+            },
+            {
+              id: 'bd-2', document_id: 'doc-2', document_title: 'Beta paper', position: 1, status: 'completed',
+              result_files: [resultFile('beta')], review_details: { set_aside: setAside(2, 0, 2) },
+            },
+            {
+              id: 'bd-3', document_id: 'doc-3', document_title: 'Gamma paper', position: 2, status: 'completed',
+              result_files: [resultFile('gamma')], review_details: null,
+            },
+          ] }))
+        }
+        if (url.startsWith('/api/curation-workspace/flow-runs/batch-set-aside/set-aside-records?document_id=doc-1')) {
+          return Promise.resolve(jsonResponse(viewerResponse('doc-1', 'anti-plim')))
+        }
+        if (url.startsWith('/api/curation-workspace/flow-runs/batch-set-aside/set-aside-records?document_id=doc-2')) {
+          return Promise.resolve(jsonResponse(viewerResponse('doc-2', 'UAS-frzw')))
+        }
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+      })
+    }
+
+    it('keeps set-aside papers finished and labels records left out, included or absent', async () => {
+      mockSetAsideBatch()
+      renderPage()
+      fireEvent.click(await screen.findByText('Reagent table'))
+      await screen.findByText('Batch Complete')
+
+      expect(screen.getByText('3 successful')).toBeInTheDocument()
+      expect(screen.getByText('Finished, 1 record set aside, not in the file')).toBeInTheDocument()
+      const leftOutButton = screen.getByRole('button', { name: 'View set-aside record for Alpha paper' })
+      expect(leftOutButton).toHaveTextContent('View set-aside record')
+      expect(screen.getByText('Finished, 2 records set aside by review')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'View set-aside records for Beta paper' })).toHaveTextContent(/^View$/)
+      expect(screen.queryByRole('button', { name: /for Gamma paper/ })).not.toBeInTheDocument()
+      expect(screen.getByText('gamma.tsv')).toBeInTheDocument()
+      // Finished papers keep their downloads and are not reported as awaiting review.
+      expect(screen.getByRole('button', { name: 'Download alpha.tsv' })).toBeInTheDocument()
+      expect(screen.queryByText(/Awaiting review/)).not.toBeInTheDocument()
+
+      fireEvent.click(leftOutButton)
+      const dialog = await screen.findByRole('dialog', { name: '1 record set aside' })
+      expect(await within(dialog).findByText('anti-plim', { selector: 'span' })).toBeInTheDocument()
+      expect(within(dialog).getByText('Not in the file')).toBeInTheDocument()
+    })
+
+    it('shows a header count and one combined viewer for all set-aside papers', async () => {
+      mockSetAsideBatch()
+      renderPage()
+      fireEvent.click(await screen.findByText('Reagent table'))
+      await screen.findByText('Batch Complete')
+
+      expect(screen.getByText('3 records set aside in 2 papers.')).toBeInTheDocument()
+      expect(screen.getByText(/Some are not in the files\./)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: '3 records set aside' }))
+
+      const dialog = await screen.findByRole('dialog', { name: '3 records set aside in 2 papers' })
+      expect(within(dialog).getByRole('button', { name: /Alpha paper/ })).toHaveAttribute('aria-expanded', 'true')
+      expect(within(dialog).getByRole('button', { name: /Beta paper/ })).toHaveAttribute('aria-expanded', 'false')
+      expect(await within(dialog).findByText('anti-plim', { selector: 'span' })).toBeInTheDocument()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    })
+
+    it('writes an audit line when a live paper finishes with records set aside', async () => {
+      mockFetch.mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+        if (url.startsWith('/api/flows?')) {
+          return Promise.resolve(jsonResponse({ flows: [], total: 0, page: 1, page_size: DEFAULT_FLOW_LIST_PAGE_SIZE }))
+        }
+        const batch = {
+          id: 'batch-live', flow_id: 'flow-1', flow_name: 'Reagent table', status: 'running', total_documents: 1,
+          completed_documents: 0, failed_documents: 0, review_pending_documents: 0, review_exhausted_documents: 0,
+          interrupted_documents: 0, created_at: '2026-11-19T00:00:00Z',
+        }
+        if (url === '/api/batches') return Promise.resolve(jsonResponse({ batches: [] }))
+        if (url === '/api/batches?status=active') return Promise.resolve(jsonResponse({ batches: [batch] }))
+        if (url === '/api/batches/batch-live') {
+          return Promise.resolve(jsonResponse({ ...batch, documents: [{
+            id: 'bd-1', document_id: 'doc-1', document_title: 'Alpha paper', position: 0, status: 'pending', result_files: [],
+          }] }))
+        }
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+      })
+      renderPage()
+      await waitFor(() => expect(MockEventSource.instances).toHaveLength(1))
+      const stream = MockEventSource.instances[0]
+      stream.emit({
+        type: 'DOCUMENT_STATUS', batch_id: 'batch-live', document_id: 'doc-1', batch_document_id: 'bd-1',
+        position: 0, status: 'completed', result_files: [resultFile('alpha')],
+        review_details: { set_aside: setAside(1, 1, 0) },
+      })
+      stream.emit({
+        type: 'BATCH_COMPLETE', status: 'completed', completed_documents: 1, failed_documents: 0,
+        review_pending_documents: 0, review_exhausted_documents: 0, interrupted_documents: 0,
+        partial_documents: 0, total_documents: 1,
+      })
+
+      expect(await screen.findByTestId('audit-warning'))
+        .toHaveTextContent('Document 1: 1 record set aside by review, not in the file')
+      expect(await screen.findByText('Finished, 1 record set aside, not in the file')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '1 record set aside' })).toBeInTheDocument()
+      expect(screen.queryByText(/set aside in \d+ papers/)).not.toBeInTheDocument()
+    })
+
+    it('reads a set-aside summary only for completed papers and rejects a corrupted one', () => {
+      expect(readBatchSetAside('review_pending', { episode_id: 'retained' }, 'doc-1')).toBeNull()
+      expect(readBatchSetAside('completed', null, 'doc-1')).toBeNull()
+      expect(readBatchSetAside('completed', { set_aside: setAside(1, 1, 0) }, 'doc-1')).toEqual(setAside(1, 1, 0))
+      expect(() => readBatchSetAside('completed', { set_aside: { count: 'one' } }, 'doc-1'))
+        .toThrow('Batch document doc-1 has a corrupted set-aside summary')
     })
   })
 })
