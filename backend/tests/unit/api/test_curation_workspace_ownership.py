@@ -42,6 +42,8 @@ EXEMPT_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/api/curation-workspace/sessions/next"): "queue query always filters by the caller's sessions",
     ("GET", "/api/curation-workspace/flow-runs"): "flow-run summaries are built from the caller's sessions only",
     ("GET", "/api/curation-workspace/flow-runs/{run_id}/sessions"): "flow-run members are the caller's sessions only",
+    ("GET", "/api/curation-workspace/flow-runs/{flow_run_id}/set-aside-records"):
+        "reads only the caller's own saved flow results (owner on every row, then each result's history scope)",
     ("GET", "/api/curation-workspace/views"): "saved views are filtered by their creator",
     ("POST", "/api/curation-workspace/views"): "creates a saved view owned by the caller",
     ("DELETE", "/api/curation-workspace/views/{view_id}"): "saved-view deletion is filtered by its creator",
@@ -179,7 +181,7 @@ def test_exempt_list_names_only_existing_routes():
 
 def test_route_inventory_is_complete():
     # A new route must be classified above; this count makes the change visible.
-    assert sum(len(route.methods) for route in _routes()) == 49
+    assert sum(len(route.methods) for route in _routes()) == 50
 
 
 @pytest.fixture

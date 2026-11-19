@@ -1626,3 +1626,42 @@ async def test_a_restore_stopped_by_a_system_error_reads_as_plain_words(monkeypa
             request_id=uuid4(), target_id=uuid4(), expected_version=1, reason='Review it again'),
             user={'sub': 'user-1'})
     assert (caught.value.status_code, caught.value.detail) == (status, detail)
+
+
+@pytest.mark.asyncio
+async def test_set_aside_records_are_read_for_the_caller_only(monkeypatch):
+    """ALL-1561: the read-only viewer lists the caller's own set-aside records of one run and paper."""
+    from src.schemas.set_aside_records import FlowRunSetAsideRecordsResponse
+
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
+    document_id = uuid4()
+    expected = FlowRunSetAsideRecordsResponse(flow_run_id="flow-alpha", document_id=str(document_id),
+                                              set_aside_count=0, results=[])
+    captured = {}
+
+    def _list(**kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(module, "list_set_aside_records", _list)
+    response = await module.get_flow_run_set_aside_records(
+        flow_run_id="flow-alpha", document_id=document_id, user={"sub": "user-1"})
+    assert response is expected
+    assert captured == {"user_id": "user-1", "flow_run_id": "flow-alpha", "document_id": str(document_id)}
+
+
+@pytest.mark.asyncio
+async def test_set_aside_records_of_a_run_without_the_callers_results_are_not_found(monkeypatch):
+    from fastapi import HTTPException
+    from src.lib.flows.set_aside_records import FlowRunResultsNotFound
+
+    monkeypatch.setattr(module, "provision_user_async", AsyncMock(return_value=None))
+
+    def _list(**kwargs):
+        raise FlowRunResultsNotFound("none")
+
+    monkeypatch.setattr(module, "list_set_aside_records", _list)
+    with pytest.raises(HTTPException) as raised:
+        await module.get_flow_run_set_aside_records(
+            flow_run_id="someone-elses-run", document_id=uuid4(), user={"sub": "user-1"})
+    assert raised.value.status_code == 404
