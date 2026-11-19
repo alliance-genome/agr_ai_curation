@@ -60,8 +60,16 @@ def validation_view(record: Any, *, revision: int | None, user_id: str) -> dict[
 
 
 def accepted_view(record: Any, *, user_id: str) -> dict[str, Any]:
-    """Current explicitly selected projection; original/checkpoint views stay exact."""
-    from src.lib.validation_history.projection import latest_publication_reference, read_published_projection
+    """Current explicitly selected projection; original/checkpoint views stay exact.
+
+    Each object a finished flow run's review set aside (ALL-1561, the export
+    rule: ``read_current_projection_with_reasons``) carries
+    ``metadata.review_status = "set aside"``, so every listing of this view
+    marks it.
+    """
+    from src.lib.validation_history.projection import (
+        SET_ASIDE_REVIEW_STATUS, latest_publication_reference, read_current_projection_with_reasons,
+    )
     from src.lib.validation_history.store import HistoryScope, HistoryConflict
     payload = _attr(record, "payload_json") or {}
     history = (payload.get("metadata") or {}).get("validation_history")
@@ -72,9 +80,12 @@ def accepted_view(record: Any, *, user_id: str) -> dict[str, Any]:
     if reference is None:
         raise InspectionViewUnavailable("Result is awaiting explicit review and publication.")
     try:
-        envelope, manifest = read_published_projection(scope, reference, current=True)
+        envelope, manifest, _, _, set_aside = read_current_projection_with_reasons(scope, reference, reasons=False)
     except HistoryConflict as exc:
         raise InspectionViewUnavailable("The selected projection requires refresh after review changes.") from exc
+    for obj in envelope.extracted_objects:
+        if obj.metadata["validation_history"]["target_id"] in set_aside:
+            obj.metadata["review_status"] = SET_ASIDE_REVIEW_STATUS
     result = dict(record) if isinstance(record, Mapping) else record.model_dump(mode="json")
     result.update(payload_json=envelope.model_dump(mode="json"), inspection_view="accepted",
                   selection_manifest=manifest, inspection_revision=None)

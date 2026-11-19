@@ -136,7 +136,7 @@ from src.lib.openai_agents.export_details_tool import make_export_details_tool
 from src.lib.export_accounting import EXPORT_ACCOUNTING_GUIDANCE
 from src.lib.openai_agents.extraction_manifest import (
     build_extraction_manifest_page, bind_extraction_manifest_reference,
-    render_extraction_manifest_page, ExtractionManifestError, mark_set_aside_objects,
+    render_extraction_manifest_page, ExtractionManifestError,
 )
 from src.lib.openai_agents.langfuse_client import clear_pending_configs
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
@@ -2739,11 +2739,6 @@ def get_all_agent_tools(
                                 f"The review set aside {set_aside_count} {noun} it deferred or did not "
                                 "accept. They are listed here but are not accepted; a curator decides them.\n"
                             )
-                            # Each listed set-aside record carries review=set aside.
-                            inspection_manifest = mark_set_aside_objects(
-                                inspection_manifest, accepted["payload_json"],
-                                set(flow_review.set_aside_record_target_ids),
-                            )
                 result = manifest_header + render_extraction_manifest_page(bind_extraction_manifest_reference(
                     inspection_manifest, str(record.extraction_result_id), result_view=manifest_view,
                 ))
@@ -4843,6 +4838,8 @@ async def execute_flow(
                 "output": inspection_response,
                 "output_preview": _truncate_tool_output(inspection_response),
                 "output_length": len(inspection_response),
+                "flow_run_id": flow_run_id,
+                "document_id": document_id,
                 "inspection_only": True,
                 "inspected_result_refs": inspected_result_refs,
             },
@@ -5071,6 +5068,11 @@ async def execute_flow(
             *pending_output_events,
         ]
         for output_event in produced_output_events:
+            if output_event.get("type") == "CHAT_OUTPUT_READY":
+                # Like FILE_READY, a chat output names its run and document, so a
+                # text-only output can open the set-aside records view (ALL-1561).
+                output_event["details"] = {**dict(output_event.get("details") or {}),
+                                           "flow_run_id": flow_run_id, "document_id": document_id}
             yield output_event
 
     output_attachment_node_ids = set(output_attachment_by_node_id)

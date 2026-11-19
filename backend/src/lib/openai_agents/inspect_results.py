@@ -1521,6 +1521,9 @@ def _object_row(
     }
     row["validation"] = _object_validation_counts(findings)
     row["evidence_count"] = len(obj.evidence_record_ids)
+    # Marked by the accepted view when a finished flow review set it aside (ALL-1561).
+    if "review_status" in obj.metadata:
+        row["review_status"] = obj.metadata["review_status"]
     return row
 
 
