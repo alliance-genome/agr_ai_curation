@@ -97,19 +97,28 @@ _ROUTINE_TRANSACTION_NAMES = {
     "/weaviate/documents/{document_id}/status",
 }
 _SUCCESSFUL_TRANSACTION_STATUSES = {"ok"}
-_KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURE = (
-    ("httpx._client", "aclose"),
-    ("httpx._transports.default", "aclose"),
-    ("httpcore._async.connection_pool", "aclose"),
-    ("httpcore._async.connection_pool", "_close_connections"),
-    ("httpcore._async.connection", "aclose"),
-    ("httpcore._async.http11", "aclose"),
-    ("httpcore._backends.anyio", "aclose"),
-    ("anyio.streams.tls", "aclose"),
-    ("anyio._backends._asyncio", "aclose"),
-    ("asyncio.selector_events", "close"),
-    ("asyncio.base_events", "call_soon"),
-    ("asyncio.base_events", "_check_closed"),
+def _httpx_closed_loop_frame_signature(httpx_module: str, httpcore_module: str) -> tuple:
+    return (
+        (f"{httpx_module}._client", "aclose"),
+        (f"{httpx_module}._transports.default", "aclose"),
+        (f"{httpcore_module}._async.connection_pool", "aclose"),
+        (f"{httpcore_module}._async.connection_pool", "_close_connections"),
+        (f"{httpcore_module}._async.connection", "aclose"),
+        (f"{httpcore_module}._async.http11", "aclose"),
+        (f"{httpcore_module}._backends.anyio", "aclose"),
+        ("anyio.streams.tls", "aclose"),
+        ("anyio._backends._asyncio", "aclose"),
+        ("asyncio.selector_events", "close"),
+        ("asyncio.base_events", "call_soon"),
+        ("asyncio.base_events", "_check_closed"),
+    )
+
+
+# Our own HTTP clients use httpx; the OpenAI client (openai 3) uses httpx2, whose
+# close path has the same shape under its own module names.
+_KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURES = (
+    _httpx_closed_loop_frame_signature("httpx", "httpcore"),
+    _httpx_closed_loop_frame_signature("httpx2", "httpcore2"),
 )
 _RUNTIME_IDENTIFIER_CONTEXT_KEYS = {
     "artifact_id",
@@ -1974,7 +1983,7 @@ def _is_known_httpcore_closed_loop_cleanup(event: Mapping[str, Any]) -> bool:
         if isinstance(frame, Mapping)
     )
     return (
-        frame_signatures == _KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURE
+        frame_signatures in _KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURES
         and not any(
             frame.get("in_app") is True
             for frame in frames

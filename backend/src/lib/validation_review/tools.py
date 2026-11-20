@@ -4,7 +4,7 @@ import asyncio
 import logging
 from time import perf_counter
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 from src.lib.agent_studio.profile_conformance import ProfileConformanceError, ProfileIdentityError
 from src.lib.openai_agents.config import get_generic_profile_max_issues

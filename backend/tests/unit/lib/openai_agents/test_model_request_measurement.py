@@ -155,7 +155,7 @@ def _usage(input_tokens=1200, cached=300, output_tokens=80, reasoning=20) -> Usa
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,
-        input_tokens_details=InputTokensDetails(cached_tokens=cached),
+        input_tokens_details=InputTokensDetails(cached_tokens=cached, cache_write_tokens=0),
         output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning),
     )
 
@@ -216,7 +216,7 @@ class _RecordingMixin:
             output=model_response.output,
             usage=ResponseUsage(
                 input_tokens=900,
-                input_tokens_details=ResponseInputTokensDetails(cached_tokens=100),
+                input_tokens_details=ResponseInputTokensDetails(cached_tokens=100, cache_write_tokens=0),
                 output_tokens=40,
                 output_tokens_details=ResponseOutputTokensDetails(reasoning_tokens=5),
                 total_tokens=940,
@@ -747,9 +747,9 @@ def test_accumulated_small_tool_results_counted_and_warned(monkeypatch, publishe
 
 def test_sdk_retry_attempts_are_each_measured(published):
     from openai import APIConnectionError
-    import httpx
+    import httpx2
 
-    failure = APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    failure = APIConnectionError(request=httpx2.Request("POST", "https://api.openai.com/v1/responses"))
     model = FakeResponsesHTTPModel([failure, _final()])
     agent = Agent(
         name="validator",
@@ -771,7 +771,7 @@ def test_sdk_retry_attempts_are_each_measured(published):
 
 
 def test_benchmark_retry_has_distinct_joinable_request_ids(published, monkeypatch):
-    import httpx
+    import httpx2
     from openai import APIConnectionError
     from src.lib.openai_agents.benchmark_routing import (
         BenchmarkTelemetryModel, set_benchmark_invocation_route, reset_benchmark_invocation_route,
@@ -781,7 +781,7 @@ def test_benchmark_retry_has_distinct_joinable_request_ids(published, monkeypatc
     monkeypatch.setattr(
         "src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event", lambda record: None,
     )
-    failure = APIConnectionError(request=httpx.Request("POST", "https://example.invalid/responses"))
+    failure = APIConnectionError(request=httpx2.Request("POST", "https://example.invalid/responses"))
     model = BenchmarkTelemetryModel(FakeResponsesHTTPModel([failure, _final()]))
     model._agr_provider_id = "openai"
     provider = SimpleNamespace(get_model=lambda _name: model, _agr_provider_id="openai")
@@ -1482,7 +1482,7 @@ async def test_standalone_compaction_reserves_benchmark_budget_and_records_exact
         calls.append(kwargs)
         return SimpleNamespace(id="cmp-1", model="gpt-6-astra",
             usage=ResponseUsage(input_tokens=123, output_tokens=17, total_tokens=140,
-                input_tokens_details=ResponseInputTokensDetails(cached_tokens=5),
+                input_tokens_details=ResponseInputTokensDetails(cached_tokens=5, cache_write_tokens=0),
                 output_tokens_details=ResponseOutputTokensDetails(reasoning_tokens=0)))
     with pytest.raises(BenchmarkInvocationBudgetExceeded), capture_provider_usage(max_records=1) as records, observe_provider_invocations(Observer()):
         await call_measured_direct_request(surface="context_compaction", provider="openai", api="responses.compact",
@@ -1514,7 +1514,7 @@ async def test_standalone_compaction_under_review_records_usage_or_uncertainty(m
             raise RuntimeError("transport uncertain")
         return SimpleNamespace(id="compact-1", model="gpt-test", usage=ResponseUsage(
             input_tokens=300000, output_tokens=10000, total_tokens=310000,
-            input_tokens_details=ResponseInputTokensDetails(cached_tokens=0),
+            input_tokens_details=ResponseInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
             output_tokens_details=ResponseOutputTokensDetails(reasoning_tokens=0)))
     budget = review.ExecutionBudget(HistoryScope("owner", "11111111-1111-1111-1111-111111111111", "session"), "episode", "initial_tokens", False)
     with review.budget_scope(budget):
@@ -1560,7 +1560,7 @@ async def test_review_admission_rejection_never_registers_runtime_cost(monkeypat
 
 @pytest.mark.asyncio
 async def test_review_compaction_on_websocket_client_never_hides_http_retries(monkeypatch, published):
-    import httpx
+    import httpx2
     from openai import InternalServerError
     from src.lib.validation_review import provider as review
     from src.lib.validation_history.store import HistoryScope
@@ -1569,11 +1569,11 @@ async def test_review_compaction_on_websocket_client_never_hides_http_retries(mo
         calls.append(request)
         # A retry would succeed and incorrectly erase the first uncertain call.
         if len(calls) == 1:
-            return httpx.Response(500, json={"error": {"message": "retryable", "type": "server_error"}})
-        return httpx.Response(200, json={"id": "compact-retry", "object": "response.compaction", "created_at": 0,
+            return httpx2.Response(500, json={"error": {"message": "retryable", "type": "server_error"}})
+        return httpx2.Response(200, json={"id": "compact-retry", "object": "response.compaction", "created_at": 0,
             "output": [], "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
                 "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}})
-    client = AsyncOpenAI(api_key="test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
+    client = AsyncOpenAI(api_key="test", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handle)))
     assert client.max_retries > 0
     model = OpenAIResponsesWSModel(model="gpt-test", openai_client=client)
     async def prepare(request, items, settings):

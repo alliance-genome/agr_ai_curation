@@ -17,7 +17,7 @@ pyjwt[crypto]>=2.15.1  # JWT token handling and JWKS validation
 # AI and Chat dependencies
 openai
 tiktoken  # Token preflight checks for embedding limits
-openai-agents==0.17.4  # Exact, upgrade-gated pin. Bumps require dev_release_smoke.py PASS evidence because extractor/flow finalization depends on SDK behavior.
+openai-agents==0.25.0  # Exact, upgrade-gated pin. Bumps require dev_release_smoke.py PASS evidence because extractor/flow finalization depends on SDK behavior.
 aiohttp>=3.13.4  # Async HTTP client for PDFX service
 langfuse>=4.0.0,<5.0.0  # Observability for LLM applications (v4 API: start_as_current_observation + propagate_attributes)
 openinference-instrumentation-openai-agents==1.6.1  # Export OpenAI Agents SDK spans to Langfuse via OpenTelemetry.
@@ -28,7 +28,7 @@ sqlalchemy>=2.0
 psycopg2-binary
 alembic
 agr-abc-document-parsers>=1.5.0
-agr-curation-api-client==0.15.1  # Rank allele hints before bounded discovery; retain explicit coverage.
+agr-curation-api-client==0.16.0  # opensearch-py client (urllib3 2 compatible); rank allele hints before bounded discovery.
 
 # Ontology processing
 pronto  # OBO file parsing for biological ontologies

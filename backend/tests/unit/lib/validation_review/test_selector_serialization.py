@@ -9,7 +9,8 @@ from pydantic import ValidationError
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry, ValidatorRoute
-from src.lib.validation_review.validator_adapter import BINDING, REGISTRY, _serialize_binding
+from src.lib.validation_review.saved_matches import BINDING, serialize_binding
+from src.lib.validation_review.validator_adapter import REGISTRY
 from src.schemas.domain_pack_metadata import DomainPackInputSelector
 
 
@@ -25,7 +26,7 @@ def package_registry(name):
 def test_real_package_registry_roundtrip_preserves_nested_selector_keys(name):
     registry = package_registry(name)
     dumped = REGISTRY.dump_python(registry, mode="json")
-    dumped["bindings"] = [_serialize_binding(binding) for binding in registry.bindings]
+    dumped["bindings"] = [serialize_binding(binding) for binding in registry.bindings]
     restored = REGISTRY.validate_python(dumped)
     assert restored == registry
     contexts = 0
@@ -60,7 +61,7 @@ def test_normal_and_routed_selectors_preserve_explicit_values(source):
     binding = replace(binding, input_fields={"input": selector},
                       routes={"route": ValidatorRoute(binding.validator_agent, {"input": selector})},
                       raw={"scientific_value": None})
-    saved = _serialize_binding(binding)
+    saved = serialize_binding(binding)
     assert BINDING.validate_python(saved) == binding
     for output in (saved["input_fields"]["input"], saved["routes"]["route"]["input_fields"]["input"]):
         assert output == {k: v for k, v in source.items() if k != "output"}

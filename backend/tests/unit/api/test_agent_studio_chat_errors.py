@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import UUID, uuid4
 
-import httpx
+import httpx2
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -120,13 +120,13 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
 
 
 def _make_bad_request_error(message: str):
-    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
-    response = httpx.Response(400, request=request)
+    request = httpx2.Request("POST", "https://api.openai.com/v1/responses")
+    response = httpx2.Response(400, request=request)
     return api_module.openai.BadRequestError(message, response=response, body={"request_id": "req_test_123"})
 
 
 def _make_api_error(message: str):
-    request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    request = httpx2.Request("POST", "https://api.openai.com/v1/responses")
     return api_module.openai.APIError(message, request, body={"request_id": "req_test_456"})
 
 

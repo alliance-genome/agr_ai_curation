@@ -1,5 +1,6 @@
 """Fixed output plans use the existing validated saver without a formatter run."""
 
+from tests.sdk_tool_context_support import tool_context
 import json
 from types import SimpleNamespace
 
@@ -69,7 +70,7 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
     )
     if save_failure:
         # One reported failure fails the branch with its reason; nothing is re-raised.
-        result = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), json.dumps({"query": "Export"})))
+        result = json.loads(await tool.on_invoke_tool(tool_context("export", run_config=None), json.dumps({"query": "Export"})))
         assert result["status"] == "failed"
         assert result["code"] == "save_failed"
         assert "Storage unavailable" in executor._flow_formatter_failure_reason({"output": json.dumps(result)})
@@ -77,7 +78,7 @@ async def test_direct_export_reuses_validation_and_saver(monkeypatch, profile_st
         assert len(reports) == 1
         assert reports[0][0].category == "output_delivery_failure"
     else:
-        result = json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), json.dumps({"query": "Export"})))
+        result = json.loads(await tool.on_invoke_tool(tool_context("export", run_config=None), json.dumps({"query": "Export"})))
         assert result["status"] == "ok"
         assert result["download_url"] == "/api/files/saved/download"
     assert len(saved) == 1
@@ -115,8 +116,8 @@ async def test_explicit_mode_controls_prompt_bypass(monkeypatch, profile_step, m
         flow_name="Stock", flow_run_id="run", document_id="doc", node_data=data,
     )
     if expected == "ai":
-        assert await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), '{"query":"Export"}') == "AI instructions executed"
+        assert await tool.on_invoke_tool(tool_context("export", run_config=None), '{"query":"Export"}') == "AI instructions executed"
     else:
         with pytest.raises(ValueError, match=expected):
-            await tool.on_invoke_tool(SimpleNamespace(tool_name="export", run_config=None), '{"query":"Export"}')
+            await tool.on_invoke_tool(tool_context("export", run_config=None), '{"query":"Export"}')
     assert data["custom_instructions"] == "Combine stocks by supplier"

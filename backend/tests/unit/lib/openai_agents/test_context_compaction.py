@@ -182,7 +182,7 @@ def test_compaction_progress_does_not_expose_encrypted_content():
 @pytest.mark.parametrize("under_review", [False, True])
 async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_sixty_four_turns(history, monkeypatch, transport, streamed, under_review):
     """Use the real SDK serializers and transport loops, with local responses only."""
-    import httpx
+    import httpx2
     from src.lib.openai_agents import model_request_measurement as measurement
     from src.lib.openai_agents.config import get_max_turns
     measurement.install_model_request_measurement()
@@ -229,13 +229,13 @@ async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_six
     def http_reply(request):
         wire = json.loads(request.content)
         if request.url.path.endswith("/input_tokens"):
-            return httpx.Response(200, json={"input_tokens": 1000})
+            return httpx2.Response(200, json={"input_tokens": 1000})
         payload = response(wire)
         if wire.get("stream"):
             event = {"type": "response.completed", "sequence_number": 1, "response": payload}
-            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+            return httpx2.Response(200, headers={"content-type": "text/event-stream"},
                                   content="data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n")
-        return httpx.Response(200, json=payload)
+        return httpx2.Response(200, json=payload)
 
     class Socket:
         state = SimpleNamespace(name="OPEN")
@@ -246,7 +246,7 @@ async def test_real_sdk_wire_native_policy_repeated_compaction_and_more_than_six
         async def close(self, **kwargs):
             pass
 
-    async with AsyncOpenAI(api_key="fixture", max_retries=0, http_client=httpx.AsyncClient(transport=httpx.MockTransport(http_reply))) as client:
+    async with AsyncOpenAI(api_key="fixture", max_retries=0, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(http_reply))) as client:
         kind = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
         model = kind(model="gpt-6-astra", openai_client=client)
         if transport == "websocket":
@@ -319,7 +319,7 @@ async def test_archive_write_failure_cannot_publish_compaction_or_execute_tools(
 @pytest.mark.parametrize("ingress_source", ["tool", "initial"])
 async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_repeating_write(monkeypatch, tmp_path, transport, ingress_source):
     import ast
-    import httpx
+    import httpx2
     from agents import SQLiteSession
     from src.lib.openai_agents import model_request_measurement as measurement
     measurement.install_model_request_measurement()
@@ -327,6 +327,8 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
     monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
         "context_window_tokens": 16000, "max_input_tokens": 15000, "max_output_tokens": 1000}}))
     monkeypatch.setenv("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", "10000")
+    # Synthetic 15000-token capacity: keep the former exact-limit fit.
+    monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "0")
     monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "owner")
     monkeypatch.setattr("src.lib.context.get_current_trace_id", lambda: "run")
     monkeypatch.setattr("src.lib.context.get_current_session_id", lambda: None)
@@ -372,14 +374,14 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
     def http_reply(request):
         wire = json.loads(request.content)
         if request.url.path.endswith("/input_tokens"):
-            return httpx.Response(200, json={"input_tokens": len(json.dumps(wire["input"], ensure_ascii=False))})
+            return httpx2.Response(200, json={"input_tokens": len(json.dumps(wire["input"], ensure_ascii=False))})
         if request.url.path.endswith("/compact"):
             compacted.append(wire)
-            return httpx.Response(200, json={"id": "cmp", "object": "response.compaction", "created_at": 0,
+            return httpx2.Response(200, json={"id": "cmp", "object": "response.compaction", "created_at": 0,
                 "output": [{"type": "compaction", "id": "compact", "encrypted_content": "standalone"},
                            {"role": "assistant", "type": "message", "id": "retained", "status": "completed", "content": [{"type": "output_text", "text": "Canonical retained message", "annotations": []}]}],
                 "usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}})
-        return httpx.Response(200, json=response(wire))
+        return httpx2.Response(200, json=response(wire))
 
     class Socket:
         state = SimpleNamespace(name="OPEN")
@@ -390,7 +392,7 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
         async def close(self, **kwargs):
             pass
 
-    async with AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(http_reply))) as client:
+    async with AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(http_reply))) as client:
         cls = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
         model = cls(model="gpt-6-astra", openai_client=client)
         if transport == "websocket":
@@ -442,7 +444,7 @@ async def test_token_count_failure_is_recorded_and_never_dispatches_generation(h
 @pytest.mark.parametrize("transport", ["http", "websocket"])
 async def test_reviewer_continuation_reuses_real_sdk_compaction_history_and_accounting(history, monkeypatch, transport):
     """Two ordinary SDK phases, two compactions, one exact history/budget; no paid IO."""
-    import httpx
+    import httpx2
     from unittest.mock import MagicMock, Mock
     from src.lib.config.tool_loading_loader import ToolLoadingPolicy
     from src.lib.openai_agents import runner, model_request_measurement as measurement
@@ -530,7 +532,7 @@ async def test_reviewer_continuation_reuses_real_sdk_compaction_history_and_acco
                           "input_tokens_details": {"cached_tokens": 0}, "output_tokens_details": {"reasoning_tokens": 0}}}
 
     def http_reply(request):
-        return httpx.Response(200, json=response(json.loads(request.content)))
+        return httpx2.Response(200, json=response(json.loads(request.content)))
 
     class Socket:
         state = SimpleNamespace(name="OPEN")
@@ -543,10 +545,10 @@ async def test_reviewer_continuation_reuses_real_sdk_compaction_history_and_acco
 
     # Owned HTTP clients still use the real SDK serializer and ownership path,
     # but every newly created transport is locally intercepted.
-    monkeypatch.setattr(runner, "DefaultAsyncHttpxClient", lambda **kw: httpx.AsyncClient(
-        transport=httpx.MockTransport(http_reply), **kw))
+    monkeypatch.setattr(runner, "DefaultAsyncHttpx2Client", lambda **kw: httpx2.AsyncClient(
+        transport=httpx2.MockTransport(http_reply), **kw))
     async with AsyncOpenAI(api_key="fixture", max_retries=0,
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(http_reply))) as client:
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(http_reply))) as client:
         kind = OpenAIResponsesModel if transport == "http" else OpenAIResponsesWSModel
         model = kind(model="gpt-6-astra", openai_client=client)
         if transport == "websocket":

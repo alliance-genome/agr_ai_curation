@@ -1,4 +1,5 @@
 """Local ordinals retain exact source meaning across restart, paging and scopes."""
+from tests.sdk_tool_context_support import tool_context
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -514,7 +515,6 @@ async def test_record_evidence_returns_malformed_arguments_to_the_model_without_
     from agr_ai_curation_alliance.tools import documents
     from src.lib.observability.tool_results import classify_tool_result
     from src.lib.openai_agents.tools import record_evidence
-    from src.lib.packages.package_runner_entrypoint import _build_tool_context
     value = binding(store, scope)
     monkeypatch.setattr(refs, "get_current_user_id", lambda: "alice")
     monkeypatch.setattr(refs, "get_current_trace_id", lambda: "run-a")
@@ -525,7 +525,7 @@ async def test_record_evidence_returns_malformed_arguments_to_the_model_without_
     monkeypatch.setattr(refs, "get_chunk_by_index", selection_lookup)
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", canonical_lookup)
     tool = documents.create_record_evidence_tool({"document_id": "doc-a", "user_id": "alice"})
-    output = await tool.on_invoke_tool(_build_tool_context(tool.name, {}), raw_arguments)
+    output = await tool.on_invoke_tool(tool_context(tool.name, raw_arguments), raw_arguments)
     result = json.loads(output)
     assert result["status"] == "invalid_arguments"
     assert result["saved"] is False
@@ -708,10 +708,9 @@ async def test_model_view_of_evidence_list_drops_repeated_document_and_empty_tar
 @pytest.mark.asyncio
 async def test_workspace_failures_keep_their_actual_cause_and_classification():
     from src.lib.openai_agents.tools.evidence_workspace import create_get_recorded_evidence_tool
-    from types import SimpleNamespace
     tool = create_get_recorded_evidence_tool("doc-a", "alice")
     with pytest.raises(RuntimeError, match="workspace"):
-        await tool.on_invoke_tool(SimpleNamespace(tool_name="get_recorded_evidence", tool_call_id="read", run_config=None),
+        await tool.on_invoke_tool(tool_context("get_recorded_evidence", tool_call_id="read", run_config=None),
             json.dumps({"evidence_record_id": "missing"}))
     # Other workspace SDK tools retain their existing recoverable error contract.
     items = [{"type": "function_call", "name": "attach_evidence_to_object", "call_id": "attach", "arguments": "{}"},

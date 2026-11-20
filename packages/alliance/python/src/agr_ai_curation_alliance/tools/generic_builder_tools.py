@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from pydantic import (
     BaseModel,
     ConfigDict,

@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
-import httpx
+import httpx2
 from openai import AsyncOpenAI
 from agents import function_tool
 from agents.models.interface import ModelTracing
@@ -51,7 +51,7 @@ async def test_parallel_request_policy_preserves_explicit_restrictions(
 
     async def respond(request):
         captured.update(json.loads(request.content))
-        return httpx.Response(
+        return httpx2.Response(
             200,
             json={
                 "id": "synthetic-completion",
@@ -81,7 +81,7 @@ async def test_parallel_request_policy_preserves_explicit_restrictions(
     async with AsyncOpenAI(
         api_key="synthetic-test-key",
         base_url="https://provider.invalid/v1",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond)),
         max_retries=0,
     ) as client:
         model = ProviderConfiguredChatCompletionsModel(

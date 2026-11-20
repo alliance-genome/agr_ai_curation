@@ -1,4 +1,5 @@
 """Tests for registry-driven supervisor tool generation."""
+from tests.sdk_tool_context_support import tool_context
 import asyncio
 import importlib
 import json
@@ -131,7 +132,7 @@ async def test_chat_specialist_receives_complete_authoritative_user_request(monk
     )
 
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name="ask_pdf_extraction_specialist", run_config=None),
+        tool_context("ask_pdf_extraction_specialist", run_config=None),
         json.dumps({"query": delegation}),
     )
 
@@ -181,7 +182,7 @@ async def test_automatic_specialist_deadline_cancels_and_returns_unresolved(monk
     )
 
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name, run_config=None),
+        tool_context(tool.name, run_config=None),
         json.dumps({"query": "Assess Cttn"}),
     )
     payload = json.loads(output)
@@ -196,7 +197,7 @@ async def test_automatic_specialist_deadline_cancels_and_returns_unresolved(monk
     assert reports[0][1]["operation"] == "specialist_deadline_exceeded"
 
     replay = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name, run_config=None),
+        tool_context(tool.name, run_config=None),
         json.dumps({"query": "Assess Cttn"}),
     )
     assert run_count == 1
@@ -222,7 +223,7 @@ async def test_structured_callbacks_are_invocation_local_and_not_model_arguments
             tool_description="Validate", specialist_name="Validator", propagate_errors=True,
             inline_chat_persistence=False, validated_result_callback=captured[label].append)
         assert "validated_result_callback" not in tool.params_json_schema["properties"]
-        return await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, run_config=None),
+        return await tool.on_invoke_tool(tool_context(tool.name, run_config=None),
                                          json.dumps({"query": label}))
 
     assert await asyncio.gather(invoke("one"), invoke("two")) == ["human summary", "human summary"]
@@ -262,7 +263,7 @@ async def test_automatic_specialist_deadline_does_not_wait_for_slow_cleanup(monk
 
     started_at = time.monotonic()
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name, run_config=None),
+        tool_context(tool.name, run_config=None),
         json.dumps({"query": "Assess Cttn"}),
     )
     elapsed = time.monotonic() - started_at
@@ -306,7 +307,7 @@ async def test_automatic_specialist_propagates_outer_cancellation(monkeypatch):
 
     invocation = asyncio.create_task(
         tool.on_invoke_tool(
-            SimpleNamespace(tool_name=tool.name, run_config=None),
+            tool_context(tool.name, run_config=None),
             json.dumps({"query": "Assess Cttn"}),
         )
     )
@@ -360,7 +361,7 @@ async def test_deadline_preserves_only_validated_structured_handoff(monkeypatch)
     )
 
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name, run_config=None),
+        tool_context(tool.name, run_config=None),
         json.dumps({"query": "Assess Cttn"}),
     )
     payload = json.loads(output)
@@ -394,7 +395,7 @@ async def test_flow_specialist_is_outside_automatic_chat_deadline(monkeypatch):
     )
 
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name, run_config=None),
+        tool_context(tool.name, run_config=None),
         json.dumps({"query": "Run selected flow"}),
     )
 
@@ -497,7 +498,7 @@ async def test_flow_streaming_tool_uses_isolated_run_config_and_closes(monkeypat
     )
 
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name="run_flow_specialist", run_config=parent_config),
+        tool_context("run_flow_specialist", run_config=parent_config),
         json.dumps({"query": "extract this"}),
     )
 
@@ -567,7 +568,7 @@ async def test_flow_streaming_tool_closes_isolated_provider_after_error(monkeypa
 
     with pytest.raises(RuntimeError, match="specialist failed"):
         await tool.on_invoke_tool(
-            SimpleNamespace(tool_name="run_flow_specialist", run_config=parent_config),
+            tool_context("run_flow_specialist", run_config=parent_config),
             json.dumps({"query": "extract this"}),
         )
 
@@ -591,7 +592,7 @@ async def test_pdf_read_failure_escapes_sdk_specialist_recovery(monkeypatch):
     )
     with pytest.raises(DocumentReadError) as caught:
         await tool.on_invoke_tool(
-            SimpleNamespace(tool_name=tool.name, run_config=None),
+            tool_context(tool.name, run_config=None),
             json.dumps({"query": "Extract evidence"}),
         )
     assert caught.value is cause

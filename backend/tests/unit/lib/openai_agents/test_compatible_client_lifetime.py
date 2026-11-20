@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient, InternalServerError
+from openai import AsyncOpenAI, DefaultAsyncHttpx2Client, InternalServerError
 from src.lib.openai_agents import provider_model, runner
 from src.lib.openai_agents.benchmark_routing import (
     attach_benchmark_route,
@@ -32,7 +32,8 @@ def completion_server():
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            requests.append((body, dict(self.headers)))
+            # HTTP header names are case-insensitive; openai 3 sends them lowercased.
+            requests.append((body, {name.lower(): value for name, value in self.headers.items()}))
             # A real pending read binds the pooled connection to its owner loop.
             time.sleep(0.025)
             response = json.dumps({
@@ -79,7 +80,7 @@ def test_main_loop_and_parallel_sync_validators_do_not_share_transport(completio
     async def exercise():
         async with AsyncOpenAI(
             api_key="synthetic", base_url=url, max_retries=0,
-            http_client=DefaultAsyncHttpxClient(timeout=2),
+            http_client=DefaultAsyncHttpx2Client(timeout=2),
             default_headers={"X-Caller": "preserved"},
         ) as client:
             agent = make_agent(client)
@@ -108,8 +109,8 @@ def test_main_loop_and_parallel_sync_validators_do_not_share_transport(completio
         assert body["model"] == "synthetic-model"
         assert body["temperature"] == 0
         assert body["policy"] == {"enabled": True}
-        assert headers["X-Policy"] == "preserved"
-        assert headers["X-Caller"] == "preserved"
+        assert headers["x-policy"] == "preserved"
+        assert headers["x-caller"] == "preserved"
 
 
 @pytest.mark.parametrize("synchronous", [False, True])
@@ -260,7 +261,7 @@ def test_owned_http_transport_copy_does_not_resolve_ambiguous_prompt_names(compl
         clear_prompt_context()
         try:
             async with AsyncOpenAI(api_key="synthetic", base_url=url, max_retries=0,
-                                   http_client=DefaultAsyncHttpxClient(timeout=2)) as client:
+                                   http_client=DefaultAsyncHttpx2Client(timeout=2)) as client:
                 originals = [make_agent(client), make_agent(client)]
                 for agent in originals:
                     bind_prompt_run(agent, set_pending_prompts(agent.name, []))

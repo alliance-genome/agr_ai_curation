@@ -1,3 +1,4 @@
+from tests.sdk_tool_context_support import tool_context
 import importlib
 import json
 from pathlib import Path
@@ -46,7 +47,7 @@ def _completed_artifact_step():
 
 
 async def _invoke_tool(tool, payload: dict) -> str:
-    tool_ctx = SimpleNamespace(tool_name=getattr(tool, "name", "tool"), run_config=None)
+    tool_ctx = tool_context(getattr(tool, "name", "tool"), run_config=None)
     return await tool.on_invoke_tool(tool_ctx, json.dumps(payload))
 
 

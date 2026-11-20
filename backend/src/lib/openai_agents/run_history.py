@@ -359,7 +359,7 @@ async def record_runtime_payload(kind: str, value: Any, **metadata) -> str | Non
 
 
 def history_tools(history: RunHistory) -> list[Any]:
-    from agents import function_tool
+    from agr_ai_curation_runtime.function_tools import function_tool
     from agr_ai_curation_runtime.tool_result_bounds import detail_chunk, fit_page, invalid_cursor
 
     @function_tool

@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -62,19 +62,6 @@ def _default_client_factory() -> Any:
 
 
 _client_factory: Callable[[], Any] = _default_client_factory
-
-
-def _ensure_elasticsearch_numpy2_compat() -> None:
-    """Keep the upstream ES client importable under the repo's NumPy 2.x pin."""
-    try:
-        import numpy as np
-    except (ImportError, ModuleNotFoundError):
-        return
-
-    if not hasattr(np, "float_"):
-        np.float_ = np.float64  # type: ignore[attr-defined]
-    if not hasattr(np, "complex_"):
-        np.complex_ = np.complex128  # type: ignore[attr-defined]
 
 
 def _plain_reference(reference: Any) -> Dict[str, Any]:
@@ -446,7 +433,6 @@ def agr_literature_reference_lookup(
 
     effective_exact_match = True if method_value == "get_literature_reference" else exact_match
     try:
-        _ensure_elasticsearch_numpy2_compat()
         client = _client_factory()
         if method_value == "get_literature_reference":
             reference = client.get_literature_reference(query_value)
