@@ -818,14 +818,17 @@ class FanoutExtraction:
             for index, positions in enumerate(slices, start=1)
         ]
         primary = None
+        failed_writer: int | None = None
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-            for task in tasks:
+            for index, task in enumerate(tasks, start=1):
                 if task in done and not task.cancelled():
                     primary = task.exception()
                     if primary is not None:
+                        failed_writer = index
                         raise primary
         finally:
+            stop_started = asyncio.get_running_loop().time()
             pending = [task for task in tasks if not task.done()]
             for task in pending:
                 task.cancel()
@@ -837,6 +840,8 @@ class FanoutExtraction:
                 primary = None
                 raise
             finally:
+                if pending or failed_writer is not None:
+                    self._trace_writers_stopped(tasks, pending, failed_writer, stop_started)
                 for view in self._chunk_views.values():
                     if not view.done():
                         view.cancel()
@@ -848,6 +853,39 @@ class FanoutExtraction:
                             seen.add(id(error))
                             _report_discarded_writer_failure(error)
         return [task.result() for task in tasks]
+
+    def _trace_writers_stopped(
+        self,
+        tasks: Sequence[asyncio.Task],
+        pending: Sequence[asyncio.Task],
+        failed_writer: int | None,
+        stop_started: float,
+    ) -> None:
+        """Trace how the writers still running at a failure or cancellation ended.
+
+        Read from task state only. ``stop_ms`` runs from the moment the failure (or the
+        cancellation) reached ``_run_writers`` until every writer still running then had
+        stopped. A writer whose outcome is ``completed`` ignored the cancel and finished
+        its work after the run had failed.
+        """
+
+        def outcome(task: asyncio.Task) -> str:
+            if not task.done():
+                return "running"
+            if task.cancelled():
+                return "cancelled"
+            return "failed" if task.exception() is not None else "completed"
+
+        self._trace("writers_stopped", {
+            "reason": "writer_failed" if failed_writer is not None else "cancelled",
+            "failed_writer": failed_writer,
+            "stop_ms": round((asyncio.get_running_loop().time() - stop_started) * 1000),
+            "writers": [
+                {"writer": index, "outcome": outcome(task)}
+                for index, task in enumerate(tasks, start=1)
+                if task in pending
+            ],
+        })
 
     async def _run_writer_with_reruns(
         self, index: int, writer_count: int, positions: tuple[int, ...],

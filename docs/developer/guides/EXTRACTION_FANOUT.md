@@ -152,9 +152,28 @@ audit when the writers finish, with their recorded start and end times.
   type, the provider's typed error type and code, the curator-failure category, whether it
   runs again); both carry `store_off`, true when that writer attempt sent `store=false`,
   `extraction_fanout.writer_rerun_started` (the removed candidate and evidence IDs and
-  counts), `extraction_fanout.writer_rerun_finished` (`succeeded`, `failed` or `cancelled`) and
-  `extraction_fanout.finalize_attempt`. No message text or record content is traced.
-  TraceReview groups them under `extraction_fanout`, which is absent when fan-out did not run.
+  counts), `extraction_fanout.writer_rerun_finished` (`succeeded`, `failed` or `cancelled`),
+  `extraction_fanout.writers_stopped` (below) and `extraction_fanout.finalize_attempt`. No
+  message text or record content is traced. TraceReview groups them under
+  `extraction_fanout`, which is absent when fan-out did not run.
+- `extraction_fanout.writers_stopped` is written once when the writing step ends early:
+  `reason` is `writer_failed` (a writer failed for good, after its re-runs) or `cancelled`
+  (the step was cancelled from outside). `failed_writer` is that writer's number, or `null`
+  when cancelled. `stop_ms` is the time from the failure (or cancellation) reaching the
+  step until every writer still running then had stopped. `writers` lists those writers,
+  each with `outcome`: `cancelled` (stopped on the cancel, the expected case), `failed`
+  (ended with an error while being cancelled), `completed` (ignored the cancel and finished
+  its work after the run had failed) or `running` (the wait was itself interrupted). It is
+  not written when every writer finished normally. Example:
+
+  ```json
+  {"reason": "writer_failed", "failed_writer": 1, "stop_ms": 3,
+   "writers": [{"writer": 2, "outcome": "cancelled"}, {"writer": 3, "outcome": "cancelled"}]}
+  ```
+
+  A writer that keeps running after a failure (KANBAN-2079) shows as an outcome of
+  `completed` with a `stop_ms` of seconds; that writer's `writer_completed` event and its
+  "Done" reply then appear after the `writer_failed` event that ended the run.
 - Langfuse shows the planner, check pass and each writer as separate agent runs in one
   trace.
 

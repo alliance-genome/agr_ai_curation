@@ -281,7 +281,7 @@ def _tool(name, invoke, *, schema=None):
     )
 
 
-def _source_tools(reads):
+def _source_tools(reads, scenario=None):
     async def read_chunk(_ctx, arguments):
         from src.lib.openai_agents.document_result_view import document_result_view
 
@@ -303,6 +303,10 @@ def _source_tools(reads):
         # in that list and changes it in place.
         args = json.loads(arguments)
         entity = args["entity"]
+        if scenario is not None and entity == scenario.get("busy_tool_entity"):
+            # The writer stays inside this tool call until it is cancelled.
+            scenario.setdefault("other_busy", asyncio.Event()).set()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=5)
         record = {"status": "verified", "evidence_record_id": f"ev-{entity}", "entity": entity,
                   "verified_quote": f"quote for {entity}", "page": 1, "section": "Methods", "chunk_id": "chunk-1"}
         if args.get("evidence_record_id"):
@@ -382,7 +386,12 @@ class ScriptedFanoutModel(FakeResponsesHTTPModel):
             # The re-run stays busy until it is cancelled.
             busy.set()
             await asyncio.wait_for(asyncio.Event().wait(), timeout=5)
-        waits_for_busy = self.scenario.get("busy_rerun_writer") or self.scenario.get("converts_cancel_writer")
+        if writer is not None and writer == self.scenario.get("busy_model_writer") and turn == 0:
+            # The writer's first model call stays in flight until it is cancelled.
+            busy.set()
+            await asyncio.wait_for(asyncio.Event().wait(), timeout=5)
+        waits_for_busy = (self.scenario.get("busy_rerun_writer") or self.scenario.get("converts_cancel_writer")
+                          or self.scenario.get("busy_model_writer") or self.scenario.get("busy_tool_entity"))
         if waits_for_busy and writer == self.scenario.get("failing_writer") and turn == 0 \
                 and starts.get(writer) == 1:
             # The failing writer's last attempt starts once the other writer is busy.
@@ -617,7 +626,7 @@ def harness(monkeypatch):
                 model=model,
                 # Saved agents may leave parallel tool calls unset; fan-out turns them on.
                 model_settings=ModelSettings(),
-                tools=[*_source_tools(self.reads), _stage_test_object, _patch_test_object, _discard_test_object,
+                tools=[*_source_tools(self.reads, getattr(model, "scenario", None)), _stage_test_object, _patch_test_object, _discard_test_object,
                        _finalize_tool(self.finalize_calls),
                        *([_tool(CATALOG, list_record_types)] if catalog else [])],
             )
@@ -993,7 +1002,7 @@ async def test_a_writer_that_failed_after_staging_is_cleared_and_run_again(harne
     rerun = workspace.candidates_staged_by("writer-2/a2")
     assert len(rerun) == 2 and not set(rerun) & set(removed_candidates)
     assert [len(workspace.candidates_staged_by(f"writer-{n}/a1")) for n in (1, 3)] == [3, 2]
-    assert workspace.candidates_staged_by("writer-2/a1") == []
+    assert workspace.candidates_staged_by(fanout._staging_owner(2, 1)) == []
     staged_labels = [candidate.staged_fields["label"] for candidate_id, candidate in workspace.candidates.items()
                      if candidate_id not in workspace.finalization.candidate_ids]
     assert sorted(staged_labels) == sorted(_SEVEN), "exactly one staged record per planned record"
@@ -1237,6 +1246,107 @@ async def test_a_writer_failing_for_good_cancels_another_writer_mid_rerun(harnes
         (1, "cancelled"), (2, "failed")]
     assert harness.workspaces[-1].state == builder.BUILDER_STATE_ABORTED
     assert harness.finalize_calls == []
+
+
+_SIX = _SEVEN[:6]  # writers: 1 -> P1-P3, 2 -> P4-P6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy, requests_before_failure", [
+    ({"busy_model_writer": 2}, 0),
+    ({"busy_tool_entity": "reagent 4"}, 1),
+])
+async def test_a_failed_run_traces_how_long_the_other_writers_took_to_stop(harness, busy, requests_before_failure):
+    # Writer 2 is inside a model call or a tool call when writer 1 fails for good; each
+    # stand-in waits 5 s unless it is cancelled.
+    model = ScriptedFanoutModel({"plan": _plan(*_SIX), "failing_writer": 1, **busy})
+    started = time.monotonic()
+
+    with pytest.raises(RuntimeError, match=r"writer provider failure \(attempt 1\)"):
+        await harness.run(model)
+
+    assert time.monotonic() - started < 2, "the failure does not wait for the busy writer"
+    assert model.scenario["writer_starts"][1] == 2, "the failed writer ran again once first"
+    stopped, = _fanout_trace(harness, "writers_stopped")
+    assert stopped["reason"] == "writer_failed"
+    assert stopped["failed_writer"] == 1
+    assert stopped["writers"] == [{"writer": 2, "outcome": "cancelled"}]
+    assert 0 <= stopped["stop_ms"] < 1000
+    assert sum(1 for request in model.requests if request["writer"] == 2) == requests_before_failure
+    assert harness.workspaces[-1].candidates_staged_by(fanout._staging_owner(2, 1)) == []
+    order = harness.trace_types()
+    assert order.index("extraction_fanout.writer_rerun_finished") < order.index("extraction_fanout.writers_stopped")
+
+
+def _writers_under_test(harness, monkeypatch, writer):
+    agent = harness.agent(ScriptedFanoutModel({}))
+    extraction = fanout.prepare_fanout_extraction(
+        agent, builder_workspace=builder.ExtractionBuilderWorkspace(run_id="run-1"),
+        specialist_name="Test Builder", input_text="Extract the reagents.",
+        emit_event=harness.events.append, record_live_evidence=lambda record: None,
+        evidence_records=[],
+    )
+    monkeypatch.setattr(extraction, "_run_writer", writer)
+    return extraction
+
+
+@pytest.mark.asyncio
+async def test_a_writer_that_completes_after_the_failure_is_traced_as_completed(harness, monkeypatch):
+    # The overrun signature: a writer that does not stop on cancel finishes after the run failed.
+    ready = asyncio.Event()
+
+    async def writer(index, count, positions, *, attempt=1):
+        if index == 1:
+            await ready.wait()
+            raise ValueError("writer failure")
+        if index == 2:
+            ready.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.05)
+                return "kept running"
+        await asyncio.Future()
+
+    extraction = _writers_under_test(harness, monkeypatch, writer)
+    monkeypatch.setattr(extraction, "writer_reruns", 0)
+
+    with pytest.raises(ValueError, match="writer failure"):
+        await extraction._run_writers([(0,), (1,), (2,)])
+
+    stopped, = _fanout_trace(harness, "writers_stopped")
+    assert stopped["reason"] == "writer_failed" and stopped["failed_writer"] == 1
+    assert stopped["writers"] == [{"writer": 2, "outcome": "completed"}, {"writer": 3, "outcome": "cancelled"}]
+    assert stopped["stop_ms"] >= 50
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_fanout_traces_how_the_writers_stopped(harness, monkeypatch):
+    started = asyncio.Event()
+
+    async def writer(index, count, positions, *, attempt=1):
+        if index == count:
+            started.set()
+        await asyncio.Future()
+
+    extraction = _writers_under_test(harness, monkeypatch, writer)
+    parent = asyncio.create_task(extraction._run_writers([(0,), (1,)]))
+    await started.wait()
+    parent.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await parent
+
+    stopped, = _fanout_trace(harness, "writers_stopped")
+    assert stopped["reason"] == "cancelled" and stopped["failed_writer"] is None
+    assert stopped["writers"] == [{"writer": 1, "outcome": "cancelled"}, {"writer": 2, "outcome": "cancelled"}]
+    assert stopped["stop_ms"] < 1000
+
+
+@pytest.mark.asyncio
+async def test_a_run_whose_writers_all_succeed_traces_no_stop(harness):
+    await harness.run(ScriptedFanoutModel({"plan": _plan(*_SEVEN)}))
+
+    assert _fanout_trace(harness, "writers_stopped") == []
 
 
 @pytest.mark.asyncio
