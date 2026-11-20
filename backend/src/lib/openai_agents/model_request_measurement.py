@@ -1556,7 +1556,7 @@ def install_model_request_measurement() -> None:
     through ``run_loop.get_model``. Wrapping there covers agent-bound model
     objects, provider-resolved model names, WebSocket and HTTP transports, and
     SDK-managed retries without per-call-site instrumentation. The pinned SDK
-    (0.17.4) defines ``get_model`` in ``turn_preparation`` and binds it into
+    (0.25.0) defines ``get_model`` in ``turn_preparation`` and binds it into
     ``run_loop`` by name; the regression guard test fails if an SDK upgrade
     moves it.
     """

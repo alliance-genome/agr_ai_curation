@@ -1,5 +1,6 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
+from tests.sdk_tool_context_support import tool_context
 import asyncio
 import json
 import copy
@@ -4330,7 +4331,7 @@ async def test_stream_failure_preserves_original_error_and_finalized_workspace(
     )
     with pytest.raises(type(failure)) as caught:
         await tool.on_invoke_tool(
-            SimpleNamespace(tool_name=tool.name, run_config=None),
+            tool_context(tool.name, run_config=None),
             json.dumps({"query": "extract"}),
         )
     assert caught.value is failure

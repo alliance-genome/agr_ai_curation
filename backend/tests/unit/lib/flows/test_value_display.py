@@ -1,6 +1,7 @@
 """ALL-1282: structured values render as standard display text in non-JSON outputs."""
 
 from __future__ import annotations
+from tests.sdk_tool_context_support import tool_context
 
 import csv
 import io
@@ -536,7 +537,7 @@ async def test_split_list_through_formatter_tools_with_lock_and_inventory():
         bundle=bundle, output_format="csv", formatter_agent_id="csv_formatter", save_projected_output=save)}
 
     async def call(name, payload):
-        raw = await tools[name].on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(payload))
+        raw = await tools[name].on_invoke_tool(tool_context(name), json.dumps(payload))
         return json.loads(raw)
 
     inventory = await call("inspect_output_artifacts", {"catalog_query": "anatomy_terms"})

@@ -4,7 +4,7 @@ from copy import deepcopy
 import json
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 from agents import (
     FunctionTool,
@@ -132,13 +132,13 @@ async def test_sdk_count_and_compact_use_same_projection_without_changing_source
 
     async def transport(request):
         sent.append(json.loads(request.content))
-        return httpx.Response(
+        return httpx2.Response(
             200, json={"object": "response.input_tokens", "input_tokens": 100}
         )
 
     client = AsyncOpenAI(
         api_key="fixture",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)),
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(transport)),
     )
 
     async def compact(items, **kwargs):
@@ -175,13 +175,13 @@ async def test_measured_generation_matches_real_sdk_count_after_checkpoint_resto
 
     async def transport(request):
         counted.append(json.loads(request.content))
-        return httpx.Response(
+        return httpx2.Response(
             200, json={"object": "response.input_tokens", "input_tokens": 100}
         )
 
     client = AsyncOpenAI(
         api_key="fixture",
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)),
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(transport)),
     )
     inner = model_class(model="gpt-6-astra", openai_client=client)
 

@@ -3,7 +3,7 @@
 import asyncio
 from time import perf_counter
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 from . import decisions, quick_check, reads, scheduling
 from .admission import ReviewStopped

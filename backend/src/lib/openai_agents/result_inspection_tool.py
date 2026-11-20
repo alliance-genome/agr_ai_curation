@@ -1,7 +1,7 @@
 """One model-facing result inspection schema across chat and flow runtimes."""
 import json
 from typing import Any, Callable, List, Mapping
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from src.lib.openai_agents.inspect_results import inspect_results
 
 INSPECTION_GUIDANCE = """

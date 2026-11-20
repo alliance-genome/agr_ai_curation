@@ -16,7 +16,7 @@ from copy import deepcopy
 from typing import Optional, List, Dict, Any, Tuple, Literal, Annotated, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, field_validator, model_validator
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 from agr_ai_curation_runtime.agr_lookup import (
     LOOKUP_STATUS_AMBIGUOUS,

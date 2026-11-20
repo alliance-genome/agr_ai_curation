@@ -121,7 +121,7 @@ def test_prefix_boundaries_do_not_orphan_calls():
 
 @pytest.mark.asyncio
 async def test_count_endpoint_receives_sdk_wire_tools_schema_instructions_and_opaque_state(monkeypatch):
-    import httpx
+    import httpx2
     import json
     from openai import AsyncOpenAI
     from agents import function_tool
@@ -132,8 +132,8 @@ async def test_count_endpoint_receives_sdk_wire_tools_schema_instructions_and_op
     sent = []
     def transport(request):
         sent.append((request.url.path, json.loads(request.content)))
-        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 123})
-    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)))
+        return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 123})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(transport)))
     model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
     request = NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="Keep NOT observed.",
         tools=[lookup], output_schema=None, handoffs=[])
@@ -239,7 +239,7 @@ async def test_capacity_recovery_requires_storage_before_paid_compaction():
 
 @pytest.mark.asyncio
 async def test_effective_extra_body_instructions_and_output_reserve_are_counted(monkeypatch):
-    import httpx
+    import httpx2
     import json
     from openai import AsyncOpenAI
     from agents.models.openai_responses import OpenAIResponsesModel
@@ -248,8 +248,8 @@ async def test_effective_extra_body_instructions_and_output_reserve_are_counted(
     sent = []
     def reply(request):
         sent.append(json.loads(request.content))
-        return httpx.Response(200, json={"input_tokens": 100})
-    async with AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply))) as client:
+        return httpx2.Response(200, json={"input_tokens": 100})
+    async with AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply))) as client:
         model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
         request = NativeCapacityRequest(model, ModelSettings(max_tokens=100,
             extra_body={"instructions": "actual instructions", "max_output_tokens": 3000}),
@@ -261,7 +261,7 @@ async def test_effective_extra_body_instructions_and_output_reserve_are_counted(
 
 def _sdk_request(monkeypatch, *, capacity=None, sent=None):
     """A real SDK wire with a mocked provider; records token-count calls."""
-    import httpx
+    import httpx2
     import json
     from openai import AsyncOpenAI
     from agents.models.openai_responses import OpenAIResponsesModel
@@ -271,8 +271,8 @@ def _sdk_request(monkeypatch, *, capacity=None, sent=None):
     sent = [] if sent is None else sent
     def reply(request):
         sent.append(request.url.path)
-        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
-    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply)))
+        return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)))
     model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
     request = NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="Extract records.",
         tools=[], output_schema=None, handoffs=[])
@@ -306,7 +306,7 @@ async def test_request_that_provably_fits_skips_the_token_count_call(monkeypatch
 
 @pytest.mark.asyncio
 async def test_skip_path_serializes_the_real_tool_surface(monkeypatch):
-    import httpx
+    import httpx2
     from openai import AsyncOpenAI
     from openai.types.shared import Reasoning
     from pydantic import BaseModel
@@ -330,8 +330,8 @@ async def test_skip_path_serializes_the_real_tool_surface(monkeypatch):
     sent = []
     def reply(request):
         sent.append(request.url.path)
-        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
-    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply)))
+        return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)))
     model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
     settings = ModelSettings(max_tokens=1000, reasoning=Reasoning(effort="medium", summary="auto"),
         tool_choice="read_chunk", parallel_tool_calls=True, verbosity="low", store=False,

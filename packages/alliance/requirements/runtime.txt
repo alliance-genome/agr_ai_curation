@@ -1,7 +1,9 @@
 # Runtime dependencies for the tracked AGR Alliance package.
 # Some packaged tools still rely on public host-runtime surfaces exposed via
 # agr_ai_curation_runtime during isolated package execution.
-openai-agents
+# Match backend/requirements.lock.txt so isolated package tools build their
+# FunctionTools and model-visible tool errors with the same SDK as the backend.
+openai-agents==0.25.0
 pydantic>=2.0
 requests>=2.0
 # Match backend/requirements.lock.txt: SQLAlchemy 2.1 changes plain PostgreSQL

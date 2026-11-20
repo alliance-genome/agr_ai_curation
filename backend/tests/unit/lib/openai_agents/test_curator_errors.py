@@ -1,5 +1,5 @@
 """Provider overload and terminal errors never leak payloads or promise unsafe retries."""
-import httpx
+import httpx2
 import pytest
 from agents.models.openai_responses import ResponsesWebSocketError
 from openai import APIConnectionError, APIStatusError
@@ -87,7 +87,7 @@ def test_access_quota_and_key_websocket_errors_keep_the_configuration_message(co
     (400, "context_length_exceeded", "context_limit", False),
 ])
 def test_http_provider_errors(status, code, category, retryable):
-    response = httpx.Response(status, request=httpx.Request("POST", "https://example.test"))
+    response = httpx2.Response(status, request=httpx2.Request("POST", "https://example.test"))
     error = APIStatusError("PRIVATE", response=response, body={"code": code})
     result = classify_failure(error)
     assert (result.category, result.retryable) == (category, retryable)
@@ -95,7 +95,7 @@ def test_http_provider_errors(status, code, category, retryable):
 
 
 def test_connection_and_unknown_errors_are_sanitized():
-    error = APIConnectionError(request=httpx.Request("POST", "https://example.test"))
+    error = APIConnectionError(request=httpx2.Request("POST", "https://example.test"))
     assert classify_failure(error).category == "provider_connection"
     assert "PRIVATE" not in classify_failure(ValueError("PRIVATE")).message
     assert failure_for_event({"error_type": "BuilderFinalizationMissing", "message": "PRIVATE"}).retryable is False

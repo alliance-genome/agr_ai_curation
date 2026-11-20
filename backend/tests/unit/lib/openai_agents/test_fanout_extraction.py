@@ -12,9 +12,10 @@ import re
 import time
 
 import pytest
-from agents import Agent, FunctionTool, ModelSettings, RunConfig, function_tool
+from agents import Agent, FunctionTool, ModelSettings, RunConfig
 from agents.items import ModelResponse
 from agents.strict_schema import ensure_strict_json_schema
+from agr_ai_curation_runtime.function_tools import function_tool
 from openai.types.responses import ResponseFunctionToolCall
 
 from src.lib.openai_agents import extraction_builder_workspace as builder

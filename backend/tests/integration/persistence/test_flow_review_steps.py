@@ -1,4 +1,5 @@
 """Database-enforced flow replay fences and honest review completion."""
+from tests.sdk_tool_context_support import tool_context
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
@@ -314,7 +315,7 @@ async def test_ordered_flow_wrapper_gates_next_step_and_never_reextracts(planned
         document_id=item.scope.document_id, user_id=item.scope.owner_id, session_id=item.scope.session_id,
         flow_run_id=run_id, enable_result_inspection=True)
     state['supervisor'] = supervisor
-    context = SimpleNamespace(tool_name='step', run_config=None)
+    context = tool_context('step', run_config=None)
     if accept in ('extractor_turns', 'extractor_timeout'):
         from agents import MaxTurnsExceeded
         with pytest.raises(MaxTurnsExceeded if accept == 'extractor_turns' else TimeoutError):

@@ -77,7 +77,7 @@ def test_sdk_normalization_cannot_turn_unknown_into_recorded_zero(monkeypatch):
     assert defaults.accounting_usage == TokenUsage()
     known = capture(monkeypatch, Usage(
         input_tokens=10, output_tokens=5, total_tokens=15,
-        input_tokens_details=InputTokensDetails(cached_tokens=3),
+        input_tokens_details=InputTokensDetails(cached_tokens=3, cache_write_tokens=0),
         output_tokens_details=OutputTokensDetails(reasoning_tokens=2),
     ))
     assert known.accounting_usage == TokenUsage(10, 5, 15, 3, None, 2)
@@ -87,7 +87,7 @@ def test_native_model_response_preserves_sdk_detail_boundary(monkeypatch):
     monkeypatch.setattr("src.lib.openai_agents.provider_usage._emit_provider_usage_trace_event", lambda record: None)
     response = ModelResponse(output=[], response_id="synthetic", usage=Usage(
         input_tokens=10, output_tokens=4, total_tokens=14,
-        input_tokens_details=InputTokensDetails(cached_tokens=5),
+        input_tokens_details=InputTokensDetails(cached_tokens=5, cache_write_tokens=0),
         output_tokens_details=OutputTokensDetails(reasoning_tokens=3),
     ))
     with capture_provider_usage() as records:
@@ -130,7 +130,7 @@ async def test_streaming_wrapper_distinguishes_raw_response_from_sdk_conversion(
     # Same shape, different provenance: chatcmpl_stream_handler synthesizes zero
     # details when the upstream chunk omitted them. Responses can report real0.
     usage = ResponseUsage(input_tokens=10, output_tokens=4, total_tokens=14,
-                          input_tokens_details=InputTokensDetails(cached_tokens=0),
+                          input_tokens_details=InputTokensDetails.model_construct(cached_tokens=0),
                           output_tokens_details=OutputTokensDetails(reasoning_tokens=0))
     base = OpenAIChatCompletionsModel if chat_conversion else OpenAIResponsesModel
 

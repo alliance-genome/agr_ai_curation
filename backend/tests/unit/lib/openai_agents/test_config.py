@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import httpx
+import httpx2
 import pytest
 from agents import ModelSettings
 from openai import InternalServerError
@@ -1368,14 +1368,14 @@ async def test_other_indexed_param_frames_are_not_retried(monkeypatch, changes):
 @pytest.mark.asyncio
 async def test_an_http_400_with_the_same_body_is_not_retried(monkeypatch):
     """Only the Responses websocket frame is resent; an HTTP 400 still fails at once."""
-    import httpx
+    import httpx2
     from openai import BadRequestError
     from agents.run_internal.model_retry import stream_response_with_retry
 
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
     _zero_model_retry_delay(monkeypatch)
     attempts = 0
-    response = httpx.Response(400, request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    response = httpx2.Response(400, request=httpx2.Request("POST", "https://api.openai.com/v1/responses"))
 
     def get_stream():
         async def stream():
@@ -2042,9 +2042,9 @@ async def test_get_model_for_agent_builds_single_attempt_openrouter_adapter(monk
     async def failing_route(_request):
         nonlocal attempts
         attempts += 1
-        return httpx.Response(500, json={"error": {"message": "redacted"}})
+        return httpx2.Response(500, json={"error": {"message": "redacted"}})
 
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(failing_route))
+    http_client = httpx2.AsyncClient(transport=httpx2.MockTransport(failing_route))
     monkeypatch.setattr(
         "agents.models.openai_provider.shared_http_client",
         lambda: http_client,

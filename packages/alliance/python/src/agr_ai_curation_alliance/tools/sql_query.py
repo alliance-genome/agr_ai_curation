@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.pool import QueuePool
 from pydantic import BaseModel
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 logger = logging.getLogger(__name__)
 

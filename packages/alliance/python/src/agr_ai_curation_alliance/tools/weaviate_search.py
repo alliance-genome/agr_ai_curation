@@ -14,7 +14,7 @@ import os
 from typing import Optional, List, TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from agr_ai_curation_runtime.document_errors import DocumentReadError
 from agr_ai_curation_runtime.document_references import LocalIndex, scoped_document_tool, retain_issued_spans
 from agr_ai_curation_runtime.evidence_spans import (

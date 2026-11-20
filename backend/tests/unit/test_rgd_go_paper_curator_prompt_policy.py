@@ -1,5 +1,6 @@
 """Package and prompt policy for the restricted RGD GO paper specialist."""
 
+from tests.sdk_tool_context_support import tool_context
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -198,10 +199,7 @@ async def test_trace_routes_execute_distinct_tools_reuse_results_and_reject_curi
         ledger=ledger,
         propagate_errors=False,
     ))
-    ctx = SimpleNamespace(
-        tool_name="automatic_supervisor_trace_replay",
-        run_config=None,
-    )
+    ctx = tool_context("automatic_supervisor_trace_replay", run_config=None)
 
     initial_case = cases["trace_initial_ipi"]
     initial_output = await rgd_tool.on_invoke_tool(
@@ -280,7 +278,7 @@ async def test_rgd_tool_rejects_blank_malformed_or_unsupported_curie_before_disp
     ))
 
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name, run_config=None),
+        tool_context(tool.name, run_config=None),
         json.dumps({"query": f"Assess this identifier: {curie}"}),
     )
 

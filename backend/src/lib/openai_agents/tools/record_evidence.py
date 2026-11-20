@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from agents.exceptions import ModelBehaviorError
 from pydantic import ValidationError
 from agr_ai_curation_runtime.document_references import DocumentSelection, resolve_selections, scoped_document_tool

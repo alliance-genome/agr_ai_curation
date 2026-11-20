@@ -1,5 +1,6 @@
 """Offline regressions for the captured ordinary-chat provider refusal."""
 
+from tests.sdk_tool_context_support import tool_context
 import json
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -7,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 from agents import UserError
 from agents.models.openai_responses import ResponsesWebSocketError
-from agents.tool import default_tool_error_function
+from agr_ai_curation_runtime.function_tools import model_visible_tool_error
 
 from src.lib.openai_agents import provider_errors
 from src.lib.openai_agents.agents import supervisor_agent
@@ -44,7 +45,7 @@ async def test_sdk_caught_policy_result_is_safe_and_reported_once(monkeypatch, w
         specialist_name="PDF Specialist", propagate_errors=False,
     )
     output = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name, run_config=None), json.dumps({"query": "extract"}),
+        tool_context(tool.name, run_config=None), json.dumps({"query": "extract"}),
     )
     payload = json.loads(output)
     assert payload == provider_errors.chat_policy_failure()
@@ -82,8 +83,8 @@ async def test_unrelated_sdk_tool_errors_keep_default_behavior(monkeypatch, code
         agent=SimpleNamespace(name="PDF Specialist"), tool_name="ask_pdf_extraction_specialist",
         tool_description="Extract", specialist_name="PDF Specialist", propagate_errors=False,
     )
-    ctx = SimpleNamespace(tool_name=tool.name, run_config=None)
-    assert await tool.on_invoke_tool(ctx, '{"query":"extract"}') == default_tool_error_function(ctx, error)
+    ctx = tool_context(tool.name, run_config=None)
+    assert await tool.on_invoke_tool(ctx, '{"query":"extract"}') == model_visible_tool_error(ctx, error)
     report.assert_not_called()
 
 
@@ -111,6 +112,7 @@ def test_sdk_policy_report_serialization_and_duplicate_guard():
         from src.lib.observability import sentry
         from src.lib.openai_agents.agents import supervisor_agent
         from src.lib.openai_agents import provider_errors
+        from tests.sdk_tool_context_support import tool_context
 
         events = []
         sentry_sdk.init(dsn="http://public@example.invalid/1", transport=events.append,
@@ -127,7 +129,7 @@ def test_sdk_policy_report_serialization_and_duplicate_guard():
             agent=SimpleNamespace(name="PDF Specialist"), tool_name="ask_pdf_extraction_specialist",
             tool_description="Extract", specialist_name="PDF Specialist", propagate_errors=False)
         output = asyncio.run(tool.on_invoke_tool(
-            SimpleNamespace(tool_name=tool.name, run_config=None), '{"query":"extract"}'))
+            tool_context(tool.name, run_config=None), '{"query":"extract"}'))
         assert json.loads(output)["retryable"] is False
         # SDK/log re-reporting of the same exception is suppressed by the shared guard.
         logging.getLogger("openai.agents").error("Repeated provider failure: %s", error)

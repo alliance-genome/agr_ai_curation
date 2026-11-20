@@ -36,7 +36,8 @@ from uuid import UUID, uuid4
 
 from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
 
-from agents import Agent, RunContextWrapper, function_tool
+from agents import Agent, RunContextWrapper
+from agr_ai_curation_runtime.function_tools import function_tool
 from sqlalchemy.orm import Session
 from src.lib.curation_workspace.execution_provenance import capture_source_document
 from src.schemas.execution_provenance import ExtractionExecutionContext
@@ -962,8 +963,12 @@ def _make_flow_runtime_formatter_tool(
             }
         )
         agent = get_agent_by_id(agent_id, **agent_kwargs)
-        tool_ctx = SimpleNamespace(
-            tool_name=tool_name,
+        from agents.tool_context import ToolContext
+
+        tool_arguments = json.dumps({"query": query})
+        tool_ctx = ToolContext(
+            context=getattr(ctx, "context", None), tool_name=tool_name,
+            tool_call_id=f"flow-formatter-{tool_name}", tool_arguments=tool_arguments,
             run_config=getattr(ctx, "run_config", None),
         )
         current_attachment = get_current_flow_output_attachment() or {}
@@ -1002,8 +1007,6 @@ def _make_flow_runtime_formatter_tool(
                 )
                 if finalizer is None:
                     raise ValueError("Selected-fields export requires the configured file finalizer")
-                from agents.tool_context import ToolContext
-
                 arguments = json.dumps({"filename_hint": output_filename_descriptor})
                 finalizer_context = ToolContext(
                     context=getattr(ctx, "context", None), tool_name="finalize_and_save",
@@ -1029,10 +1032,7 @@ def _make_flow_runtime_formatter_tool(
                     isolate_run_config=True, propagate_errors=True,
                 ),
             )
-            return await streaming_tool.on_invoke_tool(
-                tool_ctx,
-                json.dumps({"query": query}),
-            )
+            return await streaming_tool.on_invoke_tool(tool_ctx, tool_arguments)
         finally:
             reset_current_flow_output_attachment(source_token)
 
@@ -1116,12 +1116,19 @@ def _make_flow_chat_output_tool(
             specialist_name=specialist_name, inline_chat_persistence=False,
             isolate_run_config=True, propagate_errors=True,
         ))
-        tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=getattr(ctx, "run_config", None))
+        from agents.tool_context import ToolContext
+
+        tool_arguments = json.dumps({"query": query})
+        tool_ctx = ToolContext(
+            context=getattr(ctx, "context", None), tool_name=tool_name,
+            tool_call_id=f"flow-chat-output-{tool_name}", tool_arguments=tool_arguments,
+            run_config=getattr(ctx, "run_config", None),
+        )
         # The specialist run's own output is not used; delivered content and the
         # receipt come only from the application-held delivery.
         post_delivery_error: str | None = None
         try:
-            await streaming_tool.on_invoke_tool(tool_ctx, json.dumps({"query": query}))
+            await streaming_tool.on_invoke_tool(tool_ctx, tool_arguments)
         except Exception as exc:
             if not delivery.delivered:
                 raise
@@ -2325,20 +2332,24 @@ def get_all_agent_tools(
                 raise
             try:
                 if hasattr(tool_callable, "on_invoke_tool"):
-                    # Newer openai-agents tool invokers dereference ctx.tool_name and,
-                    # on handled tool errors, ctx.run_config (0.17+). Pass the parent
+                    # openai-agents function tools need a real ToolContext (0.25 reads
+                    # its prepared-argument slot and run_config). Pass the parent
                     # RunConfig as a trace/template source; the flow tool wrapper clones
                     # it onto a step-owned provider so each flow-step WebSocket closes
                     # before the supervisor provider is torn down.
-                    tool_ctx = SimpleNamespace(
-                        tool_name=tool_name,
-                        run_config=getattr(ctx, "run_config", None),
-                    )
+                    from agents.tool_context import ToolContext
+
                     tool_input = {"query": resolved_query}
                     if formatter_format is not None:
                         tool_input["output_filename_descriptor"] = (
                             output_filename_descriptor or ""
                         )
+                    tool_arguments = json.dumps(tool_input)
+                    tool_ctx = ToolContext(
+                        context=getattr(ctx, "context", None), tool_name=tool_name,
+                        tool_call_id=f"flow-step-{tool_name}", tool_arguments=tool_arguments,
+                        run_config=getattr(ctx, "run_config", None),
+                    )
                     # Chat formatters deliver rendered output into this
                     # executor-owned scope; their tool result is only a receipt.
                     delivery_scope = (
@@ -2349,7 +2360,7 @@ def get_all_agent_tools(
                     with delivery_scope as chat_delivery:
                         result = await tool_callable.on_invoke_tool(
                             tool_ctx,
-                            json.dumps(tool_input),
+                            tool_arguments,
                         )
                     if chat_delivery is not None and chat_delivery.delivered:
                         projected_chat_output = chat_delivery.output

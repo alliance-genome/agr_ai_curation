@@ -36,7 +36,7 @@ from agents import (
 from agents.models.openai_provider import OpenAIProvider
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel, OpenAIResponsesWSModel
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+from openai import AsyncOpenAI, DefaultAsyncHttpx2Client
 from openai.types.responses import (
     ResponseTextDeltaEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
@@ -631,7 +631,7 @@ async def _owned_compatible_agent(agent: Agent) -> AsyncIterator[Agent]:
     model = agent.model
     assert isinstance(model, (OpenAIChatCompletionsModel, OpenAIResponsesModel))
     source_client = model._get_client()
-    transport = DefaultAsyncHttpxClient(timeout=source_client.timeout)
+    transport = DefaultAsyncHttpx2Client(timeout=source_client.timeout)
     try:
         client = source_client.copy(http_client=transport)
     except BaseException:

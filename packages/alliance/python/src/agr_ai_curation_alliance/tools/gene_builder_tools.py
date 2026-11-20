@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, List, Mapping, Optional, Sequence
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from pydantic import (
     BaseModel,
     ConfigDict,

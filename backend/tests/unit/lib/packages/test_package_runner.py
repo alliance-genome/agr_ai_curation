@@ -1557,10 +1557,22 @@ def _write_fake_agents_dependency(tmp_path: Path) -> Path:
     def decorate(func):
         return func
 
-    if decorator_args and callable(decorator_args[0]) and not decorator_kwargs:
+    # Like the real SDK, function_tool(func, **options) builds the tool directly.
+    if decorator_args and callable(decorator_args[0]):
         return decorate(decorator_args[0])
     return decorate
 """,
         encoding="utf-8",
     )
+    # Surfaces imported by agr_ai_curation_runtime.function_tools.
+    (package_root / "exceptions.py").write_text(
+        "class ModelBehaviorError(Exception):\n    pass\n", encoding="utf-8",
+    )
+    (package_root / "function_schema.py").write_text(
+        "from types import SimpleNamespace\n\n\n"
+        "def function_schema(**kwargs):\n"
+        "    return SimpleNamespace(params_pydantic_model=None)\n",
+        encoding="utf-8",
+    )
+    (package_root / "tool.py").write_text("class FunctionTool:\n    pass\n", encoding="utf-8")
     return dependency_root

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from openai import AsyncOpenAI
 
@@ -75,13 +75,13 @@ class FakeDecisions:
         response = self.respond(body)
         if asyncio.iscoroutine(response):
             response = await response
-        if isinstance(response, httpx.Response):
+        if isinstance(response, httpx2.Response):
             return response
-        return httpx.Response(200, json=response)
+        return httpx2.Response(200, json=response)
 
     def client(self):
         client = AsyncOpenAI(api_key="test-placeholder", base_url="https://decisions.test/v1", max_retries=0,
-                             http_client=httpx.AsyncClient(transport=httpx.MockTransport(self.handler)))
+                             http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(self.handler)))
         self.clients.append(client)
         return client
 
@@ -366,7 +366,7 @@ async def test_refused_questions_leave_the_record_with_the_supervisor(decisions)
 async def test_one_failed_order_fails_the_check_and_keeps_the_other_order(decisions):
     def respond(body):
         if body["prompt_cache_key"].endswith(":reversed"):
-            return httpx.Response(429, json={"error": {"message": "slow down", "code": "rate_limit_exceeded"}})
+            return httpx2.Response(429, json={"error": {"message": "slow down", "code": "rate_limit_exceeded"}})
         return {"answers": _answers(body["questions"]), "usage": {"input_tokens": 10}}
 
     decisions.respond = respond
@@ -516,7 +516,7 @@ async def test_review_without_a_bound_scope_is_not_checked(decisions, captured, 
 async def test_provider_failure_is_logged_without_effect(decisions, captured, monkeypatch, caplog):
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
     monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
-    decisions.respond = lambda body: httpx.Response(
+    decisions.respond = lambda body: httpx2.Response(
         503, json={"error": {"message": "overloaded", "type": "server_error", "code": "server_overloaded"}})
     with quick_check.review_scope(QUESTION, _source()):
         quick_check.packet_pinned(_context(), PAGE)
@@ -592,7 +592,7 @@ async def test_reviewer_packet_read_is_unchanged_by_the_shadow_check(outcome, de
     monkeypatch.setenv("VALIDATION_REVIEW_QUICK_CHECK_MODE", "shadow")
     monkeypatch.setattr(quick_check, "_load_packet", lambda *args: _packet())
     if outcome == "provider_failure":
-        decisions.respond = lambda body: httpx.Response(500, json={"error": {"message": "boom"}})
+        decisions.respond = lambda body: httpx2.Response(500, json={"error": {"message": "boom"}})
     elif outcome == "observer_defect":
         monkeypatch.setattr(quick_check, "prepare_check", Mock(side_effect=TypeError("defect")))
     tool = _read_tool(_context())

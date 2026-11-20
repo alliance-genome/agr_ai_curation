@@ -199,7 +199,7 @@ def assemble_in_transaction(
 
 def create_history_reader(scope, artifact_id, *, records, packet_bytes):
     """Resolve exact supplied capabilities; no episode-wide or paper access."""
-    from agents import function_tool
+    from agr_ai_curation_runtime.function_tools import function_tool
     import asyncio
 
     allowed = {item["fact_id"]: item["sha256"] for item in records}

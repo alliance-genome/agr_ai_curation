@@ -2797,7 +2797,7 @@ def _configure_structured_specialist_finalization(
     live_evidence_records: List[Dict[str, Any]],
     compact_runtime: Any = None,
 ) -> Agent:
-    from agents import function_tool
+    from agr_ai_curation_runtime.function_tools import function_tool
 
     if runtime_agent is source_agent:
         runtime_agent = fork_prompt_run(source_agent, copy.copy(source_agent))
@@ -3281,7 +3281,7 @@ def _build_run_state_bound_tool(
     """
     import functools
 
-    from agents import function_tool
+    from agr_ai_curation_runtime.function_tools import function_tool
 
     tool_name = getattr(existing_tool, "name", None) or raw_func.__name__
 
