@@ -1295,3 +1295,26 @@ def test_monitoring_ttl_rejects_invalid_settings(monkeypatch, value):
     monkeypatch.setenv("CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS", value)
     with pytest.raises(ValueError):
         get_connections_health_snapshot_ttl_seconds()
+
+
+def test_default_snapshot_ttl_outlasts_slowest_configured_probe(monkeypatch):
+    """A sweep bounded by the slowest probe must never publish an expired result."""
+    from pathlib import Path
+
+    from src.lib.config import connections_loader as loader
+    from src.lib.openai_agents.config import get_connections_health_snapshot_ttl_seconds
+
+    for name in (
+        "CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS",
+        "CONNECTIONS_CONFIG_OVERLAY_PATH",
+        "CONNECTION_HEALTH_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    repo_connections = Path(__file__).resolve().parents[5] / "config" / "connections.yaml"
+    try:
+        connections = loader.load_connections(repo_connections, force_reload=True)
+        slowest_probe = max(conn.timeout_seconds for conn in connections.values())
+    finally:
+        loader.reset_cache()
+
+    assert get_connections_health_snapshot_ttl_seconds() > slowest_probe
