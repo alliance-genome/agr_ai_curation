@@ -11,6 +11,7 @@ const entry: ChangelogEntry = {
       "heading": "Under the Hood",
       "bullets": [
         "The software libraries the site uses to talk to the AI service, and to look up papers in the Alliance literature collection, were updated to their current versions. Nothing about how you use the site changes, and there is nothing you need to do.",
+        "The AI service has started to turn down some requests at the very start of an extraction. The program now sends such a request once more on a new connection, as it already does for two other kinds of turned-down request.",
         "If anything looks different from before, or a run stops with an error you have not seen before, please report it using the feedback menu so we can look at it."
       ]
     },
