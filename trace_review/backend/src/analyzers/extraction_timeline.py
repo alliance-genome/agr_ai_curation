@@ -1046,6 +1046,8 @@ class ExtractionTimelineAnalyzer:
                 "events": fanout_events,
                 "note": "Fan-out extraction: the submitted plan, each parallel writer's assigned and staged counts, "
                         "failed writers and their re-runs (with the records code removed from the failed attempt), "
+                        "writers_stopped (after a failure or cancellation, how long the other writers took to stop "
+                        "and how each ended; an outcome of completed means a writer finished after the run failed), "
                         "and code finalize attempts. Writers run as separate agent runs in this trace; counts are "
                         "what code observed, not judgments about the records.",
             }} if fanout_events else {}),
