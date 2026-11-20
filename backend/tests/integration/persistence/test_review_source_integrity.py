@@ -23,10 +23,10 @@ from sqlalchemy import select
 
 from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext, prepare_validator_dispatch
 from src.lib.validation_history import projection, runtime, selections, store
-from src.lib.validation_review import admission, extraction_results, extraction_scheduling, reads, work
+from src.lib.validation_review import admission, extraction_results, extraction_scheduling, reads, saved_matches, work
 from src.lib.validation_review.decisions import ReviewContext
 from src.lib.validation_review.tools import create_tools
-from src.lib.validation_review.validator_adapter import MATCH, ValidatorAdapter, save_plan
+from src.lib.validation_review.validator_adapter import ValidatorAdapter, save_plan
 from src.models.sql.validation_history import ValidationFact
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope, DomainEnvelope, FieldRef, ObjectRef, ValidationFinding,
@@ -253,8 +253,7 @@ def _assert_published_source_is_valid(item):
         body = store._content(db, fact)
     DomainEnvelope.model_validate(body["envelope"])
     assert body["matches"], "the accepted record's binding is still published"
-    for match in body["matches"].values():
-        MATCH.validate_python(match)
+    saved_matches.decode(body)
 
 
 @pytest.mark.asyncio

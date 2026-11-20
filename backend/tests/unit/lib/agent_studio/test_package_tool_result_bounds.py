@@ -7,6 +7,7 @@ showing that the complete result stays application-side.
 """
 
 from __future__ import annotations
+from tests.sdk_tool_context_support import tool_context
 
 import json
 from dataclasses import dataclass, field
@@ -224,7 +225,7 @@ async def test_validator_capture_keeps_complete_lookup_and_pages_refs_with_rows(
     assert "result_sha256" not in wrapped.params_json_schema["properties"]
 
     first = json.loads(await wrapped.on_invoke_tool(
-        SimpleNamespace(tool_call_id="call-1"), json.dumps({"method": "search_genes"})
+        tool_context(wrapped.name, tool_call_id="call-1"), json.dumps({"method": "search_genes"})
     ))
     pages = [first]
     assert len(state["calls"]) == 1  # continuation pages the stored lookup, no re-run
@@ -318,7 +319,7 @@ async def test_oversized_builder_result_becomes_reported_compact_failure():
 
     tool = _bound_tool("stage_generic_object", stage)
     result = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name="stage_generic_object", tool_call_id="c1"),
+        tool_context("stage_generic_object", tool_call_id="c1"),
         json.dumps({"candidate_id": "cand-1"}),
     )
 
@@ -334,7 +335,7 @@ async def test_an_oversized_resolver_result_is_replaced_like_any_run_state_resul
 
     tool = _bound_tool("resolve_domain_field_term", resolve)
     result = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name="resolve_domain_field_term", tool_call_id="c2"),
+        tool_context("resolve_domain_field_term", tool_call_id="c2"),
         json.dumps({"field_path": "anatomy"}),
     )
 

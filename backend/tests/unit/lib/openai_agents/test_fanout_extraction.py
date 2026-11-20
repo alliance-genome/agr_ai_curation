@@ -12,9 +12,10 @@ import re
 import time
 
 import pytest
-from agents import Agent, FunctionTool, ModelSettings, RunConfig, function_tool
+from agents import Agent, FunctionTool, ModelSettings, RunConfig
 from agents.items import ModelResponse
 from agents.strict_schema import ensure_strict_json_schema
+from agr_ai_curation_runtime.function_tools import function_tool
 from openai.types.responses import ResponseFunctionToolCall
 
 from src.lib.openai_agents import extraction_builder_workspace as builder
@@ -1335,6 +1336,25 @@ async def test_missing_plan_exhausts_reminder_budget(harness, monkeypatch, confi
                for request in model.requests) == reminders
     assert harness.finalize_calls == []
     assert any(event.get("details", {}).get("reason") == "extraction_plan_missing" for event in harness.events)
+
+
+@pytest.mark.asyncio
+async def test_a_run_keeping_more_than_fifty_records_finalizes_all_of_them_in_one_call(harness):
+    """KANBAN-2100 / ALL-1583: code finalizes every retained record at once, in plan order."""
+    labels = [f"reagent {n}" for n in range(1, 56)]
+    model = ScriptedFanoutModel({"plan": _plan(*labels)})
+
+    await harness.run(model)
+
+    workspace = harness.workspaces[-1]
+    assert workspace.finalization is not None
+    call, = harness.finalize_calls
+    assert len(call) == 55 and len(set(call)) == 55
+    assert workspace.finalization.source_candidate_ids == tuple(call)
+    assert sorted(_finalized_labels(harness)) == sorted(labels)
+    attempt, = [event["output_summary"] for event in harness.trace
+                if event["event_type"] == "extraction_fanout.finalize_attempt"]
+    assert (attempt["candidate_count"], attempt["finalized"]) == (55, True)
 
 
 @pytest.mark.asyncio

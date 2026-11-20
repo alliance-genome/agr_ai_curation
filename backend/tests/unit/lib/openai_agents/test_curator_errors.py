@@ -1,5 +1,5 @@
 """Provider overload and terminal errors never leak payloads or promise unsafe retries."""
-import httpx
+import httpx2
 import pytest
 from agents.models.openai_responses import ResponsesWebSocketError
 from openai import APIConnectionError, APIStatusError
@@ -56,15 +56,26 @@ def test_a_reasoning_input_refusal_that_ends_a_run_is_temporary(param):
     assert failure_for_event(result.event_fields()) == result
 
 
+@pytest.mark.parametrize("param", ["tools[0]", "tools[14]", "tools[15]"])
+def test_a_tool_namespace_refusal_that_ends_a_run_is_temporary(param):
+    result = classify_failure(_through_sdk_wrapper(invalid_request("unsupported_parameter", param)))
+    assert (result.category, result.retryable, result.provider) == ("provider_unavailable", True, "openai")
+    assert "will not fix" not in result.message and "PRIVATE" not in result.message
+    assert failure_for_event(result.event_fields()) == result
+
+
 @pytest.mark.parametrize("error", [
     invalid_request("unsupported_parameter", "input"),
     invalid_request("unsupported_parameter", "tools"),
     invalid_request("unsupported_parameter", "input[2].content"),
+    invalid_request("unsupported_parameter", "tools[x]"),
+    invalid_request("unsupported_parameter", "tools[15].namespace"),
     invalid_request("unsupported_parameter", None),
     invalid_request("invalid_value", "input[2]"),
     websocket("something_new", "invalid_request_error"),
     websocket(None, None),
-], ids=["item-ids-form", "other-param", "nested-param", "no-param", "other-code", "new-code", "untyped"])
+], ids=["item-ids-form", "other-param", "nested-param", "tools-word-index", "tools-nested",
+     "no-param", "other-code", "new-code", "untyped"])
 def test_unrecognised_websocket_errors_are_unknown_not_configuration(error):
     result = classify_failure(_through_sdk_wrapper(error))
     assert (result.category, result.retryable, result.provider) == ("unknown", True, "openai")
@@ -87,7 +98,7 @@ def test_access_quota_and_key_websocket_errors_keep_the_configuration_message(co
     (400, "context_length_exceeded", "context_limit", False),
 ])
 def test_http_provider_errors(status, code, category, retryable):
-    response = httpx.Response(status, request=httpx.Request("POST", "https://example.test"))
+    response = httpx2.Response(status, request=httpx2.Request("POST", "https://example.test"))
     error = APIStatusError("PRIVATE", response=response, body={"code": code})
     result = classify_failure(error)
     assert (result.category, result.retryable) == (category, retryable)
@@ -95,7 +106,7 @@ def test_http_provider_errors(status, code, category, retryable):
 
 
 def test_connection_and_unknown_errors_are_sanitized():
-    error = APIConnectionError(request=httpx.Request("POST", "https://example.test"))
+    error = APIConnectionError(request=httpx2.Request("POST", "https://example.test"))
     assert classify_failure(error).category == "provider_connection"
     assert "PRIVATE" not in classify_failure(ValueError("PRIVATE")).message
     assert failure_for_event({"error_type": "BuilderFinalizationMissing", "message": "PRIVATE"}).retryable is False

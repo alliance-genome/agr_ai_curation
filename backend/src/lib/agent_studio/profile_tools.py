@@ -7,7 +7,7 @@ import json
 from importlib import import_module
 from typing import Any, Callable
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 from src.lib.agent_studio.profile_conformance import ResolvedGenericProfile
 

@@ -1,6 +1,7 @@
 """ALL-1290: remaining structured-display edge cases from the ALL-1282 review."""
 
 from __future__ import annotations
+from tests.sdk_tool_context_support import tool_context
 
 from copy import deepcopy
 from types import SimpleNamespace
@@ -389,7 +390,7 @@ async def test_formatter_default_plan_for_a_selected_source_filters_to_units():
     tools = {tool.name: tool for tool in build_output_formatter_tools(
         bundle=bundle, output_format="csv", formatter_agent_id="csv_formatter", save_projected_output=save)}
     raw = await tools["build_default_projection_plan"].on_invoke_tool(
-        SimpleNamespace(tool_name="build_default_projection_plan"),
+        tool_context("build_default_projection_plan"),
         json.dumps({"row_source": "object", "source_ref": source_key}),
     )
     response = json.loads(raw)

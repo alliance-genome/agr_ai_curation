@@ -24,7 +24,7 @@ There are two measurement points and no per-call-site instrumentation.
 1. **Agents SDK model resolution.**
    `backend/src/lib/openai_agents/model_request_measurement.py`
    `install_model_request_measurement()` wraps the SDK's per-turn model
-   resolution (`agents.run_internal.run_loop.get_model`, pinned SDK 0.17.4).
+   resolution (`agents.run_internal.run_loop.get_model`, pinned SDK 0.25.0).
    Every `Runner.run`, `Runner.run_streamed` and `Runner.run_sync` turn resolves
    its model there, whatever the `RunConfig`, so each turn's model is wrapped in
    `MeasuredModel`. It measures the arguments handed to the provider adapter

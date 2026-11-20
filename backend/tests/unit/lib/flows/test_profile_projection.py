@@ -1,3 +1,4 @@
+from tests.sdk_tool_context_support import tool_context
 from copy import deepcopy
 from uuid import uuid4
 from unittest.mock import Mock
@@ -290,7 +291,6 @@ def test_selected_export_keeps_sources_separate_and_rejects_stale_or_invented_fi
 @pytest.mark.asyncio
 async def test_formatter_tools_cannot_override_selected_fields(profile_step):
     from src.lib.openai_agents.tools.output_formatter_tools import build_output_formatter_tools
-    from types import SimpleNamespace
     import json
     step, _, profile = profile_step
     step["node_id"] = "stocks"
@@ -302,7 +302,7 @@ async def test_formatter_tools_cannot_override_selected_fields(profile_step):
         return {"status": "saved", "file_id": "file1"}
     tools = {tool.name: tool for tool in build_output_formatter_tools(bundle=bundle, output_format="json", formatter_agent_id="json_formatter", configured_plan=plan.model_dump(mode="json"), save_projected_output=saver)}
     async def invoke(name, args):
-        return json.loads(await tools[name].on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(args)))
+        return json.loads(await tools[name].on_invoke_tool(tool_context(name), json.dumps(args)))
     changed = plan.model_dump(mode="json")
     changed["columns"] = changed["columns"][:1]
     assert (await invoke("finalize_and_save", {"plan_json": json.dumps(changed)}))["status"] == "invalid"

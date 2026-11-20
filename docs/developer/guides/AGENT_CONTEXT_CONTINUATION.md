@@ -90,6 +90,7 @@ Responses compaction; they have no claimed equivalent capacity recovery.
 | Workshop main/group/metadata clipping | Removed before the shared boundary |
 | Native trigger | `AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD=250000`; tunable optimization point |
 | Model capabilities | Model catalog plus `AGENT_MODEL_CAPACITY_OVERRIDES_JSON`; verified provider limits, not policy guesses |
+| Capacity headroom | `AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS=20000`; every fit check (sending, standalone compaction input, pending-context pages) uses capacity minus this headroom, because the provider refused a request counted at exactly the limit; 0 restores exact-limit filling |
 | Main/Studio turns | 256; suggestion submission 64; stop at its submission tool |
 | Specialist calls/deadline | 256 total, 64 per specialist, 3600 seconds; bulk optimization cannot lower base turns |
 | Validator calls / synthesis retry | 64; specialized allele bindings also 64 |
@@ -134,4 +135,4 @@ Official references checked October 16, 2026:
 - [Input token counting](https://developers.openai.com/api/docs/guides/token-counting): Responses-shaped exact request accounting.
 - [Agents SDK sessions](https://openai.github.io/openai-agents-python/sessions/): application-owned conversation persistence.
 - [WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode): continuation and reconnect behavior.
-- Installed `openai==2.41.0`, `openai-agents==0.17.4`: request builders, SDK output-to-input conversion and session persistence are the implementation contract.
+- Installed `openai==3.48.0`, `openai-agents==0.25.0`: request builders, SDK output-to-input conversion and session persistence are the implementation contract.

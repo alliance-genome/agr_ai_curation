@@ -1,4 +1,5 @@
 """Reconstructed ALL-1209 topology, not a raw historical trace fixture."""
+from tests.sdk_tool_context_support import tool_context
 import csv
 import io
 import json
@@ -191,7 +192,7 @@ async def test_inventory_inspect_validate_preview_and_saved_csv(tmp_path):
                                          formatter_agent_id="csv_formatter", save_projected_output=save)
     async def invoke(name, **kwargs):
         tool = next(tool for tool in tools if tool.name == name)
-        return json.loads(await tool.on_invoke_tool(SimpleNamespace(tool_name=name), json.dumps(kwargs)))
+        return json.loads(await tool.on_invoke_tool(tool_context(name), json.dumps(kwargs)))
     inventory = await invoke("inspect_output_artifacts", catalog_query="resolved.curie")
     assert PREFIX + "resolved.curie" in {
         field["ref"] for field in inventory["inventory"]["field_catalog"]["entries"]

@@ -1,7 +1,7 @@
 """Exact recovery, authorization and write-failure behavior of canonical history."""
+from tests.sdk_tool_context_support import tool_context
 from dataclasses import replace
 import json
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, func, select
@@ -202,14 +202,14 @@ async def test_large_nested_exact_read_pages_and_search_are_bounded(store, scope
     tools = {tool.name: tool for tool in history_tools(RunHistory(scope, store))}
     cursor, sha, parts = 0, None, []
     while cursor is not None:
-        result = await tools["read_run_history"].on_invoke_tool(SimpleNamespace(tool_name="read_run_history", tool_call_id="read", run_config=None), json.dumps({
+        result = await tools["read_run_history"].on_invoke_tool(tool_context("read_run_history", tool_call_id="read", run_config=None), json.dumps({
             "event_id": ref, "detail_path": "payload.findings.0", "detail_cursor": cursor, "result_sha256": sha}))
         assert result["detail"]["complete"]
         detail = result["detail"]
         parts.append(detail["content"])
         cursor, sha = detail["next_cursor"], detail["sha256"]
     assert json.loads("".join(parts)) == value["findings"][0]
-    bad = await tools["read_run_history"].on_invoke_tool(SimpleNamespace(tool_name="read_run_history", tool_call_id="read", run_config=None), json.dumps({
+    bad = await tools["read_run_history"].on_invoke_tool(tool_context("read_run_history", tool_call_id="read", run_config=None), json.dumps({
         "event_id": ref, "result_sha256": "stale"}))
     assert bad["error_code"] == "stale_result_cursor"
 
@@ -235,7 +235,7 @@ async def test_failed_archive_write_does_not_retry_or_hide_a_completed_mutation(
         assert ACTIVE_HISTORY.get() is history
         return {"saved": True, "id": "saved-1"}
     tool = wrap_history_tools([save_record], history)[0]
-    result = await tool.on_invoke_tool(SimpleNamespace(tool_call_id="call-one", tool_name="save_record", run_config=None), '{"value":"one"}')
+    result = await tool.on_invoke_tool(tool_context("save_record", tool_call_id="call-one", run_config=None), '{"value":"one"}')
     assert calls == ["one"]
     assert result == {"saved": True, "id": "saved-1"}
     assert not history.healthy
@@ -265,7 +265,7 @@ async def test_reused_history_tool_checks_request_identity_again(store, scope, m
     ref = store.append(scope, "output", exact_json({"private": "alice only"}))
     tool = next(t for t in history_tools(RunHistory(scope, store)) if t.name == "read_run_history")
     monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "bob")
-    result = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, tool_call_id="read", run_config=None), json.dumps({"event_id": ref}))
+    result = await tool.on_invoke_tool(tool_context(tool.name, tool_call_id="read", run_config=None), json.dumps({"event_id": ref}))
     assert "alice only" not in str(result)
     assert result["status"] == "invalid_request"
 
@@ -280,7 +280,7 @@ async def test_history_storage_read_failures_report_sanitized_errors(scope, monk
             raise ValueError("SQL private-payload-secret")
         search = read
     tool = next(t for t in history_tools(RunHistory(scope, BrokenStore())) if t.name == operation + "_run_history")
-    result = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, tool_call_id="call", run_config=None),
+    result = await tool.on_invoke_tool(tool_context(tool.name, tool_call_id="call", run_config=None),
         json.dumps({"event_id": "missing"} if operation == "read" else {"query": "private-query"}))
     assert result["status"] == "invalid_request"
     assert len(reports) == 1
@@ -311,7 +311,7 @@ async def test_expected_history_request_failures_do_not_report(store, scope, mon
     else:
         name, arguments = "search_run_history", {"after": -1}
     tool = next(t for t in history_tools(RunHistory(scope, store)) if t.name == name)
-    result = await tool.on_invoke_tool(SimpleNamespace(tool_name=name, tool_call_id="call", run_config=None), json.dumps(arguments))
+    result = await tool.on_invoke_tool(tool_context(name, tool_call_id="call", run_config=None), json.dumps(arguments))
     assert result["status"] == "invalid_request"
     assert reports == []
 
@@ -352,7 +352,7 @@ async def test_corrupt_canonical_history_reports_integrity_failure(store, scope,
         payload = db.scalar(select(AgentHistoryPayload))
         payload.content = exact_json({"value": "corrupt"})
     tool = next(t for t in history_tools(RunHistory(scope, store)) if t.name == "read_run_history")
-    result = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name, tool_call_id="read", run_config=None), json.dumps({"event_id": ref}))
+    result = await tool.on_invoke_tool(tool_context(tool.name, tool_call_id="read", run_config=None), json.dumps({"event_id": ref}))
     assert result["status"] == "invalid_request"
     assert len(reports) == 1 and reports[0][1]["operation"] == "read_failed"
 
@@ -393,6 +393,6 @@ async def test_input_item_recovery_projects_source_output_without_changing_archi
     assert json.loads(projected["payload"]["output"]) == {"chunk_index": 7, "document_id": "doc", "quote": "Not expressed."}
     assert store.read(scope, refs[1])["payload"] == items[1]
     tool = next(tool for tool in history_tools(RunHistory(scope, store)) if tool.name == "read_run_history")
-    recovered = await tool.on_invoke_tool(SimpleNamespace(tool_name="read_run_history", tool_call_id="recover", run_config=None),
+    recovered = await tool.on_invoke_tool(tool_context("read_run_history", tool_call_id="recover", run_config=None),
         json.dumps({"event_id": refs[1], "detail_path": "payload.output"}))
     assert json.loads(recovered["detail"]["content"]) == json.loads(projected["payload"]["output"])

@@ -12,8 +12,12 @@ from src.lib.openai_agents.run_history import exact_json
 class FakeRequest:
     # Synthetic accounting units; these are NOT a model tokenizer or production
     # size estimate. Wire accounting is tested separately with the installed SDK.
-    def __init__(self, capacity=2000):
+    def __init__(self, capacity=2000, headroom=0):
+        # headroom 0 keeps the synthetic units filling to the exact capacity, as
+        # before AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS; headroom tests set it.
         self.capacity = capacity
+        self.headroom = headroom
+        self.input_limit = capacity - headroom
         self.has_context_tool = True
         self.count_calls = 0
         self.count_duration_ms = 0
@@ -121,7 +125,7 @@ def test_prefix_boundaries_do_not_orphan_calls():
 
 @pytest.mark.asyncio
 async def test_count_endpoint_receives_sdk_wire_tools_schema_instructions_and_opaque_state(monkeypatch):
-    import httpx
+    import httpx2
     import json
     from openai import AsyncOpenAI
     from agents import function_tool
@@ -132,8 +136,8 @@ async def test_count_endpoint_receives_sdk_wire_tools_schema_instructions_and_op
     sent = []
     def transport(request):
         sent.append((request.url.path, json.loads(request.content)))
-        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 123})
-    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)))
+        return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 123})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(transport)))
     model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
     request = NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="Keep NOT observed.",
         tools=[lookup], output_schema=None, handoffs=[])
@@ -145,6 +149,7 @@ async def test_count_endpoint_receives_sdk_wire_tools_schema_instructions_and_op
     assert wire["input"] == items
     assert wire["tools"][0]["parameters"]["properties"]["value"]["type"] == "string"
     assert request.capacity == 922000
+    assert request.headroom == 20000 and request.input_limit == 902000, "default headroom"
     assert request.count_calls == 1
     await client.close()
 
@@ -239,40 +244,44 @@ async def test_capacity_recovery_requires_storage_before_paid_compaction():
 
 @pytest.mark.asyncio
 async def test_effective_extra_body_instructions_and_output_reserve_are_counted(monkeypatch):
-    import httpx
+    import httpx2
     import json
     from openai import AsyncOpenAI
     from agents.models.openai_responses import OpenAIResponsesModel
     monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
         "context_window_tokens": 10000, "max_input_tokens": 10000, "max_output_tokens": 4000}}))
+    monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "500")
     sent = []
     def reply(request):
         sent.append(json.loads(request.content))
-        return httpx.Response(200, json={"input_tokens": 100})
-    async with AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply))) as client:
+        return httpx2.Response(200, json={"input_tokens": 100})
+    async with AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply))) as client:
         model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
         request = NativeCapacityRequest(model, ModelSettings(max_tokens=100,
             extra_body={"instructions": "actual instructions", "max_output_tokens": 3000}),
             instructions="overridden", tools=[], output_schema=None, handoffs=[])
         assert request.capacity == 7000
+        assert request.headroom == 500 and request.input_limit == 6500
         await request.count([{"role": "user", "content": "task"}])
         assert sent[0]["instructions"] == request.effective_instructions == "actual instructions"
 
 
 def _sdk_request(monkeypatch, *, capacity=None, sent=None):
     """A real SDK wire with a mocked provider; records token-count calls."""
-    import httpx
+    import httpx2
     import json
     from openai import AsyncOpenAI
     from agents.models.openai_responses import OpenAIResponsesModel
     if capacity is not None:
         monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
             "context_window_tokens": capacity + 1000, "max_input_tokens": capacity, "max_output_tokens": 1000}}))
+        # Synthetic small capacities keep the former exact-limit fit.
+        monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "0")
     sent = [] if sent is None else sent
     def reply(request):
         sent.append(request.url.path)
-        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
-    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply)))
+        return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)))
     model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
     request = NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="Extract records.",
         tools=[], output_schema=None, handoffs=[])
@@ -306,7 +315,7 @@ async def test_request_that_provably_fits_skips_the_token_count_call(monkeypatch
 
 @pytest.mark.asyncio
 async def test_skip_path_serializes_the_real_tool_surface(monkeypatch):
-    import httpx
+    import httpx2
     from openai import AsyncOpenAI
     from openai.types.shared import Reasoning
     from pydantic import BaseModel
@@ -330,8 +339,8 @@ async def test_skip_path_serializes_the_real_tool_surface(monkeypatch):
     sent = []
     def reply(request):
         sent.append(request.url.path)
-        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
-    client = AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(reply)))
+        return httpx2.Response(200, json={"object": "response.input_tokens", "input_tokens": 10})
+    client = AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)))
     model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=client)
     settings = ModelSettings(max_tokens=1000, reasoning=Reasoning(effort="medium", summary="auto"),
         tool_choice="read_chunk", parallel_tool_calls=True, verbosity="low", store=False,
@@ -446,3 +455,116 @@ async def test_deferred_business_choice_overhead_participates_in_capacity_recove
     assert request.compactions == [items[:1]]
     assert settings.tool_choice == "submit_prompt_suggestion"
     assert await request.count(result) <= request.capacity
+
+
+class LinearRequest(FakeRequest):
+    """One synthetic unit per serialized character, with a configurable headroom."""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("headroom", [0, 300])
+async def test_a_page_stops_at_capacity_minus_headroom(headroom):
+    from src.lib.openai_agents.context_capacity import PendingPayload
+    request = LinearRequest(3000, headroom=headroom)
+    policy = ContextCapacityPolicy(MemoryHistory())
+    policy.request = request
+    body = "exact source text " * 400
+    policy.pending = [PendingPayload("source", body, {"role": "user"})]
+    policy.last_input = [{"role": "user", "content": "Read the source."}]
+    call = {"type": "function_call", "call_id": "read", "name": "read_pending_context", "arguments": "{}"}
+    policy.last_output = [call]
+    page = await policy.next_page("read")
+    request_with_page = [*policy.last_input, call,
+                         {"type": "function_call_output", "call_id": "read", "output": str(page)}]
+    sent = await request.count(request_with_page)
+    assert sent <= request.capacity - headroom
+    # The page is the largest that fits: one more character would pass the limit.
+    longer = {**page, "content": body[:page["returned_range"]["end"] + 1]}
+    longer["returned_range"] = {**page["returned_range"], "end": page["returned_range"]["end"] + 1}
+    longer["complete"] = longer["returned_range"]["end"] == len(body)
+    assert await request.count([*request_with_page[:-1], {
+        "type": "function_call_output", "call_id": "read", "output": str(longer)}]) > request.capacity - headroom
+    if headroom == 0:
+        assert sent > request.capacity - 50, "headroom 0 still fills to the exact capacity"
+
+
+@pytest.mark.asyncio
+async def test_prepare_does_not_send_above_capacity_minus_headroom():
+    request = LinearRequest(2000, headroom=200)
+    policy = ContextCapacityPolicy(MemoryHistory())
+    under = [{"role": "user", "content": "x" * 1500}]
+    count = await request.count(under)
+    assert count <= 1800
+    result, _ = await policy.prepare(request, deepcopy(under), ModelSettings())
+    assert result == under and request.compactions == [] and not policy.pending
+    # A request between capacity - headroom and capacity is no longer sent as is.
+    between = [{"role": "user", "content": "x" * (1900 - (count - 1500))}]
+    between_count = await request.count(between)
+    assert 1800 < between_count <= 2000
+    result, settings = await policy.prepare(LinearRequest(2000, headroom=200), deepcopy(between), ModelSettings())
+    assert result != between and policy.pending, "its text moved to pending context instead"
+    assert settings.tool_choice == "read_pending_context"
+
+
+@pytest.mark.asyncio
+async def test_two_page_ingestion_compacts_between_pages_and_covers_both_ranges():
+    history = MemoryHistory()
+    policy = ContextCapacityPolicy(history)
+    request = LinearRequest(3000, headroom=300)
+    body = 'NOT present α😀. "Quoted" exact\n' * 120
+    canonical = [{"role": "user", "content": body}]
+    policy.canonical_input = canonical
+    result, settings = await policy.prepare(request, canonical, ModelSettings())
+    assert await request.count(result) <= request.input_limit
+    pages = []
+    index = 0
+    while policy.pending:
+        index += 1
+        call = {"type": "function_call", "name": "read_pending_context", "call_id": str(index), "arguments": "{}"}
+        policy.observe_output([call])
+        page = await policy.next_page(str(index))
+        pages.append(page)
+        canonical = [*canonical, call, {"type": "function_call_output", "call_id": str(index), "output": str(page)}]
+        policy.canonical_input = canonical
+        result, settings = await policy.prepare(request, policy.apply(canonical), ModelSettings())
+        assert await request.count(result) <= request.input_limit, "no request reaches the exact capacity"
+    assert len(pages) >= 2
+    assert request.compactions, "earlier pages were compacted before the next one"
+    assert "".join(page["content"] for page in pages) == body
+    coverage = [value["range"] for kind, value in history.rows if kind == "context_ingress_coverage"]
+    assert coverage[0]["start"] == 0 and coverage[-1]["end"] == len(body)
+    assert all(earlier["end"] == later["start"] for earlier, later in zip(coverage, coverage[1:]))
+
+
+@pytest.mark.parametrize("raw,expected", [(None, 20000), ("", 20000), ("0", 0), ("15000", 15000)])
+def test_capacity_headroom_setting_defaults_and_follows_the_env(monkeypatch, raw, expected):
+    from src.lib.openai_agents.config import get_agent_context_capacity_headroom_tokens
+    if raw is None:
+        monkeypatch.delenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", raising=False)
+    else:
+        monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", raw)
+    assert get_agent_context_capacity_headroom_tokens() == expected
+
+
+@pytest.mark.parametrize("raw", ["-1", "ten", "1.5"])
+def test_capacity_headroom_setting_rejects_invalid_values(monkeypatch, raw):
+    from src.lib.openai_agents.config import get_agent_context_capacity_headroom_tokens
+    monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", raw)
+    with pytest.raises(ValueError, match="AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS"):
+        get_agent_context_capacity_headroom_tokens()
+
+
+@pytest.mark.parametrize("headroom", ["2000", "2500"])
+def test_capacity_headroom_must_stay_below_the_model_capacity(monkeypatch, headroom):
+    import json
+    from openai import AsyncOpenAI
+    from agents.models.openai_responses import OpenAIResponsesModel
+    from src.lib.openai_agents.model_context_view import ContextRecoveryError
+    monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
+        "context_window_tokens": 3000, "max_input_tokens": 2000, "max_output_tokens": 1000}}))
+    monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", headroom)
+    model = OpenAIResponsesModel(model="gpt-6-astra", openai_client=AsyncOpenAI(api_key="fixture"))
+    with pytest.raises(ContextRecoveryError, match="must be below the input capacity"):
+        NativeCapacityRequest(model, ModelSettings(max_tokens=1000), instructions="x",
+                              tools=[], output_schema=None, handoffs=[])
+

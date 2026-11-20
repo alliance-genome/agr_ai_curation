@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import httpx
+import httpx2
 import pytest
 from agents import ModelSettings
 from openai import InternalServerError
@@ -1156,6 +1156,29 @@ def _reasoning_input_refused(**changes):
     return ResponsesWebSocketError(payload)
 
 
+# The frame OpenAI sent from about 2026-11-20 01:00 UTC for a namespaced (hosted tool
+# search) request that was not the first request on its websocket connection.
+_TOOL_NAMESPACE_REFUSED = {
+    "type": "error",
+    "error": {
+        "message": "This request does not support namespace in 'tools[15]' with 'store=true'.",
+        "type": "invalid_request_error",
+        "param": "tools[15]",
+        "code": "unsupported_parameter",
+    },
+    "status": 400,
+}
+
+
+def _tool_namespace_refused(**changes):
+    from copy import deepcopy
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    payload = deepcopy(_TOOL_NAMESPACE_REFUSED)
+    payload["error"].update(changes)
+    return ResponsesWebSocketError(payload)
+
+
 async def _stream_with_refusals(monkeypatch, failures, *, previous_response_id=None,
                                 retries=None, before_error=(), refusal=_input_item_ids_refused):
     """Run the real SDK retry loop over a request the provider refuses `failures` times.
@@ -1383,14 +1406,14 @@ async def test_other_indexed_param_frames_are_not_retried(monkeypatch, changes):
 @pytest.mark.asyncio
 async def test_an_http_400_with_the_same_body_is_not_retried(monkeypatch):
     """Only the Responses websocket frame is resent; an HTTP 400 still fails at once."""
-    import httpx
+    import httpx2
     from openai import BadRequestError
     from agents.run_internal.model_retry import stream_response_with_retry
 
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", "3")
     _zero_model_retry_delay(monkeypatch)
     attempts = 0
-    response = httpx.Response(400, request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    response = httpx2.Response(400, request=httpx2.Request("POST", "https://api.openai.com/v1/responses"))
 
     def get_stream():
         async def stream():
@@ -2057,9 +2080,9 @@ async def test_get_model_for_agent_builds_single_attempt_openrouter_adapter(monk
     async def failing_route(_request):
         nonlocal attempts
         attempts += 1
-        return httpx.Response(500, json={"error": {"message": "redacted"}})
+        return httpx2.Response(500, json={"error": {"message": "redacted"}})
 
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(failing_route))
+    http_client = httpx2.AsyncClient(transport=httpx2.MockTransport(failing_route))
     monkeypatch.setattr(
         "agents.models.openai_provider.shared_http_client",
         lambda: http_client,
@@ -2252,3 +2275,180 @@ def test_capacity_overrides_malformed_nonempty_is_rejected(monkeypatch, raw):
     monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", raw)
     with pytest.raises(ValueError):
         get_agent_model_capacity_overrides()
+
+
+@pytest.mark.parametrize("param,recognised", [
+    ("tools[0]", True), ("tools[14]", True), ("tools[15]", True),
+    ("tools", False), ("tools[x]", False), ("tools[]", False), ("tools[-1]", False),
+    ("tools[015]", False), ("tools[15].namespace", False), (" tools[15]", False),
+    ("input", False), ("input[2]", False),
+])
+def test_tool_namespace_refusals_are_recognised_by_their_typed_param_only(param, recognised):
+    from src.lib.openai_agents.config import (
+        is_reasoning_input_refusal, is_tool_namespace_refusal, unsupported_parameter_frame_param,
+    )
+
+    error = _tool_namespace_refused(param=param)
+    assert is_tool_namespace_refusal(error) is recognised
+    if param.startswith("tools"):
+        assert is_reasoning_input_refusal(error) is False
+    # The message is never read: a different message with the same typed fields still matches.
+    assert is_tool_namespace_refusal(_tool_namespace_refused(param=param, message="other")) is recognised
+    assert unsupported_parameter_frame_param(error) == param
+
+
+@pytest.mark.parametrize("changes", [
+    {"code": "invalid_value"}, {"type": "server_error"},
+], ids=["other-code", "other-type"])
+def test_other_tool_frames_are_not_tool_namespace_refusals(changes):
+    from src.lib.openai_agents.config import is_tool_namespace_refusal
+
+    assert is_tool_namespace_refusal(_tool_namespace_refused(**changes)) is False
+
+
+@pytest.mark.asyncio
+async def test_a_request_refused_for_a_tool_namespace_is_resent_once_unchanged(monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    events, sent, rewinds, error = await _stream_with_refusals(
+        monkeypatch, failures=1, refusal=_tool_namespace_refused)
+    assert error is None
+    assert events == [{"type": "response.completed"}]
+    assert len(sent) == 2 and len(rewinds) == 1
+    assert sent[1] == sent[0], "the resend is the same request"
+    marked, = [record for record in caplog.records if getattr(record, "retry_marker", None)]
+    assert marked.retry_marker == "responses_tool_namespace_refused"
+    assert marked.refused_param == "tools[15]"
+    assert "responses_tool_namespace_refused: resending" in caplog.text
+    assert "tool namespace param tools[15]" in caplog.text
+    assert "responses_input_item_ids_refused" not in caplog.text
+    assert "responses_reasoning_input_refused" not in caplog.text
+    assert "store=true" not in caplog.text, "the frame message is not logged"
+
+
+@pytest.mark.asyncio
+async def test_a_second_tool_namespace_refusal_is_raised(monkeypatch):
+    from agents.models.openai_responses import ResponsesWebSocketError
+
+    events, sent, _, error = await _stream_with_refusals(
+        monkeypatch, failures=5, refusal=_tool_namespace_refused)
+    assert isinstance(error, ResponsesWebSocketError) and error.code == "unsupported_parameter"
+    assert error.payload["error"]["param"] == "tools[15]"
+    assert len(sent) == 2, "one resend, although OPENAI_MODEL_MAX_RETRIES allows three"
+    assert events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retries,expected_requests", [(0, 1), (2, 3)])
+async def test_tool_namespace_resends_follow_the_shared_setting(monkeypatch, retries, expected_requests):
+    _, sent, _, error = await _stream_with_refusals(
+        monkeypatch, failures=5, retries=retries, refusal=_tool_namespace_refused)
+    assert error is not None and len(sent) == expected_requests
+
+
+@pytest.mark.asyncio
+async def test_a_tool_namespace_refusal_after_a_response_event_is_not_resent(monkeypatch):
+    tool_call = {"type": "response.output_item.added",
+                 "item": {"type": "function_call", "call_id": "call_fixture", "name": "lookup_record"}}
+    events, sent, rewinds, error = await _stream_with_refusals(
+        monkeypatch, failures=1, before_error=[tool_call], refusal=_tool_namespace_refused)
+    assert error is not None and len(sent) == 1 and rewinds == []
+    assert events == [tool_call]
+
+
+@pytest.mark.asyncio
+async def test_a_stateful_request_refused_for_a_tool_namespace_is_not_replayed(monkeypatch):
+    _, sent, _, error = await _stream_with_refusals(
+        monkeypatch, failures=1, previous_response_id="resp_fixture", refusal=_tool_namespace_refused)
+    assert error is not None and len(sent) == 1, "no replay approval for previous_response_id requests"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refusal,marker", [
+    (_input_item_ids_refused, "responses_input_item_ids_refused"),
+    (_reasoning_input_refused, "responses_reasoning_input_refused"),
+])
+async def test_the_existing_refusal_resends_keep_their_own_markers(monkeypatch, caplog, refusal, marker):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    _, sent, _, error = await _stream_with_refusals(monkeypatch, failures=1, refusal=refusal)
+    assert error is None and len(sent) == 2
+    marked, = [record for record in caplog.records if getattr(record, "retry_marker", None)]
+    assert marked.retry_marker == marker
+    assert "responses_tool_namespace_refused" not in caplog.text
+
+
+_NAMESPACED_FRAME_TOOLS = [
+    {"type": "tool_search", "execution": "server"},
+    {"type": "namespace", "name": "evidence_maintenance", "description": "Evidence upkeep.",
+     "tools": [{"type": "function", "name": "get_recorded_evidence", "defer_loading": True,
+                "parameters": {"type": "object", "properties": {}}, "strict": True}]},
+]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_namespace_refusal_on_a_warm_connection_is_resent_on_a_new_connection(monkeypatch):
+    """The refusal happens on a reused connection; the resend must not reuse it."""
+    from agents.run_internal.model_retry import stream_response_with_retry
+
+    def completed(response_id):
+        return {"type": "response.completed", "sequence_number": 1,
+                "response": {**_RESENT_RESPONSE, "id": response_id}}
+
+    warm = _RecordedWebSocket([completed("resp_warm"), _TOOL_NAMESPACE_REFUSED])
+    fresh = _RecordedWebSocket([completed("resp_resent")])
+    model, client, opened = _ws_model_over(monkeypatch, [warm, fresh])
+
+    async def rewind():
+        pass
+
+    try:
+        # An earlier request (the supervisor's) warms the connection.
+        warmup = [event async for event in model._iter_websocket_response_events(
+            {"model": "gpt-test", "input": "hello"})]
+        assert [event.type for event in warmup] == ["response.completed"] and len(opened) == 1
+        events = [event async for event in stream_response_with_retry(
+            get_stream=lambda: model._iter_websocket_response_events(
+                {"model": "gpt-test", "input": list(_REPLAYED_INPUT), "tools": _NAMESPACED_FRAME_TOOLS}),
+            rewind=rewind, retry_settings=build_default_model_retry(),
+            get_retry_advice=model.get_retry_advice, previous_response_id=None, conversation_id=None)]
+    finally:
+        await client.close()
+    assert [event.type for event in events] == ["response.completed"]
+    assert len(opened) == 2 and opened[1] is fresh, "the resend opened a new connection"
+    assert warm.closed, "the refused warm connection was dropped"
+    assert len(warm.sent) == 2 and len(fresh.sent) == 1
+    assert fresh.sent[0] == warm.sent[1], "the same request frame, namespaces and store unchanged"
+    assert "store" not in fresh.sent[0] and fresh.sent[0]["tools"][1]["type"] == "namespace"
+
+
+@pytest.mark.asyncio
+async def test_the_non_streaming_path_resends_a_tool_namespace_refusal_over_a_fresh_connection(monkeypatch):
+    from agents.models.interface import ModelTracing
+    from agents.run_internal.model_retry import get_response_with_retry
+
+    model, client, opened = _ws_model_over(monkeypatch, [
+        _RecordedWebSocket([_TOOL_NAMESPACE_REFUSED]),
+        _RecordedWebSocket([{"type": "response.completed", "sequence_number": 0, "response": _RESENT_RESPONSE}]),
+    ])
+
+    async def get_response():
+        return await model.get_response(system_instructions=None, input=list(_REPLAYED_INPUT),
+            model_settings=ModelSettings(), tools=[], output_schema=None, handoffs=[],
+            tracing=ModelTracing.DISABLED, previous_response_id=None, conversation_id=None, prompt=None)
+
+    async def rewind():
+        pass
+
+    try:
+        response = await get_response_with_retry(get_response=get_response, rewind=rewind,
+            retry_settings=build_default_model_retry(), get_retry_advice=model.get_retry_advice,
+            previous_response_id=None, conversation_id=None)
+    finally:
+        await client.close()
+    assert response.response_id == "resp_resent"
+    assert len(opened) == 2 and opened[0].closed
+    assert opened[1].sent[0] == opened[0].sent[0]
+

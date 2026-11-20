@@ -1,5 +1,6 @@
 """Branch tests for run_agent_streamed orchestration paths."""
 
+from tests.sdk_tool_context_support import tool_context
 from agents import RunConfig as SDKRunConfig
 
 import asyncio
@@ -1670,7 +1671,7 @@ class _RunStateToolCallingRunResult:
     async def stream_events(self):
         tool = next(t for t in self._agent.tools if t.name == "stage_probe_observation")
         self._captured["tool_output"] = await tool.on_invoke_tool(
-            SimpleNamespace(tool_name=tool.name, run_config=None), "{}"
+            tool_context(tool.name, run_config=None), "{}"
         )
         if False:
             yield None

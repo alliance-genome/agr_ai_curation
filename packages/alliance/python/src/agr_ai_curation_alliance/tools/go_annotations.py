@@ -9,7 +9,7 @@ from typing import Any, Callable, Literal
 from urllib.parse import quote
 
 import requests
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 logger = logging.getLogger(__name__)

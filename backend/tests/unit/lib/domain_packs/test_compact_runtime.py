@@ -1,5 +1,6 @@
 """Raw lookup capture, explicit batch scope, and all-or-nothing assembly."""
 
+from tests.sdk_tool_context_support import tool_context
 import json
 from types import SimpleNamespace
 
@@ -104,7 +105,7 @@ async def test_batch_lookup_preserves_raw_count_and_projects_records_by_request(
     runtime = CompactValidatorRuntime([contract("a"), contract("b")], adapter)
     wrapped = runtime.wrap_lookup_tool(tool)
     assert "validator_request_ids" not in tool.params_json_schema["properties"]
-    response = json.loads(await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id="call-1"), json.dumps({
+    response = json.loads(await wrapped.on_invoke_tool(tool_context(wrapped.name, tool_call_id="call-1"), json.dumps({
         "method": "search", "validator_request_ids": ["a", "b"],
     })))
     assert calls == [{"method": "search"}]
@@ -130,7 +131,7 @@ async def test_invalid_batch_scope_rejected_before_provider_call(ids):
     runtime = CompactValidatorRuntime([contract("a"), contract("b")], adapter)
     tool = SimpleNamespace(name="lookup", params_json_schema={"type": "object"}, on_invoke_tool=forbidden)
     with pytest.raises(ValueError, match="unique known"):
-        await runtime.wrap_lookup_tool(tool).on_invoke_tool(None, json.dumps({"validator_request_ids": ids}))
+        await runtime.wrap_lookup_tool(tool).on_invoke_tool(tool_context("lookup"), json.dumps({"validator_request_ids": ids}))
 
 
 @pytest.mark.asyncio
@@ -144,9 +145,9 @@ async def test_single_request_scope_owned_by_runtime_and_capture_is_immutable():
     tool = SimpleNamespace(name="lookup", params_json_schema={"type": "object"}, on_invoke_tool=invoke)
     wrapped = runtime.wrap_lookup_tool(tool)
     assert "validator_request_ids" not in wrapped.params_json_schema.get("properties", {})
-    response = json.loads(await wrapped.on_invoke_tool(None, '{"method":"search"}'))
+    response = json.loads(await wrapped.on_invoke_tool(tool_context("lookup"), '{"method":"search"}'))
     source["data"][0]["id"] = "EX:forged"
     result = runtime.assemble(decision("a", response["validator_record_refs"][0]["record_ref"]))
     assert result.resolved_values == {"identifier": "EX:1"}
     with pytest.raises(ValueError, match="runtime"):
-        await wrapped.on_invoke_tool(None, '{"method":"search","validator_request_ids":["a"]}')
+        await wrapped.on_invoke_tool(tool_context("lookup"), '{"method":"search","validator_request_ids":["a"]}')
