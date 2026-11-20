@@ -495,6 +495,31 @@ async def get_existing_chunk_indexes(
     return query() if _run_sync_in_package_tool_subprocess() else await asyncio.to_thread(query)
 
 
+async def count_document_chunks(*, user_id: str, document_id: str) -> int:
+    """Return how many chunks the authenticated document has stored.
+
+    One tenant-scoped aggregate count; no chunk text is read. Query failures and
+    malformed counts raise.
+    """
+    if not document_id or not user_id:
+        raise ValueError("Document and user scope are required")
+    connection = get_connection()
+
+    def count() -> int:
+        with connection.session() as client:
+            from ..weaviate_helpers import get_user_collections
+            collection, _ = get_user_collections(client, user_id)
+            total = collection.aggregate.over_all(
+                filters=Filter.by_property("documentId").equal(document_id),
+                total_count=True,
+            ).total_count
+            if type(total) is not int or total < 0:
+                raise TypeError("Document chunk count query returned no valid chunk count")
+            return total
+
+    return count() if _run_sync_in_package_tool_subprocess() else await asyncio.to_thread(count)
+
+
 async def get_chunk_neighbor_ids(
     *,
     document_id: str,

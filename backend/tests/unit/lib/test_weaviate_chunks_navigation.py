@@ -756,3 +756,41 @@ async def test_local_chunk_index_never_selects_first_duplicate(monkeypatch, coun
     args = collection.query.fetch_objects.call_args.kwargs
     assert args["limit"] == 2
     assert [f.value for f in args["filters"].filters] == ["doc-a", 42]
+
+
+@pytest.mark.asyncio
+async def test_count_document_chunks_counts_every_stored_chunk_of_the_document(monkeypatch):
+    _sync_to_thread(monkeypatch)
+    collection = MagicMock()
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=349)
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())) as collections:
+        count = await chunks.count_document_chunks(user_id="user-1", document_id="doc-1")
+
+    assert count == 349
+    collections.assert_called_once()
+    assert collections.call_args.args[1] == "user-1"
+    kwargs = collection.aggregate.over_all.call_args.kwargs
+    assert kwargs["total_count"] is True
+    assert kwargs["filters"] == chunks.Filter.by_property("documentId").equal("doc-1")
+    collection.query.fetch_objects.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total", [None, -1, "349", True])
+async def test_count_document_chunks_rejects_a_malformed_store_count(monkeypatch, total):
+    _sync_to_thread(monkeypatch)
+    collection = MagicMock()
+    collection.aggregate.over_all.return_value = SimpleNamespace(total_count=total)
+    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
+         patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
+        with pytest.raises(TypeError, match="chunk count"):
+            await chunks.count_document_chunks(user_id="user-1", document_id="doc-1")
+
+
+@pytest.mark.asyncio
+async def test_count_document_chunks_requires_document_and_user_scope():
+    with pytest.raises(ValueError, match="scope"):
+        await chunks.count_document_chunks(user_id="", document_id="doc-1")
+    with pytest.raises(ValueError, match="scope"):
+        await chunks.count_document_chunks(user_id="user-1", document_id="")

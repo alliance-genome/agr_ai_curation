@@ -317,17 +317,120 @@ async def test_read_chunk_tool_raises_when_backend_chunk_id_missing(monkeypatch)
         await tool(1)
 
 
-@pytest.mark.asyncio
-async def test_read_chunk_tool_handles_missing_chunk(monkeypatch):
+def _missing_chunk_store(monkeypatch, *, chunk_count):
+    """A store that finds no chunk at the requested index and holds ``chunk_count`` chunks."""
+    counted = []
+
     async def _fake_get_chunk_by_index(**_kwargs):
         return None
 
+    async def _fake_count_document_chunks(**kwargs):
+        counted.append(kwargs)
+        return chunk_count
+
+    async def _no_neighbors(**_kwargs):
+        raise AssertionError("a missing chunk must not be navigated")
+
     monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
+    monkeypatch.setattr(weaviate_search, "count_document_chunks", _fake_count_document_chunks)
+    monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _no_neighbors)
+    return counted
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_past_the_end_returns_the_valid_range_to_the_model(monkeypatch):
+    """The November 6 case: a 349-chunk document (indexes 0 to 348) and read_chunk(349)."""
+    counted = _missing_chunk_store(monkeypatch, chunk_count=349)
+    retain = AsyncMock()
+    monkeypatch.setattr(weaviate_search, "retain_issued_spans", retain)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    result = await tool(349)
+
+    assert result.summary == (
+        "Invalid read_chunk request: chunk_index 349 does not exist; "
+        "this document has chunks 0 to 348."
+    )
+    assert result.chunk is None
+    assert result.error_code == "invalid_result_cursor"
+    assert counted == [{"user_id": "user-1", "document_id": "doc-12345678"}]
+    retain.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_past_the_end_reaches_the_model_as_a_request_error(monkeypatch):
+    from src.lib.agent_studio import catalog_service
+
+    _missing_chunk_store(monkeypatch, chunk_count=349)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    result = await tool(400)
+
+    assert catalog_service._document_model_result("read_chunk", result.model_dump(mode="json")) == {
+        "summary": (
+            "Invalid read_chunk request: chunk_index 400 does not exist; "
+            "this document has chunks 0 to 348."
+        ),
+        "error_code": "invalid_result_cursor",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("chunk_index", "chunk_count"), [(100, 349), (348, 349), (0, 0), (5, 0)])
+async def test_read_chunk_missing_chunk_inside_the_document_still_fails(
+    monkeypatch, chunk_index, chunk_count
+):
+    """An index the document should hold, or any read of a document with no stored chunks,
+    is a failed source read and still stops the run."""
+    _missing_chunk_store(monkeypatch, chunk_count=chunk_count)
     tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
 
     from agr_ai_curation_runtime.document_errors import DocumentReadError
     with pytest.raises(DocumentReadError):
-        await tool(999)
+        await tool(chunk_index)
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_missing_chunk_with_failed_count_still_fails(monkeypatch):
+    from agents import function_tool  # pyright: ignore[reportMissingImports]
+
+    _missing_chunk_store(monkeypatch, chunk_count=0)
+
+    async def _count_boom(**_kwargs):
+        raise RuntimeError("count blew up")
+
+    monkeypatch.setattr(weaviate_search, "count_document_chunks", _count_boom)
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+    payload = {"chunk_index": 349}
+
+    with pytest.raises(RuntimeError, match="required PDF") as caught:
+        await tool.on_invoke_tool(
+            _build_tool_context(tool.name, payload), json.dumps(payload)
+        )
+    assert str(caught.value.__cause__) == "count blew up"
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_found_chunk_does_not_count_the_document(monkeypatch):
+    async def _fake_get_chunk_by_index(**_kwargs):
+        return {"id": "chunk-1", "text": "Exact raw chunk text.", "chunk_index": 0}
+
+    async def _fake_get_chunk_neighbor_ids(**_kwargs):
+        return {"previous_chunk_id": None, "next_chunk_id": None}
+
+    async def _no_count(**_kwargs):
+        raise AssertionError("a found chunk must not cost a count query")
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _fake_get_chunk_by_index)
+    monkeypatch.setattr(weaviate_search, "get_chunk_neighbor_ids", _fake_get_chunk_neighbor_ids)
+    monkeypatch.setattr(weaviate_search, "count_document_chunks", _no_count)
+    tool = weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+    result = await tool(0)
+
+    assert result.chunk is not None
+    assert result.error_code is None
 
 
 @pytest.mark.asyncio

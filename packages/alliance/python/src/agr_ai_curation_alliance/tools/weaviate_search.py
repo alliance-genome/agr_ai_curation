@@ -24,6 +24,7 @@ from agr_ai_curation_runtime.evidence_spans import (
 from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
 from agr_ai_curation_runtime.tool_result_bounds import parse_offset
 from agr_ai_curation_runtime.weaviate_chunks import (
+    count_document_chunks,
     hybrid_search_chunks,
     get_chunk_by_index,
     get_chunk_neighbor_ids,
@@ -430,6 +431,18 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
             document_id=document_id,
         )
         if not chunk:
+            # An index past the document's last chunk is a request error the model
+            # can correct; a missing chunk inside the range is a failed source read.
+            chunk_count = await count_document_chunks(user_id=user_id, document_id=document_id)
+            if chunk_count > 0 and chunk_index >= chunk_count:
+                return ChunkReadResult(
+                    summary=(
+                        f"Invalid read_chunk request: chunk_index {chunk_index} does not exist; "
+                        f"this document has chunks 0 to {chunk_count - 1}."
+                    ),
+                    chunk=None,
+                    error_code="invalid_result_cursor",
+                )
             raise DocumentReadError("read_chunk")
 
         chunk_id = _read_actual_chunk_id(str(chunk_index), chunk)
