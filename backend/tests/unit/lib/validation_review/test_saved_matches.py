@@ -178,3 +178,32 @@ def test_a_match_object_outside_its_envelope_is_refused():
 
     with pytest.raises(store.HistoryConflict, match="not one object of its envelope"):
         saved_matches.encode({target: copied}, plan_envelope=envelope.model_dump(mode="json"))
+
+
+def test_each_records_checked_field_paths_are_saved_once_and_read_back():
+    # Which of a record's quotes each check receives depends on the field paths
+    # every active check on that record reads (ALL-1584); a saved plan keeps them.
+    envelope, matches = plan_matches(6)
+    assert any(match.record_binding_paths for match in matches.values())
+    plan_envelope = envelope.model_dump(mode="json")
+    saved = store.canonical(saved_matches.encode(matches, plan_envelope=plan_envelope))[1]
+
+    distinct = {match.record_binding_paths for match in matches.values()}
+    assert len(saved["match_parts"]["record_binding_paths"]) == len(distinct)
+    assert all(len(item["record_binding_paths"]) == 64 for item in saved["matches"].values())
+
+    restored = saved_matches.decode({**saved, "envelope": plan_envelope})
+    for target, match in matches.items():
+        assert restored[target].record_binding_paths == match.record_binding_paths
+        assert type(restored[target].record_binding_paths) is tuple
+
+
+def test_a_saved_match_without_its_records_checked_field_paths_is_not_read():
+    envelope, matches = plan_matches(2)
+    plan_envelope = envelope.model_dump(mode="json")
+    saved = store.canonical(saved_matches.encode(matches, plan_envelope=plan_envelope))[1]
+    for item in saved["matches"].values():
+        del item["record_binding_paths"]
+
+    with pytest.raises(KeyError):
+        saved_matches.decode({**saved, "envelope": plan_envelope})

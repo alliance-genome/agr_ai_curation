@@ -336,3 +336,30 @@ def test_selection_leaves_object_evidence_and_record_wide_selectors_unchanged(tm
         build_domain_validation_request(match)
     assert envelope.model_dump(mode="json") == snapshot
     assert envelope.extracted_objects[0].evidence_record_ids == ["ev-anatomy", "ev-untagged"]
+
+
+def test_a_check_a_flow_leaves_out_still_owns_its_fields_quotes(tmp_path):
+    """Chris's decision 5: ownership comes from every active check for the data type."""
+    from src.lib.validation_history import store
+    from src.lib.validation_review.flow_plan import configured_registry
+    from src.lib.validation_review.validator_adapter import REGISTRY, saved_registry
+
+    registry = DomainPackValidationRegistry.from_domain_pack(_pack(tmp_path))
+    groups = [{"binding_id": binding.binding_id, "state": "automatic"}
+              for binding in registry.bindings
+              if binding.state is ValidationBindingState.ACTIVE and binding.binding_id != "component"]
+    flow_registry = configured_registry(registry, groups, nodes=())
+    assert "component" not in {binding.binding_id for binding in flow_registry.bindings}
+
+    # A review's saved plan keeps the flow's registry; follow-ups match on the read-back copy.
+    saved = REGISTRY.validate_python(store.canonical(saved_registry(flow_registry))[1])
+    envelope = _envelope([_record("ev-component", "site.component"), _record("ev-statement", "statement")])
+    for candidate in (flow_registry, saved):
+        delivered = {match.binding.binding_id: [record["evidence_record_id"]
+                                                for record in build_domain_validation_request(match).request.evidence]
+                     for match in candidate.match_bindings(envelope)
+                     if match.field_path in {None, *match.binding.field_paths}}
+        # Only the left-out check reads site.component, and it still owns that quote.
+        assert "component" not in delivered
+        assert delivered["anatomy"] == delivered["stage"] == ["ev-statement"]
+        assert delivered["whole_record"] == ["ev-component", "ev-statement"]

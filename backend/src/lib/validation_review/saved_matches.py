@@ -4,6 +4,9 @@ A ``ValidatorBindingMatch`` holds the whole envelope it was matched on, plus
 its binding, object definition, field definition and policy. The matches of
 one plan share those objects, so saving every match whole made a plan body
 grow with matches times records: a 97-record paper produced a 2.2 GB body.
+The field paths every active check on a record reads (``record_binding_paths``,
+which decide which of the record's quotes each check receives) are shared by
+all matches on that record, so they are a part too.
 
 A saved body keeps every distinct part once in ``match_parts``, keyed by the
 SHA-256 of its canonical JSON. Each saved match names its parts by key and its
@@ -42,6 +45,7 @@ _READERS = {
     "object_definitions": TypeAdapter(DomainPackObjectDefinition),
     "field_definitions": TypeAdapter(DomainPackFieldDefinition),
     "policies": TypeAdapter(FieldValidationPolicy),
+    "record_binding_paths": TypeAdapter(tuple[str, ...]),
 }
 # Match attribute -> saved part kind, for the parts other than the envelope.
 _PART_FIELDS = {
@@ -49,6 +53,7 @@ _PART_FIELDS = {
     "object_definition": "object_definitions",
     "field_definition": "field_definitions",
     "policy": "policies",
+    "record_binding_paths": "record_binding_paths",
 }
 
 
@@ -80,6 +85,7 @@ _WRITERS = {
     "object_definitions": lambda value: _READERS["object_definitions"].dump_python(value, mode="json"),
     "field_definitions": lambda value: _READERS["field_definitions"].dump_python(value, mode="json"),
     "policies": lambda value: _READERS["policies"].dump_python(value, mode="json"),
+    "record_binding_paths": list,
 }
 
 

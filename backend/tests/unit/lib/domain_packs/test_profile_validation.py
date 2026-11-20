@@ -243,7 +243,7 @@ def test_compilation_retains_complete_provider_scope_and_selector(example, const
 
 def test_compiled_nullable_constant_survives_review_plan_serialization(example):
     from src.lib.validation_review import saved_matches
-    from src.lib.validation_review.validator_adapter import REGISTRY
+    from src.lib.validation_review.validator_adapter import REGISTRY, saved_registry
     raw, cap, pack = example
     reuse = cap.binding.custom_profile_reuse.model_copy(deep=True)
     reuse.inputs["mention"] = reuse.inputs["mention"].model_copy(
@@ -256,8 +256,7 @@ def test_compiled_nullable_constant_survives_review_plan_serialization(example):
     context = compile_profile_validation(receipt, profile, pack, capabilities=[cap])
     assert not context.unavailable
     compiled, = context.registry.bindings
-    saved = REGISTRY.dump_python(context.registry, mode="json")
-    saved["bindings"] = [saved_matches.serialize_binding(compiled)]
+    saved = saved_registry(context.registry)
     assert saved["bindings"][0]["input_fields"]["mention"]["value"] is None
     assert "value" in saved["bindings"][0]["input_fields"]["mention"]
     assert REGISTRY.validate_python(saved) == context.registry

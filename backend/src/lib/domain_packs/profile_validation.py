@@ -213,6 +213,7 @@ def compile_profile_validation(
     registry = DomainPackValidationRegistry(
         domain_pack=pack, validator_metadata=(), bindings=tuple(bindings),
         field_policies=_build_field_policies(pack, tuple(bindings)),
+        ownership_bindings=tuple(bindings),
     )
     return ProfileValidationContext(receipt, profile, registry, tuple(selected), tuple(unavailable))
 

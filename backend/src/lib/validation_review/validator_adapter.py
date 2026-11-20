@@ -173,6 +173,16 @@ def _checked_matches(matches, *, plan_envelope):
     return saved
 
 
+def saved_registry(registry):
+    """The plan's registry as saved, proven to read back."""
+    saved = REGISTRY.dump_python(registry, mode="json")
+    for name in ("bindings", "ownership_bindings"):
+        saved[name] = [saved_matches.serialize_binding(binding_definition)
+                       for binding_definition in getattr(registry, name)]
+    REGISTRY.validate_python(saved)
+    return saved
+
+
 def save_plan(plan, *, context):
     from types import SimpleNamespace
     from src.lib.domain_packs.validation_registry import ValidationBindingState
@@ -186,10 +196,7 @@ def save_plan(plan, *, context):
         lambda: _checked_matches(dict(zip(targets, plan.matches, strict=True)), plan_envelope=envelope),
         artifact_id=binding.artifact_id, episode_id=plan.envelope.metadata["review_episode_id"],
         stage="saved_plan_match")
-    registry = REGISTRY.dump_python(plan.registry, mode="json")
-    registry["bindings"] = [saved_matches.serialize_binding(binding_definition)
-                            for binding_definition in plan.registry.bindings]
-    REGISTRY.validate_python(registry)
+    registry = saved_registry(plan.registry)
     body = {
         "registry": registry,
         "envelope": envelope,

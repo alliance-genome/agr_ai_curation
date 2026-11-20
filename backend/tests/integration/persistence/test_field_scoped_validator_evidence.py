@@ -212,6 +212,8 @@ async def test_four_corrected_records_revalidate_only_changed_bindings_within_bu
                                                               f"new-{index}-{name}"]
 
     assert _extra_attempts_left(item) == 16 - RECORDS * len(CORRECTED)
+    # The review did not stop: every correction fit inside the paper's re-check limit.
+    assert admission.status(item.scope, item.ep)["state"] in {"complete", "pending"}
     final = checkpoint().envelope
     for index, obj in enumerate(final.extracted_objects):
         # The record keeps all of its evidence; only validator inputs are field-scoped.

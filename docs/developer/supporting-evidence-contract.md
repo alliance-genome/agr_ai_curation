@@ -72,8 +72,13 @@ reads quote text. The rule lives in `backend/src/lib/domain_packs/evidence_scope
 - Evidence whose tags match no declared path of any active validator binding on
   the record (for example a free-text statement field that no validator reads)
   also goes to every binding on the record. Ownership is computed per object from
-  the registry's active validator bindings, independent of the states a caller
-  matches, the payload and group or flow filtering.
+  every active validator binding of the data type
+  (`DomainPackValidationRegistry.ownership_bindings`), independent of the states
+  a caller matches, the payload and group or flow filtering. A flow that leaves
+  a check out narrows `bindings` only, so that check still owns its fields'
+  evidence. Each match carries the result as `record_binding_paths`; a saved
+  review plan stores it once per distinct value in `match_parts` and saves the
+  registry's `ownership_bindings` next to its `bindings`.
 - A record with at least one claimed tag goes only to the bindings whose own
   paths match one of its tags, even if it also carries an unclaimed tag.
 - A binding with an `evidence_record` selector that has no `field_path` reads the

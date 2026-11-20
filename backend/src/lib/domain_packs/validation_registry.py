@@ -664,6 +664,10 @@ class DomainPackValidationRegistry:
     validator_metadata: tuple[ValidatorMetadataEntry, ...]
     bindings: tuple[ValidatorBinding, ...]
     field_policies: tuple[FieldValidationPolicy, ...]
+    # Every binding of the data type, kept when a flow narrows ``bindings``:
+    # which fields' evidence belongs to some check does not depend on which
+    # checks a flow runs.
+    ownership_bindings: tuple[ValidatorBinding, ...]
 
     @classmethod
     def from_domain_pack(
@@ -711,6 +715,7 @@ class DomainPackValidationRegistry:
             ),
             bindings=normalized_bindings,
             field_policies=_build_field_policies(domain_pack, normalized_bindings),
+            ownership_bindings=normalized_bindings,
         )
 
     @property
@@ -883,12 +888,13 @@ class DomainPackValidationRegistry:
     ) -> dict[int, tuple[str, ...]]:
         """Declared field paths of the active validator bindings on each object.
 
-        Independent of the states a caller matches and of payload contents, so
-        every caller assigns a record's evidence to the same bindings.
+        Independent of the states a caller matches, of payload contents and of
+        the checks a flow runs, so every caller assigns a record's evidence to
+        the same bindings.
         """
 
         paths: dict[int, list[str]] = {id(obj): [] for obj in envelope.extracted_objects}
-        for binding in self.bindings:
+        for binding in self.ownership_bindings:
             if binding.state is not ValidationBindingState.ACTIVE or not binding.validator_agents():
                 continue
             if (
