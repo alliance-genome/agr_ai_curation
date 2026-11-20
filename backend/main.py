@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 os.environ['POSTHOG_DISABLED'] = 'true'  # Disable PostHog telemetry
 os.environ['ANONYMIZED_TELEMETRY'] = 'False'  # Disable ChromaDB telemetry (capital F)
 
-from src.api import documents, chunks, processing, strategies, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, generic_profiles, logs, flows, flow_exports, files, maintenance, batch, pdf_jobs, curation_workspace, observability
+from src.api import documents, chunks, processing, settings, schema, health, chat, pdf_viewer, feedback, auth, users, agent_studio, agent_studio_custom, generic_profiles, logs, flows, flow_exports, files, maintenance, batch, pdf_jobs, curation_workspace, observability
 from src.api.benchmark_sources import (
     install_benchmark_input_resolvers,
     router as benchmark_sources_router,
@@ -965,7 +965,6 @@ def create_app() -> FastAPI:
     application.include_router(pdf_jobs.router, tags=["PDF Jobs"])
     application.include_router(chunks.router, tags=["Chunks"])
     application.include_router(processing.router, tags=["Processing"])
-    application.include_router(strategies.router, tags=["Strategies"])
     application.include_router(settings.router, tags=["Settings"])
     application.include_router(schema.router, tags=["Schema"])
     application.include_router(health.router, tags=["Health"])

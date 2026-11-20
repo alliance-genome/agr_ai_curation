@@ -4,6 +4,7 @@ Tests that the health API properly redacts credentials and returns
 expected response structure.
 
 Note: These endpoints are public (no auth required) for monitoring purposes.
+Both answer from the shared cached observation.
 """
 
 import pytest
@@ -131,10 +132,11 @@ class TestConnectionsHealthEndpointSecurity:
     ):
         """GET /api/admin/health/connections/{service_id} should never expose credentials."""
         with patch(
-            "src.lib.config.connections_loader.check_service_health",
+            "src.lib.config.connections_loader.check_all_health",
             new_callable=AsyncMock,
         ) as mock_check:
-            mock_check.return_value = True
+            from src.lib.config.connections_loader import get_connection_status
+            mock_check.return_value = get_connection_status()
 
             response = await test_client.get("/api/admin/health/connections/test_db")
 

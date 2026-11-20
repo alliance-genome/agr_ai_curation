@@ -31,7 +31,18 @@ docker compose logs --tail=200 langfuse > "${OUT_DIR}/langfuse_logs_tail.txt" 2>
 if ! curl -sS --fail --max-time 8 http://localhost:8000/health > "${OUT_DIR}/backend_health.json" 2>"${OUT_DIR}/backend_health.err"; then
   FAILURES=$((FAILURES + 1))
 fi
-if ! curl -sS --fail --max-time 8 http://localhost:8000/api/admin/health/llm-providers > "${OUT_DIR}/llm_provider_health.json" 2>"${OUT_DIR}/llm_provider_health.err"; then
+# The provider report requires login. A local dev-mode backend signs requests
+# in without credentials; anywhere else, set TESTING_API_KEY. The key is sent as
+# X-API-Key and read by curl from stdin, so it never appears in the process list.
+fetch_llm_provider_health() {
+  local url="http://localhost:8000/api/admin/health/llm-providers"
+  if [[ -n "${TESTING_API_KEY:-}" ]]; then
+    curl -sS --fail --max-time 8 -H @- "${url}" <<<"X-API-Key: ${TESTING_API_KEY}"
+  else
+    curl -sS --fail --max-time 8 "${url}"
+  fi
+}
+if ! fetch_llm_provider_health > "${OUT_DIR}/llm_provider_health.json" 2>"${OUT_DIR}/llm_provider_health.err"; then
   FAILURES=$((FAILURES + 1))
 fi
 

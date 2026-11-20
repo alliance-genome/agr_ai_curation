@@ -21,6 +21,12 @@ curl -fsS http://localhost:3100/ready
 ./scripts/utilities/collect_agent_evidence.sh
 ```
 
+`/api/admin/health/llm-providers` and `/api/admin/health/packages` require
+login. A local backend in dev mode (`DEV_MODE=true`) signs requests in without
+credentials. Elsewhere, send the testing API key, for example
+`curl -H "X-API-Key: $TESTING_API_KEY" ...`; `collect_agent_evidence.sh` sends
+`TESTING_API_KEY` automatically when it is set.
+
 ## Canonical Investigations
 
 ### 1) Backend startup/runtime failure

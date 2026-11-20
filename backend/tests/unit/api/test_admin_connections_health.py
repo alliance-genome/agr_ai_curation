@@ -9,7 +9,6 @@ from fastapi import HTTPException
 import src.api.admin.connections as admin_connections
 from src.lib.config.connections_loader import (
     ConnectionDefinition,
-    CredentialsConfig,
     HealthCheck,
 )
 
@@ -133,86 +132,107 @@ def test_check_all_connections_reports_unhealthy_when_required_service_fails(mon
     assert result.required_healthy is False
 
 
-def test_check_single_connection_requires_initialized(monkeypatch):
+def test_check_single_connection_requires_initialized(monkeypatch, request_stub):
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: False)
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(admin_connections.check_single_connection("postgres"))
+        asyncio.run(admin_connections.check_single_connection("postgres", request_stub))
 
     assert exc.value.status_code == 503
 
 
-def test_check_single_connection_returns_404_for_unknown_service(monkeypatch):
+def _cached_postgres_snapshot():
+    return SimpleNamespace(
+        observed_at="2026-11-20T00:00:00+00:00",
+        services={
+            "postgres": {
+                "service_id": "postgres",
+                "description": "Postgres DB",
+                "url": "postgres://***@db:5432/app",
+                "required": True,
+                "is_healthy": False,
+                "last_error": "connection refused",
+            },
+        },
+    )
+
+
+def _fail_on_live_probe(*_args, **_kwargs):
+    raise AssertionError("single-service route started a live probe")
+
+
+def test_check_single_connection_returns_cached_entry_without_probing(monkeypatch, request_stub):
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
-    monkeypatch.setattr("src.lib.config.connections_loader.get_connection", lambda _service_id: None)
+    monkeypatch.setattr("src.lib.config.connections_loader.check_service_health", _fail_on_live_probe)
+
+    async def snapshot():
+        return _cached_postgres_snapshot()
+
+    request_stub.app.state.connections_health_monitor.get = snapshot
+
+    result = asyncio.run(admin_connections.check_single_connection("postgres", request_stub))
+
+    assert result.service_id == "postgres"
+    assert result.url == "postgres://***@db:5432/app"
+    assert result.is_healthy is False
+    assert result.last_error == "connection refused"
+
+
+def test_check_single_connection_returns_404_for_service_missing_from_cache(monkeypatch, request_stub):
+    monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
+
+    async def snapshot():
+        return _cached_postgres_snapshot()
+
+    request_stub.app.state.connections_health_monitor.get = snapshot
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(admin_connections.check_single_connection("unknown"))
+        asyncio.run(admin_connections.check_single_connection("unknown", request_stub))
 
     assert exc.value.status_code == 404
     assert "Unknown service" in str(exc.value.detail)
 
 
-def test_check_single_connection_returns_sanitized_response(monkeypatch):
+def test_check_single_connection_returns_503_when_snapshot_unavailable(monkeypatch, request_stub):
+    from unittest.mock import AsyncMock
+    from src.lib.config.connections_monitor import SnapshotUnavailable
+
     monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
-
-    conn = SimpleNamespace(
-        service_id="postgres",
-        description="Postgres DB",
-        display_url="postgres://***@db:5432/app",
-        credentials=None,
-        required=True,
-        is_healthy=False,
-        last_error="postgres://user:<redacted>@db:5432/app is down",
-    )
-    monkeypatch.setattr("src.lib.config.connections_loader.get_connection", lambda _service_id: conn)
-
-    calls = {"checked": []}
-
-    async def _check_service_health(service_id: str):
-        calls["checked"].append(service_id)
-        return False
-
-    monkeypatch.setattr("src.lib.config.connections_loader.check_service_health", _check_service_health)
-    monkeypatch.setattr("src.lib.config.connections_loader.sanitize_error_message", lambda err: f"sanitized:{err}")
-
-    result = asyncio.run(admin_connections.check_single_connection("postgres"))
-    assert result.service_id == "postgres"
-    assert result.url == "postgres://***@db:5432/app"
-    assert result.last_error.startswith("sanitized:")
-    assert calls["checked"] == ["postgres"]
-
-
-def test_check_single_connection_uses_effective_redacted_url(monkeypatch):
-    monkeypatch.setattr("src.lib.config.connections_loader.is_initialized", lambda: True)
-
-    conn = ConnectionDefinition(
-        service_id="curation_db",
-        description="Curation DB",
-        health_check=HealthCheck(method="CONNECT"),
-        credentials=CredentialsConfig(source="env"),
-        required=False,
-        is_healthy=True,
-        last_error=None,
-    )
-    monkeypatch.setattr(
-        "src.lib.config.connections_loader.get_connection",
-        lambda _service_id: conn,
+    request_stub.app.state.connections_health_monitor.get = AsyncMock(
+        side_effect=SnapshotUnavailable("Connection monitoring sweep did not complete")
     )
 
-    async def _check_service_health(_service_id: str):
-        conn.effective_display_url = (
-            "testdb://***:***@db.example:5432/curation"
-        )
-        return True
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(admin_connections.check_single_connection("postgres", request_stub))
 
-    monkeypatch.setattr(
-        "src.lib.config.connections_loader.check_service_health",
-        _check_service_health,
-    )
-    result = asyncio.run(admin_connections.check_single_connection("curation_db"))
+    assert exc.value.status_code == 503
 
-    assert result.url == "testdb://***:***@db.example:5432/curation"
+
+@pytest.mark.parametrize(
+    "path,builder",
+    [
+        ("/api/admin/health/llm-providers", "src.lib.config.provider_validation.build_provider_runtime_report"),
+        ("/api/admin/health/packages", "src.lib.packages.health.build_package_health_report"),
+    ],
+)
+def test_configuration_health_routes_require_authentication(monkeypatch, path, builder):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+
+    def _builder_must_not_run(*_args, **_kwargs):
+        raise AssertionError("anonymous request reached the report builder")
+
+    monkeypatch.setattr(builder, _builder_must_not_run)
+    app = FastAPI()
+    app.include_router(admin_connections.router)
+
+    response = TestClient(app).get(path)
+
+    assert response.status_code == 401
 
 
 @pytest.fixture
@@ -275,7 +295,8 @@ async def test_public_http_snapshots_keep_status_counts_and_timestamp(
             assert probe_mock.await_count == 2
             direct = await client.get("/api/admin/health/connections/required")
             assert direct.status_code == 200
-            assert probe_mock.await_count == 3
+            assert direct.json() == data["services"]["required"]
+            assert probe_mock.await_count == 2
             assert (await client.get("/api/admin/health/connections")).json() == data
     finally:
         await owner.close()
