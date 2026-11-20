@@ -12,7 +12,10 @@ Two model views exist, and traces from both must stay readable:
 * ``numbered_passages`` (after it): the section lists ``passages``. Each
   passage's ``text`` is numbered lines ``[span_index] sentence``; a sentence's
   own line breaks are kept and its later lines are indented four spaces, so
-  only a real span number starts a line.
+  only a real span number starts a line. A table passage also has, above its
+  rows, one unnumbered label line starting ``Columns of table`` (the table's
+  column names and which rows the passage holds), with further header rows
+  indented four spaces. The label is context, not a span.
 
 The span numbers are reading aids added by the application, not paper text.
 Anything that looks for citation numbers must read the decoded sentences, never
@@ -33,6 +36,7 @@ SECTION_READ_RESULT_KEYS = {"read_section": "section", "read_subsection": "subse
 # Must match the application's model view renderer
 # (backend/src/lib/openai_agents/document_result_view.py).
 _CONTINUATION_INDENT = "    "
+_TABLE_LABEL_PREFIX = "Columns of table "
 _PREVIEW_CHARS = 500
 
 
@@ -75,28 +79,46 @@ def section_read_shape(section: Any) -> Optional[str]:
     return None
 
 
-def numbered_view_spans(text: str) -> List[str]:
-    """Exact sentence texts of one passage's numbered lines, without the numbers.
-
-    This reverses the application's rendering exactly. A line that is neither a
-    numbered line nor an indented continuation means the text is not a numbered
-    view, and is reported rather than guessed at.
-    """
+def _numbered_view_parts(text: str) -> tuple[List[str], List[str]]:
+    """Split a passage's numbered view into span texts and table labels."""
     if text == "":
         # A passage with no sentences is rendered as empty text.
-        return []
+        return [], []
     spans: List[str] = []
+    labels: List[str] = []
+    current: Optional[List[str]] = None
     for line in text.split("\n"):
         if line.startswith(_CONTINUATION_INDENT):
-            if not spans:
+            if current is None:
                 raise UndecodableReadError("Numbered passage text starts with a continuation line")
-            spans[-1] += "\n" + line[len(_CONTINUATION_INDENT):]
+            current[-1] += "\n" + line[len(_CONTINUATION_INDENT):]
+            continue
+        if line.startswith(_TABLE_LABEL_PREFIX):
+            labels.append(line)
+            current = labels
             continue
         number, separator, sentence = line.partition("] ")
         if not line.startswith("[") or not separator or not number[1:].isdigit():
             raise UndecodableReadError("Numbered passage text has a line without a span number")
         spans.append(sentence)
-    return spans
+        current = spans
+    return spans, labels
+
+
+def numbered_view_spans(text: str) -> List[str]:
+    """Exact sentence texts of one passage's numbered lines, without the numbers.
+
+    This reverses the application's rendering exactly. Table labels are context
+    and are left out. A line that is neither a numbered line, a table label nor
+    an indented continuation means the text is not a numbered view, and is
+    reported rather than guessed at.
+    """
+    return _numbered_view_parts(text)[0]
+
+
+def numbered_view_table_labels(text: str) -> List[str]:
+    """The unnumbered table labels of one passage's numbered view, in order."""
+    return _numbered_view_parts(text)[1]
 
 
 def passage_source_text(passage: Dict[str, Any]) -> str:
@@ -140,7 +162,10 @@ def _numbered_display(result_key: str, section: Dict[str, Any]) -> Dict[str, Any
     passages = [passage for passage in section["passages"] if isinstance(passage, dict)]
     # Shown as the model saw it, so a reviewer can follow the span numbers it used.
     blocks = []
+    table_labels: List[str] = []
     for passage in passages:
+        if isinstance(passage.get("text"), str):
+            table_labels.extend(numbered_view_table_labels(passage["text"]))
         label = f"Passage {passage.get('chunk_index')}"
         if passage.get("page_number") is not None:
             label += f", page {passage['page_number']}"
@@ -156,6 +181,8 @@ def _numbered_display(result_key: str, section: Dict[str, Any]) -> Dict[str, Any
         "content_preview": full_content[:_PREVIEW_CHARS],
         "full_content": full_content,
     }
+    if table_labels:
+        display["table_labels"] = table_labels
     if result_key == "subsection":
         display["subsection"] = section.get("requested_subsection")
         display["matched_subsections"] = section.get("matched_subsections") or []

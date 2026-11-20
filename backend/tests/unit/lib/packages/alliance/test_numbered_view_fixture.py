@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 
 import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search  # pyright: ignore[reportMissingImports]
-from src.lib.openai_agents.document_result_view import document_result_view
+from src.lib.openai_agents.document_result_view import document_result_view, table_rows_label
 
 FIXTURE = (
     Path(__file__).resolve().parents[6]
@@ -38,19 +38,32 @@ PASSAGES = [
     (6, "Larvae were staged at 96 h.\r\nDiscs were dissected in PBS\r\nand fixed."),
     # A passage with no sentences at all: it is shown as empty text.
     (7, "   "),
+    # A whole-row table piece: one span per row under an unnumbered label
+    # carrying a two-row header from the piece's metadata.
+    (8, "Strains\n\n| XS0401 | zeta401. | 25 C |\n| XS0402 | zeta402. | 18 C |"),
 ]
+
+TABLE_SEGMENTS = {
+    8: [{
+        "table_index": 2, "char_start": 9, "char_end": 66, "first_data_row": 401, "last_data_row": 402,
+        "total_data_rows": 2033, "header_row_count": 2,
+        "header_text": "| Table S2. Made-up strains | | |\n| Strain | Genotype | Temp |",
+    }],
+}
 
 
 def render_fixture() -> dict:
     passages = []
     for chunk_index, text in PASSAGES:
         chunk_id = f"00000000-0000-0000-0000-{chunk_index:012d}"
+        segments = TABLE_SEGMENTS.get(chunk_index, [])
         passages.append(weaviate_search.NumberedPassage(
             chunk_id=chunk_id, chunk_index=chunk_index, page_number=3, section="Methods",
-            content=text, evidence_spans=weaviate_search._evidence_spans(chunk_id, text, 3, "Methods"),
+            content=text, evidence_spans=weaviate_search._evidence_spans(chunk_id, text, 3, "Methods", segments),
+            tables=weaviate_search._table_rows(segments),
         ))
     result = weaviate_search.SectionReadResult(
-        summary="Read 4 passages from Methods.",
+        summary="Read 5 passages from Methods.",
         section=weaviate_search.NumberedSection(
             requested_section="Methods", matched_sections=["Methods"], page_numbers=[3],
             total_chunk_count=len(passages), passages=passages,
@@ -60,6 +73,11 @@ def render_fixture() -> dict:
     return {
         "about": "Written by backend/tests/unit/lib/packages/alliance/test_numbered_view_fixture.py; do not edit by hand.",
         "sentences": [[span.text for span in passage.evidence_spans] for passage in passages],
+        # Labels as TraceReview decodes them: continuation indents removed.
+        "table_labels": [
+            [table_rows_label(table).replace("\n    ", "\n") for table in TABLE_SEGMENTS.get(passage.chunk_index, [])]
+            for passage in passages
+        ],
         # What Langfuse records: the Agents SDK sends a returned dictionary as its repr.
         "model_output": str(view),
     }
@@ -79,6 +97,11 @@ def test_the_fixture_covers_the_hard_cases():
     assert sentences[1][0].startswith("[2] ")
     assert any("\r\n" in sentence for sentence in sentences[2])
     assert sentences[3] == []
+    assert sentences[4] == ["Strains", "| XS0401 | zeta401. | 25 C |", "| XS0402 | zeta402. | 18 C |"]
+    assert fixture["table_labels"][4][0].startswith("Columns of table 2 (this passage holds rows 401 to 402 of 2,033)")
+    # model_output is the SDK repr, so its line breaks are escaped.
+    assert r"\n    | Strain | Genotype | Temp |" in fixture["model_output"]
+    assert fixture["table_labels"][4][0].endswith("\n| Strain | Genotype | Temp |")
 
 
 if __name__ == "__main__":

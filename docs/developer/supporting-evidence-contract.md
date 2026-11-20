@@ -128,6 +128,37 @@ supplement file check's job.
 
 These rules apply to text cut after this change. Stored pieces are not rewritten.
 
+### Table rows as quotable lines
+
+`build_evidence_spans` reads the piece's `table_segments` (the structural flag
+written at chunking, never a guess from the text). Inside a segment, each table
+row is one span of type `table_row`, and the Markdown separator line is no
+span. Text outside segments is split into sentences exactly as before, so a
+piece without table segments, including any table text stored before
+whole-row pieces, gets the same spans byte for byte. The span hash keeps the
+`pdf_sentence_v1` salt, so every span ID minted earlier still resolves.
+`resolve_evidence_span_id` takes the same segments, and a span inside one
+resolves as `table_row`; `record_evidence` passes them from the stored chunk
+metadata, so a saved source fragment records `span_type: table_row`.
+
+`read_chunk`, `read_section`, `read_subsection` and `search_document` return the
+segments as `tables`. The model view (`document_result_view.py`) prints, above
+the first shown row of each table, one unnumbered label line,
+`Columns of table N (this passage holds rows A to B of T): <first header row>`,
+with further header rows on lines indented four spaces. Search hits list the
+same labels under `table_labels` and keep their content unchanged. The label is
+never an issued span, so `record_evidence` cannot select it. TraceReview's
+`document_read_results.py` decodes label lines (prefix `Columns of table `) as
+context and the rows as numbered lines; the round-trip fixture
+`trace_review/backend/tests/fixtures/numbered_document_view.json` includes a
+table passage.
+
+Rows as lines turn a table piece from about one span into one per row, so a
+whole-sheet read stores many more span definitions in the conversation history.
+A conversation that read a table piece cut by whole rows before this change
+would see its definitions change; whole-row pieces and row spans therefore ship
+in the same release.
+
 Evidence sentence generation treats blank lines as source-block boundaries,
 including headings without terminal punctuation. Single line breaks remain
 possible PDF line wraps. Spans are exact slices of stored chunk text; no cleanup

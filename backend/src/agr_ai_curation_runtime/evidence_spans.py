@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 import hashlib
+import json
 import re
 from typing import Any
+
+from agr_ai_curation_runtime.markdown_tables import is_table_separator_row
 
 EVIDENCE_SPANIZER_VERSION = "pdf_sentence_v1"
 EVIDENCE_SPAN_HASH_ALGORITHM = "sha256"
@@ -14,6 +18,9 @@ EVIDENCE_SPAN_HASH_POLICY = (
     f"{EVIDENCE_SPAN_HASH_ALGORITHM}:{EVIDENCE_SPANIZER_VERSION}:"
     f"utf8:exact-source-text:{EVIDENCE_SPAN_HASH_LENGTH}"
 )
+
+_SENTENCE_SPAN_TYPE = "sentence"
+_TABLE_ROW_SPAN_TYPE = "table_row"
 
 _SPAN_ID_PATTERN = re.compile(
     r"^(?P<chunk_id>.+):s(?P<span_index>\d+):"
@@ -111,22 +118,65 @@ def parse_evidence_span_id(span_id: str) -> ParsedEvidenceSpanId:
     )
 
 
+def chunk_table_segments(metadata: Any) -> list[dict[str, Any]]:
+    """Table row segments a stored chunk's metadata records, in text order.
+
+    Chunking writes ``table_segments`` (character ranges holding whole table
+    rows) into chunk metadata. Chunks stored before that carry none and keep
+    sentence spans. Metadata arrives as a mapping or as its stored JSON string.
+    """
+
+    if metadata is None:
+        return []
+    if isinstance(metadata, str):
+        metadata = json.loads(metadata) if metadata.strip() else {}
+    if not isinstance(metadata, Mapping):
+        raise TypeError("Chunk metadata must be an object or JSON object string")
+    segments = metadata.get("table_segments") or []
+    if not isinstance(segments, list):
+        raise TypeError("Chunk table_segments must be a list")
+    return sorted((dict(segment) for segment in segments), key=lambda segment: segment["char_start"])
+
+
+def _table_ranges(chunk_text: str, table_segments: Sequence[Mapping[str, Any]]) -> list[tuple[int, int]]:
+    ranges = sorted((segment["char_start"], segment["char_end"]) for segment in table_segments)
+    previous_end = 0
+    for start, end in ranges:
+        if type(start) is not int or type(end) is not int or not previous_end <= start < end <= len(chunk_text):
+            raise EvidenceSpanResolutionError("Chunk table segment does not fit the chunk text")
+        previous_end = end
+    return ranges
+
+
+def _span_type(char_start: int, char_end: int, table_ranges: Sequence[tuple[int, int]]) -> str:
+    if any(start <= char_start and char_end <= end for start, end in table_ranges):
+        return _TABLE_ROW_SPAN_TYPE
+    return _SENTENCE_SPAN_TYPE
+
+
 def build_evidence_spans(
     *,
     chunk_id: str,
     chunk_text: str,
     page_number: int | None = None,
     section_title: str | None = None,
+    table_segments: Sequence[Mapping[str, Any]] = (),
 ) -> list[EvidenceSpan]:
     """Split source blocks into exact-text sentences, preserving chunk offsets.
 
     Blank lines delimit source blocks; single newlines can be PDF line wraps.
-    The span ID/hash contract remains unchanged: existing IDs resolve directly
-    by their stored offsets/hash, independent of current segmentation choices.
+    Inside the chunk's table segments (structural metadata written at
+    chunking, see ``chunk_table_segments``), each table row is one span of type
+    ``table_row`` and the Markdown separator line is no span. Text outside them
+    is split exactly as before, so a chunk without table segments gets the same
+    spans byte for byte. The span ID/hash contract remains unchanged: existing
+    IDs resolve directly by their stored offsets/hash, independent of current
+    segmentation choices.
     """
 
+    table_ranges = _table_ranges(chunk_text, table_segments)
     spans: list[EvidenceSpan] = []
-    for span_index, (char_start, char_end) in enumerate(_iter_block_sentence_offsets(chunk_text)):
+    for span_index, (char_start, char_end) in enumerate(_iter_span_offsets(chunk_text, table_ranges)):
         text = chunk_text[char_start:char_end]
         spans.append(
             EvidenceSpan(
@@ -138,7 +188,7 @@ def build_evidence_spans(
                     text=text,
                 ),
                 span_index=span_index,
-                span_type="sentence",
+                span_type=_span_type(char_start, char_end, table_ranges),
                 text=text,
                 char_start=char_start,
                 char_end=char_end,
@@ -156,8 +206,13 @@ def resolve_evidence_span_id(
     expected_chunk_id: str | None = None,
     page_number: int | None = None,
     section_title: str | None = None,
+    table_segments: Sequence[Mapping[str, Any]] = (),
 ) -> EvidenceSpan:
-    """Resolve a span ID by chunk ID, offsets, and exact source-text hash."""
+    """Resolve a span ID by chunk ID, offsets, and exact source-text hash.
+
+    ``table_segments`` is the same structural metadata ``build_evidence_spans``
+    takes; a span inside one resolves as a ``table_row``.
+    """
 
     parsed = parse_evidence_span_id(span_id)
     if expected_chunk_id is not None and parsed.chunk_id != expected_chunk_id:
@@ -176,13 +231,38 @@ def resolve_evidence_span_id(
     return EvidenceSpan(
         span_id=span_id,
         span_index=parsed.span_index,
-        span_type="sentence",
+        span_type=_span_type(parsed.char_start, parsed.char_end, _table_ranges(chunk_text, table_segments)),
         text=text,
         char_start=parsed.char_start,
         char_end=parsed.char_end,
         page_number=page_number,
         section_title=section_title,
     )
+
+
+def _iter_span_offsets(text: str, table_ranges: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    offsets: list[tuple[int, int]] = []
+    cursor = 0
+    for start, end in table_ranges:
+        offsets.extend((cursor + lo, cursor + hi) for lo, hi in _iter_block_sentence_offsets(text[cursor:start]))
+        offsets.extend(_iter_table_row_offsets(text, start, end))
+        cursor = end
+    offsets.extend((cursor + lo, cursor + hi) for lo, hi in _iter_block_sentence_offsets(text[cursor:]))
+    return offsets
+
+
+def _iter_table_row_offsets(text: str, start: int, end: int) -> list[tuple[int, int]]:
+    offsets: list[tuple[int, int]] = []
+    line_start = start
+    while line_start < end:
+        line_end = text.find("\n", line_start, end)
+        if line_end == -1:
+            line_end = end
+        line = text[line_start:line_end]
+        if line.strip() and not is_table_separator_row(line):
+            offsets.append((line_start, line_end))
+        line_start = line_end + 1
+    return offsets
 
 
 def _iter_block_sentence_offsets(text: str) -> list[tuple[int, int]]:
@@ -304,6 +384,7 @@ __all__ = [
     "EvidenceSpanResolutionError",
     "ParsedEvidenceSpanId",
     "build_evidence_spans",
+    "chunk_table_segments",
     "parse_evidence_span_id",
     "resolve_evidence_span_id",
 ]

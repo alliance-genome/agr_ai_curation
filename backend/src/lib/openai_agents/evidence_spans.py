@@ -11,6 +11,7 @@ from agr_ai_curation_runtime.evidence_spans import (
     EvidenceSpanResolutionError,
     ParsedEvidenceSpanId,
     build_evidence_spans,
+    chunk_table_segments,
     parse_evidence_span_id,
     resolve_evidence_span_id,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "EvidenceSpanResolutionError",
     "ParsedEvidenceSpanId",
     "build_evidence_spans",
+    "chunk_table_segments",
     "parse_evidence_span_id",
     "resolve_evidence_span_id",
 ]

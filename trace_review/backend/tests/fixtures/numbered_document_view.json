@@ -10,7 +10,21 @@
     [
       "Larvae were staged at 96 h.\r\nDiscs were dissected in PBS\r\nand fixed."
     ],
-    []
+    [],
+    [
+      "Strains",
+      "| XS0401 | zeta401. | 25 C |",
+      "| XS0402 | zeta402. | 18 C |"
+    ]
   ],
-  "model_output": "{'summary': 'Read 4 passages from Methods.', 'section': {'requested_section': 'Methods', 'matched_sections': ['Methods'], 'page_numbers': [3], 'total_chunk_count': 4, 'passages': [{'chunk_index': 4, 'page_number': 3, 'section': 'Methods', 'text': '[0] Flies were raised at 25 C.\\n    Primers\\n    [1] GAL4-F\\n    [2] GAL4-R'}, {'chunk_index': 5, 'page_number': 3, 'section': 'Methods', 'text': '[0] [2] Brown A. Wingless signalling in the wing disc.'}, {'chunk_index': 6, 'page_number': 3, 'section': 'Methods', 'text': '[0] Larvae were staged at 96 h.\\r\\n    Discs were dissected in PBS\\r\\n    and fixed.'}, {'chunk_index': 7, 'page_number': 3, 'section': 'Methods', 'text': ''}]}}"
+  "table_labels": [
+    [],
+    [],
+    [],
+    [],
+    [
+      "Columns of table 2 (this passage holds rows 401 to 402 of 2,033): | Table S2. Made-up strains | | |\n| Strain | Genotype | Temp |"
+    ]
+  ],
+  "model_output": "{'summary': 'Read 5 passages from Methods.', 'section': {'requested_section': 'Methods', 'matched_sections': ['Methods'], 'page_numbers': [3], 'total_chunk_count': 5, 'passages': [{'chunk_index': 4, 'page_number': 3, 'section': 'Methods', 'text': '[0] Flies were raised at 25 C.\\n    Primers\\n    [1] GAL4-F\\n    [2] GAL4-R'}, {'chunk_index': 5, 'page_number': 3, 'section': 'Methods', 'text': '[0] [2] Brown A. Wingless signalling in the wing disc.'}, {'chunk_index': 6, 'page_number': 3, 'section': 'Methods', 'text': '[0] Larvae were staged at 96 h.\\r\\n    Discs were dissected in PBS\\r\\n    and fixed.'}, {'chunk_index': 7, 'page_number': 3, 'section': 'Methods', 'text': ''}, {'chunk_index': 8, 'page_number': 3, 'section': 'Methods', 'text': '[0] Strains\\nColumns of table 2 (this passage holds rows 401 to 402 of 2,033): | Table S2. Made-up strains | | |\\n    | Strain | Genotype | Temp |\\n[1] | XS0401 | zeta401. | 25 C |\\n[2] | XS0402 | zeta402. | 18 C |'}]}}"
 }
