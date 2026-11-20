@@ -54,8 +54,13 @@ def _table_element(text, section="Sheet1"):
     return {"type": "Table", "text": text, "metadata": {"section_title": section, "page_number": 1}}
 
 
-def _title(text):
-    return {"type": "Title", "text": text, "metadata": {"section_title": text, "page_number": 1}}
+def _title(text, path=None):
+    """A heading as the Markdown parser emits it: its section path ends with itself."""
+    return {
+        "type": "Title",
+        "text": text,
+        "metadata": {"section_title": text, "section_path": path or [text], "page_number": 1},
+    }
 
 
 def _table_lines(chunk):
@@ -141,10 +146,17 @@ def test_rule_reads_its_parameters_from_settings(monkeypatch):
     assert current_table_header_rule() == TableHeaderRule(max_rows=5, min_filled_fraction=0.5)
 
 
-@pytest.mark.parametrize("raw", ["0", "1.5", "-0.1"])
-def test_rule_refuses_a_filled_fraction_outside_zero_to_one(monkeypatch, raw):
+@pytest.mark.parametrize("raw", ["0", "1.5", "-0.1", "half", "nan"])
+def test_rule_refuses_an_invalid_filled_fraction(monkeypatch, raw):
     monkeypatch.setenv("DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION", raw)
     with pytest.raises(ValueError, match="DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION"):
+        current_table_header_rule()
+
+
+@pytest.mark.parametrize("raw", ["0", "-2", "2.5", "five", ""])
+def test_rule_refuses_an_invalid_row_limit(monkeypatch, raw):
+    monkeypatch.setenv("DOCUMENT_TABLE_HEADER_MAX_ROWS", raw)
+    with pytest.raises(ValueError, match="DOCUMENT_TABLE_HEADER_MAX_ROWS"):
         current_table_header_rule()
 
 
@@ -278,6 +290,23 @@ def test_small_table_offsets_locate_its_rows_inside_a_mixed_piece():
     assert (segment["first_data_row"], segment["last_data_row"], segment["total_data_rows"]) == (1, 1, 1)
 
 
+def test_only_the_markdown_separator_line_is_recorded_as_the_separator():
+    """An all-dash data row (a common "none" value) is a data row like any other."""
+    text = _table(["| Score | Control |"], ["| 3 | 1 |", "| - | - |", "| 5 | -- |"], columns=2)
+    (chunk,) = _chunk_by_title([_table_element(text)], _strategy())
+    (segment,) = chunk["table_segments"]
+    start = segment["separator_char_start"]
+    assert chunk["content"][start:].split("\n", 1)[0] == "| --- | --- |"
+    assert segment["total_data_rows"] == 3
+
+
+def test_later_pieces_hold_no_separator():
+    text = _table(["| Strain | Description | Notes | Source |"], _data_rows(120))
+    chunks = _chunk_by_title([_table_element(text)], _strategy())
+    assert chunks[0]["table_segments"][0]["separator_char_start"] == len("| Strain | Description | Notes | Source |") + 1
+    assert all(chunk["table_segments"][0]["separator_char_start"] is None for chunk in chunks[1:])
+
+
 # --- Headings -----------------------------------------------------------------
 
 
@@ -285,7 +314,7 @@ def test_no_heading_only_pieces():
     text = _table(["| Strain | Description | Notes | Source |"], _data_rows(60))
     elements = [
         _title("Made-up workbook"),
-        _title("Sheet1"),
+        _title("Sheet1", ["Made-up workbook", "Sheet1"]),
         _table_element(text),
         _title("Results"),
         {"type": "NarrativeText", "text": "x " * 760, "metadata": {"section_title": "Results"}},
@@ -299,6 +328,54 @@ def test_no_heading_only_pieces():
     segment = chunks[0]["table_segments"][0]
     assert chunks[0]["content"][segment["char_start"]:].startswith("| Strain |")
     assert any(chunk["content"].startswith("Results\n\nx x") for chunk in chunks)
+
+
+def test_workbook_title_and_sheet_heading_join_the_sheet_first_piece():
+    table = _table(["| Strain | Genotype |"], ["| XS1 | zeta1. |"], columns=2)
+    elements = [_title("Made-up workbook"), _title("Sheet1", ["Made-up workbook", "Sheet1"]), _table_element(table)]
+    (chunk,) = _chunk_by_title(elements, _strategy())
+    assert chunk["content"] == f"Made-up workbook\n\nSheet1\n\n{table}"
+    assert chunk["metadata"]["section_title"] == "Sheet1"
+    assert chunk["metadata"]["section_path"] == ["Made-up workbook", "Sheet1"]
+
+
+def test_sibling_headings_keep_their_own_pieces_and_section_metadata():
+    """A heading followed by a sibling (an empty section) is not merged away."""
+    elements = [_title(f"Heading {i}") for i in range(300)]
+    elements.append({"type": "NarrativeText", "text": "Made-up text.", "metadata": {"section_title": "Heading 299"}})
+    chunks = _chunk_by_title(elements, _strategy())
+    assert [chunk["metadata"]["section_title"] for chunk in chunks] == [f"Heading {i}" for i in range(300)]
+    assert chunks[-1]["content"] == "Heading 299\n\nMade-up text."
+
+
+def test_headings_in_different_parent_sections_are_not_merged():
+    first = _title("Made-up workbook")
+    first["metadata"]["parent_section"] = "Made-up workbook"
+    second = _title("Sheet1", ["Made-up workbook", "Sheet1"])
+    second["metadata"]["parent_section"] = "Sheet1"
+    body = {"type": "NarrativeText", "text": "Made-up text.", "metadata": {"section_title": "Sheet1"}}
+    chunks = _chunk_by_title([first, second, body], _strategy())
+    assert [chunk["content"] for chunk in chunks] == ["Made-up workbook", "Sheet1\n\nMade-up text."]
+    assert chunks[0]["metadata"]["parent_section"] == "Made-up workbook"
+
+
+def test_a_stack_of_nested_headings_stops_at_the_piece_size():
+    elements, path = [], []
+    for depth in range(60):
+        name = f"Made-up nested heading number {depth:02d} of a long outline"
+        path = [*path, name]
+        elements.append(_title(name, list(path)))
+    elements.append({"type": "NarrativeText", "text": "Made-up text.", "metadata": {}})
+    chunks = _chunk_by_title(elements, _strategy())
+
+    assert len(chunks) > 1
+    assert all(len(chunk["content"]) <= 1500 for chunk in chunks[:-1])
+    stored = "\n\n".join(chunk["content"] for chunk in chunks)
+    assert all(element["text"] in stored for element in elements)
+    for chunk in chunks:
+        # The innermost heading's path still names every heading stacked above it.
+        stacked = [element["text"] for element in chunk["elements"] if element["type"] == "Title"]
+        assert chunk["metadata"]["section_path"][-len(stacked):] == stacked
 
 
 # --- Stored metadata ----------------------------------------------------------

@@ -97,7 +97,9 @@ The header rows stay where the source has them: they are the first rows of the
 table's first piece. Every table piece records its rows in the chunk metadata
 (`ChunkMetadata.table_segments`): the table number within the file, the
 piece's character range, its first and last data row, the total data rows, the
-header row count and the header rows' text. The header text is never copied
+header row count, the header rows' text, and where the Markdown separator line
+sits (first piece only; only the table's second line is ever the separator, so
+an all-dash data row such as `| - | - |` stays a data row). The header text is never copied
 into stored piece text. The header rule counts empty cells only: the header is
 the Markdown header row plus each following row up to and including the first
 row whose filled share is at least `DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION`
@@ -106,16 +108,23 @@ pinned by tests: a column-name row that is itself less than half filled pulls
 the first data row into the header, and a header longer than a piece is cut
 like ordinary rows while every piece's metadata carries the whole header.
 
-A heading is never a piece of its own while content follows it: consecutive
-headings stay together (the innermost heading owns the section metadata), and a
-heading that does not fit beside its next element is carried into that
-element's first piece, which can then exceed the chunk size by the heading's
-length. A heading with nothing after it is still its own piece.
+A heading followed by a heading under it (its section path is a proper prefix
+of the next heading's, in the same parent section) stays with it, up to the
+chunk size; the innermost heading owns the section metadata, and its section
+path still names every stacked heading. A workbook's file title followed by a
+sheet heading is such a pair. A heading followed by a sibling heading, or with
+nothing after it, is still a piece of its own, so no section loses its own
+metadata. A heading that does not fit beside its next element is carried into
+that element's first piece, which can then exceed the chunk size by the
+headings' length.
 
 A row too long to embed (over `EMBEDDING_MODEL_TOKEN_LIMIT` minus
-`EMBEDDING_TOKEN_SAFETY_MARGIN`) still makes storage fail at the token
-preflight, as an oversized piece did before. Refusing such a file before it is
-parsed is the supplement file check's job.
+`EMBEDDING_TOKEN_SAFETY_MARGIN`, 7,691 tokens by default) is kept whole, so
+storage fails at the token preflight with `Weaviate storage failed: Chunk N for
+document <id> has T tokens (limit: L)`. This also applies to main papers: such a
+row used to be split, and now the whole import fails loudly instead. Nothing
+splits it as a fallback. Refusing such a supplement before it is parsed is the
+supplement file check's job.
 
 These rules apply to text cut after this change. Stored pieces are not rewritten.
 

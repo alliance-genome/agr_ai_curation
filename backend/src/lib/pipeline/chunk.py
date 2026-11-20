@@ -209,6 +209,30 @@ def _holds_only_headings(chunk: Dict[str, Any]) -> bool:
     )
 
 
+def _joins_heading_stack(chunk: Dict[str, Any], heading: Dict[str, Any], max_characters: int) -> bool:
+    """Whether a heading may join a chunk that holds only headings.
+
+    Structural metadata only: the stacked innermost heading must be an ancestor
+    of the new one (its section path a proper prefix of the new heading's, in
+    the same parent section), so the merged chunk's metadata still reaches every
+    stacked heading. A sibling heading starts its own chunk, as does a heading
+    that would push the stack past max_characters.
+    """
+    if not _holds_only_headings(chunk):
+        return False
+    if len(chunk["content"]) + 2 + len(heading.get("text", "")) > max_characters:
+        return False
+    stacked = chunk["elements"][-1].get("metadata") or {}
+    incoming = heading.get("metadata") or {}
+    stacked_path = stacked.get("section_path") or []
+    incoming_path = incoming.get("section_path") or []
+    return (
+        len(stacked_path) < len(incoming_path)
+        and incoming_path[: len(stacked_path)] == stacked_path
+        and stacked.get("parent_section") == incoming.get("parent_section")
+    )
+
+
 def _chunk_by_title(
     elements: List[Dict[str, Any]],
     strategy: ChunkingStrategy
@@ -216,11 +240,12 @@ def _chunk_by_title(
     """Chunk elements by title boundaries.
 
     Groups content under each title, respecting max_characters limit. Tables
-    are cut only between whole rows (``table_chunking``). A heading never
-    becomes a piece of its own while content follows it: consecutive headings
-    stay together, and a heading that does not fit beside its next element is
-    carried into that element's first piece, which can then exceed
-    max_characters by the heading's length.
+    are cut only between whole rows (``table_chunking``). A heading followed by
+    a heading under it stays with it (``_joins_heading_stack``), and a heading
+    that does not fit beside its next element is carried into that element's
+    first piece, which can then exceed max_characters by the headings' length.
+    A heading followed by a sibling heading, or with nothing after it, is
+    still a piece of its own, so it keeps its section metadata.
     """
     chunks: List[Dict[str, Any]] = []
     current_chunk = _new_chunk()
@@ -250,9 +275,10 @@ def _chunk_by_title(
         element_text = element.get("text", "")
 
         if element_type == "Title" and current_chunk["content"]:
-            if _holds_only_headings(current_chunk):
-                # Consecutive headings stay together; the innermost heading
-                # owns the section metadata of the text that follows.
+            if _joins_heading_stack(current_chunk, element, strategy.max_characters):
+                # A heading under the stacked one stays with it; the innermost
+                # heading owns the section metadata of the text that follows,
+                # and its section path still names every stacked heading.
                 current_chunk["content"] = f"{current_chunk['content']}\n\n{element_text}"
                 current_chunk["elements"].append(element)
                 current_chunk["metadata"] = dict(element.get("metadata", {}))

@@ -55,6 +55,7 @@ class TableRowsSegment:
     total_data_rows: int
     header_row_count: int
     header_text: str
+    separator_char_start: Optional[int]
 
     def to_metadata(self) -> dict:
         return {
@@ -66,6 +67,7 @@ class TableRowsSegment:
             "total_data_rows": self.total_data_rows,
             "header_row_count": self.header_row_count,
             "header_text": self.header_text,
+            "separator_char_start": self.separator_char_start,
         }
 
 
@@ -76,6 +78,7 @@ class TablePiece:
     text: str
     first_data_row: Optional[int]
     last_data_row: Optional[int]
+    separator_offset: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -131,7 +134,20 @@ class TableLayout:
             total_data_rows=self.total_data_rows,
             header_row_count=self.header_row_count,
             header_text=self.header_text,
+            separator_char_start=(
+                None if piece.separator_offset is None else char_start + piece.separator_offset
+            ),
         )
+
+    def separator_offset(self, line_indexes: List[int]) -> Optional[int]:
+        """Offset of the separator line in a piece holding these lines, if it holds it.
+
+        The separator is always line 1, packed right after line 0, which
+        starts the table's first piece.
+        """
+        if self.separator_line_index is None or self.separator_line_index not in line_indexes:
+            return None
+        return len(self.lines[0]) + 1
 
     def whole_table_piece(self) -> TablePiece:
         data_rows = [
@@ -143,6 +159,7 @@ class TableLayout:
             text=self.text,
             first_data_row=data_rows[0] if data_rows else None,
             last_data_row=data_rows[-1] if data_rows else None,
+            separator_offset=self.separator_offset(list(range(len(self.lines)))),
         )
 
 
@@ -236,6 +253,7 @@ def pack_table_rows(layout: TableLayout, max_characters: int) -> List[TablePiece
                 text=current_text,
                 first_data_row=data_rows[0] if data_rows else None,
                 last_data_row=data_rows[-1] if data_rows else None,
+                separator_offset=layout.separator_offset(current_lines),
             )
         )
 
