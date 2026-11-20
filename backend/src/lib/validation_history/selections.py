@@ -465,8 +465,8 @@ def set_aside_fact_in_transaction(db, artifact_id, episode_id):
 # Why an export of a finished run's result is refused once a curator holds one of
 # its set-aside records (ALL-1561); curator-facing.
 CURATOR_HOLDS_SET_ASIDE = (
-    "A curator is deciding records this run's review set aside. Exports of this result "
-    "wait until those records are accepted or removed in Review & Curate."
+    "This run's files cannot be made again yet. A curator deferred or rejected a record "
+    "the review had set aside. Accept or remove that record in Review & Curate, then try again."
 )
 
 

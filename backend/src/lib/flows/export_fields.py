@@ -31,7 +31,7 @@ REVIEW_REASON_REF = "object.review_reason"
 REVIEW_STATUS_ACCEPTED = "accepted"
 # Curator-facing labels in Review reason for a set-aside record whose shown
 # value an earlier decision accepted: "Accepted earlier: ... | Set aside later: ..."
-# (ALL-1561; wording awaiting Chris's approval).
+# (ALL-1561).
 REVIEW_REASON_ACCEPTED_EARLIER_LABEL = "Accepted earlier"
 REVIEW_REASON_SET_ASIDE_LATER_LABEL = "Set aside later"
 REVIEW_STATUS_SET_ASIDE = "set aside"

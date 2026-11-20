@@ -553,7 +553,7 @@ async def test_a_curator_holding_a_set_aside_record_is_shown_not_dropped(planned
                                     document_id=item.scope.document_id)
     [result] = listed.results
     assert result.held_by_curator and result.records == [] and listed.set_aside_count == 0
-    with pytest.raises(store.SelectionNotReady, match="A curator is deciding records"):
+    with pytest.raises(store.SelectionNotReady, match="A curator deferred or rejected a record"):
         finalize_output_projection(_bundle(flow, item, monkeypatch),
                                    _plan("tsv", [("record", "object.pending_ref_id")]))
-    assert CURATOR_HOLDS_SET_ASIDE.startswith("A curator is deciding records")
+    assert CURATOR_HOLDS_SET_ASIDE.startswith("This run's files cannot be made again yet.")

@@ -57,8 +57,9 @@ files. They are still listed in the run's set-aside records view.
 
 In Review & Curate, records that were set aside appear undecided. The paper cannot
 be sent to the curation database until you decide them. If you defer or reject one
-of them there, the run's files cannot be made again until you accept or remove it,
-and the set-aside records view says that you are deciding them.
+of them there, you cannot export that run's results again until you accept or remove
+the record. Files you already have are not changed. The set-aside records view will
+say a curator is deciding them.
 
 Useful requests:
 

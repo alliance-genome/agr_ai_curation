@@ -1148,8 +1148,9 @@ def _capabilities_payload(
             "source declares no rationale field. The reviewer's stored reason and doubts "
             "are object.review_reason and object.review_uncertainty, and object.review_status "
             "says whether the review accepted or set aside each record; add them only when asked. "
-            "Records the review set aside are in the output only when it has a plain "
-            "object.review_status column."
+            "Records the review set aside are in the output only when it has an "
+            "object.review_status column with no transform; filters, sorts and transforms "
+            "on it do not bring them in."
         ),
         "transform_rules": {
             "pair_join": (

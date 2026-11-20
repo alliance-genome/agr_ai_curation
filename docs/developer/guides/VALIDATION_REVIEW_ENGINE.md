@@ -911,8 +911,8 @@ current blocker is one it recorded and each blocked unit keeps the head version 
 recorded. A curator deciding some of the records removes their blockers, so the rest
 stay set aside and exports still work; anything new (another decision on a set-aside
 unit, a new answer, any other blocker, a new review round) leaves the fact behind
-and the strict rule applies; the export refusal then says that a curator is
-deciding records the run set aside (`selections.CURATOR_HOLDS_SET_ASIDE`), and the
+and the strict rule applies; the export refusal then says that a curator deferred or
+rejected a record the run set aside (`selections.CURATOR_HOLDS_SET_ASIDE`), and the
 viewer returns that result with `held_by_curator: true` and no records. A record is
 "set aside" only while a covering fact names
 it; everywhere else (ordinary chat reviews, stopped flow reviews) nothing is set aside
