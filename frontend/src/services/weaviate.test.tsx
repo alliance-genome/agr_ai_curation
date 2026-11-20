@@ -11,7 +11,6 @@ import {
   useWeaviateSettings,
   useDeleteDocument,
   useReembedDocument,
-  useReprocessDocument,
   useUpdateEmbeddingSettings,
   useUpdateChunkingStrategy,
   useWeaviateHealth,
@@ -20,7 +19,6 @@ import {
   type OperationResult,
 } from './weaviate';
 import { logger } from './logger';
-import { createMockDocument } from '../test/test-utils';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
@@ -540,30 +538,6 @@ describe('weaviate service', () => {
       expect(response).toEqual(operationResult);
       expect(mockFetch).toHaveBeenCalledWith(
         '/api/weaviate/documents/doc-1/reembed',
-        expect.objectContaining({ method: 'POST' })
-      );
-    });
-  });
-
-  describe('useReprocessDocument', () => {
-    it('reprocesses a document', async () => {
-      const mockDocument = createMockDocument();
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockDocument,
-      });
-
-      const { result } = renderHook(
-        () => useReprocessDocument(),
-        { wrapper: createWrapper() }
-      );
-
-      const response = await result.current.mutateAsync('doc-1');
-
-      expect(response).toEqual(mockDocument);
-      expect(mockFetch).toHaveBeenCalledWith(
-        '/api/weaviate/documents/doc-1/reprocess',
         expect.objectContaining({ method: 'POST' })
       );
     });

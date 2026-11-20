@@ -363,7 +363,7 @@ async def test_hierarchy_helper(monkeypatch):
     )
     chunk_collection.query.fetch_objects.return_value = hier_response
 
-    fake_sql_doc = SimpleNamespace(hierarchy_metadata={"abstract_section_title": "Abstract"})
+    fake_sql_doc = SimpleNamespace(main_file=SimpleNamespace(hierarchy_metadata={"abstract_section_title": "Abstract"}))
 
     class _Session:
         def query(self, *_args, **_kwargs):
@@ -593,7 +593,7 @@ async def test_section_outline_counts_every_chunk_of_a_document_over_five_hundre
 async def test_document_hierarchy_fetches_db_metadata(monkeypatch):
     _sync_to_thread(monkeypatch)
 
-    fake_sql_doc = SimpleNamespace(hierarchy_metadata={"sections": [{"name": "Intro"}]})
+    fake_sql_doc = SimpleNamespace(main_file=SimpleNamespace(hierarchy_metadata={"sections": [{"name": "Intro"}]}))
 
     class _Session:
         def query(self, *_args, **_kwargs):

@@ -47,6 +47,7 @@ from src.lib.domain_packs.registry import LoadedDomainPack
 from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
     CurationCandidateDraftUpdateRequest,
@@ -62,6 +63,7 @@ from src.schemas.domain_envelope import (
     DomainEnvelopeStatus,
     HistoryEventKind,
 )
+from tests.pdf_document_test_support import new_paper
 
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
@@ -82,6 +84,7 @@ TEST_TABLES = [
     ValidationCheckpoint.__table__,
     User.__table__,
     PDFDocument.__table__,
+    PDFDocumentFile.__table__,
     DocumentReferenceLink.__table__,
     CurationReviewSession.__table__,
     CurationSessionAgentRevision.__table__,
@@ -220,7 +223,7 @@ def loaded_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LoadedDomain
 
 def _create_document(db_session) -> PDFDocument:
     now = _now()
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         user_id=1,
         filename="paper.pdf",

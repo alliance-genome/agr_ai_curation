@@ -10,9 +10,9 @@ from sqlalchemy.exc import DBAPIError
 
 from src.lib.validation_history import store as h
 from src.lib.validation_review import admission as a
-from src.models.sql.pdf_document import PDFDocument
 from tests.pdf_document_test_support import ensure_test_pdf_owner
 from tests.integration.persistence.test_validation_review import artifact, binding, episode
+from tests.pdf_document_test_support import new_paper
 
 
 def test_old_policy_archived_without_resetting_history(historical_migration_database):
@@ -21,7 +21,7 @@ def test_old_policy_archived_without_resetting_history(historical_migration_data
     doc, owner = uuid4(), "migration-" + uuid4().hex
     with h.SessionLocal.begin() as db:
         uid = ensure_test_pdf_owner(db, auth_sub=owner)
-        db.add(PDFDocument(id=doc, user_id=uid, filename="history.pdf",
+        db.add(new_paper(id=doc, user_id=uid, filename="history.pdf",
             file_path=f"{doc}/history.pdf", file_hash=doc.hex * 2,
             file_size=1024, page_count=1, status="processed"))
     scope = h.HistoryScope(owner, str(doc), uuid4().hex)

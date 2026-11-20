@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
+from tests.pdf_document_test_support import new_paper
 from conftest import MockCognitoUser
 
 
@@ -280,7 +281,7 @@ class TestCrossUserAccessPrevention:
         # Create document owned by User 1
         import uuid
         doc_id = str(uuid.uuid4())
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user1.id,  # Owned by User 1
             filename="test_curator1_document.pdf",
@@ -342,7 +343,7 @@ class TestCrossUserAccessPrevention:
         # Create document owned by User 1
         import uuid
         doc_id = str(uuid.uuid4())
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user1.id,
             filename="test_curator1_document.pdf",
@@ -403,7 +404,7 @@ class TestCrossUserAccessPrevention:
         # Create document for User 1
         import uuid
         doc1_id = str(uuid.uuid4())
-        doc1 = PDFDocument(
+        doc1 = new_paper(
             id=doc1_id,
             user_id=user1.id,
             filename="test_curator1_doc.pdf",
@@ -418,7 +419,7 @@ class TestCrossUserAccessPrevention:
 
         # Create document for User 2
         doc2_id = str(uuid.uuid4())
-        doc2 = PDFDocument(
+        doc2 = new_paper(
             id=doc2_id,
             user_id=user2.id,
             filename="test_curator2_doc.pdf",
@@ -496,7 +497,7 @@ class TestCrossUserAccessPrevention:
         # Create document for User 1
         import uuid
         doc_id = str(uuid.uuid4())
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user1.id,
             filename="test_curator1_doc.pdf",
@@ -553,7 +554,7 @@ class TestCrossUserAccessPrevention:
         # Create document for User 1
         import uuid
         doc_id = str(uuid.uuid4())
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user1.id,
             filename="test_curator1_doc.pdf",
@@ -618,7 +619,7 @@ class TestCrossUserAccessPrevention:
         # Create document for User 1
         import uuid
         doc_id = str(uuid.uuid4())
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user1.id,
             filename="test_doc.pdf",
@@ -664,7 +665,7 @@ class TestCrossUserAccessPrevention:
         # Create document for User 1
         import uuid
         doc_id = str(uuid.uuid4())
-        document = PDFDocument(
+        document = new_paper(
             id=doc_id,
             user_id=user1.id,
             filename="test_own_doc.pdf",

@@ -254,7 +254,7 @@ def retire_document_history(db, document_id: UUID) -> int:
                 "document_id": str(document_id),
                 "actor": {"type": "curator", "id": owner.auth_sub},
                 "reason": "Source document removed from the active library",
-                "file_hash": document.file_hash,
+                "file_hash": document.main_file.file_hash,
             },
         )
     return len(artifacts)
@@ -398,8 +398,8 @@ def capture_baseline(
                 **provenance,
                 "source_document": {
                     "id": str(document.id),
-                    "file_hash": document.file_hash,
-                    "viewer_mode": document.viewer_mode,
+                    "file_hash": document.main_file.file_hash,
+                    "viewer_mode": document.main_file.display_mode,
                 }
                 if document is not None
                 else None,

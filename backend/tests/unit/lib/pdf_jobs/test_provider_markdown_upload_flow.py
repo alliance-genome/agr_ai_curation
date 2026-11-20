@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from unittest.mock import AsyncMock
 
@@ -327,7 +327,25 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
             }
         ]
 
-    async def _store_to_weaviate(chunks, document_id, weaviate_client, user_id):
+    file_events = []
+    main_file_uuid = UUID("00000000-0000-0000-0000-0000000000f1")
+
+    def _reserve_file_chunk_range(document_id, file_id, chunk_count):
+        file_events.append(("reserve", document_id, file_id, chunk_count))
+        return 0
+
+    def _offset_chunk_indices(chunks, start):
+        assert start == 0
+        return chunks
+
+    async def _finalize_new_paper(document_id, *, user_id, owner_user_id, weaviate_client):
+        file_events.append(("finalize", document_id, weaviate_client))
+        await _sync_sql_document_status(
+            document_id, user_id=user_id, owner_user_id=owner_user_id, status="completed",
+        )
+
+    async def _store_to_weaviate(chunks, document_id, weaviate_client, user_id, *, chunk_range):
+        assert chunk_range == (0, len(chunks) - 1)
         stored_chunks.append(
             {
                 "chunks": chunks,
@@ -386,6 +404,22 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     )
     monkeypatch.setattr("src.lib.pipeline.chunk.chunk_parsed_document", _chunk_document)
     monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", _store_to_weaviate)
+    monkeypatch.setattr("src.lib.pipeline.chunk.offset_chunk_indices", _offset_chunk_indices)
+    monkeypatch.setattr(ingestion_module, "main_file_id", lambda _document_id: main_file_uuid)
+    monkeypatch.setattr(ingestion_module, "mark_file_pending", lambda file_id: file_events.append(("pending", file_id)))
+    monkeypatch.setattr(
+        ingestion_module,
+        "mark_file_failed",
+        lambda file_id, **_kwargs: pytest.fail("the main file should not fail on success"),
+    )
+    monkeypatch.setattr(ingestion_module, "finalize_new_paper", _finalize_new_paper)
+    monkeypatch.setattr(
+        "src.lib.document_files.service.reserve_file_chunk_range", _reserve_file_chunk_range,
+    )
+    monkeypatch.setattr(
+        "src.lib.document_files.service.mark_file_ready",
+        lambda file_id, *, text_bytes: file_events.append(("ready", file_id, text_bytes)),
+    )
 
     source_duplicate_checks = []
     created_documents = []
@@ -456,28 +490,29 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert len(session.added) == 1
     record = session.added[0]
     assert record.id.hex == result.document_id.replace("-", "")
-    assert record.viewer_mode == "local_pdf"
-    assert record.file_path == f"user-provider/{result.document_id}/paper.pdf"
-    assert record.file_hash != local_checksum
-    assert len(record.file_hash) == 64
+    assert record.main_file.display_mode == "local_pdf"
+    assert record.document_kind == "library" and record.next_chunk_index == 0
+    assert record.main_file.file_path == f"user-provider/{result.document_id}/paper.pdf"
+    assert record.main_file.file_hash != local_checksum
+    assert len(record.main_file.file_hash) == 64
     assert record.source_provider == "mock_literature"
     assert record.source_provider_reference_curie == "MOCK:55"
-    assert record.source_provider_source_file_id == "source-file-55"
-    assert record.source_provider_pdf_artifact_id == "source-pdf-55"
-    assert record.source_provider_converted_artifact_id == "markdown-55"
+    assert record.main_file.source_provider_source_file_id == "source-file-55"
+    assert record.main_file.source_provider_pdf_artifact_id == "source-pdf-55"
+    assert record.main_file.source_provider_converted_artifact_id == "markdown-55"
     assert record.source_external_ids == {"doi": "10.5555/provider-flow"}
-    assert record.source_file_class == "semantic_text"
-    assert record.source_file_extension == "md"
-    assert record.source_md5 == checksum
-    assert record.source_access_scope == "restricted"
-    assert record.source_access_group_ids == ["FAKE"]
-    assert record.source_import_status == "pending"
+    assert record.main_file.source_file_class == "semantic_text"
+    assert record.main_file.source_file_extension == "md"
+    assert record.main_file.source_md5 == checksum
+    assert record.main_file.source_access_scope == "restricted"
+    assert record.main_file.source_access_group_ids == ["FAKE"]
+    assert record.main_file.source_import_status == "pending"
     assert session.commit_calls == 1
     assert session.closed is True
 
     user_dir = tmp_path / "user-provider"
     assert user_dir.exists()
-    assert (tmp_path / record.file_path).exists()
+    assert (tmp_path / record.main_file.file_path).exists()
     assert len(background_tasks.tasks) == 1
     task = background_tasks.tasks[0]
     assert task.func.__observability_original_task__ == execution_service.execute_provider_markdown
@@ -487,7 +522,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert queued_request.converted_artifact_id == "markdown-55"
     assert queued_request.curator_token == "curator-token"
     assert queued_request.source_provenance["provider"] == "mock_literature"
-    assert queued_request.file_path == tmp_path / record.file_path
+    assert queued_request.file_path == tmp_path / record.main_file.file_path
 
     await task.func(*task.args, **task.kwargs)
 
@@ -533,6 +568,13 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
         }
     ]
     assert ingestion_status_updates[-1]["status"] == "completed"
+    assert persisted_metadata[0]["file_id"] == main_file_uuid
+    assert file_events == [
+        ("pending", main_file_uuid),
+        ("reserve", result.document_id, main_file_uuid, 1),
+        ("ready", main_file_uuid, len(markdown.encode("utf-8"))),
+        ("finalize", result.document_id, "weaviate-client"),
+    ]
     assert progress_updates[0]["stage"] == ProcessingStage.UPLOAD.value
     assert progress_updates[0]["status"] == PdfJobStatus.RUNNING.value
     assert progress_updates[1]["stage"] == ProcessingStage.PARSING.value

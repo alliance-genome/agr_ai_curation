@@ -14,6 +14,7 @@ from tests.fixtures.evidence.harness import (
     build_domain_envelope_extraction_payload,
     load_evidence_fixture,
 )
+from tests.pdf_document_test_support import new_paper
 
 
 TEST_PREFIX = "handoff_it"
@@ -229,9 +230,8 @@ def _create_user(db, suffix: str):
 
 
 def _create_document(db, user, suffix: str, *, viewer_mode: str | None = None):
-    from src.models.sql.pdf_document import PDFDocument
 
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         filename=f"{TEST_PREFIX}_{suffix}.pdf",
         title=f"Handoff fixture {suffix}",
@@ -241,7 +241,7 @@ def _create_document(db, user, suffix: str, *, viewer_mode: str | None = None):
         page_count=3,
         status="processed",
         user_id=user.id,
-        viewer_mode=viewer_mode,
+        display_mode=viewer_mode,
     )
     db.add(document)
     db.flush()

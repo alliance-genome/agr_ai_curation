@@ -226,13 +226,6 @@ class SettingsResponse(BaseModel):
     available_models: List[AvailableModelsResponse]
 
 
-class ReprocessRequest(BaseModel):
-    """Request for document reprocessing."""
-
-    strategy_name: str = Field(..., description="Chunking strategy to use")
-    force_reparse: bool = Field(default=False, description="Force re-parsing from PDF")
-
-
 class ReembedRequest(BaseModel):
     """Request for document re-embedding."""
 

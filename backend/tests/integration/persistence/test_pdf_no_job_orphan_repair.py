@@ -16,13 +16,14 @@ from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _document(*, document_id, owner_id: int, status: str, uploaded_at: datetime):
-    return PDFDocument(
+    return new_paper(
         id=document_id,
         filename=f"orphan-repair-{document_id}.pdf",
         file_path=f"orphan-repair/{document_id}.pdf",
