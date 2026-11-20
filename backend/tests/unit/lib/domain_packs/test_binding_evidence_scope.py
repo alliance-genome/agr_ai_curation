@@ -363,3 +363,17 @@ def test_a_check_a_flow_leaves_out_still_owns_its_fields_quotes(tmp_path):
         assert "component" not in delivered
         assert delivered["anatomy"] == delivered["stage"] == ["ev-statement"]
         assert delivered["whole_record"] == ["ev-component", "ev-statement"]
+
+
+def test_a_tag_naming_a_list_element_the_record_lacks_reaches_every_binding(tmp_path):
+    """No check reads an element that does not exist, so the tag claims nothing (decision 1)."""
+    delivered = _evidence_by_target(tmp_path, [
+        _record("ev-t5", "terms[5]"),
+        _record("ev-relation-9", "relations[9].conditions[0]"),
+        _record("ev-condition-4", "relations[0].conditions[4].summary"),
+        _record("ev-t1", "terms[1]"),
+    ])
+    missing = ["ev-t5", "ev-relation-9", "ev-condition-4"]
+    for key, ids in delivered.items():
+        expected = [*missing, "ev-t1"] if key in {"terms:terms[1]", "whole_record"} else missing
+        assert ids == expected, key

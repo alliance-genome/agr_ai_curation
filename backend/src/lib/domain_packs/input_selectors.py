@@ -860,6 +860,7 @@ def _evidence_records_for_target(match: ValidatorBindingMatch) -> list[dict[str,
             records,
             own_paths=_binding_own_field_paths(match),
             record_binding_paths=match.record_binding_paths,
+            payload=match.object_envelope.payload,
         )
     return [copy.deepcopy(record) for record in records]
 

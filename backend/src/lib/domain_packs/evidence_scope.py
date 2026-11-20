@@ -6,7 +6,9 @@ attached. A validator binding declares the fields it validates and reads. A
 binding receives the record's evidence whose tags overlap its own declared
 field paths, plus the record's evidence that no validator binding on the
 record claims: untagged evidence, and evidence tagged only to fields that no
-active validator binding on that record validates or reads.
+active validator binding on that record validates or reads. A tag naming a
+list element the record does not have (``terms[5]`` on a two-item list) is
+read by no binding either, so it claims nothing.
 
 A binding that declares an ``evidence_record`` selector without ``field_path``
 reads the whole record's evidence by its own configuration, so it receives all
@@ -18,13 +20,11 @@ evidence text or decides whether a quote supports a value.
 
 from __future__ import annotations
 
-import re
+from functools import lru_cache
 from typing import Any, Iterable, Mapping, Sequence
 
+from src.schemas.domain_envelope import parse_field_path
 from src.schemas.domain_pack_metadata import DomainPackInputSelector
-
-_SEGMENT = re.compile(r"^(?P<name>[^\[\]]+)(?P<indexes>(?:\[\d+\])*)$")
-_INDEX = re.compile(r"\[(\d+)\]")
 
 # Selector sources that read a field of the target object's payload.
 _PAYLOAD_PATH_SOURCES = frozenset({"payload", "payload_keyed_literal"})
@@ -111,13 +111,15 @@ def binding_evidence(
     *,
     own_paths: Iterable[str],
     record_binding_paths: Iterable[str],
+    payload: Any,
 ) -> tuple[Mapping[str, Any], ...]:
     """The records one binding receives, in the record's order.
 
     ``own_paths`` are the binding's own field paths, already resolved to the
     element it validates. ``record_binding_paths`` are the declared field paths
     of every active validator binding on the record; a tag that overlaps none of
-    them belongs to no binding.
+    them, or names a list element missing from ``payload``, belongs to no
+    binding.
     """
 
     own = tuple(own_paths)
@@ -125,10 +127,10 @@ def binding_evidence(
     selected = []
     for record in records:
         tags = evidence_record_field_paths(record)
-        if not tags or not any(
-            field_paths_overlap(tag, path, compare_indexes=False)
+        if not any(
+            not names_missing_element(payload, tag)
+            and any(field_paths_overlap(tag, path, compare_indexes=False) for path in claimed)
             for tag in tags
-            for path in claimed
         ):
             selected.append(record)
             continue
@@ -141,21 +143,41 @@ def binding_evidence(
     return tuple(selected)
 
 
+def names_missing_element(payload: Any, path: str) -> bool:
+    """True when the path gives a list index that the payload does not have.
+
+    Walks the payload along the path. A field absent from the payload is not a
+    missing element unless an index is given at or below it.
+    """
+
+    segments = _segments(path)
+    value = payload
+    for position, (name, indexes) in enumerate(segments):
+        if not isinstance(value, Mapping) or name not in value:
+            return any(later for _, later in segments[position:])
+        value = value[name]
+        for index in indexes:
+            if not _is_sequence(value) or index >= len(value):
+                return True
+            value = value[index]
+    return False
+
+
+@lru_cache(maxsize=65536)
 def _segments(path: str) -> tuple[tuple[str, tuple[int, ...]], ...]:
-    segments = []
-    for segment in path.split("."):
-        parsed = _SEGMENT.match(segment)
-        if parsed is None:
-            # Not a well-formed path segment; it compares as literal text.
-            segments.append((segment, ()))
-            continue
-        segments.append(
-            (
-                parsed.group("name"),
-                tuple(int(index) for index in _INDEX.findall(parsed.group("indexes"))),
-            )
-        )
-    return tuple(segments)
+    """Field names with their list indexes; a malformed path is one literal name."""
+
+    try:
+        parts = parse_field_path(path)
+    except ValueError:
+        return ((path, ()),)
+    segments: list[tuple[str, list[int]]] = []
+    for part in parts:
+        if isinstance(part, int):
+            segments[-1][1].append(part)
+        else:
+            segments.append((part, []))
+    return tuple((name, tuple(indexes)) for name, indexes in segments)
 
 
 def _is_sequence(value: Any) -> bool:

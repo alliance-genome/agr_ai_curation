@@ -79,6 +79,10 @@ reads quote text. The rule lives in `backend/src/lib/domain_packs/evidence_scope
   evidence. Each match carries the result as `record_binding_paths`; a saved
   review plan stores it once per distinct value in `match_parts` and saves the
   registry's `ownership_bindings` next to its `bindings`.
+- A tag that names a list element the record does not have (`terms[5]` on a
+  two-item list) is read by no binding, so it claims nothing either.
+- For a custom profile, a mapping that is unavailable to the current user but
+  whose exact capability still declares its slots keeps owning its fields.
 - A record with at least one claimed tag goes only to the bindings whose own
   paths match one of its tags, even if it also carries an unclaimed tag.
 - A binding with an `evidence_record` selector that has no `field_path` reads the

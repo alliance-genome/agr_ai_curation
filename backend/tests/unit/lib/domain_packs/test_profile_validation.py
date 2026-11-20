@@ -588,3 +588,18 @@ def test_saved_profile_uses_live_allowance_without_changing_its_capability_pin(e
         binding, = context.registry.bindings
         assert binding.max_tool_calls == allowance
         assert profile.contract.validator_mappings[0].capability_fingerprint == live.fingerprint()
+
+
+@pytest.mark.parametrize("catalogued", [True, False])
+def test_a_mapping_unavailable_to_this_user_still_owns_its_fields(example, catalogued):
+    """ALL-1584 decision 5: which fields a check owns does not depend on the caller's groups."""
+    raw, cap, pack = example
+    cap = replace(cap, binding=replace(cap.binding, required_any_active_group=("group-a",)))
+    raw["validator_mappings"][0]["capability_fingerprint"] = cap.fingerprint()
+    receipt, profile = resolve(raw)
+    context = compile_profile_validation(receipt, profile, pack, capabilities=[cap] if catalogued else [],
+                                         active_group_ids=())
+    assert context.unavailable and not context.registry.bindings
+    source = envelope({"paper_name": "A"})
+    owned = context.registry._record_binding_paths(source, context.registry.object_definitions_by_type)
+    assert owned[id(source.extracted_objects[0])] == (("attributes.paper_name",) if catalogued else ())
