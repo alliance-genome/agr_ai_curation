@@ -327,6 +327,8 @@ async def test_real_sdk_capacity_ingestion_preserves_exact_tool_result_without_r
     monkeypatch.setenv("AGENT_MODEL_CAPACITY_OVERRIDES_JSON", json.dumps({"gpt-6-astra": {
         "context_window_tokens": 16000, "max_input_tokens": 15000, "max_output_tokens": 1000}}))
     monkeypatch.setenv("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", "10000")
+    # Synthetic 15000-token capacity: keep the former exact-limit fit.
+    monkeypatch.setenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "0")
     monkeypatch.setattr("src.lib.context.get_current_user_id", lambda: "owner")
     monkeypatch.setattr("src.lib.context.get_current_trace_id", lambda: "run")
     monkeypatch.setattr("src.lib.context.get_current_session_id", lambda: None)

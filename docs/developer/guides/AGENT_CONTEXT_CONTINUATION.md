@@ -90,6 +90,7 @@ Responses compaction; they have no claimed equivalent capacity recovery.
 | Workshop main/group/metadata clipping | Removed before the shared boundary |
 | Native trigger | `AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD=250000`; tunable optimization point |
 | Model capabilities | Model catalog plus `AGENT_MODEL_CAPACITY_OVERRIDES_JSON`; verified provider limits, not policy guesses |
+| Capacity headroom | `AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS=20000`; every fit check (sending, standalone compaction input, pending-context pages) uses capacity minus this headroom, because the provider refused a request counted at exactly the limit; 0 restores exact-limit filling |
 | Main/Studio turns | 256; suggestion submission 64; stop at its submission tool |
 | Specialist calls/deadline | 256 total, 64 per specialist, 3600 seconds; bulk optimization cannot lower base turns |
 | Validator calls / synthesis retry | 64; specialized allele bindings also 64 |

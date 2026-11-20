@@ -4059,6 +4059,28 @@ def get_agent_context_compaction_token_threshold() -> int:
     return max(1, _get_env_int_with_fallback("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", 250000))
 
 
+def get_agent_context_capacity_headroom_tokens() -> int:
+    """Tokens kept free below a model's input capacity (AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS).
+
+    Every capacity fit check (request acceptance, standalone compaction input and
+    pending-context pages) compares against capacity minus this headroom. On
+    2026-11-20 the provider refused a request counted at exactly the 922,000-token
+    limit. Default 20000 (about 2 % of 922,000); 0 restores the former behaviour of
+    filling to the exact limit. Must be a non-negative integer below the model's
+    input capacity, which the capacity request checks per model.
+    """
+    raw = os.getenv("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "").strip()
+    if not raw:
+        return 20000
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS must be a non-negative integer") from None
+    if value < 0:
+        raise ValueError("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS must be a non-negative integer")
+    return value
+
+
 def get_agent_model_capacity_overrides() -> dict:
     """Verified deployment capability overrides by model (AGENT_MODEL_CAPACITY_OVERRIDES_JSON).
 
