@@ -208,19 +208,17 @@ def test_check_single_connection_returns_503_when_snapshot_unavailable(monkeypat
     assert exc.value.status_code == 503
 
 
-@pytest.mark.parametrize(
-    "path,builder",
-    [
-        ("/api/admin/health/llm-providers", "src.lib.config.provider_validation.build_provider_runtime_report"),
-        ("/api/admin/health/packages", "src.lib.packages.health.build_package_health_report"),
-    ],
-)
-def test_configuration_health_routes_require_authentication(monkeypatch, path, builder):
+_CONFIGURATION_HEALTH_ROUTES = [
+    ("/api/admin/health/llm-providers", "src.lib.config.provider_validation.build_provider_runtime_report"),
+    ("/api/admin/health/packages", "src.lib.packages.health.build_package_health_report"),
+]
+
+
+def _anonymous_get(monkeypatch, path, builder):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     monkeypatch.setenv("DEV_MODE", "false")
-    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
     monkeypatch.delenv("TESTING_API_KEY", raising=False)
 
     def _builder_must_not_run(*_args, **_kwargs):
@@ -229,10 +227,35 @@ def test_configuration_health_routes_require_authentication(monkeypatch, path, b
     monkeypatch.setattr(builder, _builder_must_not_run)
     app = FastAPI()
     app.include_router(admin_connections.router)
+    return TestClient(app).get(path)
 
-    response = TestClient(app).get(path)
+
+@pytest.mark.parametrize("path,builder", _CONFIGURATION_HEALTH_ROUTES)
+def test_configuration_health_routes_require_authentication(monkeypatch, path, builder):
+    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+
+    response = _anonymous_get(monkeypatch, path, builder)
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("path,builder", _CONFIGURATION_HEALTH_ROUTES)
+def test_configuration_health_routes_refuse_missing_cookie_when_auth_is_configured(
+    monkeypatch, path, builder
+):
+    import src.api.auth as auth_api
+
+    monkeypatch.setattr(auth_api, "is_auth_configured", lambda: True)
+
+    def _provider_must_not_be_used():
+        raise AssertionError("request without a cookie reached token validation")
+
+    monkeypatch.setattr(auth_api, "_get_provider_or_503", _provider_must_not_be_used)
+
+    response = _anonymous_get(monkeypatch, path, builder)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Not authenticated"}
 
 
 @pytest.fixture

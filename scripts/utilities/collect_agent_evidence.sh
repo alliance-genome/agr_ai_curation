@@ -33,10 +33,11 @@ if ! curl -sS --fail --max-time 8 http://localhost:8000/health > "${OUT_DIR}/bac
 fi
 # The provider report requires login. A local dev-mode backend signs requests
 # in without credentials; anywhere else, set TESTING_API_KEY. The key is sent as
-# X-API-Key and read by curl from stdin, so it never appears in the process list.
+# X-API-Key and read by curl from stdin, so it never appears in the process list
+# or in a `bash -x` trace. The smoke step below still needs dev mode.
 fetch_llm_provider_health() {
   local url="http://localhost:8000/api/admin/health/llm-providers"
-  if [[ -n "${TESTING_API_KEY:-}" ]]; then
+  if [[ -n "${TESTING_API_KEY:+set}" ]]; then
     curl -sS --fail --max-time 8 -H @- "${url}" <<<"X-API-Key: ${TESTING_API_KEY}"
   else
     curl -sS --fail --max-time 8 "${url}"

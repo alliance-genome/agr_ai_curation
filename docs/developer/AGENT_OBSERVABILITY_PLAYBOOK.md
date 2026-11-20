@@ -24,8 +24,16 @@ curl -fsS http://localhost:3100/ready
 `/api/admin/health/llm-providers` and `/api/admin/health/packages` require
 login. A local backend in dev mode (`DEV_MODE=true`) signs requests in without
 credentials. Elsewhere, send the testing API key, for example
-`curl -H "X-API-Key: $TESTING_API_KEY" ...`; `collect_agent_evidence.sh` sends
-`TESTING_API_KEY` automatically when it is set.
+`curl -H "X-API-Key: $TESTING_API_KEY" ...`.
+
+`collect_agent_evidence.sh` sends `TESTING_API_KEY` for its own provider-report
+request when it is set. That does not make the whole capture work outside dev
+mode: the `llm_provider_smoke_local.sh` step it runs next sends only
+`SMOKE_BEARER_TOKEN` as a Bearer token, which the backend login does not
+accept, so its login-required checks fail and the capture ends as partial. This
+was already true before these routes required login (the smoke step's
+`/api/agent-studio/models` check needed login). Use dev mode for a complete
+capture.
 
 ## Canonical Investigations
 

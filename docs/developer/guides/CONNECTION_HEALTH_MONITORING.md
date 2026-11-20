@@ -63,7 +63,24 @@ This demonstrates probe-count reduction for overlapping callers in one worker,
 not a measured production latency or cluster-wide reduction. Independent monitors
 that require fresh diagnostics should use the readiness route.
 
-Scripts that poll the single-service route until a service is healthy see the
-same observation age as the summary route: a recovery can take up to
-`CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` (30 seconds by default) plus one
-sweep's duration to appear.
+Callers of the single-service route wait like callers of the summary route.
+When the worker's observation is missing or expired, the request waits for a
+sweep of **every** configured service, not just the one asked for, so it can
+take as long as the slowest configured probe (`timeout_seconds` in
+`config/connections.yaml`; weaviate's is 30 seconds), plus cleanup. Before this
+route used the cache it waited only for the named service's own probe. A caller
+with a short request timeout (for example `curl -m 5`) can time out on a cold
+or expired observation; the sweep keeps running and a retry after it finishes
+gets the cached answer. A caller that retries only once or twice in a few
+seconds may therefore get no answer at all. Once answered, the result can be up
+to `CONNECTIONS_HEALTH_SNAPSHOT_TTL_SECONDS` (30 seconds by default) old.
+
+Known edge case: expiry is counted from sweep **start**, which is what keeps
+every published observation's age within the TTL. A sweep that takes as long
+as the TTL (with the defaults, a probe that hangs for weaviate's full 30-second
+timeout) is already expired when it is published. Its own waiters get it, but
+the next request starts a new sweep, so callers with short timeouts keep
+timing out until the slow service answers or fails quickly again. With the
+defaults (TTL 30 seconds, weaviate probe timeout 30 seconds) this happens
+whenever weaviate hangs instead of refusing connections. Setting the TTL above
+the slowest probe timeout avoids it.
