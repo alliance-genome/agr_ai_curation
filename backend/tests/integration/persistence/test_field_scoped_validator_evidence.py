@@ -20,7 +20,7 @@ from src.lib.domain_packs.validator_dispatch import ValidatorRuntimeContext, pre
 from src.lib.validation_history import runtime, selections, store
 from src.lib.validation_review import admission, extraction_results, extraction_scheduling, source_inputs, work
 from src.lib.validation_review.decisions import ReviewContext
-from src.lib.validation_review.validator_adapter import ValidatorAdapter, save_plan
+from src.lib.validation_review.validator_adapter import REGISTRY, ValidatorAdapter, save_plan
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from tests.cancellation_test_support import install_cancel_reader
 from tests.integration.persistence.test_chat_review_adapter import checkpoint_provider
@@ -114,7 +114,7 @@ def paper(scope, tmp_path, monkeypatch):
                                  targets=0, episodes=0)
     admission.attach_episode(scope, artifact_id=aid, episode_id=ep, scope_id=sid)
     adapter = ValidatorAdapter(scope, aid, ep, plan_ref, authenticated_groups=())
-    item = SimpleNamespace(plan=plan, adapter=adapter, aid=aid, ep=ep, scope=scope, pack=pack)
+    item = SimpleNamespace(plan=plan, adapter=adapter, aid=aid, ep=ep, scope=scope, pack=pack, context=context)
     item.targets = {}
     for match in plan.matches:
         key = (match.object_envelope.pending_ref_id, match.field_path)
@@ -183,6 +183,17 @@ async def test_four_corrected_records_revalidate_only_changed_bindings_within_bu
     assert all(len(ids) == 2 and all(identity.startswith("original-") for identity in ids) for _, ids in calls)
     budget = _extra_attempts_left(item)
     assert budget == 16
+    # The saved plan is in main's v0.11.11 format: nothing new is saved. Each
+    # match's checked field paths are derived from the plan's own registry.
+    body = store.read_fact(item.scope, item.aid, item.adapter.plan_ref)["content"]
+    assert set(body["match_parts"]) == {"envelopes", "bindings", "object_definitions",
+                                        "field_definitions", "policies"}
+    assert all(set(saved) == {"envelope", "object_index", "binding", "object_definition", "field_definition",
+                              "policy", "element_index", "resolved_field_path", "element_index_path"}
+               for saved in body["matches"].values())
+    assert set(body["registry"]) == {"domain_pack", "validator_metadata", "bindings", "field_policies"}
+    # The rest of the review resumes from the saved plan in a fresh adapter.
+    item.adapter = ValidatorAdapter(item.scope, item.aid, item.ep, item.adapter.plan_ref, authenticated_groups=())
     checkpoint = checkpoint_provider(item)
 
     for index in range(RECORDS):
@@ -215,6 +226,13 @@ async def test_four_corrected_records_revalidate_only_changed_bindings_within_bu
     # The review did not stop: every correction fit inside the paper's re-check limit.
     assert admission.status(item.scope, item.ep)["state"] in {"complete", "pending"}
     final = checkpoint().envelope
+    # Revalidate reads the saved registry and plans a new round on it; it assigns
+    # every record's evidence to the same checks the first dispatch did.
+    replanned = prepare_validator_dispatch(final, item.pack, runtime_context=item.context,
+                                           registry=REGISTRY.validate_python(body["registry"]))
+    owners = {(m.object_envelope.pending_ref_id, m.field_path): m.record_binding_paths for m in item.plan.matches}
+    assert {(m.object_envelope.pending_ref_id, m.field_path): m.record_binding_paths
+            for m in replanned.matches} == owners
     for index, obj in enumerate(final.extracted_objects):
         # The record keeps all of its evidence; only validator inputs are field-scoped.
         assert obj.evidence_record_ids == [f"original-{index}-a", f"original-{index}-b",

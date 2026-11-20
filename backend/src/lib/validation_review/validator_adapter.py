@@ -166,19 +166,18 @@ def binding_contract(match):
     })[1]
 
 
-def _checked_matches(matches, *, plan_envelope):
+def _checked_matches(matches, *, plan_envelope, registry):
     """Encode saved matches and prove the saved form reads back."""
     saved = saved_matches.encode(matches, plan_envelope=plan_envelope)
-    saved_matches.decode({**saved, "envelope": plan_envelope})
+    saved_matches.decode({**saved, "envelope": plan_envelope}, registry=registry)
     return saved
 
 
 def saved_registry(registry):
     """The plan's registry as saved, proven to read back."""
     saved = REGISTRY.dump_python(registry, mode="json")
-    for name in ("bindings", "ownership_bindings"):
-        saved[name] = [saved_matches.serialize_binding(binding_definition)
-                       for binding_definition in getattr(registry, name)]
+    saved["bindings"] = [saved_matches.serialize_binding(binding_definition)
+                         for binding_definition in registry.bindings]
     REGISTRY.validate_python(saved)
     return saved
 
@@ -193,7 +192,8 @@ def save_plan(plan, *, context):
         initial_requests = runtime.frozen_job_requests(binding, plan.initial_jobs, db=db)
     envelope = plan.envelope.model_dump(mode="json")
     matches = require_source_integrity(
-        lambda: _checked_matches(dict(zip(targets, plan.matches, strict=True)), plan_envelope=envelope),
+        lambda: _checked_matches(dict(zip(targets, plan.matches, strict=True)), plan_envelope=envelope,
+                                 registry=plan.registry),
         artifact_id=binding.artifact_id, episode_id=plan.envelope.metadata["review_episode_id"],
         stage="saved_plan_match")
     registry = saved_registry(plan.registry)
@@ -404,7 +404,7 @@ class ValidatorAdapter:
                 episode_id=self.episode_id, source_selection_id=selection_id, obligations=obligations)
             source_json = envelope.model_dump(mode="json")
             matches = require_source_integrity(
-                lambda: _checked_matches(resolved_matches, plan_envelope=source_json),
+                lambda: _checked_matches(resolved_matches, plan_envelope=source_json, registry=registry),
                 artifact_id=self.artifact_id, episode_id=self.episode_id, stage="published_match")
             append_fact(db, self.artifact_id, operation_id="source-plan:" + selection_id,
                 kind="review_source_plan", parent_id=self.episode_id,
@@ -541,7 +541,7 @@ class ValidatorAdapter:
             cached = self._decoded.get(id(plan))
             if cached is not None and cached[0] is plan:
                 return cached[1]
-            matches = saved_matches.decode(plan)
+            matches = saved_matches.decode(plan, registry=REGISTRY.validate_python(plan["registry"]))
             self._decoded = {key: value for key, value in self._decoded.items()
                              if value[0] is self._chat_plan}
             self._decoded[id(plan)] = (plan, matches)

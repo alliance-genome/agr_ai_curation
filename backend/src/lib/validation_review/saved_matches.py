@@ -4,9 +4,10 @@ A ``ValidatorBindingMatch`` holds the whole envelope it was matched on, plus
 its binding, object definition, field definition and policy. The matches of
 one plan share those objects, so saving every match whole made a plan body
 grow with matches times records: a 97-record paper produced a 2.2 GB body.
-The field paths every active check on a record reads (``record_binding_paths``,
-which decide which of the record's quotes each check receives) are shared by
-all matches on that record, so they are a part too.
+Each match's ``record_binding_paths`` (the field paths every active check on its
+record reads, which decide which of the record's quotes each check receives) are
+not saved: reading derives them from the plan's own saved registry, the same way
+the dispatch that saved the plan did.
 
 A saved body keeps every distinct part once in ``match_parts``, keyed by the
 SHA-256 of its canonical JSON. Each saved match names its parts by key and its
@@ -23,6 +24,7 @@ from typing import Any, Mapping
 from pydantic import TypeAdapter
 
 from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
     FieldValidationPolicy,
     ValidatorBinding,
     ValidatorBindingMatch,
@@ -45,7 +47,6 @@ _READERS = {
     "object_definitions": TypeAdapter(DomainPackObjectDefinition),
     "field_definitions": TypeAdapter(DomainPackFieldDefinition),
     "policies": TypeAdapter(FieldValidationPolicy),
-    "record_binding_paths": TypeAdapter(tuple[str, ...]),
 }
 # Match attribute -> saved part kind, for the parts other than the envelope.
 _PART_FIELDS = {
@@ -53,7 +54,6 @@ _PART_FIELDS = {
     "object_definition": "object_definitions",
     "field_definition": "field_definitions",
     "policy": "policies",
-    "record_binding_paths": "record_binding_paths",
 }
 
 
@@ -85,7 +85,6 @@ _WRITERS = {
     "object_definitions": lambda value: _READERS["object_definitions"].dump_python(value, mode="json"),
     "field_definitions": lambda value: _READERS["field_definitions"].dump_python(value, mode="json"),
     "policies": lambda value: _READERS["policies"].dump_python(value, mode="json"),
-    "record_binding_paths": list,
 }
 
 
@@ -134,10 +133,15 @@ def encode(matches: Mapping[str, ValidatorBindingMatch], *, plan_envelope: dict)
     return {"match_parts": parts, "matches": saved_matches}
 
 
-def decode(body: Mapping[str, Any]) -> dict[str, ValidatorBindingMatch]:
-    """Rebuild every saved match of a body, parsing each shared part once."""
+def decode(body: Mapping[str, Any], *, registry: DomainPackValidationRegistry) -> dict[str, ValidatorBindingMatch]:
+    """Rebuild every saved match of a body, parsing each shared part once.
+
+    ``registry`` is the plan's own saved registry; each match's
+    ``record_binding_paths`` come from it.
+    """
     parts = body["match_parts"]
     parsed: dict[tuple[str, str], Any] = {}
+    owners: dict[str, dict[int, tuple[str, ...]]] = {}
 
     def part(kind, key):
         if (kind, key) not in parsed:
@@ -151,11 +155,15 @@ def decode(body: Mapping[str, Any]) -> dict[str, ValidatorBindingMatch]:
     matches = {}
     for target_id, saved in body["matches"].items():
         envelope = part("envelopes", saved["envelope"])
+        if saved["envelope"] not in owners:
+            owners[saved["envelope"]] = registry.record_binding_paths(envelope)
         object_index = saved["object_index"]
+        object_envelope = envelope.extracted_objects[object_index] if object_index is not None else None
         matches[target_id] = MATCH.validate_python({
             "envelope": envelope,
-            "object_envelope": (envelope.extracted_objects[object_index]
-                                if object_index is not None else None),
+            "object_envelope": object_envelope,
+            "record_binding_paths": (owners[saved["envelope"]][id(object_envelope)]
+                                     if object_envelope is not None else ()),
             **{name: None if saved[name] is None else part(kind, saved[name])
                for name, kind in _PART_FIELDS.items()},
             "element_index": saved["element_index"],

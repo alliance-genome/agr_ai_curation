@@ -71,18 +71,21 @@ reads quote text. The rule lives in `backend/src/lib/domain_packs/evidence_scope
 - Untagged evidence goes to every binding on the record.
 - Evidence whose tags match no declared path of any active validator binding on
   the record (for example a free-text statement field that no validator reads)
-  also goes to every binding on the record. Ownership is computed per object from
-  every active validator binding of the data type
-  (`DomainPackValidationRegistry.ownership_bindings`), independent of the states
-  a caller matches, the payload and group or flow filtering. A flow that leaves
-  a check out narrows `bindings` only, so that check still owns its fields'
-  evidence. Each match carries the result as `record_binding_paths`; a saved
-  review plan stores it once per distinct value in `match_parts` and saves the
-  registry's `ownership_bindings` next to its `bindings`.
+  also goes to every binding on the record. Ownership is computed per object by
+  `DomainPackValidationRegistry.record_binding_paths` from the registry's own
+  pack snapshot: every binding the pack declares plus the registry's bindings,
+  independent of the states a caller matches, the payload and group or flow
+  filtering. A flow that leaves a check out narrows `bindings` only; the pack
+  still declares that check, so it still owns its fields' evidence. Nothing about
+  ownership is saved in a review plan: reading a saved plan derives each match's
+  `record_binding_paths` from the plan's saved registry, the same way the
+  dispatch that saved it did.
 - A tag that names a list element the record does not have (`terms[5]` on a
   two-item list) is read by no binding, so it claims nothing either.
 - For a custom profile, a mapping that is unavailable to the current user but
-  whose exact capability still declares its slots keeps owning its fields.
+  whose exact capability still declares its slots keeps owning its fields. The
+  generated profile pack lists every mapping's owned paths under
+  `profile_owned_field_paths`, so a saved plan keeps them.
 - A record with at least one claimed tag goes only to the bindings whose own
   paths match one of its tags, even if it also carries an unclaimed tag.
 - A binding with an `evidence_record` selector that has no `field_path` reads the
