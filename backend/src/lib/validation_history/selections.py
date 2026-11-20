@@ -421,6 +421,69 @@ def require_ready(manifest):
         raise store.SelectionNotReady("Selected output is not ready for finalization")
 
 
+# A flow run that finished while its review had set records aside (ALL-1561).
+SET_ASIDE_KIND = "review_set_aside"
+# Pending decisions that set a record aside: the reviewer left it for a person
+# (defer) or did not accept it (reject). A check that could not run
+# (acknowledge_failure) is not a decision about the record and still stops.
+SET_ASIDE_DECISIONS = frozenset({"reject", "defer"})
+
+
+def set_aside_in_transaction(db, artifact_id, manifest):
+    """The finished run's set-aside fact while it still covers this pending manifest, else None.
+
+    Covered means every current blocker is one the run recorded, and each
+    blocked unit still has the decision it had then (its head version). A
+    curator deciding some of the records removes their blockers and leaves the
+    rest covered. Anything new (a new answer, another decision on a set-aside
+    unit, any other blocker, a new review round) leaves the fact behind, and the
+    strict readiness rule applies again.
+    """
+    if manifest["ready"]:
+        return None
+    body = set_aside_fact_in_transaction(db, artifact_id, manifest["episode_id"])
+    if body is None:
+        return None
+    if any(blocker not in body["blockers"] for blocker in manifest["blockers"]):
+        return None
+    for target_id in {blocker["target_id"] for blocker in manifest["blockers"]}:
+        if store._current(db, artifact_id, target_id)["version"] != body["unit_versions"][target_id]:
+            return None
+    return body
+
+
+def set_aside_fact_in_transaction(db, artifact_id, episode_id):
+    """The episode's latest ``review_set_aside`` fact body, whether or not it still covers, else None."""
+    fact = db.scalar(select(ValidationFact).where(
+        ValidationFact.artifact_id == artifact_id,
+        ValidationFact.kind == SET_ASIDE_KIND,
+        ValidationFact.parent_id == episode_id,
+    ).order_by(ValidationFact.sequence.desc()).limit(1))
+    return None if fact is None else store._content(db, fact)
+
+
+# Why an export of a finished run's result is refused once a curator holds one of
+# its set-aside records (ALL-1561); curator-facing.
+CURATOR_HOLDS_SET_ASIDE = (
+    "This run's files cannot be made again yet. A curator deferred or rejected a record "
+    "the review had set aside. Accept or remove that record in Review & Curate, then try again."
+)
+
+
+def require_ready_or_set_aside(db, artifact_id, manifest):
+    """Exports of a finished flow run only: a manifest its set-aside fact still covers is accepted.
+
+    Submission, curator restore and curation preparation keep ``require_ready``.
+    When the run's fact no longer covers the manifest (a curator deferred,
+    rejected or otherwise changed a set-aside record), the refusal says so.
+    """
+    if manifest["ready"] or set_aside_in_transaction(db, artifact_id, manifest) is not None:
+        return
+    if set_aside_fact_in_transaction(db, artifact_id, manifest["episode_id"]) is not None:
+        raise store.SelectionNotReady(CURATOR_HOLDS_SET_ASIDE)
+    raise store.SelectionNotReady("Selected output is not ready for finalization")
+
+
 def selected_prerequisites(manifest, target_ids):
     """Supply only eligible exact selected versions, never prior completion hints."""
     units = {unit["target_id"]: unit for unit in manifest["units"]}

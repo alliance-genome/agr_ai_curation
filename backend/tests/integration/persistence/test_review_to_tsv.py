@@ -234,3 +234,12 @@ def test_review_reason_after_reject_defer_revoke_and_a_curator_accept(scope, tmp
         {"statement": "S2", "reason": ""},
         {"statement": "S3", "reason": "Confirmed against Figure 2."},
     ]
+    # ALL-1561: outside a finished flow run nothing is set aside. Pending records
+    # stay in previews and their Review status is blank.
+    _, statuses = _review_export(scope, item.checkpoint().envelope, [
+        ("statement", "object.pack.Annotation.statement"), ("status", "object.review_status")], finalized=False)
+    assert statuses.rows == [
+        {"statement": "S0", "status": ""}, {"statement": "S1", "status": ""},
+        {"statement": "S2", "status": ""}, {"statement": "S3", "status": "accepted"},
+    ]
+    assert statuses.set_aside_left_out == 0 and statuses.set_aside_included == 0

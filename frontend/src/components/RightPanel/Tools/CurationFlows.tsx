@@ -11,6 +11,7 @@ import { subscribeToFlowListInvalidation } from '@/features/flows/flowListInvali
 import { getFlow, listAllFlows, type FlowSummaryResponse } from '@/services/agentStudioService'
 import { getFlowShortcuts, saveFlowShortcuts, type FlowShortcuts } from '@/services/flowShortcutService'
 import logger from '@/services/logger'
+import { isFlowSetAsideSummary } from '@/features/curation/setAside/setAsideSummary'
 
 export interface CurationFlowsProps {
   /** Current chat session ID */
@@ -45,6 +46,11 @@ export function mapFlowFinishedEvent(
   if (!flowRunId || !flowName || !status || !Number.isFinite(totalEvidenceRecords)) {
     return null
   }
+  // Only a completed run carries the records its review set aside (ALL-1561).
+  const rawSetAside: unknown = status === 'completed' ? event.set_aside : null
+  if (rawSetAside !== null && rawSetAside !== undefined && !isFlowSetAsideSummary(rawSetAside)) {
+    return null
+  }
 
   return {
     adapterKeys: Array.isArray(event.adapter_keys)
@@ -77,6 +83,7 @@ export function mapFlowFinishedEvent(
       ? event.failure_reason
       : null,
     totalEvidenceRecords,
+    setAside: isFlowSetAsideSummary(rawSetAside) ? rawSetAside : null,
   }
 }
 

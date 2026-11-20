@@ -944,6 +944,10 @@ async def test_flow_preserves_finalized_empty_and_sibling_output(monkeypatch, mi
     assert finished["extraction_handoff_audits"][0]["persistenceStatus"] == "success"
     outputs = [event["details"]["output"] for event in events if event["type"] == "CHAT_OUTPUT_READY"]
     assert any("zero objects" in output and "no annotation was accepted" in output for output in outputs)
+    # ALL-1561: like FILE_READY, each chat output names its run and document.
+    assert all((event["details"]["flow_run_id"], event["details"]["document_id"])
+               == (finished["flow_run_id"], "doc1")
+               for event in events if event["type"] == "CHAT_OUTPUT_READY")
     if mixed:
         assert "Sibling priority result" in outputs
     if attached:
@@ -4933,6 +4937,9 @@ class TestExecuteFlowTermination:
         )
         chat_output = next(e for e in events if e.get("type") == "CHAT_OUTPUT_READY")
         assert chat_output["details"]["inspection_only"] is True
+        flow_finished_data = next(e for e in events if e.get("type") == "FLOW_FINISHED")["data"]
+        assert chat_output["details"]["flow_run_id"] == flow_finished_data["flow_run_id"]
+        assert "document_id" in chat_output["details"]
         assert chat_output["details"]["inspected_result_refs"] == [result_ref]
         flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
         assert flow_finished["data"]["status"] == "completed"

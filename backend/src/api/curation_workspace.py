@@ -162,6 +162,8 @@ from src.schemas.curation_workspace import (
     CurationWorkspaceResponse,
     DomainEnvelopeReviewRowsResponse,
 )
+from src.lib.flows.set_aside_records import FlowRunResultsNotFound, list_set_aside_records
+from src.schemas.set_aside_records import FlowRunSetAsideRecordsResponse
 from src.services.user_service import principal_from_claims, provision_user_async
 from src.lib.agent_studio.profile_conformance import (
     EnvelopeIntegrityError,
@@ -638,6 +640,22 @@ async def get_review_flow_run_sessions(
 ) -> CurationFlowRunSessionsResponse:
     await provision_user_async(principal_from_claims(user))
     return list_flow_run_sessions(db, request, current_user_id=_require_current_user_id(user))
+
+
+@router.get("/flow-runs/{flow_run_id}/set-aside-records", response_model=FlowRunSetAsideRecordsResponse)
+async def get_flow_run_set_aside_records(
+    flow_run_id: str,
+    document_id: UUID = Query(...),
+    user: dict = get_auth_dependency(),
+) -> FlowRunSetAsideRecordsResponse:
+    """Read-only: the records this run's review set aside for one document (ALL-1561)."""
+    await provision_user_async(principal_from_claims(user))
+    try:
+        return await run_in_threadpool(list_set_aside_records, user_id=_require_current_user_id(user),
+                                       flow_run_id=flow_run_id, document_id=str(document_id))
+    except FlowRunResultsNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=f"Flow run {flow_run_id} not found") from exc
 
 
 @router.get("/sessions/next", response_model=CurationNextSessionResponse)

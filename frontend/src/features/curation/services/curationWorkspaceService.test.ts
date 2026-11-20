@@ -4,6 +4,7 @@ import type { CurationWorkspace, DomainEnvelopeReviewRowsResponse } from '@/feat
 import {
   buildCurationWorkspaceEnvelopeReviewRowsRequests,
   buildDomainEnvelopeReviewRowsPath,
+  buildFlowRunSetAsideRecordsPath,
   CurationWorkspaceRequestError,
   createCurationBenchmarkSnapshot,
   executeCurationSubmission,
@@ -539,6 +540,12 @@ describe('curationWorkspaceService submission requests', () => {
           },
         }),
       }),
+    )
+  })
+
+  it('builds the read-only set-aside records path for one run and document', () => {
+    expect(buildFlowRunSetAsideRecordsPath('run/1', 'doc-1')).toBe(
+      '/api/curation-workspace/flow-runs/run%2F1/set-aside-records?document_id=doc-1',
     )
   })
 })

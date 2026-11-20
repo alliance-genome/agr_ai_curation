@@ -523,6 +523,38 @@ describe('Chat persistence', () => {
     expect(restored.container.querySelectorAll('.assistant-message')).toHaveLength(1)
   })
 
+  it('notes set-aside records under a chat table and keeps the note in the restored session (ALL-1561)', async () => {
+    const table = '| Reagent |\n| --- |\n| anti-Plimsoll |'
+    const view = renderChat({
+      sessionId: 'session-1', eventStreamVersion: 5, processedEventCount: 0,
+      events: [
+        { type: 'RUN_STARTED', session_id: 'session-1', turn_id: 'set-aside-turn' },
+        {
+          type: 'CHAT_OUTPUT_READY', session_id: 'session-1', turn_id: 'set-aside-turn',
+          details: {
+            formatter_node_id: 'reagent-chat', output: table, flow_run_id: 'run-1', document_id: 'doc-1',
+            set_aside: { included: 0, left_out: 2 },
+          },
+        },
+        {
+          type: 'CHAT_OUTPUT_READY', session_id: 'session-1', turn_id: 'set-aside-turn',
+          details: {
+            formatter_node_id: 'stock-chat', output: 'Stock table', flow_run_id: 'run-1', document_id: null,
+            set_aside: { included: 1, left_out: 0 },
+          },
+        },
+      ],
+    })
+    expect(await screen.findByText('2 records set aside by review, not in this table')).toBeInTheDocument()
+    expect(screen.getByText('1 record set aside by review, in this table')).toBeInTheDocument()
+    // Only the table whose paper is known can open the viewer.
+    expect(screen.getAllByRole('button', { name: 'View set-aside records for this table' })).toHaveLength(1)
+    view.unmount()
+
+    renderChat({ sessionId: 'session-1' })
+    expect(await screen.findByText('2 records set aside by review, not in this table')).toBeInTheDocument()
+  })
+
   it('does not delete stored messages when session id mismatches', () => {
     localStorage.setItem(chatStorageKeys.sessionId, 'session-2')
     localStorage.setItem(

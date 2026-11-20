@@ -264,3 +264,19 @@ it('restores authoritative review status independently of completion prose', () 
   expect(message.validationReview).toEqual(review)
   expect(message.validationReviewSnapshot).toBe(true)
 })
+
+
+it('restores a saved file card with the records its review set aside (ALL-1561)', () => {
+  const [message] = buildRestorableChatMessages([{
+    message_id: 'file', session_id: 'session-1', chat_kind: 'assistant_chat', role: 'assistant',
+    message_type: 'file_download', content: 'Generated file: reagents.tsv', turn_id: 'turn-1',
+    created_at: '2026-11-19T00:00:00Z',
+    payload_json: { type: 'FILE_READY', details: {
+      file_id: 'file-1', filename: 'reagents.tsv', format: 'tsv', download_url: '/api/files/file-1/download',
+      flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 0, left_out: 2 },
+    } },
+  }])
+  expect(message.fileData).toMatchObject({
+    flow_run_id: 'run-1', document_id: 'doc-1', set_aside: { included: 0, left_out: 2 },
+  })
+})

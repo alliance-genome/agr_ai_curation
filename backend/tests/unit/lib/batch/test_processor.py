@@ -102,7 +102,7 @@ def test_batch_processor_marks_failed_when_no_file_ready(monkeypatch):
     published_events = []
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return ([], [], "none", [])
+        return ([], [], "none", [], None)
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
     monkeypatch.setattr(
@@ -321,6 +321,7 @@ def test_batch_processor_marks_completed_when_file_ready(monkeypatch):
             [],
             "partial",
             [],
+            None,
         )
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
@@ -353,7 +354,7 @@ def test_batch_processor_succeeds_on_curation_handoff(monkeypatch):
     batch, batch_doc, flow = _build_batch_context()
 
     async def _fake_execute_flow_for_document(**_kwargs):
-        return ([], ["session-gene", "session-gene_expression"], "complete", [])
+        return ([], ["session-gene", "session-gene_expression"], "complete", [], None)
 
     monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
 
@@ -958,6 +959,7 @@ def test_execute_flow_for_document_passes_batch_id_as_flow_run_id(monkeypatch):
         [],
         "partial",
         [],
+        None,
     )
     assert captured["flow_run_id"] == batch_id
     assert captured["active_groups"] == ["group-a"]
@@ -1004,7 +1006,7 @@ def test_execute_flow_for_document_captures_curation_handoff_ready(monkeypatch):
         )
     )
 
-    assert result == ([], ["session-gene", "session-gene_expression"], "complete", [])
+    assert result == ([], ["session-gene", "session-gene_expression"], "complete", [], None)
     assert [event["type"] for event in published_events] == [
         "CURATION_HANDOFF_READY",
         "FLOW_FINISHED",
@@ -1117,7 +1119,7 @@ def test_execute_flow_for_document_does_not_publish_unowned_file_ready(monkeypat
         )
     )
 
-    assert result == ([], [], "none", [])
+    assert result == ([], [], "none", [], None)
     assert published_events == []
 
 
@@ -1192,7 +1194,7 @@ def test_execute_flow_for_document_strips_internal_payload_before_publish(monkey
         )
     )
 
-    assert result == ([], [], "none", [])
+    assert result == ([], [], "none", [], None)
     assert len(published_events) == 1
     assert published_events[0]["type"] == "TOOL_COMPLETE"
     assert published_events[0]["batch_id"] == batch_id
@@ -1273,3 +1275,63 @@ def test_review_stop_retains_source_without_success_or_error_alert(monkeypatch, 
     assert getattr(batch, status + '_documents') == 1
     assert document.output_status == 'none' and not document.result_files
     assert not any(event['type'] in {'BATCH_DOCUMENT_ERROR', 'FLOW_ERROR', 'RUN_ERROR', 'FILE_READY'} for event in published)
+
+
+SET_ASIDE_SUMMARY = {
+    "count": 1,
+    "results": [{"extraction_result_id": "result-1", "node_id": "extract", "episode_id": "episode-1", "count": 1}],
+    "outputs": [{"type": "FILE_READY", "formatter_node_id": "tsv-output", "file_id": "file-1",
+                 "filename": "genes.tsv", "included": 0, "left_out": 1}],
+    "left_out_of_outputs": 1,
+    "included_in_outputs": 0,
+}
+
+
+def test_execute_flow_for_document_keeps_the_set_aside_summary_of_a_completed_run(monkeypatch):
+    """ALL-1561: a paper whose review set a record aside finishes; the summary rides along."""
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "FILE_READY", "details": {
+            "file_id": "c0ffee00-cafe-cafe-cafe-c0ffeec0ffee", "filename": "genes.tsv",
+            "download_url": "/api/files/c0ffee00-cafe-cafe-cafe-c0ffeec0ffee/download", "format": "tsv",
+            "set_aside": {"included": 0, "left_out": 1}}}
+        yield {"type": "FLOW_FINISHED",
+               "data": {"status": "completed", "output_status": "complete", "set_aside": SET_ASIDE_SUMMARY}}
+
+    monkeypatch.setattr(processor, "get_batch_broadcaster",
+                        lambda: SimpleNamespace(publish_sync=lambda _batch_uuid, _event: None))
+    monkeypatch.setattr(processor, "_validate_file_ownership", lambda *_args: True)
+    monkeypatch.setattr("src.lib.flows.executor.execute_flow", _fake_execute_flow)
+    monkeypatch.setattr("src.lib.context.set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr("src.lib.context.set_current_session_id", lambda _session_id: None)
+
+    files, sessions, output_status, branches, set_aside = asyncio.run(
+        processor._execute_flow_for_document(
+            flow=SimpleNamespace(name="Batch Flow"), document_id=str(uuid4()), cognito_sub="auth-sub",
+            batch_id=str(uuid4()), active_groups=[], db_user_id=7,
+        )
+    )
+
+    assert set_aside == SET_ASIDE_SUMMARY
+    assert output_status == "complete" and sessions == [] and branches == []
+    # Each file says whether the set-aside records are in it.
+    assert files[0]["set_aside"] == {"included": 0, "left_out": 1}
+
+
+def test_a_completed_paper_with_set_aside_records_stores_its_summary(monkeypatch):
+    db = Mock()
+    batch, batch_doc, flow = _build_batch_context()
+    result_file = {"file_id": "00000000-0000-0000-0000-000000000123", "filename": "genes.tsv",
+                   "download_url": "/api/files/00000000-0000-0000-0000-000000000123/download",
+                   "set_aside": {"included": 0, "left_out": 1}}
+
+    async def _fake_execute_flow_for_document(**_kwargs):
+        return ([result_file], [], "complete", [], SET_ASIDE_SUMMARY)
+
+    monkeypatch.setattr(processor, "_execute_flow_for_document", _fake_execute_flow_for_document)
+    processor._process_single_document(db=db, batch=batch, batch_doc=batch_doc, flow=flow, cognito_sub="auth-sub")
+
+    assert batch_doc.status == BatchDocumentStatus.COMPLETED
+    assert batch_doc.result_files == [result_file]
+    assert batch_doc.review_details == {"set_aside": SET_ASIDE_SUMMARY}
+    assert batch.completed_documents == 1

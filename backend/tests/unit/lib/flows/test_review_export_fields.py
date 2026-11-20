@@ -220,9 +220,9 @@ def test_review_reason_puts_the_records_own_reason_first_then_each_field_in_orde
     items = [{"object_type": "Annotation", "metadata": {"validation_history": {"target_id": target}}}
              for target in ("t1", "t2")]
     reasons = {
-        "t1": [(None, "Shown in Table 1."), ("statement", "The legend says so."),
-               ("evidence_code_curies[1]", "The methods name the assay.")],
-        "t2": [("statement", "Only the abstract states it.")],
+        "t1": [(None, None, "Shown in Table 1."), ("statement", None, "The legend says so."),
+               ("evidence_code_curies[1]", None, "The methods name the assay.")],
+        "t2": [("statement", None, "Only the abstract states it.")],
     }
     _attach_review_fields(rows, items, [], reasons, {("Annotation", "statement"): "Statement"})
     assert [row[export_fields.REVIEW_REASON_REF] for row in rows] == [

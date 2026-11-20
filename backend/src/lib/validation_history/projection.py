@@ -296,14 +296,21 @@ def pin_publication_in_transaction(
     return envelope.model_copy(update={"metadata": metadata})
 
 
-def read_published_projection(scope, reference, *, current=False, finalized=False):
+def read_published_projection(scope, reference, *, current=False, finalized=False, set_aside_ok=False):
     """Exact old reads never reinterpret content using today's selection heads."""
     with store.SessionLocal.begin() as db:
-        return read_published_projection_in_transaction(db, scope, reference, current=current, finalized=finalized)
+        return read_published_projection_in_transaction(db, scope, reference, current=current,
+                                                        finalized=finalized, set_aside_ok=set_aside_ok)
 
 
-def read_published_projection_in_transaction(db, scope, reference, *, current=False, finalized=False):
-    """Read under a caller's existing checkpoint lock, including uncommitted publication."""
+def read_published_projection_in_transaction(db, scope, reference, *, current=False, finalized=False,
+                                             set_aside_ok=False):
+    """Read under a caller's existing checkpoint lock, including uncommitted publication.
+
+    ``set_aside_ok`` is for exports only: a finalized read also accepts the
+    current publication a flow run finished with while its review had set
+    records aside (``selections.require_ready_or_set_aside``).
+    """
     artifact_id = reference["artifact_id"]
     selections._lock_artifact(db, scope, artifact_id)
     fact = store._fact(db, artifact_id, reference["fact_id"], kind="selected_projection")
@@ -338,28 +345,84 @@ def read_published_projection_in_transaction(db, scope, reference, *, current=Fa
                     or live["source_state_sha256"] != manifest["source_state_sha256"]):
                 raise store.SelectionNotReady("Published projection is no longer current")
             manifest = live
-    if finalized:
+    if finalized and set_aside_ok:
+        selections.require_ready_or_set_aside(db, artifact_id, manifest)
+    elif finalized:
         selections.require_ready(manifest)
     projection = DomainEnvelope.model_validate(body["projection"])
     projection.metadata["selected_projection"] = deepcopy(reference)
     return projection, deepcopy(manifest)
 
 
-def read_current_projection_with_reasons(scope, reference):
-    """The current published projection and the standing decision reasons of each record.
+def read_current_projection_with_reasons(scope, reference, *, reasons=True):
+    """The current published projection, each record's review reasons, and which records are pending.
 
-    One read under the projection's own lock: the reasons come from the same
-    manifest snapshot as the values. See ``standing_decision_reasons_in_transaction``.
+    One read under the projection's own lock: reasons and record states come
+    from the same manifest snapshot as the values. Returns
+    ``(projection, manifest, reasons, pending, set_aside)``: ``pending`` are the
+    records a manifest blocker reaches (``pending_records_in_transaction``);
+    ``set_aside`` are those a finished flow run's set-aside fact still covers
+    (``selections.set_aside_in_transaction``, ALL-1561), empty everywhere else.
+    ``reasons=False`` skips the reason read when the caller's output cannot
+    show it.
     """
     with store.SessionLocal.begin() as db:
         projection, manifest = read_published_projection_in_transaction(db, scope, reference, current=True)
+        artifact_id = reference["artifact_id"]
         records = {obj.metadata["validation_history"]["target_id"]: obj.metadata["validation_history"]
                    for obj in projection.extracted_objects if "validation_history" in obj.metadata}
-        return projection, manifest, standing_decision_reasons_in_transaction(
-            db, reference["artifact_id"], manifest, records)
+        covered = selections.set_aside_in_transaction(db, artifact_id, manifest)
+        blocked_units = {blocker["target_id"] for blocker in manifest["blockers"]}
+        contributed = contributed_records(projection, manifest, blocked_units)
+        pending = pending_records_in_transaction(db, artifact_id, manifest, records) | contributed
+        set_aside = (pending.intersection(covered["record_target_ids"]) | contributed) if covered else set()
+        set_aside_units = blocked_units if covered else set()
+        return projection, manifest, (
+            standing_decision_reasons_in_transaction(db, artifact_id, manifest, records,
+                                                     set_aside_units=set_aside_units)
+            if reasons else {}
+        ), pending, set_aside
 
 
-def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records):
+def contributed_records(projection, manifest, unit_target_ids):
+    """Objects a still-selected answer of one of these units contributed, by target id.
+
+    A validator answer can add objects; they hang under the envelope, not under
+    the record whose unit is blocked, so blocker lineage does not reach them.
+    Each keeps ``metadata.selected_contribution.completion_id``, the answer it
+    came from; a unit's ``selected`` names its selected answer. Pure structure.
+    """
+    answers = {unit["selected"] for unit in manifest["units"]
+               if unit["target_id"] in unit_target_ids and unit["selected"] is not None}
+    return {obj.metadata["validation_history"]["target_id"] for obj in projection.extracted_objects
+            if "selected_contribution" in obj.metadata
+            and obj.metadata["selected_contribution"]["completion_id"] in answers}
+
+
+def pending_records_in_transaction(db, artifact_id, manifest, records):
+    """The records (of ``records``, by target id) that a manifest blocker reaches.
+
+    The same structural rule as ``record_lifecycle.counts``: a blocker on a
+    unit reaches the records in its target lineage, and an envelope-level
+    blocker reaches every record. Nothing here reads why they are pending.
+    """
+    pending: set[str] = set()
+    for blocker in manifest["blockers"]:
+        if blocker["target_id"] is None:
+            return set(records)
+        pending.update(set(records).intersection(store._target_lineage(db, artifact_id, blocker["target_id"])))
+    return pending
+
+
+# Object metadata mark of a record a finished flow run's review set aside, in
+# the supervisor's accepted view (ALL-1561).
+SET_ASIDE_REVIEW_STATUS = "set aside"
+# Roles of the two reasons a set-aside unit with a standing accepted value shows (ALL-1561).
+ACCEPTED_EARLIER = "accepted_earlier"
+SET_ASIDE_LATER = "set_aside_later"
+
+
+def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records, *, set_aside_units=frozenset()):
     """The reasons of the decisions each record stands on, by record target.
 
     ``records`` maps each record's target id to its history refs. A unit's
@@ -368,10 +431,18 @@ def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records)
     again moves it, so a replaced decision is never read, and a decision that
     selects nothing (defer, reject of another answer) leaves it in place. Only
     eligible units are read, the ones whose selection the projection applies.
+    A unit in ``set_aside_units`` (ALL-1561: units a finished flow run's
+    set-aside fact covers, so their current decision is the reviewer's defer or
+    reject) also reads the reason of that decision. When an earlier accepted
+    value still stands for it (eligible, with an accepting selection: the value
+    the projection shows), both are kept, as ``ACCEPTED_EARLIER`` then
+    ``SET_ASIDE_LATER``; with no standing value, the set-aside reason alone. No
+    other unit reads its current decision.
 
-    Each record gets ``(None, reason)`` for its own unit first, then
-    ``(field_path, reason)`` for each unit of a validator binding on the record,
-    in manifest order. A binding target names its record (``object_target``)
+    Each record gets ``(None, role, reason)`` for its own unit first, then
+    ``(field_path, role, reason)`` for each unit of a validator binding on the
+    record, in manifest order. ``role`` is None, or one of the two roles above
+    for a set-aside unit that keeps an accepted value. A binding target names its record (``object_target``)
     and its stable source location; a declared decision unit is a child of its
     binding target and takes the binding's location. The reason is the stored
     text, copied as is. Selection facts are immutable, so the caller's read
@@ -382,11 +453,19 @@ def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records)
     own: dict[str, list] = {}
     fields: dict[str, list] = {}
     for unit in manifest["units"]:
-        if unit["selection_id"] is None or not unit["eligible"]:
+        standing = None
+        if unit["selection_id"] is not None and unit["eligible"]:
+            standing = store._content(db, store._fact(db, artifact_id, unit["selection_id"], kind="selection"))["reason"]
+        if unit["target_id"] in set_aside_units:
+            set_aside = store._current(db, artifact_id, unit["target_id"])["reason"]
+            reasons = ([(None, set_aside)] if standing is None
+                       else [(ACCEPTED_EARLIER, standing), (SET_ASIDE_LATER, set_aside)])
+        elif standing is not None:
+            reasons = [(None, standing)]
+        else:
             continue
-        reason = store._content(db, store._fact(db, artifact_id, unit["selection_id"], kind="selection"))["reason"]
         if unit["target_id"] in records:
-            own.setdefault(unit["target_id"], []).append((None, reason))
+            own.setdefault(unit["target_id"], []).extend((None, role, text) for role, text in reasons)
             continue
         target = store._fact(db, artifact_id, unit["target_id"], kind="target")
         location = store._content(db, target)
@@ -398,7 +477,8 @@ def standing_decision_reasons_in_transaction(db, artifact_id, manifest, records)
         stable = location.get("stable_path") or []
         anchor = location.get("absent_anchor") or {
             "target_id": stable[-1] if stable else record, "suffix": []}
-        fields.setdefault(record, []).append((anchored_path(records[record], anchor), reason))
+        path = anchored_path(records[record], anchor)
+        fields.setdefault(record, []).extend((path, role, text) for role, text in reasons)
     return {record: [*own.get(record, []), *fields.get(record, [])] for record in {*own, *fields}}
 
 

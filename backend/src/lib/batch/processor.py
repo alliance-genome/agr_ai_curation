@@ -421,7 +421,7 @@ def _process_single_document(
         ).first()
         document_name = getattr(source_document, "filename", None)
 
-        result_files, review_session_ids, output_status, output_branches = asyncio.run(
+        result_files, review_session_ids, output_status, output_branches, set_aside = asyncio.run(
             _execute_flow_for_document(
                 flow=flow,
                 document_id=str(batch_doc.document_id),
@@ -454,6 +454,9 @@ def _process_single_document(
         batch_doc.review_session_ids = review_session_ids or None
         batch_doc.output_status = output_status
         batch_doc.output_branches = output_branches or None
+        # A finished paper whose review set records aside (ALL-1561) keeps the
+        # run's summary for the row notice and the read-only viewer.
+        batch_doc.review_details = {"set_aside": set_aside} if set_aside else None
         batch_doc.processing_time_ms = processing_time_ms
         batch_doc.processed_at = datetime.now(timezone.utc)
         BatchService(db).recompute_batch_counters(batch)
@@ -535,7 +538,7 @@ async def _execute_flow_for_document(
     active_groups: list[str],
     db_user_id: Optional[int] = None,
     document_name: Optional[str] = None,
-) -> tuple[list[dict[str, Any]], list[str], str, list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[str], str, list[dict[str, Any]], dict[str, Any] | None]:
     """Execute a flow on a single document and extract batch success outputs.
 
     All events from the flow execution are published to the BatchEventBroadcaster
@@ -578,6 +581,7 @@ async def _execute_flow_for_document(
     pending_curation_handoff_event: Optional[dict[str, Any]] = None
     flow_output_status: Optional[str] = None
     flow_output_branches: list[dict[str, Any]] = []
+    flow_set_aside: Optional[dict[str, Any]] = None
     flow_failure_message: Optional[str] = None
     flow_failure_already_reported = False
     flow_failure_event_seen = False
@@ -643,6 +647,7 @@ async def _execute_flow_for_document(
                             "source_extraction_result_ids",
                             "source_keys",
                             "source_envelope_ids",
+                            "set_aside",
                         )
                         if file_ready_details.get(key) is not None
                     }
@@ -674,6 +679,8 @@ async def _execute_flow_for_document(
                     and raw_output_status in {"complete", "partial", "none"}
                 ):
                     flow_output_status = raw_output_status
+                if finished_data.get("status") == "completed":
+                    flow_set_aside = finished_data.get("set_aside")
                 raw_output_branches = finished_data.get("output_branches")
                 if isinstance(raw_output_branches, list):
                     flow_output_branches = [
@@ -794,7 +801,7 @@ async def _execute_flow_for_document(
     resolved_output_status = flow_output_status or (
         "complete" if result_files or review_session_ids else "none"
     )
-    return result_files, review_session_ids, resolved_output_status, flow_output_branches
+    return result_files, review_session_ids, resolved_output_status, flow_output_branches, flow_set_aside
 
 
 def _enrich_event_for_batch(

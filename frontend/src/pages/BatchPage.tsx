@@ -35,6 +35,7 @@ import {
   MoreVert as MoreVertIcon,
   ContentCopy as ContentCopyIcon,
   RateReview as RateReviewIcon,
+  InfoOutlined as InfoOutlinedIcon,
 } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import AuditPanel from '../components/AuditPanel';
@@ -47,6 +48,17 @@ import AuthoritativeReviewAndCurateButton from '@/features/curation/components/A
 import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService';
 import { buildBatchAuditStorageKey } from '@/lib/aiCurationLocalCache';
 import { safeGetJson, safeRemoveItem, safeSetJson } from '@/lib/browserStorage';
+import SetAsideRecordsDialog, { type SetAsidePaper } from '@/features/curation/setAside/SetAsideRecordsDialog';
+import {
+  type FlowSetAsideSummary,
+  isFlowSetAsideSummary,
+  isLeftOutSomewhere,
+  recordCountText,
+  setAsideAuditMessage,
+  setAsideFinishedLabel,
+  setAsidePlacement,
+  setAsideViewButtonLabel,
+} from '@/features/curation/setAside/setAsideSummary';
 
 // Valid audit event types that should be shown in the batch audit panel
 // NOTE: Excludes AGENT_THINKING because it emits per-token events that
@@ -128,6 +140,7 @@ interface DocumentStatusStreamEventBase {
   flow_run_id?: string;
   origin_session_id?: string;
   review_session_ids?: string[] | null;
+  review_details?: Record<string, unknown> | null;
 }
 
 type DocumentStatusStreamEvent = DocumentStatusStreamEventBase & (
@@ -219,6 +232,28 @@ const requireBatchEventEnum = <T extends string>(
   return value as T;
 };
 
+/**
+ * Records the review set aside on a completed paper (ALL-1561): the run summary
+ * in `review_details.set_aside`, or null when the review set nothing aside.
+ * Stopped papers keep their own review details and have no such summary.
+ */
+export const readBatchSetAside = (
+  status: DocumentStatus,
+  reviewDetails: unknown,
+  documentId: string,
+): FlowSetAsideSummary | null => {
+  if (status !== 'completed' || reviewDetails === null || reviewDetails === undefined) return null;
+  if (typeof reviewDetails !== 'object') {
+    throw new Error(`Batch document ${documentId} has corrupted review details`);
+  }
+  const summary = (reviewDetails as Record<string, unknown>).set_aside;
+  if (summary === null || summary === undefined) return null;
+  if (!isFlowSetAsideSummary(summary)) {
+    throw new Error(`Batch document ${documentId} has a corrupted set-aside summary`);
+  }
+  return summary;
+};
+
 interface BatchOutputBranch {
   source_node_id: string;
   output_node_id: string;
@@ -250,6 +285,7 @@ export interface BatchDocument {
   flow_run_id?: string;
   origin_session_id?: string;
   review_session_ids: string[];
+  set_aside: FlowSetAsideSummary | null;
 }
 
 interface BatchDocumentPayload {
@@ -270,6 +306,7 @@ interface BatchDocumentPayload {
   flow_run_id?: string;
   origin_session_id?: string;
   review_session_ids?: string[] | null;
+  review_details?: Record<string, unknown> | null;
 }
 
 export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
@@ -290,6 +327,7 @@ export function mapBatchDocument(doc: BatchDocumentPayload): BatchDocument {
     flow_run_id: doc.flow_run_id,
     origin_session_id: doc.origin_session_id,
     review_session_ids: Array.isArray(doc.review_session_ids) ? doc.review_session_ids : [],
+    set_aside: readBatchSetAside(doc.status, doc.review_details, doc.document_id),
   };
 }
 
@@ -325,6 +363,7 @@ const BatchPage: React.FC = () => {
       status: 'pending',
       result_files: [],
       review_session_ids: [],
+      set_aside: null,
     })),
     selectedFlowId: null,
     flowValidation: null,
@@ -395,6 +434,13 @@ const BatchPage: React.FC = () => {
   // Feedback dialog state
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
   const [feedbackDocument, setFeedbackDocument] = useState<BatchDocument | null>(null);
+
+  // Read-only viewer of records the review set aside (one paper or all of them)
+  const [setAsideViewer, setSetAsideViewer] = useState<{ open: boolean; documents: BatchDocument[] }>({
+    open: false,
+    documents: [],
+  });
+  const openSetAsideViewer = (documents: BatchDocument[]) => setSetAsideViewer({ open: true, documents });
 
   // Load available flows
   useEffect(() => {
@@ -564,6 +610,7 @@ const BatchPage: React.FC = () => {
             const docPosition = requireBatchEventNumber(data.position, 'position', data.type);
             const docTitle = `Document ${docPosition + 1}`; // Default title
             const resultFiles = requireBatchResultFiles(data.result_files, docId);
+            const setAside = readBatchSetAside(docStatus, data.review_details, docId);
 
             // CR-7: Add audit events outside state setter to avoid stale closure issues
             // State setter callbacks should be pure functions
@@ -590,6 +637,14 @@ const BatchPage: React.FC = () => {
                   agent: 'Batch Processor',
                 },
               });
+              if (setAside) {
+                addAuditEvent({
+                  type: 'DOMAIN_WARNING',
+                  timestamp: new Date(),
+                  sessionId: batchId,
+                  details: { message: setAsideAuditMessage(docTitle, setAside) },
+                });
+              }
             } else if (docStatus === 'failed') {
               addAuditEvent({
                 type: 'TOOL_COMPLETE',
@@ -627,6 +682,7 @@ const BatchPage: React.FC = () => {
                     review_session_ids: Object.prototype.hasOwnProperty.call(data, 'review_session_ids')
                       ? (Array.isArray(data.review_session_ids) ? data.review_session_ids : [])
                       : d.review_session_ids,
+                    set_aside: setAside,
                   };
                 }
                 return d;
@@ -1159,6 +1215,62 @@ const BatchPage: React.FC = () => {
   } as Partial<Record<DocumentStatus, string>>)[status];
   const reviewedStopCount = batchState.reviewPendingCount + batchState.reviewExhaustedCount + batchState.interruptedCount;
 
+  // Papers that finished with records the review set aside (ALL-1561)
+  const setAsideDocuments = batchState.documents.filter(
+    (doc): doc is BatchDocument & { set_aside: FlowSetAsideSummary } => doc.status === 'completed' && doc.set_aside !== null,
+  );
+  const setAsideTotal = setAsideDocuments.reduce((sum, doc) => sum + doc.set_aside.count, 0);
+  const setAsidePlacements = setAsideDocuments.map((doc) => setAsidePlacement(doc.set_aside));
+  const setAsideAnyLeftOut = setAsidePlacements.some(isLeftOutSomewhere);
+  const setAsideAllLeftOut = setAsidePlacements.length > 0 && setAsidePlacements.every((placement) => placement === 'left_out');
+  const setAsideAllIncluded = setAsidePlacements.length > 0 && setAsidePlacements.every((placement) => placement === 'included');
+  const setAsideChipLabel = setAsideAllIncluded
+    ? `${recordCountText(setAsideTotal)} set aside, in the file`
+    : `${recordCountText(setAsideTotal)} set aside`;
+  const setAsideSummarySentence = setAsideAllLeftOut
+    ? 'They are not in the files.'
+    : setAsideAnyLeftOut
+      ? 'Some are not in the files.'
+      : setAsideAllIncluded
+        ? 'They are in the files, marked "set aside".'
+        : '';
+  const setAsidePapers: SetAsidePaper[] = activeBatchId
+    ? setAsideViewer.documents.flatMap((doc) => (doc.set_aside
+      ? [{
+        documentId: doc.document_id,
+        flowRunId: activeBatchId,
+        title: doc.title,
+        count: doc.set_aside.count,
+        placement: setAsidePlacement(doc.set_aside),
+      }]
+      : []))
+    : [];
+
+  const renderSetAsideRowNotice = (doc: BatchDocument, summary: FlowSetAsideSummary) => {
+    const leftOut = isLeftOutSomewhere(setAsidePlacement(summary));
+    return (
+      <Box sx={{ mt: 0.5 }}>
+        {/* Right padding keeps the label clear of the row's action icons. */}
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5, pr: 9, color: leftOut ? 'warning.main' : 'text.secondary' }}>
+          <InfoOutlinedIcon aria-hidden sx={{ fontSize: '0.95rem', mt: '2px' }} />
+          <Typography variant="caption" sx={{ fontWeight: leftOut ? 600 : 400 }}>
+            {setAsideFinishedLabel(summary)}
+          </Typography>
+        </Box>
+        <Button
+          size="small"
+          variant={leftOut ? 'outlined' : 'text'}
+          color={leftOut ? 'warning' : 'primary'}
+          aria-label={`${summary.count === 1 ? 'View set-aside record' : 'View set-aside records'} for ${doc.title}`}
+          onClick={() => openSetAsideViewer([doc])}
+          sx={{ mt: 0.5, ml: 2.25, py: 0, textTransform: 'none', whiteSpace: 'nowrap' }}
+        >
+          {setAsideViewButtonLabel(summary)}
+        </Button>
+      </Box>
+    );
+  };
+
   // Calculate progress percentage
   const progressPercent = batchState.totalCount > 0
     ? ((batchState.completedCount + batchState.failedCount + reviewedStopCount) / batchState.totalCount) * 100
@@ -1448,13 +1560,23 @@ const BatchPage: React.FC = () => {
         }}>
           Flow: {flows.find(f => f.id === batchState.selectedFlowId)?.name || 'Unknown'}
         </Typography>
-        <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+        <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
           <Chip
             icon={<SuccessIcon />}
             label={`${batchState.completedCount} successful`}
             color="success"
             size="small"
           />
+          {setAsideTotal > 0 && (
+            <Chip
+              size="small"
+              variant="outlined"
+              color={setAsideAnyLeftOut ? 'warning' : 'default'}
+              icon={<InfoOutlinedIcon />}
+              label={setAsideChipLabel}
+              onClick={() => openSetAsideViewer(setAsideDocuments)}
+            />
+          )}
           {batchState.reviewPendingCount > 0 && <Chip size="small" color="warning" label={`${batchState.reviewPendingCount} awaiting review`} />}
           {batchState.reviewExhaustedCount > 0 && <Chip size="small" color="warning" label={`${batchState.reviewExhaustedCount} review limits reached`} />}
           {batchState.interruptedCount > 0 && <Chip size="small" color="warning" label={`${batchState.interruptedCount} interrupted`} />}
@@ -1468,6 +1590,34 @@ const BatchPage: React.FC = () => {
           )}
         </Box>
       </Box>
+
+      {setAsideDocuments.length > 1 && (
+        <Box
+          sx={{
+            mb: 2,
+            p: 1.5,
+            border: 1,
+            borderRadius: 1,
+            borderColor: setAsideAnyLeftOut ? 'warning.main' : 'divider',
+          }}
+        >
+          <Typography variant="body2">
+            <Box component="span" sx={{ fontWeight: 700 }}>
+              {recordCountText(setAsideTotal)} set aside in {setAsideDocuments.length} papers.
+            </Box>
+            {setAsideSummarySentence && ` ${setAsideSummarySentence}`}
+          </Typography>
+          <Button
+            size="small"
+            variant="outlined"
+            color={setAsideAnyLeftOut ? 'warning' : 'primary'}
+            onClick={() => openSetAsideViewer(setAsideDocuments)}
+            sx={{ mt: 1, textTransform: 'none' }}
+          >
+            View all set-aside records
+          </Button>
+        </Box>
+      )}
 
       {/* Results List */}
       <Typography variant="subtitle2" gutterBottom sx={{
@@ -1525,17 +1675,21 @@ const BatchPage: React.FC = () => {
               <ListItemText
                 primary={doc.title}
                 secondary={
-                  reviewOutcomeLabel(doc.status) || (doc.status === 'failed'
-                    ? doc.error_message
-                    : doc.result_files.length
-                      ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${doc.result_files
-                        .map((resultFile) => `${resultFile.filename}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
-                        .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}${getEmptyOutputSummary(doc) ? ` · ${getEmptyOutputSummary(doc)}` : ''}`
-                      : getEmptyOutputSummary(doc) || undefined)
+                  <>
+                    {reviewOutcomeLabel(doc.status) || (doc.status === 'failed'
+                      ? doc.error_message
+                      : doc.result_files.length
+                        ? `${doc.output_status === 'partial' ? 'Partial output · ' : ''}${doc.result_files
+                          .map((resultFile) => `${resultFile.filename}${resultFile.formatter_label ? ` (${resultFile.formatter_label}${resultFile.source_label ? ` from ${resultFile.source_label}` : ''})` : ''}`)
+                          .join(' · ')}${getMissingOutputSummary(doc) ? ` · Missing: ${getMissingOutputSummary(doc)}` : ''}${getEmptyOutputSummary(doc) ? ` · ${getEmptyOutputSummary(doc)}` : ''}`
+                        : getEmptyOutputSummary(doc) || undefined)}
+                    {doc.status === 'completed' && doc.set_aside && renderSetAsideRowNotice(doc, doc.set_aside)}
+                  </>
                 }
                 sx={{ pr: 2 }}
                 slotProps={{
-                  primary: { noWrap: true }
+                  primary: { noWrap: true },
+                  secondary: { component: 'div' },
                 }}
               />
             </ListItem>
@@ -1665,6 +1819,14 @@ const BatchPage: React.FC = () => {
           Copy Trace ID
         </MenuItem>
       </Menu>
+
+      {/* Read-only viewer of records the review set aside */}
+      <SetAsideRecordsDialog
+        open={setAsideViewer.open && setAsidePapers.length > 0}
+        onClose={() => setSetAsideViewer((current) => ({ ...current, open: false }))}
+        flowName={flows.find(f => f.id === batchState.selectedFlowId)?.name || 'Unknown'}
+        papers={setAsidePapers}
+      />
 
       {/* Feedback Dialog */}
       <FeedbackDialog
