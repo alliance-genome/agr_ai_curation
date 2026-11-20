@@ -917,3 +917,23 @@ async def test_zip_dispatch_keeps_sql_user_and_file_subject_distinct(monkeypatch
     batch_id = uuid4()
     assert await batch_api.download_batch_zip(batch_id, user=claims) is prepare.return_value
     prepare.assert_awaited_once_with(batch_id, 8, owner)
+
+
+def test_batch_document_response_keeps_each_files_set_aside_counts():
+    """ALL-1561: GET /api/batches/{id} returns result_files[].set_aside and review_details.set_aside."""
+    from src.schemas.batch import BatchDocumentResponse
+
+    summary = {"count": 1, "results": [], "left_out_of_outputs": 1, "included_in_outputs": 0,
+               "outputs": [{"type": "FILE_READY", "formatter_node_id": "tsv", "file_id": "file-1",
+                            "filename": "genes.tsv", "included": 0, "left_out": 1}]}
+    response = BatchDocumentResponse.model_validate({
+        "id": uuid4(), "document_id": uuid4(), "position": 0, "status": BatchDocumentStatus.COMPLETED,
+        "result_files": [
+            {"file_id": "file-1", "filename": "genes.tsv", "download_url": "/api/files/file-1/download",
+             "set_aside": {"included": 0, "left_out": 1}},
+            {"file_id": "file-2", "filename": "other.tsv", "download_url": "/api/files/file-2/download"},
+        ],
+        "review_details": {"set_aside": summary},
+    }).model_dump(mode="json")
+    assert [item["set_aside"] for item in response["result_files"]] == [{"included": 0, "left_out": 1}, None]
+    assert response["review_details"] == {"set_aside": summary}

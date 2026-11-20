@@ -5,7 +5,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
@@ -249,9 +249,9 @@ def test_process_suggestion_background_does_not_report_typed_outcomes_as_crashes
         ),
         "context_overflow": api_module.openai.BadRequestError(
             "Sensitive request exceeded the context length token limit",
-            response=httpx.Response(
+            response=httpx2.Response(
                 400,
-                request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+                request=httpx2.Request("POST", "https://api.openai.com/v1/responses"),
             ),
             body={},
         ),

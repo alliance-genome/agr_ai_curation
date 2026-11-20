@@ -75,8 +75,10 @@ async def test_a_field_decided_only_by_defer_contributes_nothing(planned, monkey
         {"handle": first, "action": "accept", "reason": "Table 2 gives this evidence code."},
         {"handle": second, "action": "defer", "reason": "The supplement is not available yet."},
     ], "accept-and-defer")
-    rows, _ = _reason_cells(item, monkeypatch, [("reason", "object.review_reason")])
-    assert rows == [{"reason": "evidence_code_curies[0]: Table 2 gives this evidence code."}]
+    rows, _ = _reason_cells(item, monkeypatch, [("reason", "object.review_reason"),
+                                                ("status", "object.review_status")])
+    # ALL-1561: no finished flow run set the record aside, so its status is blank.
+    assert rows == [{"reason": "evidence_code_curies[0]: Table 2 gives this evidence code.", "status": ""}]
 
 
 @pytest.mark.parametrize("planned", ["optional-composite-absence"], indirect=True)

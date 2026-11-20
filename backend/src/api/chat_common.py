@@ -1434,6 +1434,8 @@ async def _run_resolved_chat_route(
                 "response": response,
                 "response_length": len(response),
                 "agents_used": agents_used,
+                # Records the run's review set aside, when there are any (ALL-1561).
+                **({"set_aside": outcome.set_aside} if outcome.set_aside else {}),
             },
         }
         return

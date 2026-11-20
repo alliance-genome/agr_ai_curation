@@ -98,6 +98,29 @@ def test_pdf_viewer_document_routes_require_authentication(monkeypatch, path):
     assert response.status_code == 401
 
 
+def test_pdf_viewer_evidence_fuzzy_match_requires_authentication(monkeypatch):
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+    monkeypatch.delenv("TESTING_API_KEY", raising=False)
+    app = FastAPI()
+    app.include_router(pdf_viewer.router)
+
+    def _matcher_must_not_run(*_args, **_kwargs):
+        raise AssertionError("anonymous request reached the matcher")
+
+    monkeypatch.setattr(pdf_viewer, "match_quote_to_pdf_pages", _matcher_must_not_run)
+
+    response = TestClient(app).post(
+        "/api/pdf-viewer/evidence/fuzzy-match",
+        json={
+            "quote": "short quote",
+            "pages": [{"page_number": 1, "text": "page text with a short quote in it"}],
+        },
+    )
+
+    assert response.status_code == 401
+
+
 def test_list_is_scoped_to_authenticated_owner_at_query_boundary():
     own_record = _record()
     db = _Db(_Result(scalar=1), _Result(records=[own_record]))

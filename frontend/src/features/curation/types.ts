@@ -1017,3 +1017,42 @@ export interface CurationExtractionPersistenceRequest {
 export interface CurationExtractionPersistenceResponse {
   extraction_result: CurationExtractionResultRecord
 }
+
+/** One value of a record the automatic review set aside, as a file shows it. */
+export interface SetAsideRecordField {
+  field_ref: string | null
+  label: string
+  value: unknown
+}
+
+/** A record the automatic review set aside; read-only. */
+export interface SetAsideRecord {
+  extraction_result_id: string | null
+  label: string | null
+  review_status: string
+  review_reason: string | null
+  fields: SetAsideRecordField[]
+}
+
+/** One saved flow result with the records its review set aside. */
+export interface SetAsideResult {
+  extraction_result_id: string
+  node_id: string | null
+  step: number | null
+  agent_name: string | null
+  /** False for general results with no saved output fields: files never include their records. */
+  review_fields_available: boolean
+  /**
+   * True when a curator has deferred or rejected one of these records in Review &
+   * Curate: records is empty, and the result's files wait for the curator.
+   */
+  held_by_curator: boolean
+  records: SetAsideRecord[]
+}
+
+export interface FlowRunSetAsideRecordsResponse {
+  flow_run_id: string
+  document_id: string
+  set_aside_count: number
+  results: SetAsideResult[]
+}

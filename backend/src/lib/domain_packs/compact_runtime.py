@@ -16,6 +16,7 @@ import importlib
 from typing import Any, Callable, Mapping, NoReturn
 from uuid import uuid4
 
+from agents.tool_context import ToolContext
 from pydantic import BaseModel
 from pydantic import create_model
 
@@ -135,8 +136,17 @@ class CompactValidatorRuntime:
                 return json.dumps(self._bounded_lookup_view(stored, view))
             if view:
                 raise ValueError("Continue a paged lookup with the lookup_ref from its result")
+            # The lookup receives the arguments left after the view keys are removed;
+            # its context carries those same arguments so a failure is reported
+            # against what the lookup actually received.
+            lookup_arguments = json.dumps(supplied)
+            lookup_context = ToolContext(
+                context=context.context, usage=context.usage, tool_name=context.tool_name,
+                tool_call_id=context.tool_call_id, tool_arguments=lookup_arguments,
+                tool_call=context.tool_call, agent=context.agent, run_config=context.run_config,
+            )
             with full_tool_results_requested():
-                original = await tool.on_invoke_tool(context, json.dumps(supplied))
+                original = await tool.on_invoke_tool(lookup_context, lookup_arguments)
             if isinstance(original, BaseModel):
                 payload = original.model_dump(mode="json")
             elif isinstance(original, str):

@@ -36,7 +36,8 @@ from uuid import UUID, uuid4
 
 from agr_ai_curation_runtime.document_errors import raise_if_document_read_failed
 
-from agents import Agent, RunContextWrapper, function_tool
+from agents import Agent, RunContextWrapper
+from agr_ai_curation_runtime.function_tools import function_tool
 from sqlalchemy.orm import Session
 from src.lib.curation_workspace.execution_provenance import capture_source_document
 from src.schemas.execution_provenance import ExtractionExecutionContext
@@ -727,6 +728,17 @@ def _flow_file_output_format(agent_id: str, entry: Mapping[str, Any] | None = No
     return None
 
 
+def _shows_review_reason(node_data: Mapping[str, Any]) -> bool:
+    """Review reason is read unless the step's saved selected fields leave it out."""
+    from src.lib.flows.export_fields import REVIEW_REASON_REF
+    from src.lib.flows.output_projection import FlowOutputProjectionPlan, projection_plan_field_refs
+
+    raw_plan = node_data.get("projection_plan")
+    if not isinstance(raw_plan, Mapping) or raw_plan.get("selection_mode") != "selected_fields":
+        return True
+    return REVIEW_REASON_REF in projection_plan_field_refs(FlowOutputProjectionPlan.model_validate(raw_plan))
+
+
 def _build_terminal_flow_artifact_bundle(
     *,
     user_id: str | None = None,
@@ -737,6 +749,7 @@ def _build_terminal_flow_artifact_bundle(
     flow_run_id: str | None = None,
     document_id: str | None = None,
     source_node_ids: Sequence[str] | None = None,
+    review_reasons: bool = True,
 ) -> FlowOutputArtifactBundle:
     try:
         scoped_steps = completed_steps
@@ -783,6 +796,7 @@ def _build_terminal_flow_artifact_bundle(
             document_id=document_id,
             output_format=output_format,  # type: ignore[arg-type]
             profile_resolver=load_receipt_profile,
+            review_reasons=review_reasons,
         )
         if normalized_source_node_ids and len(bundle.artifacts) != len(
             normalized_source_node_ids
@@ -933,6 +947,7 @@ def _make_flow_runtime_formatter_tool(
             flow_run_id=flow_run_id,
             document_id=document_id,
             source_node_ids=source_node_ids,
+            review_reasons=_shows_review_reason(node_data),
         )
         runtime_contexts = [
             context
@@ -963,8 +978,12 @@ def _make_flow_runtime_formatter_tool(
             }
         )
         agent = get_agent_by_id(agent_id, **agent_kwargs)
-        tool_ctx = SimpleNamespace(
-            tool_name=tool_name,
+        from agents.tool_context import ToolContext
+
+        tool_arguments = json.dumps({"query": query})
+        tool_ctx = ToolContext(
+            context=getattr(ctx, "context", None), tool_name=tool_name,
+            tool_call_id=f"flow-formatter-{tool_name}", tool_arguments=tool_arguments,
             run_config=getattr(ctx, "run_config", None),
         )
         current_attachment = get_current_flow_output_attachment() or {}
@@ -1003,8 +1022,6 @@ def _make_flow_runtime_formatter_tool(
                 )
                 if finalizer is None:
                     raise ValueError("Selected-fields export requires the configured file finalizer")
-                from agents.tool_context import ToolContext
-
                 arguments = json.dumps({"filename_hint": output_filename_descriptor})
                 finalizer_context = ToolContext(
                     context=getattr(ctx, "context", None), tool_name="finalize_and_save",
@@ -1030,10 +1047,7 @@ def _make_flow_runtime_formatter_tool(
                     isolate_run_config=True, propagate_errors=True,
                 ),
             )
-            return await streaming_tool.on_invoke_tool(
-                tool_ctx,
-                json.dumps({"query": query}),
-            )
+            return await streaming_tool.on_invoke_tool(tool_ctx, tool_arguments)
         finally:
             reset_current_flow_output_attachment(source_token)
 
@@ -1085,6 +1099,7 @@ def _make_flow_chat_output_tool(
             flow_run_id=flow_run_id,
             document_id=document_id,
             source_node_ids=source_node_ids,
+            review_reasons=_shows_review_reason(node_data),
         )
         runtime_context = _build_flow_formatter_runtime_context(
             agent_id=agent_id,
@@ -1117,12 +1132,19 @@ def _make_flow_chat_output_tool(
             specialist_name=specialist_name, inline_chat_persistence=False,
             isolate_run_config=True, propagate_errors=True,
         ))
-        tool_ctx = SimpleNamespace(tool_name=tool_name, run_config=getattr(ctx, "run_config", None))
+        from agents.tool_context import ToolContext
+
+        tool_arguments = json.dumps({"query": query})
+        tool_ctx = ToolContext(
+            context=getattr(ctx, "context", None), tool_name=tool_name,
+            tool_call_id=f"flow-chat-output-{tool_name}", tool_arguments=tool_arguments,
+            run_config=getattr(ctx, "run_config", None),
+        )
         # The specialist run's own output is not used; delivered content and the
         # receipt come only from the application-held delivery.
         post_delivery_error: str | None = None
         try:
-            await streaming_tool.on_invoke_tool(tool_ctx, json.dumps({"query": query}))
+            await streaming_tool.on_invoke_tool(tool_ctx, tool_arguments)
         except Exception as exc:
             if not delivery.delivered:
                 raise
@@ -1396,6 +1418,42 @@ def _flow_node_by_id(flow: CurationFlow) -> dict[str, dict[str, Any]]:
         str(node.get("id")): node
         for node in (flow.flow_definition or {}).get("nodes", []) or []
         if node.get("id")
+    }
+
+
+def _build_set_aside_summary(
+    completed_steps: list[dict[str, Any]],
+    output_events: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Records the run's reviews set aside, and per output whether they are in it (ALL-1561).
+
+    Read from the completed review steps and the outputs' own set-aside counts;
+    None when no review set a record aside.
+    """
+
+    results = [
+        {"extraction_result_id": step.get("extraction_result_id"), "node_id": step.get("node_id"),
+         "episode_id": review["episode_id"], "count": len(review["set_aside_record_target_ids"])}
+        for step in completed_steps
+        if isinstance(review := step.get("validation_review"), Mapping)
+        and review["set_aside_record_target_ids"]
+    ]
+    if not results:
+        return None
+    outputs = []
+    for event in output_events:
+        details = event.get("details") or {}
+        counts = details.get("set_aside")
+        if isinstance(counts, Mapping):
+            outputs.append({"type": event.get("type"), "formatter_node_id": details.get("formatter_node_id"),
+                            "file_id": details.get("file_id"), "filename": details.get("filename"),
+                            "included": counts["included"], "left_out": counts["left_out"]})
+    return {
+        "count": sum(item["count"] for item in results),
+        "results": results,
+        "outputs": outputs,
+        "left_out_of_outputs": sum(item["left_out"] for item in outputs),
+        "included_in_outputs": sum(item["included"] for item in outputs),
     }
 
 
@@ -2293,6 +2351,7 @@ def get_all_agent_tools(
             internal_event_cursor = _capture_internal_extraction_event_cursor()
             specialist_started_at = time.monotonic()
             projected_chat_output: str | None = None
+            projected_chat_set_aside: dict[str, int] | None = None
             selection_token = set_flow_validator_selections(
                 effective_validation_groups
             )
@@ -2350,20 +2409,24 @@ def get_all_agent_tools(
                 raise
             try:
                 if hasattr(tool_callable, "on_invoke_tool"):
-                    # Newer openai-agents tool invokers dereference ctx.tool_name and,
-                    # on handled tool errors, ctx.run_config (0.17+). Pass the parent
+                    # openai-agents function tools need a real ToolContext (0.25 reads
+                    # its prepared-argument slot and run_config). Pass the parent
                     # RunConfig as a trace/template source; the flow tool wrapper clones
                     # it onto a step-owned provider so each flow-step WebSocket closes
                     # before the supervisor provider is torn down.
-                    tool_ctx = SimpleNamespace(
-                        tool_name=tool_name,
-                        run_config=getattr(ctx, "run_config", None),
-                    )
+                    from agents.tool_context import ToolContext
+
                     tool_input = {"query": resolved_query}
                     if formatter_format is not None:
                         tool_input["output_filename_descriptor"] = (
                             output_filename_descriptor or ""
                         )
+                    tool_arguments = json.dumps(tool_input)
+                    tool_ctx = ToolContext(
+                        context=getattr(ctx, "context", None), tool_name=tool_name,
+                        tool_call_id=f"flow-step-{tool_name}", tool_arguments=tool_arguments,
+                        run_config=getattr(ctx, "run_config", None),
+                    )
                     # Chat formatters deliver rendered output into this
                     # executor-owned scope; their tool result is only a receipt.
                     delivery_scope = (
@@ -2374,10 +2437,12 @@ def get_all_agent_tools(
                     with delivery_scope as chat_delivery:
                         result = await tool_callable.on_invoke_tool(
                             tool_ctx,
-                            json.dumps(tool_input),
+                            tool_arguments,
                         )
                     if chat_delivery is not None and chat_delivery.delivered:
                         projected_chat_output = chat_delivery.output
+                        # Present only when the output's sources hold set-aside records.
+                        projected_chat_set_aside = chat_delivery.receipt.get("set_aside")
                 else:
                     result = await tool_callable(query=resolved_query)
             finally:
@@ -2530,10 +2595,12 @@ def get_all_agent_tools(
                 reviewed_envelope = await flow_review.finish_review()
                 if candidate is None:
                     raise RuntimeError("Reviewed extraction has no flow candidate")
+                set_aside_ids = list(flow_review.set_aside_record_target_ids)
                 validation_group_metadata = {"validated_candidate": replace(candidate,
                     payload_json=reviewed_envelope.model_dump(mode="json")),
                     "validation_review": {"episode_id": flow_review.reference(flow_review.record)["episode_id"],
-                                          "ready": True}}
+                                          "ready": not set_aside_ids,
+                                          "set_aside_record_target_ids": set_aside_ids}}
             else:
                 if (candidate is not None and isinstance(candidate.payload_json, dict) and is_canonical_domain_envelope_payload(candidate.payload_json)) or effective_validation_groups:
                     raise RuntimeError("Extraction or configured validation cannot bypass the flow review lifecycle")
@@ -2594,7 +2661,9 @@ def get_all_agent_tools(
                 "validated_candidate": validated_candidate,
                 "timing": step_timing,
                 **(
-                    {"projected_chat_output": projected_chat_output}
+                    {"projected_chat_output": projected_chat_output,
+                     **({"projected_chat_set_aside": projected_chat_set_aside}
+                        if projected_chat_set_aside else {})}
                     if projected_chat_output is not None
                     else {}
                 ),
@@ -2674,6 +2743,13 @@ def get_all_agent_tools(
                             "Review selection is not curator approval, export, or submission. "
                             'Original paper wording remains available with result_view="original".\n'
                         )
+                        set_aside_count = len(flow_review.set_aside_record_target_ids)
+                        if set_aside_count:
+                            noun = "record" if set_aside_count == 1 else "records"
+                            manifest_header += (
+                                f"The review set aside {set_aside_count} {noun} it deferred or did not "
+                                "accept. They are listed here but are not accepted; a curator decides them.\n"
+                            )
                 result = manifest_header + render_extraction_manifest_page(bind_extraction_manifest_reference(
                     inspection_manifest, str(record.extraction_result_id), result_view=manifest_view,
                 ))
@@ -4598,6 +4674,7 @@ async def execute_flow(
                                     "output": projected_chat_output,
                                     "output_preview": _truncate_tool_output(projected_chat_output),
                                     "output_length": len(projected_chat_output),
+                                    "set_aside": completed_step.get("projected_chat_set_aside"),
                                     "formatter_node_id": formatter_node_id or None,
                                     "source_node_id": (
                                         output_source_by_node_id.get(formatter_node_id, (None,))[0]
@@ -4772,6 +4849,8 @@ async def execute_flow(
                 "output": inspection_response,
                 "output_preview": _truncate_tool_output(inspection_response),
                 "output_length": len(inspection_response),
+                "flow_run_id": flow_run_id,
+                "document_id": document_id,
                 "inspection_only": True,
                 "inspected_result_refs": inspected_result_refs,
             },
@@ -5000,6 +5079,11 @@ async def execute_flow(
             *pending_output_events,
         ]
         for output_event in produced_output_events:
+            if output_event.get("type") == "CHAT_OUTPUT_READY":
+                # Like FILE_READY, a chat output names its run and document, so a
+                # text-only output can open the set-aside records view (ALL-1561).
+                output_event["details"] = {**dict(output_event.get("details") or {}),
+                                           "flow_run_id": flow_run_id, "document_id": document_id}
             yield output_event
 
     output_attachment_node_ids = set(output_attachment_by_node_id)
@@ -5187,6 +5271,7 @@ async def execute_flow(
                 )
                 or []
             ),
+            "set_aside": _build_set_aside_summary(completed_steps, produced_output_events),
         }
     }
 

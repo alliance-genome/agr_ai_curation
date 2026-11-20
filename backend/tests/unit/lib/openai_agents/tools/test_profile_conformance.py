@@ -1,5 +1,6 @@
 """One profile drives provider schemas and every record mutation boundary."""
 
+from tests.sdk_tool_context_support import tool_context
 from copy import deepcopy
 from uuid import uuid4
 
@@ -314,7 +315,7 @@ async def test_direct_runner_consumes_backend_profile_finalization(
                         "entity": "hMETTL1", "section": "Results", "chunk_id": "chunk-1",
                     })
                     staged = await captured["agent"].tools[1].on_invoke_tool(
-                        SimpleNamespace(tool_name="stage_generic_object"), json.dumps({
+                        tool_context("stage_generic_object"), json.dumps({
                             "label": "hMETTL1", "attributes": record, "evidence_record_ids": ["evidence-1"],
                             "classification_notes": ["Paper-backed reagent"],
                             "rationale": "The paper names this item in its Results.",
@@ -323,7 +324,7 @@ async def test_direct_runner_consumes_backend_profile_finalization(
                     assert staged.status == "ok", staged
                     candidate_ids = [staged.data["candidate_id"]]
                 result = await captured["agent"].tools[0].on_invoke_tool(
-                    SimpleNamespace(tool_name="finalize_generic_extraction"), json.dumps({"candidate_ids": candidate_ids}),
+                    tool_context("finalize_generic_extraction"), json.dumps({"candidate_ids": candidate_ids}),
                 )
                 assert result.status == "ok", result
             if False:
@@ -443,7 +444,7 @@ async def test_final_profile_tool_schema_and_callable_survive_run_state_rebindin
             "classification_notes": ["Evidence-backed reagent"],
             "rationale": "The paper names this item in its Results.",
             "validation_guidance": "Use the paper organism context when checking this reagent."}
-    context = SimpleNamespace(tool_name=final.name)
+    context = tool_context(final.name)
     output = await final.on_invoke_tool(context, json.dumps(args))
     assert output.status == "ok", output
     # The active context here is empty: only the rebuilt callable's closure owns

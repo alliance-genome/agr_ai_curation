@@ -158,6 +158,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Review export fields are checked on a record of the installed Alliance
     # gene-expression pack beside generic and custom-profile records (ALL-1565).
     Path("backend/tests/unit/lib/flows/test_review_export_fields.py"),
+    # Set-aside records are left out of, or marked in, outputs of the installed
+    # Alliance gene-expression pack beside a generic record (ALL-1561).
+    Path("backend/tests/unit/lib/flows/test_review_set_aside_export.py"),
     # Every phenotype term exports through the installed Alliance phenotype
     # pack's phenotype_terms list field (ALL-1289).
     Path("backend/tests/unit/lib/flows/test_phenotype_terms_export.py"),
@@ -247,6 +250,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/openai_agents/tools/test_alliance_agr_curation_vocabulary_helpers.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_alliance_agr_lookup_helpers.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_backend_tool_surface_project_agnostic.py"),
+    Path("backend/tests/unit/lib/openai_agents/tools/test_builder_finalize_record_count.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_gene_expression_builder_tools.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_search_helpers.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_span_evidence_gene_expression_regression.py"),

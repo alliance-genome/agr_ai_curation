@@ -6,6 +6,7 @@ import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurat
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 
 import EvidenceCard from './EvidenceCard'
+import OutputSetAsideNotice from '@/features/curation/setAside/OutputSetAsideNotice'
 import FileDownloadCard from './FileDownloadCard'
 import FlowRunProgressBar from './FlowRunProgressBar'
 import FlowStepEvidenceCard from './FlowStepEvidenceCard'
@@ -122,6 +123,16 @@ function ChatMessageList({
                       message.content
                     )}
                   </div>
+                  {message.setAsideNotices?.map((notice) => (
+                    <OutputSetAsideNotice
+                      key={notice.outputKey}
+                      counts={notice.counts}
+                      noun="table"
+                      outputName="this table"
+                      flowRunId={notice.flowRunId}
+                      documentId={notice.documentId}
+                    />
+                  ))}
                   {message.validationReview && message.validationReview.results.length > 0 ? (
                     <div role="status" className="validation-review-status">
                       {message.validationReviewSnapshot ? 'Review status at the time of this response: ' : null}

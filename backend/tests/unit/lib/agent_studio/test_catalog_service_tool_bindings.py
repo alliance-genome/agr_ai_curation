@@ -1,6 +1,8 @@
 """Unit tests for catalog_service tool binding resolution."""
 
+from tests.sdk_tool_context_support import tool_context
 import asyncio
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -977,7 +979,91 @@ async def test_runtime_formatter_context_enforces_enabled_evidence():
     tool = catalog_service.resolve_tools(["validate_output_projection"], context)[0]
     plan = {"format": "csv", "row_source": "object",
             "columns": [{"key": "label", "field_ref": "object.label"}]}
-    raw = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name), json.dumps({"plan_json": json.dumps(plan)}))
+    raw = await tool.on_invoke_tool(tool_context(tool.name), json.dumps({"plan_json": json.dumps(plan)}))
     result = json.loads(raw)
     assert result["status"] == "invalid"
     assert "object.supporting_evidence" in json.dumps(result)
+
+
+def _real_read_chunk_tool(monkeypatch, *, chunk_count):
+    """The package read_chunk tool with its real function_tool wrapper over a fake store."""
+    import agr_ai_curation_alliance.tools.weaviate_search as weaviate_search  # pyright: ignore[reportMissingImports]
+
+    async def _missing(**kwargs):
+        assert kwargs["chunk_index"] >= 0, "a negative index must not reach the store lookup"
+        return None
+
+    async def _count(**_kwargs):
+        return chunk_count
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _missing)
+    monkeypatch.setattr(weaviate_search, "count_document_chunks", _count)
+    # Source binding needs the persistence layer; covered in test_document_references.py.
+    monkeypatch.setattr(weaviate_search, "scoped_document_tool", lambda tool, **_kwargs: tool)
+    return weaviate_search.create_read_chunk_tool("doc-1", "user-1")
+
+
+def _resolve_real_read_chunk(monkeypatch, base_tool):
+    binding = SimpleNamespace(tool_id="read_chunk", required_context=("document_id", "user_id"))
+    monkeypatch.setattr(catalog_service, "_get_package_tool_binding", lambda _tool_id: binding)
+    monkeypatch.setattr(
+        catalog_service, "_instantiate_package_tool", lambda _binding, execution_context=None: base_tool,
+    )
+    monkeypatch.setattr(
+        catalog_service,
+        "_get_package_tool_runner",
+        lambda: (_ for _ in ()).throw(AssertionError("read_chunk runs inline")),
+    )
+    return catalog_service._resolve_package_tool(
+        "read_chunk", catalog_service.ToolExecutionContext(document_id="doc-1", user_id="user-1"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_index", [-1, 349])
+async def test_inline_read_chunk_returns_an_index_outside_the_document_to_the_model(monkeypatch, chunk_index):
+    """The runtime closure the agent calls: SDK argument validation, the tool body and the model view."""
+    resolved = _resolve_real_read_chunk(monkeypatch, _real_read_chunk_tool(monkeypatch, chunk_count=349))
+    arguments = json.dumps({"chunk_index": chunk_index})
+
+    result = await resolved.on_invoke_tool(tool_context("read_chunk", arguments), arguments)
+
+    assert result == {
+        "summary": (
+            f"Invalid read_chunk request: chunk_index {chunk_index} does not exist; "
+            "this document has chunks 0 to 348."
+        ),
+        "error_code": "invalid_result_cursor",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("chunk_count", "arguments"),
+    [(349, '{"chunk_index": 100}'), (0, '{"chunk_index": -1}'), (349, '{"chunk_index": "3"}'), (349, "{}")],
+)
+async def test_inline_read_chunk_source_and_argument_failures_still_end_the_run(
+    monkeypatch, chunk_count, arguments
+):
+    from agr_ai_curation_runtime.document_errors import DocumentReadError
+
+    resolved = _resolve_real_read_chunk(monkeypatch, _real_read_chunk_tool(monkeypatch, chunk_count=chunk_count))
+
+    with pytest.raises(DocumentReadError):
+        await resolved.on_invoke_tool(tool_context("read_chunk", arguments), arguments)
+
+
+@pytest.mark.parametrize("chunk_index", [-1, 349])
+def test_package_runner_entrypoint_returns_an_index_outside_the_document(monkeypatch, chunk_index):
+    from src.lib.packages.package_runner_entrypoint import _execute_tool_target
+
+    tool = _real_read_chunk_tool(monkeypatch, chunk_count=349)
+    request = SimpleNamespace(tool_id="read_chunk", kwargs={"chunk_index": chunk_index}, args=[])
+
+    result = _execute_tool_target(tool, request)
+
+    assert result.summary == (
+        f"Invalid read_chunk request: chunk_index {chunk_index} does not exist; "
+        "this document has chunks 0 to 348."
+    )
+    assert result.error_code == "invalid_result_cursor"

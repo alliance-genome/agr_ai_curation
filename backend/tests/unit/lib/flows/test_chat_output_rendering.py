@@ -7,6 +7,7 @@ instructions, model inputs, tool returns, delivered content and receipts.
 """
 
 from __future__ import annotations
+from tests.sdk_tool_context_support import tool_context
 
 import importlib
 import json
@@ -201,7 +202,7 @@ def _chat_tool(executor, *, completed_steps, node_data=None):
 
 
 async def _invoke(tool, query: str) -> str:
-    ctx = SimpleNamespace(tool_name=tool.name, run_config=None)
+    ctx = tool_context(tool.name, run_config=None)
     return await tool.on_invoke_tool(ctx, json.dumps({"query": query}))
 
 

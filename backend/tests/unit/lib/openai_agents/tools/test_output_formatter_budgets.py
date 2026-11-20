@@ -1,10 +1,10 @@
 """ALL-1275: bounded output-formatter tools, exact detail reads and chat delivery."""
 
 from __future__ import annotations
+from tests.sdk_tool_context_support import tool_context
 
 import json
 from copy import deepcopy
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -62,7 +62,7 @@ def _tool(tools, name: str):
 
 async def _call(tool, payload: dict | None = None) -> tuple[dict, str]:
     raw = await tool.on_invoke_tool(
-        SimpleNamespace(tool_name=tool.name), json.dumps(payload or {})
+        tool_context(tool.name), json.dumps(payload or {})
     )
     return json.loads(raw), raw
 

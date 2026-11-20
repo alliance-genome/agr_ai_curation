@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 from src.lib.validation_history import store, selections
+from src.lib.validation_history.selections import SET_ASIDE_DECISIONS
 from src.models.sql.validation_history import ValidationFact, ValidationHead
 from src.models.sql.validation_review import ValidationReviewWork
 from . import admission, source_inputs
@@ -351,7 +352,8 @@ def inspect(context, tool_names):
                               if f.kind == "extraction_contribution" and f.target_id in relevant],
         }
         return {"signature": store.canonical(scientific)[0], "eligible": eligible,
-                "causes": causes, "pending": pending, "review": status, "families": families}
+                "causes": causes, "pending": pending, "review": status, "families": families,
+                "manifest_sha256": manifest["sha256"]}
 
 
 def pending_records(blockers, units, eligible, causes):
@@ -389,11 +391,37 @@ class ReviewerStalled(RuntimeError):
     """The model exhausted corrective nudges without novel scientific work."""
 
 
+def set_aside(view):
+    """The records this review set aside, when they are all that is still pending.
+
+    Read from the typed causes only: every current cause is the reviewer's own
+    defer or reject in this episode that left a record pending, with nothing new
+    since and no re-check left, and no unit can still be decided. Any other cause
+    (an outage, a curator's decision, an unknown or operational state, a check
+    the reviewer could not finish) keeps the review stopped, and so does a unit
+    that concerns the extraction as a whole rather than a record. The manifest
+    hash pins the exact state these records were set aside in.
+    """
+    causes = view["causes"]
+    if view["eligible"] or not causes or any(
+            item["code"] != "reviewer_left_pending" or item["decision"] not in SET_ASIDE_DECISIONS
+            for item in causes):
+        return None
+    records = [item["record_target_id"] for item in view["pending"]]
+    if not records or None in records:
+        return None
+    return {"manifest_sha256": view["manifest_sha256"], "record_target_ids": sorted(records),
+            "unit_target_ids": sorted({item["target_id"] for item in causes})}
+
+
 def terminal(view, refusals, output, *, stalled=False):
     """Keep typed causes and the shared non-complete public outcome shape.
 
     The current review state explains the stop before any refusal seen during
     the run: a refused follow-up is history, not the reason a record is pending.
+    ``set_aside`` names the records the review set aside when they are all that
+    is pending (``set_aside``). A stalled review still had decidable units, so
+    it never sets records aside.
     """
     ignored = {"HistoryConflict", "ValueError"}
     current = sorted({item["code"] for item in view["causes"] if item["code"] not in ignored})
@@ -404,7 +432,8 @@ def terminal(view, refusals, output, *, stalled=False):
         report_operational_failure(ReviewerStalled())
     return {"state": "needs_curator_review", "reason": reason, "resource": None,
             "review": view["review"], "causes": [*view["causes"], *refusals],
-            "pending": view["pending"], "output": output}
+            "pending": view["pending"], "output": output,
+            "set_aside": set_aside(view)}
 
 
 # Plain curator wording for each pending reason, most binding first.

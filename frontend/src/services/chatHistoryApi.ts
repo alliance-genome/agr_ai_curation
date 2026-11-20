@@ -1,6 +1,7 @@
 import { readCurationApiError } from '@/features/curation/services/api'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import type { FileInfo } from '@/components/Chat/FileDownloadCard'
+import { type OutputSetAsideNotice, readOutputSetAside } from '@/features/curation/setAside/setAsideSummary'
 import type { EvidenceRecord } from '@/features/curation/types'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
@@ -62,6 +63,7 @@ export interface RestorableChatMessage {
   evidenceRecords?: EvidenceRecord[]
   evidenceCurationSupported?: boolean | null
   evidenceCurationAdapterKey?: string | null
+  setAsideNotices?: OutputSetAsideNotice[]
 }
 
 export interface ChatHistoryListRequest {
@@ -207,6 +209,9 @@ function extractFileData(payload: Record<string, unknown> | null): FileInfo | nu
       size_bytes: readNumber(candidate.size_bytes) ?? undefined,
       mime_type: readString(candidate.mime_type) ?? undefined,
       created_at: readString(candidate.created_at) ?? undefined,
+      flow_run_id: readString(candidate.flow_run_id) ?? undefined,
+      document_id: readString(candidate.document_id) ?? undefined,
+      set_aside: readOutputSetAside(candidate.set_aside) ?? undefined,
     }
   }
 

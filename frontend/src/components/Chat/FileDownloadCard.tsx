@@ -15,6 +15,9 @@ import DownloadIcon from '@mui/icons-material/Download'
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 
+import OutputSetAsideNotice from '@/features/curation/setAside/OutputSetAsideNotice'
+import type { OutputSetAsideCounts } from '@/features/curation/setAside/setAsideSummary'
+
 /**
  * FileInfo structure matching backend FileInfo model
  */
@@ -33,6 +36,10 @@ export interface FileInfo {
   source_extraction_result_ids?: string[]
   source_keys?: string[]
   source_envelope_ids?: string[]
+  flow_run_id?: string
+  document_id?: string
+  /** Records the run's review set aside in this file's sources (ALL-1561). */
+  set_aside?: OutputSetAsideCounts | null
 }
 
 interface FileDownloadCardProps {
@@ -91,7 +98,6 @@ function FileDownloadCard({
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const resetDownloadCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   useEffect(() => {
     return () => {
       if (resetDownloadCompleteTimerRef.current !== null) {
@@ -258,6 +264,15 @@ function FileDownloadCard({
               </Button>
             ) : null}
           </Box>
+          {file.set_aside && (
+            <OutputSetAsideNotice
+              counts={file.set_aside}
+              noun="file"
+              outputName={file.filename}
+              flowRunId={file.flow_run_id ?? null}
+              documentId={file.document_id ?? null}
+            />
+          )}
         </CardContent>
       </Card>
 

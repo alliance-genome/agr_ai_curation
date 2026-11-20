@@ -256,6 +256,8 @@ def render_extraction_manifest_page(page: Mapping[str, Any]) -> str:
         lines.append(line)
 
         details: list[str] = [f"status={status}"]
+        if item.get("review_status"):
+            details.append(f"review={_text(item.get('review_status'))}")
         raw_fields = item.get("fields")
         fields: list[Any] = raw_fields if isinstance(raw_fields, list) else []
         for field in fields:
@@ -417,6 +419,9 @@ def _manifest_object(
         "fields": _policy_fields(domain_object, policy, resolvable_fields),
         "validation": _validation_counts(scoped_findings),
         "evidence_count": len(domain_object.evidence_record_ids),
+        # Marked by the accepted view when a finished flow review set it aside (ALL-1561).
+        **({"review_status": domain_object.metadata["review_status"]}
+           if "review_status" in domain_object.metadata else {}),
     }
 
 

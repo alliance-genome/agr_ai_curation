@@ -2694,7 +2694,8 @@ def test_final_export_requires_review_only_for_selected_sources(monkeypatch):
     projected = finalize_output_projection(bundle, plan)
     assert projected.rows == [{"name": "A"}]
     assert projected.selection_manifests == [{"fact_id": "accepted"}]
-    assert len(reads) == 1 and reads[0][2] == {"finalized": True}
+    # Exports accept a finished flow run's set-aside records (ALL-1561).
+    assert len(reads) == 1 and reads[0][2] == {"finalized": True, "set_aside_ok": True}
     plan.source_keys = ["pending"]
     with pytest.raises(HistoryConflict, match="explicit review"):
         finalize_output_projection(bundle, plan)

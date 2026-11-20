@@ -437,3 +437,23 @@ def test_review_stop_cannot_mask_an_actual_runtime_error(event_type):
     outcome.observe({"type": "FLOW_FINISHED", "status": "review_pending", "review_reason": "pending"})
     assert outcome.status == "failed"
     assert outcome.failure_type == "ProviderError"
+
+
+def test_a_run_whose_review_set_records_aside_completes_with_its_summary():
+    """ALL-1561: set-aside records no longer stop the run; the summary is kept for the notice."""
+
+    outcome = FlowRunOutcome()
+    file = {"type": "FILE_READY", "details": {"file_id": "one", "set_aside": {"included": 0, "left_out": 2}}}
+    summary = {"count": 2, "results": [], "outputs": [], "left_out_of_outputs": 2, "included_in_outputs": 0}
+    finished = {"type": "FLOW_FINISHED", "status": "completed", "output_status": "complete", "set_aside": summary}
+    outcome.observe(file)
+    outcome.observe(finished)
+    assert outcome.status == "completed" and outcome.stop_reason is None
+    assert outcome.set_aside == summary
+    assert outcome.events_for_persistence() == [file, finished]
+
+
+def test_a_review_stop_keeps_no_set_aside_summary():
+    outcome = FlowRunOutcome()
+    outcome.observe({"type": "FLOW_FINISHED", "status": "review_pending", "review_reason": "reviewer_left_pending"})
+    assert outcome.status == "review_pending" and outcome.set_aside is None

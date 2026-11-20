@@ -32,6 +32,20 @@ class BatchResultFile(BaseModel):
     source_extraction_result_ids: List[str] = Field(default_factory=list)
     source_keys: List[str] = Field(default_factory=list)
     source_envelope_ids: List[str] = Field(default_factory=list)
+    # Records the review set aside in this file's sources (ALL-1561); None when none.
+    set_aside: Optional["BatchFileSetAside"] = None
+
+
+class BatchFileSetAside(BaseModel):
+    """Set-aside records of a file's sources: in the file, or left out of it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    included: int = Field(..., ge=0)
+    left_out: int = Field(..., ge=0)
+
+
+BatchResultFile.model_rebuild()
 
 
 class BatchOutputBranch(BaseModel):

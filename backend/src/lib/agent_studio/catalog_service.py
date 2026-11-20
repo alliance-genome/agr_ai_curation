@@ -30,6 +30,7 @@ from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from agents import Agent
+from agents.tool_context import ToolContext
 from agr_ai_curation_runtime.document_errors import DocumentReadError
 from src.lib.config.agent_loader import (
     canonical_system_agent_key,
@@ -832,7 +833,10 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
             tracker.record_call(tool_id)
 
         if execute_inline:
-            inline_ctx = ctx or SimpleNamespace(tool_name=tool_id, run_config=None)
+            inline_ctx = ctx or ToolContext(
+                context=None, tool_name=tool_id, tool_call_id=f"inline-{tool_id}",
+                tool_arguments=input_str,
+            )
             try:
                 result = base_on_invoke_tool(inline_ctx, input_str)
                 if inspect.isawaitable(result):

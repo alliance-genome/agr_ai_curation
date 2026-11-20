@@ -165,3 +165,22 @@ def test_rejects_inconsistent_or_invalid_persisted_node_context(monkeypatch, con
     ])
     with pytest.raises(ValueError):
         load(receipt("result-1"))
+
+
+def test_a_run_whose_review_set_records_aside_is_scored_with_every_extracted_value(monkeypatch):
+    """ALL-1561 (Chris, decision 6): the run counts as finished and is scored, set-aside records included."""
+
+    objects = [{"object_type": "Gene", "pending_ref_id": "kept", "payload": {"symbol": "abc"}},
+               {"object_type": "Gene", "pending_ref_id": "set-aside", "payload": {"symbol": "xyz"}}]
+    monkeypatch.setattr(flow_results, "list_extraction_results", lambda **kwargs: [
+        extraction("result-1", payload_json={"envelope_id": "envelope:result-1", "domain_pack_id": "test-pack",
+                                             "extracted_objects": objects})])
+    completion = receipt("result-1") | {"set_aside": {
+        "count": 1, "results": [{"extraction_result_id": "result-1", "node_id": "extract",
+                                 "episode_id": "episode-1", "count": 1}],
+        "outputs": [], "left_out_of_outputs": 0, "included_in_outputs": 0}}
+
+    loaded = load(completion)
+
+    [envelope] = loaded["envelopes"]
+    assert [item["payload"]["symbol"] for item in envelope["extracted_objects"]] == ["abc", "xyz"]

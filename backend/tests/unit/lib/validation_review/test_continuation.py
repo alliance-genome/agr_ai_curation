@@ -187,7 +187,61 @@ def test_a_stall_is_reported_even_when_another_unit_names_the_reason(monkeypatch
 def view(signature="same", ready=False, eligible=True, causes=(), pending=()):
     return {"signature": signature, "review": {"ready": ready, "state": "complete" if ready else "pending"},
             "eligible": {"private-target"} if eligible else set(), "causes": list(causes),
-            "pending": list(pending)}
+            "pending": list(pending), "manifest_sha256": "manifest-sha"}
+
+
+def _left(target, decision):
+    return {"target_id": target, "code": "reviewer_left_pending", "decision": decision}
+
+
+def _pending(record, why="not_accepted"):
+    return {"record_target_id": record, "why": why, "recheck_left": False}
+
+
+@pytest.mark.parametrize("decisions", [["defer"], ["reject"], ["defer", "reject"]])
+def test_records_the_reviewer_deferred_or_rejected_are_set_aside(decisions):
+    """ALL-1561: a record the review left for a person, or did not accept, no longer stops the paper."""
+    causes = [_left(f"unit-{index}", decision) for index, decision in enumerate(decisions)]
+    records = [_pending(f"record-{index}") for index in range(len(decisions))]
+    outcome = continuation.terminal(view(eligible=False, causes=causes, pending=records), [], "notes")
+    assert outcome["state"] == "needs_curator_review" and outcome["reason"] == "reviewer_left_pending"
+    assert outcome["set_aside"] == {
+        "manifest_sha256": "manifest-sha",
+        "record_target_ids": sorted(item["record_target_id"] for item in records),
+        "unit_target_ids": sorted(item["target_id"] for item in causes),
+    }
+
+
+@pytest.mark.parametrize("causes", [
+    # A check that could not run is not a decision about the record.
+    [_left("unit-a", "acknowledge_failure")],
+    [_left("unit-a", "defer"), _left("unit-b", "acknowledge_failure")],
+    # A mix with any other cause stops, whichever cause names the reason.
+    [_left("unit-a", "defer"), {"target_id": "unit-b", "code": "configured_validator_unavailable"}],
+    [_left("unit-a", "reject"), {"target_id": "unit-b", "code": "curator_authority_required"}],
+    [_left("unit-a", "defer"), {"target_id": None, "code": "required_validator_unavailable"}],
+    [_left("unit-a", "defer"), {"target_id": "unit-b", "code": "scientific_attempts_exhausted"}],
+    [_left("unit-a", "defer"), {"target_id": None, "code": "execution_uncertain"}],
+    [_left("unit-a", "defer"), {"target_id": None, "code": "interrupted"}],
+    [{"target_id": None, "code": "document_retired"}],
+    [],
+])
+def test_any_other_cause_keeps_the_paper_stopped(causes):
+    pending = [_pending("record-a")]
+    outcome = continuation.terminal(view(eligible=False, causes=causes, pending=pending), [], None)
+    assert outcome["set_aside"] is None
+
+
+def test_a_record_that_could_still_be_decided_or_a_whole_extraction_unit_is_not_set_aside(monkeypatch):
+    monkeypatch.setattr("src.lib.validation_review.audit.report_operational_failure", lambda error: None)
+    deferred = [_left("unit-a", "defer")]
+    assert continuation.terminal(view(eligible=True, causes=deferred, pending=[_pending("record-a")]),
+                                 [], None)["set_aside"] is None
+    assert continuation.terminal(view(eligible=True, causes=deferred, pending=[_pending("record-a")]),
+                                 [], None, stalled=True)["set_aside"] is None
+    # A unit bound to the envelope itself names no record; the paper keeps stopping.
+    assert continuation.terminal(view(eligible=False, causes=deferred, pending=[_pending(None)]),
+                                 [], None)["set_aside"] is None
 
 
 @pytest.fixture

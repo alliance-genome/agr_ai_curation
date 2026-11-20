@@ -19,12 +19,24 @@ COMMON_FIELDS = [
 ]
 
 # Text copied from a record's validation review, selectable on every record row
-# and never in a default layout. "Review uncertainty" lists each open
+# and never in a default layout. "Review status" says whether the review accepted
+# the record or set it aside (deferred it or did not accept it); selecting it is
+# what puts set-aside records in a file. "Review uncertainty" lists each open
 # review-uncertainty finding as "field: explanation"; "Review reason" is the
-# reason of the review decision the record's current value stands on.
+# reason of the review decision the record's current value stands on, or of the
+# decision that set it aside.
+REVIEW_STATUS_REF = "object.review_status"
 REVIEW_UNCERTAINTY_REF = "object.review_uncertainty"
 REVIEW_REASON_REF = "object.review_reason"
+REVIEW_STATUS_ACCEPTED = "accepted"
+# Curator-facing labels in Review reason for a set-aside record whose shown
+# value an earlier decision accepted: "Accepted earlier: ... | Set aside later: ..."
+# (ALL-1561).
+REVIEW_REASON_ACCEPTED_EARLIER_LABEL = "Accepted earlier"
+REVIEW_REASON_SET_ASIDE_LATER_LABEL = "Set aside later"
+REVIEW_STATUS_SET_ASIDE = "set aside"
 REVIEW_FIELDS = [
+    {"ref": REVIEW_STATUS_REF, "label": "Review status", "value_type": "string"},
     {"ref": REVIEW_UNCERTAINTY_REF, "label": "Review uncertainty", "value_type": "string"},
     {"ref": REVIEW_REASON_REF, "label": "Review reason", "value_type": "string"},
 ]

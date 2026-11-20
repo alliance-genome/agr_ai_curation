@@ -12,6 +12,7 @@ import type {
   CurationCandidateDraftUpdateRequest,
   CurationCandidateDraftUpdateResponse,
   DomainEnvelopeReviewRowsResponse,
+  FlowRunSetAsideRecordsResponse,
   CurationEnvelopeFieldPatchRequest,
   CurationEnvelopeFieldPatchResponse,
   CurationValidationFindingWaiveRequest,
@@ -123,6 +124,23 @@ export async function fetchCurationWorkspaceEnvelopeReviewRows(
 ): Promise<DomainEnvelopeReviewRowsResponse[]> {
   const requests = buildCurationWorkspaceEnvelopeReviewRowsRequests(workspace)
   return Promise.all(requests.map((request) => fetchDomainEnvelopeReviewRows(request)))
+}
+
+export function buildFlowRunSetAsideRecordsPath(flowRunId: string, documentId: string): string {
+  const query = new URLSearchParams({ document_id: documentId })
+  return `/api/curation-workspace/flow-runs/${encodeURIComponent(flowRunId)}/set-aside-records?${query.toString()}`
+}
+
+/** Read-only list of the records a flow run's review set aside for one document. */
+export async function fetchFlowRunSetAsideRecords(
+  flowRunId: string,
+  documentId: string,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<FlowRunSetAsideRecordsResponse> {
+  return fetchCurationWorkspaceJson<FlowRunSetAsideRecordsResponse>(
+    buildFlowRunSetAsideRecordsPath(flowRunId, documentId),
+    { signal: options.signal },
+  )
 }
 
 export async function fetchCurationWorkspace(sessionId: string): Promise<CurationWorkspace> {

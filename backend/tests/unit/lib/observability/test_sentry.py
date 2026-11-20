@@ -395,6 +395,40 @@ def test_before_send_drops_only_exact_httpcore_close_after_loop_cleanup():
     assert sentry.before_send(event) is not None
 
 
+def test_before_send_drops_the_same_close_after_loop_cleanup_from_the_openai_httpx2_client():
+    frames = [
+        ("httpx2._client", "aclose"),
+        ("httpx2._transports.default", "aclose"),
+        ("httpcore2._async.connection_pool", "aclose"),
+        ("httpcore2._async.connection_pool", "_close_connections"),
+        ("httpcore2._async.connection", "aclose"),
+        ("httpcore2._async.http11", "aclose"),
+        ("httpcore2._backends.anyio", "aclose"),
+        ("anyio.streams.tls", "aclose"),
+        ("anyio._backends._asyncio", "aclose"),
+        ("asyncio.selector_events", "close"),
+        ("asyncio.base_events", "call_soon"),
+        ("asyncio.base_events", "_check_closed"),
+    ]
+    event = {
+        "logger": "asyncio",
+        "exception": {"values": [{
+            "type": "RuntimeError",
+            "mechanism": {"type": "logging", "handled": True},
+            "stacktrace": {"frames": [
+                {"module": module, "function": function, "in_app": False}
+                for module, function in frames
+            ]},
+        }]},
+    }
+
+    assert sentry.before_send(event) is None
+
+    # A mixed httpx/httpx2 chain is not the known cleanup path.
+    event["exception"]["values"][0]["stacktrace"]["frames"][0]["module"] = "httpx._client"
+    assert sentry.before_send(event) is not None
+
+
 def test_before_send_preserves_request_url_identifiers_but_strips_query_string():
     event = {
         "request": {

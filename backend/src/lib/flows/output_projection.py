@@ -33,7 +33,11 @@ from src.schemas.agent_execution_revision import AgentExecutionReceipt
 from src.lib.agent_studio.profile_conformance import ProfileIdentityError, ResolvedGenericProfile
 from src.lib.flows.profile_projection import ProfileProjectionField, profile_projection_fields
 from src.lib.domain_packs.resolvable_values import has_resolution_state, without_overruled
-from src.lib.flows.export_fields import REVIEW_REASON_REF, REVIEW_UNCERTAINTY_REF
+from src.lib.flows.export_fields import (
+    REVIEW_REASON_ACCEPTED_EARLIER_LABEL, REVIEW_REASON_REF, REVIEW_REASON_SET_ASIDE_LATER_LABEL,
+    REVIEW_STATUS_ACCEPTED, REVIEW_STATUS_REF, REVIEW_STATUS_SET_ASIDE, REVIEW_UNCERTAINTY_REF,
+)
+from src.lib.validation_history.projection import ACCEPTED_EARLIER, SET_ASIDE_LATER
 from src.lib.flows.value_display import LIST_SEPARATOR, RECORD_SEPARATOR, display_text
 from src.lib.curation_workspace.execution_contracts import require_resolved_profile_conformance
 
@@ -174,6 +178,7 @@ _FIELD_LABEL_OVERRIDES = {
     "object.supporting_evidence": "Supporting evidence (saved quotes and locations)",
     "object.evidence_link_issues": "Evidence linkage issues",
     "object.validation_status": "Validation Status",
+    "object.review_status": "Review status",
     "object.review_uncertainty": "Review uncertainty",
     "object.review_reason": "Review reason",
     "evidence.evidence_record_id": "Evidence ID",
@@ -405,6 +410,15 @@ class FlowOutputArtifact(BaseModel):
     # Object types a default plan lists as rows (the pack's curatable units);
     # empty lists every object. Supporting objects stay selectable on request.
     default_object_types: list[str] = Field(default_factory=list)
+    # Records a finished flow review set aside (ALL-1561), each by the
+    # envelope-scoped keys of its object (``_object_keys``). An output leaves
+    # them, and the evidence and findings rows naming them, out unless it
+    # selects Review status.
+    set_aside_records: list[list[str]] = Field(default_factory=list)
+    # The source's own declared fields (its export catalog without the common
+    # and review fields every source gets), in catalog order: ref, label and,
+    # for pack fields, the object type they belong to.
+    source_fields: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FlowOutputArtifactBundle(BaseModel):
@@ -429,7 +443,7 @@ class FlowOutputArtifactBundle(BaseModel):
 
 
 class FlowOutputProjectionResult(BaseModel):
-    empty_reason: Literal["all_records_retired"] | None = None
+    empty_reason: Literal["all_records_retired", "all_records_set_aside"] | None = None
     selection_manifests: list[dict[str, Any]] = Field(default_factory=list)
     # None explicitly means a caller did not supply stage measurements.
     export_accounting: ExportAccounting | None = None
@@ -448,6 +462,14 @@ class FlowOutputProjectionResult(BaseModel):
     limited_by_max_rows: bool = False
     overrides_applied: int = 0
     rows_excluded: int = 0
+    # Records the review set aside in this output's sources (ALL-1561): in the
+    # output when it selects Review status, else left out.
+    set_aside_included: int = 0
+    set_aside_left_out: int = 0
+    # The same records by identity (``_set_aside_record_key``), so outputs made
+    # of several projections over one source count each record once.
+    set_aside_record_keys: list[str] = Field(default_factory=list)
+    set_aside_included_keys: list[str] = Field(default_factory=list)
 
 
 class FlowOutputProjectionPreview(BaseModel):
@@ -1526,8 +1548,13 @@ def _build_artifact_from_step(
     source_document_id: str | None = None,
     profile_resolver: ProfileResolver | None = None,
     packaged_sources: dict[tuple[str, str], Any] | None = None,
+    review_reasons: bool = True,
 ) -> FlowOutputArtifact | None:
-    """One step's artifact; ``packaged_sources`` shares pack catalogs across a bundle."""
+    """One step's artifact; ``packaged_sources`` shares pack catalogs across a bundle.
+
+    ``review_reasons=False`` skips reading Review reason when the output is
+    known not to show it.
+    """
 
     candidate = _step_attr(step, "validated_candidate")
     if candidate is None:
@@ -1544,7 +1571,9 @@ def _build_artifact_from_step(
     selected_reference = None
     record_counts = None
     review_session_id = None
-    decision_reasons: dict[str, list[tuple[str | None, str]]] = {}
+    decision_reasons: dict[str, list[tuple[str | None, str | None, str]]] = {}
+    pending_records: set[str] = set()
+    set_aside_targets: set[str] = set()
     if isinstance(payload, Mapping):
         source_metadata = payload.get("metadata") or {}
         selected_reference = source_metadata.get("selected_projection")
@@ -1573,8 +1602,10 @@ def _build_artifact_from_step(
             from src.lib.validation_history.projection import read_current_projection_with_reasons
             from src.lib.validation_history.store import HistoryScope, SelectionNotReady
             try:
-                selected_envelope, _, decision_reasons = read_current_projection_with_reasons(
+                (selected_envelope, _, decision_reasons, pending_records,
+                 set_aside_targets) = read_current_projection_with_reasons(
                     HistoryScope(user_id, source_document_id, review_session_id), selected_reference,
+                    reasons=review_reasons,
                 )
             except SelectionNotReady as exc:
                 # Expose pending readiness without presenting stale payload as
@@ -1887,6 +1918,25 @@ def _build_artifact_from_step(
     for row, label in zip(rows_by_source["object"], declared_labels):
         row["object.label"] = label
     catalog = source_catalog(export_fields, receipt.model_dump(mode="json") if receipt else None)
+    # Review status is a row field only where the source declares a field
+    # catalog (no review fields are offered for unprofiled general results).
+    # A record is set aside only while a finished flow run's set-aside fact
+    # still covers it (ALL-1561); a record no blocker reaches is accepted.
+    set_aside_records: list[list[str]] = []
+    for row, item in zip(object_rows, object_items):
+        metadata = item.get("metadata")
+        history = metadata.get("validation_history") if isinstance(metadata, Mapping) else None
+        target_id = history.get("target_id") if isinstance(history, Mapping) else None
+        if target_id in set_aside_targets:
+            set_aside_records.append(_object_keys(row))
+        if catalog["fields"]:
+            # Blank for a record that is neither accepted nor set aside
+            # (unreviewed, revoked, or pending in a review that has not finished).
+            row[REVIEW_STATUS_REF] = (
+                REVIEW_STATUS_SET_ASIDE if target_id in set_aside_targets
+                else REVIEW_STATUS_ACCEPTED if selected_reference is not None and target_id not in pending_records
+                else None
+            )
     node_id = str(step.get("node_id") or "")
     for rows in rows_by_source.values():
         for row in rows:
@@ -1924,6 +1974,9 @@ def _build_artifact_from_step(
         rows_by_source=rows_by_source,
         default_object_refs=default_object_refs,
         default_object_types=default_object_types,
+        set_aside_records=set_aside_records,
+        source_fields=[{"ref": field["ref"], "label": field["label"], "object_type": field.get("object_type")}
+                       for field in export_fields],
     )
 
 
@@ -2050,6 +2103,7 @@ def build_flow_output_artifact_bundle(
     document_id: str | None = None,
     output_format: FlowOutputFormat | None = None,
     profile_resolver: ProfileResolver | None = None,
+    review_reasons: bool = True,
 ) -> FlowOutputArtifactBundle:
     """Build the canonical projection bundle from completed flow steps."""
 
@@ -2059,7 +2113,7 @@ def build_flow_output_artifact_bundle(
         for step in completed_steps
         if (artifact := _build_artifact_from_step(
             step, profile_resolver=profile_resolver, packaged_sources=packaged_sources,
-            user_id=user_id, source_document_id=document_id,
+            user_id=user_id, source_document_id=document_id, review_reasons=review_reasons,
         )) is not None
     ]
     return _build_artifact_bundle(
@@ -2769,6 +2823,10 @@ def _override_errors(
             # Expanded split columns are checked against the data at render time.
             column_keys.add(str(override.column_key))
     excluded_refs = {override.row_ref for override in plan.overrides if override.exclude}
+    # The review's own state is never rewritten: a set-aside row must keep
+    # reading "set aside" in the column that brought it in (ALL-1561).
+    status_keys = {column.key for column in columns
+                   if column.field_ref == REVIEW_STATUS_REF and column.transform is None}
     seen: set[tuple[str, str | None]] = set()
     for index, override in enumerate(plan.overrides, start=1):
         context = f"Override {index}"
@@ -2792,6 +2850,11 @@ def _override_errors(
         elif override.row_ref in excluded_refs:
             errors.append(
                 f"{context}: row_ref '{override.row_ref}' is excluded, so its cells cannot be edited."
+            )
+        elif override.column_key in status_keys:
+            errors.append(
+                f"{context}: column '{override.column_key}' shows Review status, which is the "
+                "review's own state and cannot be overridden."
             )
         identity = (override.row_ref, None if override.exclude else override.column_key)
         if identity in seen:
@@ -3319,19 +3382,25 @@ def _attach_review_fields(
     object_rows: Sequence[dict[str, Any]],
     object_items: Sequence[Mapping[str, Any]],
     finding_rows: Sequence[Mapping[str, Any]],
-    decision_reasons: Mapping[str, Sequence[tuple[str | None, str]]],
+    decision_reasons: Mapping[str, Sequence[tuple[str | None, str | None, str]]],
     field_labels: Mapping[tuple[str, str], str],
 ) -> None:
     """Copy each record's review text onto its row; nothing is summarised or judged.
 
     ``object.review_uncertainty`` joins the record's open review-uncertainty
     findings as "field: explanation" in finding order. The field is the column
-    label the record's source declares for exactly that stored path, else the
-    stored path (generic records, list elements); a finding without a field
-    reads as its explanation. ``object.review_reason`` joins the reasons of the
-    decisions the record stands on (``projection.standing_decision_reasons_in_transaction``):
-    its own decision first, unprefixed, then each validated field's as
-    "field: reason", labelled the same way. Like a
+    label the record's source declares for exactly that stored path; a list
+    element whose list field declares a label reads as that label and its
+    position counted from 1 (``_uncertainty_field_label``); anything else reads
+    as the stored path (generic records). A finding without a field reads as
+    its explanation. ``object.review_reason`` joins the reasons of the decisions
+    the record stands on, or of the decisions that set it aside
+    (``projection.standing_decision_reasons_in_transaction``): its own decision
+    first, unprefixed, then each validated field's as "field: reason",
+    labelled by exactly declared paths only. A set-aside unit whose shown value
+    an earlier decision accepted gives two entries, the accepted reason under
+    "Accepted earlier" then the set-aside reason under "Set aside later"
+    (``REVIEW_REASON_*_LABEL``), each after the field name for a field. Like a
     declared pack field (for example Rationale), both are set on every row, None
     when empty.
     """
@@ -3351,18 +3420,124 @@ def _attach_review_fields(
         for key in _object_keys(row):
             doubts.update(uncertainty.get(key, {}))
         texts = [
-            f"{field_labels.get((object_type, path)) or path}: {explanation}" if path else explanation
+            f"{_uncertainty_field_label(field_labels, object_type, path)}: {explanation}" if path else explanation
             for path, explanation in doubts.values()
         ]
         row[REVIEW_UNCERTAINTY_REF] = RECORD_SEPARATOR.join(texts) or None
         metadata = item.get("metadata")
         history = metadata.get("validation_history") if isinstance(metadata, Mapping) else None
         target_id = history.get("target_id") if isinstance(history, Mapping) else None
-        reasons = [
-            f"{field_labels.get((object_type, path)) or path}: {reason}" if path else reason
-            for path, reason in (decision_reasons.get(target_id, ()) if target_id else ())
-        ]
+        reasons = []
+        for path, role, reason in (decision_reasons.get(target_id, ()) if target_id else ()):
+            text = f"{_REASON_ROLE_LABELS[role]}: {reason}" if role else reason
+            reasons.append(f"{field_labels.get((object_type, path)) or path}: {text}" if path else text)
         row[REVIEW_REASON_REF] = RECORD_SEPARATOR.join(reasons) or None
+
+
+_REASON_ROLE_LABELS = {
+    ACCEPTED_EARLIER: REVIEW_REASON_ACCEPTED_EARLIER_LABEL,
+    SET_ASIDE_LATER: REVIEW_REASON_SET_ASIDE_LATER_LABEL,
+}
+
+
+def _uncertainty_field_label(
+    field_labels: Mapping[tuple[str, str], str], object_type: str, path: str,
+) -> str:
+    """A doubt's field: its exactly declared label, a list element's list label and position, or its path.
+
+    Read from the path's structure only: ``items[2]`` with no label of its own
+    reads as the label declared for ``items`` (or ``items[]``) and 3.
+    """
+
+    label = field_labels.get((object_type, path))
+    if label:
+        return label
+    base, bracket, index = path.removesuffix("]").rpartition("[")
+    if not path.endswith("]") or not bracket or not base or not index.isdigit():
+        return path
+    label = field_labels.get((object_type, base)) or field_labels.get((object_type, base + "[]"))
+    return f"{label} {int(index) + 1}" if label else path
+
+
+def _plan_artifacts(
+    bundle: FlowOutputArtifactBundle, plan: FlowOutputProjectionPlan,
+) -> list[FlowOutputArtifact]:
+    """The bundle artifacts a plan reads: its selected sources, else its source filters."""
+
+    if plan.selection_mode == "selected_fields":
+        node_ids = {source.node_id for source in plan.selected_sources}
+        return [artifact for artifact in bundle.artifacts if artifact.node_id in node_ids]
+    source_ids = {value.strip() for value in plan.source_extraction_result_ids if value.strip()}
+    source_keys = {value.strip() for value in plan.source_keys if value.strip()}
+    return [artifact for artifact in bundle.artifacts
+            if not source_ids and not source_keys
+            or artifact.extraction_result_id in source_ids or artifact.source_key in source_keys]
+
+
+def _shows_review_status(plan: FlowOutputProjectionPlan, artifact: FlowOutputArtifact) -> bool:
+    """Whether the output has a plain Review status column for this artifact's rows, and the artifact carries it.
+
+    Only a column that copies ``object.review_status`` as is counts: a transform
+    over it (count, a label or value map, a template, a literal) may not show
+    "set aside", and a filter, sort or grouping alone shows nothing. A source
+    with no declared catalog (unprofiled general results) never carries the
+    field, so its set-aside records are never in an output.
+    """
+
+    if not any(field.ref == REVIEW_STATUS_REF for field in artifact.declared_fields):
+        return False
+    return any(
+        column.field_ref == REVIEW_STATUS_REF and column.transform is None
+        and (not column.source_node_id or column.source_node_id == artifact.node_id)
+        for column in plan.columns
+    )
+
+
+def _set_aside_record_key(artifact: FlowOutputArtifact, record: Sequence[str]) -> str:
+    """A set-aside record's identity across projections of one bundle: its source step and result, and its object keys."""
+
+    return "|".join([artifact.node_id, artifact.extraction_result_id or "", *sorted(record)])
+
+
+def _set_aside_rows(
+    bundle: FlowOutputArtifactBundle, plan: FlowOutputProjectionPlan,
+) -> tuple[list[str], set[int], dict[int, str]]:
+    """Set-aside records in the plan's sources, the rows left out, and the record each kept row names.
+
+    Decided per source: an artifact's set-aside records stay in the output
+    only when the output shows Review status for it (``_shows_review_status``).
+    Otherwise each row of the plan's row source that names one of them
+    (object, evidence and finding rows alike) is left out, and so is an
+    envelope-level evidence row whose saved evidence ID only set-aside records
+    cite. Kept rows map to the record's identity (``_set_aside_record_key``) so
+    the caller can count the records that actually reach the output. Rows are
+    identified by object, as ``bundle_row_refs``.
+    """
+
+    records, left_out, kept = [], set(), {}
+    for artifact in _plan_artifacts(bundle, plan):
+        if not artifact.set_aside_records:
+            continue
+        records.extend(_set_aside_record_key(artifact, record) for record in artifact.set_aside_records)
+        record_of = {key: _set_aside_record_key(artifact, record)
+                     for record in artifact.set_aside_records for key in record}
+        rows = artifact.rows_by_source.get(plan.row_source) or []
+        if _shows_review_status(plan, artifact):
+            for row in rows:
+                for key in _object_keys(row):
+                    if key in record_of:
+                        kept[id(row)] = record_of[key]
+            continue
+        cited: dict[bool, set[str]] = {True: set(), False: set()}
+        for row in artifact.rows_by_source.get("object") or []:
+            cited[any(key in record_of for key in _object_keys(row))].update(row.get("object.evidence_record_ids") or ())
+        only_set_aside = cited[True] - cited[False]
+        for row in rows:
+            if (any(key in record_of for key in _object_keys(row))
+                    or (plan.row_source == "evidence" and not _object_keys(row)
+                        and row.get("evidence.evidence_record_id") in only_set_aside)):
+                left_out.add(id(row))
+    return records, left_out, kept
 
 
 def _object_keys(row: Mapping[str, Any]) -> list[str]:
@@ -3431,9 +3606,15 @@ def apply_projection_plan(
             columns=columns, rows=[], total_count=0, empty_reason="all_records_retired",
             warnings=[*warnings, "All records were explicitly retired; original records and decisions remain in history."])
     rows = _rows_for_plan(bundle, plan)
+    set_aside_keys, left_out, set_aside_kept = _set_aside_rows(bundle, plan)
+    all_set_aside = False
+    if left_out:
+        kept = [row for row in rows if id(row) not in left_out]
+        all_set_aside = bool(rows) and not kept
+        rows = kept
     candidate_row_count = len(rows)
     synthetic_row_count = 0
-    if not rows and projection_plan_allows_empty_bundle(plan):
+    if not rows and not all_set_aside and projection_plan_allows_empty_bundle(plan):
         rows = [{}]
         synthetic_row_count = 1
     applied_filters = []
@@ -3603,7 +3784,14 @@ def apply_projection_plan(
         requested_max_rows=plan.max_rows, truncated=truncated, limited_by_max_rows=limited_by_max_rows,
         filter_count=len(plan.filters), warning_count=len(warnings),
     )
+    # Included: set-aside records whose rows reach the output after filters and limits.
+    included = sorted({set_aside_kept[id(row)] for row in limited_rows if id(row) in set_aside_kept})
     return FlowOutputProjectionResult(
+        empty_reason="all_records_set_aside" if all_set_aside else None,
+        set_aside_included=len(included),
+        set_aside_left_out=len(set_aside_keys) - len(included),
+        set_aside_record_keys=set_aside_keys,
+        set_aside_included_keys=included,
         export_accounting=accounting, applied_filters=applied_filters,
         format=plan.format,
         row_source=plan.row_source,
@@ -3620,6 +3808,53 @@ def apply_projection_plan(
         overrides_applied=len(cell_overrides),
         rows_excluded=rows_excluded,
     )
+
+
+def set_aside_record_views(bundle: FlowOutputArtifactBundle) -> list[dict[str, Any]]:
+    """Each set-aside record of a bundle, read only, with the curator's own fields.
+
+    One entry per record the review set aside (``FlowOutputArtifact.set_aside_records``):
+    its label, the stored Review reason (``_attach_review_fields``) and its
+    fields, rendered by the same display specs as files. The fields are the
+    source's own declared fields (``FlowOutputArtifact.source_fields``: the
+    export catalog the Studio offers, without the common bookkeeping and review
+    fields every source gets), with their declared labels, in catalog order; a
+    pack field of another object type, and a group field whose parts are also
+    listed, are skipped. A general result with no declared catalog shows its
+    saved attributes (``object.attribute.*``) as a default file names them.
+    Nothing is decided, summarised or saved.
+    """
+
+    specs = {field.ref: field.display for field in bundle.field_catalog if field.row_source == "object"}
+    render = _display_renderer(specs)
+    attribute_columns = [
+        column for column in default_projection_plan(bundle, output_format="csv", row_source="object").columns
+        if (column.field_ref or "").startswith(_OBJECT_ATTRIBUTE_FIELD_PREFIX)
+    ]
+    views = []
+    for artifact in bundle.artifacts:
+        keys = {key for record in artifact.set_aside_records for key in record}
+        refs = [field["ref"] for field in artifact.source_fields]
+        for row in artifact.rows_by_source.get("object") or []:
+            if not keys.intersection(_object_keys(row)):
+                continue
+            object_type = str(row.get("object.object_type") or "")
+            columns = [
+                FlowOutputColumnSpec(key=field["ref"], header=field["label"], field_ref=field["ref"])
+                for field in artifact.source_fields
+                if field["object_type"] in (None, object_type)
+                and not any(other.startswith((field["ref"] + ".", field["ref"] + "[].")) for other in refs)
+            ] if artifact.source_fields else attribute_columns
+            values = _project_row(row, columns, missing_value=None, render=render)
+            views.append({
+                "extraction_result_id": artifact.extraction_result_id,
+                "label": row.get("object.label"),
+                "review_status": REVIEW_STATUS_SET_ASIDE,
+                "review_reason": row.get(REVIEW_REASON_REF),
+                "fields": [{"field_ref": column.field_ref, "label": column.header or column.key,
+                            "value": values[column.key]} for column in columns],
+            })
+    return views
 
 
 def inspect_output_artifacts(
@@ -3695,15 +3930,7 @@ def finalize_output_projection(
 
     from src.lib.validation_history.projection import read_published_projection
     from src.lib.validation_history.store import HistoryScope, HistoryConflict
-    if plan.selection_mode == "selected_fields":
-        node_ids = {source.node_id for source in plan.selected_sources}
-        selected_artifacts = [artifact for artifact in bundle.artifacts if artifact.node_id in node_ids]
-    else:
-        source_ids = {value.strip() for value in plan.source_extraction_result_ids if value.strip()}
-        source_keys = {value.strip() for value in plan.source_keys if value.strip()}
-        selected_artifacts = [artifact for artifact in bundle.artifacts
-            if not source_ids and not source_keys
-            or artifact.extraction_result_id in source_ids or artifact.source_key in source_keys]
+    selected_artifacts = _plan_artifacts(bundle, plan)
     verified_counts = []
     verified_empty = []
     for artifact in selected_artifacts:
@@ -3713,9 +3940,11 @@ def finalize_output_projection(
             raise HistoryConflict("Output awaits explicit review and selected-value publication")
         if not bundle.authorization_user_id or not artifact.review_session_id:
             raise HistoryConflict("Selected output requires authenticated source scope")
+        # A finished flow run's records that its review set aside do not block
+        # its exports (ALL-1561); the plan decides whether they are in them.
         verified_envelope, _ = read_published_projection(
             HistoryScope(bundle.authorization_user_id, bundle.document_id, artifact.review_session_id),
-            artifact.selected_projection, finalized=True,
+            artifact.selected_projection, finalized=True, set_aside_ok=True,
         )
         verified_counts.append(verified_envelope.metadata.get("record_counts"))
         verified_empty.append(not verified_envelope.extracted_objects)

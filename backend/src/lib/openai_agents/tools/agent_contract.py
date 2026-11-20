@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from agents.tool_context import ToolContext
 
 from src.lib.agent_contracts import get_agent_contract as _get_agent_contract

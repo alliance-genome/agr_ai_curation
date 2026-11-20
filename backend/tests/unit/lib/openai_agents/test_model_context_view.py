@@ -1,4 +1,5 @@
 """No paid model calls: exercise SDK filters with exact recoverability."""
+from tests.sdk_tool_context_support import tool_context
 from copy import deepcopy
 from dataclasses import replace
 from unittest.mock import AsyncMock
@@ -240,7 +241,6 @@ async def test_child_without_history_does_not_borrow_parent_filter(setup):
 @pytest.mark.asyncio
 async def test_thirteen_results_then_two_six_read_bursts_keep_original_event_identity(setup, monkeypatch):
     """October 15 regression: SDK repr reads must not become unreducible copies."""
-    from types import SimpleNamespace
     from src.lib.openai_agents.run_history import history_tools
     history, agent = setup
     history.store.read = lambda scope, ref: {"event": {"event_id": ref}, "payload": history.store.rows[ref]}
@@ -256,7 +256,7 @@ async def test_thirteen_results_then_two_six_read_bursts_keep_original_event_ide
         for n in range(6):
             call_id = f"read-{burst}-{n}"
             arguments = json.dumps({"event_id": ref, "detail_path": "payload.content", "detail_cursor": 0})
-            result = await reader.on_invoke_tool(SimpleNamespace(tool_name=reader.name, tool_call_id=call_id, run_config=None), arguments)
+            result = await reader.on_invoke_tool(tool_context(reader.name, tool_call_id=call_id, run_config=None), arguments)
             items.extend([
                 {"type": "function_call", "call_id": call_id, "name": reader.name, "arguments": arguments},
                 {"type": "function_call_output", "call_id": call_id, "output": str(result)},

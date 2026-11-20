@@ -8,6 +8,7 @@ the rows plus their ``validator_record_refs`` only, while the workspace keeps
 the complete response and assembly stays byte-for-byte the same.
 """
 
+from tests.sdk_tool_context_support import tool_context
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -104,7 +105,7 @@ def _lookup_tool(payload):
 
 async def _call(runtime, payload, arguments, call_id="call-1"):
     wrapped = runtime.wrap_lookup_tool(_lookup_tool(payload))
-    raw = await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id=call_id), json.dumps(arguments))
+    raw = await wrapped.on_invoke_tool(tool_context(wrapped.name, tool_call_id=call_id), json.dumps(arguments))
     return json.loads(raw), wrapped
 
 
@@ -278,7 +279,7 @@ async def test_paged_lean_view_keeps_refs_with_rows_and_exact_detail_reads(schem
     for page in pages:
         assert not set(DERIVED_KEYS) & set(page)
         assert [ref["value"] for ref in page["validator_record_refs"]] == [row["curie"] for row in page["data"]]
-    detail = json.loads(await wrapped.on_invoke_tool(SimpleNamespace(tool_call_id="detail"), json.dumps(
+    detail = json.loads(await wrapped.on_invoke_tool(tool_context(wrapped.name, tool_call_id="detail"), json.dumps(
         {"method": "search_alleles", "lookup_ref": first["validator_lookup_refs"][0]["lookup_ref"], "detail_path": "data.3"})))
     assert json.loads(detail["detail"]["content"]) == payload["data"][3]
 

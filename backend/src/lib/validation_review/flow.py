@@ -27,6 +27,8 @@ class FlowReview(ChatReview):
     record: ExtractionRecord | None = None
     source_agent: object | None = None
     initial_stop: BaseException | None = field(default=None, repr=False)
+    # Records the finished review set aside (ALL-1561); set by finish_review.
+    set_aside_record_target_ids: list = field(default_factory=list)
 
     def reference(self, record):
         return record.metadata["flow_review"]
@@ -136,8 +138,14 @@ class FlowReview(ChatReview):
         ref = self.reference(self.record)
         context = self.context(self.record)
         status = await asyncio.to_thread(admission.status, context.history_scope, ref["episode_id"])
+        set_aside = None
         if not status["ready"]:
-            raise admission.ReviewStopped((outcome or {}).get("reason") or "flow_review_pending", resource=self.step_id)
+            # Records the review deferred or did not accept no longer stop the
+            # paper (ALL-1561); every other pending state still does.
+            set_aside = (outcome or {}).get("set_aside")
+            if set_aside is None or status["state"] != "pending":
+                raise admission.ReviewStopped((outcome or {}).get("reason") or "flow_review_pending",
+                                              resource=self.step_id)
         checkpoint = await asyncio.to_thread(self.checkpoint, self.record)
         result_id = self.record.extraction_result_id
         def retain_checkpoint():
@@ -152,7 +160,10 @@ class FlowReview(ChatReview):
                 return _record_to_schema(row)
         self.record = await asyncio.to_thread(retain_checkpoint)
         result = {"extraction_result_id": str(self.record.extraction_result_id),
-                  "episode_id": ref["episode_id"], "checkpoint_revision": checkpoint.expected_revision}
+                  "episode_id": ref["episode_id"], "checkpoint_revision": checkpoint.expected_revision,
+                  "set_aside_record_target_ids": set_aside["record_target_ids"] if set_aside else []}
         await asyncio.to_thread(flow_steps.finish,
-            store.HistoryScope(self.owner_id, self.document_id, self.session_id), self.step_id, outcome=result)
+            store.HistoryScope(self.owner_id, self.document_id, self.session_id), self.step_id,
+            outcome=result, set_aside=set_aside)
+        self.set_aside_record_target_ids = result["set_aside_record_target_ids"]
         return checkpoint.envelope

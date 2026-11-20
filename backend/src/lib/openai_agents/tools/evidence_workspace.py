@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 from ..config import get_evidence_list_max_limit, get_list_recorded_evidence_limit
 from ..evidence_summary import evidence_record_status

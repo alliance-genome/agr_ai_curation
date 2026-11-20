@@ -8,6 +8,7 @@ import type { RestorableChatMessage } from '@/services/chatHistoryApi'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
 import type { FileInfo } from './FileDownloadCard'
+import type { OutputSetAsideNotice } from '@/features/curation/setAside/setAsideSummary'
 
 export type MessageRole = 'user' | 'assistant' | 'flow'
 export type TerminalTurnState =
@@ -69,6 +70,8 @@ export interface Message {
   evidenceRecords?: EvidenceRecord[]
   evidenceCurationSupported?: boolean | null
   evidenceCurationAdapterKey?: string | null
+  /** Chat tables of a flow run whose sources hold records the review set aside (ALL-1561). */
+  setAsideNotices?: OutputSetAsideNotice[]
 }
 
 export interface SerializedMessage extends Omit<RestorableChatMessage, 'terminalState' | 'terminalMessage'> {
