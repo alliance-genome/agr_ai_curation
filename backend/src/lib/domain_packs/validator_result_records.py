@@ -11,6 +11,7 @@ from hashlib import sha256
 import json
 from typing import Any, Mapping
 
+from src.lib.persistence_sanitization import sanitize_persisted_json_value
 from src.schemas.domain_envelope import DomainEnvelope
 from src.schemas.domain_validator import DomainValidationRequest, DomainValidatorResultBase
 
@@ -21,13 +22,17 @@ def validator_result_snapshot(
     request: Mapping[str, Any] | None = None,
     source_envelope_revision: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Return an immutable identity and lossless JSON snapshot, including nulls."""
-    snapshot = {
+    """Return an immutable identity and lossless JSON snapshot, including nulls.
+
+    Identity is computed over the form that is saved: PostgreSQL JSONB cannot
+    store NUL, so it is removed (the sanitizer copies every container).
+    """
+    snapshot = sanitize_persisted_json_value({
         "schema_version": 1,
         "source_envelope_revision": source_envelope_revision,
-        "request": deepcopy(dict(request)) if request is not None else None,
-        "result": deepcopy(dict(result)),
-    }
+        "request": dict(request) if request is not None else None,
+        "result": dict(result),
+    })
     encoded = json.dumps(snapshot, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False)
     return "validator-result:" + sha256(encoded.encode("utf-8")).hexdigest(), snapshot
 

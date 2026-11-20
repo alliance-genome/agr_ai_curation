@@ -192,6 +192,14 @@ def planned(scope, tmp_path, monkeypatch, request):
         env.extracted_objects[0].evidence_record_ids = ["original-evidence"]
         env.metadata["evidence_records"] = [{"evidence_record_id": "original-evidence",
             "document_id": scope.document_id, "verified_quote": "Original quoted evidence"}]
+    if isinstance(fixture_options, dict) and "evidence_quote" in fixture_options:
+        # The id is minted over the quote as recorded, as record_evidence does.
+        from src.lib.openai_agents.evidence_summary import build_evidence_record_id
+        record = {"entity": "eco:1", "verified_quote": fixture_options["evidence_quote"], "page": 1,
+                  "section": "Results", "chunk_id": "chunk-1", "document_id": scope.document_id}
+        record["evidence_record_id"] = build_evidence_record_id(evidence_record=record)
+        env.extracted_objects[0].evidence_record_ids = [record["evidence_record_id"]]
+        env.metadata["evidence_records"] = [record]
     if isinstance(fixture_options, dict) and fixture_options.get("count"):
         template = env.extracted_objects[0]
         env.extracted_objects = [template.model_copy(deep=True, update={"pending_ref_id": f"record-{index}"})

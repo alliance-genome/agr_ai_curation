@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from src.lib.domain_packs.evidence_snapshot import EvidenceSnapshot
 from src.lib.openai_agents.config import get_generic_profile_max_issues
+from src.lib.persistence_sanitization import sanitize_persisted_json_value
 from src.lib.validation_history import store
 from src.models.sql.validation_review import ValidationReviewWork as Work
 from src.schemas.validation_followup import TargetedFollowupSubmission, FollowupEntryResult
@@ -142,7 +143,9 @@ def retain(scope, work_id, lease_token, result, *, evidence_records):
             raise store.HistoryConflict("Follow-up request identity changed")
         supplied = row.payload["specialist_input"]["context"]
         old_evidence = supplied["original_evidence"]
-        snapshot = EvidenceSnapshot([*old_evidence, *evidence_records])
+        # The originals were saved without NUL; this invocation's own records
+        # come straight from paper text, so compare them in their saved form.
+        snapshot = EvidenceSnapshot([*old_evidence, *sanitize_persisted_json_value(list(evidence_records))])
         old_ids = {record["evidence_record_id"] for record in old_evidence}
         structure = saved_structure(db, row.payload["receipt"]["execution_receipt"])
         references, refused = [], []
