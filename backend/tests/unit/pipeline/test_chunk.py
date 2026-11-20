@@ -125,7 +125,11 @@ async def test_chunk_parsed_document_discards_whitespace_only_splits(method):
         ChunkingMethod.BY_SENTENCE: _chunk_by_sentence,
     }[method]
     candidates = chunker(elements, strategy)
-    assert any(not candidate["content"].strip() for candidate in candidates)
+    if method == ChunkingMethod.BY_TITLE:
+        # Table rows collapse runs of spaces and are never split inside a row.
+        assert [candidate["content"] for candidate in candidates] == ["Table start Table end"]
+    else:
+        assert any(not candidate["content"].strip() for candidate in candidates)
 
     chunks = await chunk_parsed_document(elements, strategy, "doc-table")
 

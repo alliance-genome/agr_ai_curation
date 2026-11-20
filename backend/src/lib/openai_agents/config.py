@@ -2070,6 +2070,21 @@ def get_document_source_import_timeout_seconds() -> float:
     )
 
 
+def get_document_table_header_max_rows() -> int:
+    """Most rows the table header rule may take as a table's header (minimum 1)."""
+    return max(1, _get_env_int_with_fallback("DOCUMENT_TABLE_HEADER_MAX_ROWS", 5))
+
+
+def get_document_table_header_min_filled_fraction() -> float:
+    """Filled share of cells at which a row ends a table's header block."""
+    value = _get_env_float_with_fallback("DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION", 0.5)
+    if not 0.0 < value <= 1.0:
+        raise ValueError(
+            "DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION must be greater than 0 and at most 1"
+        )
+    return value
+
+
 # --- Document retrieval ---
 
 

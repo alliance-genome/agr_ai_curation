@@ -83,6 +83,42 @@ it. Configured overlap still applies when splitting an oversized single element;
 character/sentence chunking is unchanged. Adjacent-chunk navigation remains
 available for contextual reading.
 
+### Table pieces (whole rows)
+
+Title-based chunking hands every Markdown table element to
+`backend/src/lib/pipeline/table_chunking.py`. A table piece starts and ends on
+a row boundary, never inside a row, and table pieces get no overlap. Rows are
+packed up to the chunk size (1,500 characters); a row longer than that is a
+piece of its own, whole. A table that fits beside the text before it stays in
+that piece, as before. Inside table rows, `<br>` becomes a space and runs of
+spaces become one; the stored converted Markdown is unchanged.
+
+The header rows stay where the source has them: they are the first rows of the
+table's first piece. Every table piece records its rows in the chunk metadata
+(`ChunkMetadata.table_segments`): the table number within the file, the
+piece's character range, its first and last data row, the total data rows, the
+header row count and the header rows' text. The header text is never copied
+into stored piece text. The header rule counts empty cells only: the header is
+the Markdown header row plus each following row up to and including the first
+row whose filled share is at least `DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION`
+(0.5), at most `DOCUMENT_TABLE_HEADER_MAX_ROWS` (5) rows. Two weak spots are
+pinned by tests: a column-name row that is itself less than half filled pulls
+the first data row into the header, and a header longer than a piece is cut
+like ordinary rows while every piece's metadata carries the whole header.
+
+A heading is never a piece of its own while content follows it: consecutive
+headings stay together (the innermost heading owns the section metadata), and a
+heading that does not fit beside its next element is carried into that
+element's first piece, which can then exceed the chunk size by the heading's
+length. A heading with nothing after it is still its own piece.
+
+A row too long to embed (over `EMBEDDING_MODEL_TOKEN_LIMIT` minus
+`EMBEDDING_TOKEN_SAFETY_MARGIN`) still makes storage fail at the token
+preflight, as an oversized piece did before. Refusing such a file before it is
+parsed is the supplement file check's job.
+
+These rules apply to text cut after this change. Stored pieces are not rewritten.
+
 Evidence sentence generation treats blank lines as source-block boundaries,
 including headings without terminal punctuation. Single line breaks remain
 possible PDF line wraps. Spans are exact slices of stored chunk text; no cleanup
