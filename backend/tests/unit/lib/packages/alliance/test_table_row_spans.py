@@ -125,6 +125,38 @@ async def test_every_row_span_resolves_as_a_table_row_and_stays_a_sentence_witho
         assert resolve_evidence_span_id(span_id=span.span_id, chunk_text=piece["text"]).span_type == "sentence"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("where", ["middle", "last"])
+async def test_an_all_dash_data_row_is_a_row_the_ai_sees_and_can_quote(where):
+    """Only the separator line chunking recorded is skipped; "| - | - |" is data."""
+    rows = ["| 3 | 1 |", "| 5 | -- |"]
+    rows.insert(1 if where == "middle" else 2, "| - | - |")
+    table = "\n".join(["| Score | Control |", "| --- | --- |", *rows])
+    (chunk,) = await chunk_parsed_document(
+        [{"type": "Table", "text": table, "metadata": {"section_title": "Sheet1"}}], _strategy(), "doc-dash"
+    )
+    piece = {
+        "id": "dash-piece", "chunk_index": 0, "text": chunk.content,
+        "metadata": json.loads(json.dumps(chunk.metadata.model_dump(), default=str)),
+    }
+    spans = _spans(piece)
+    assert [span.text for span in spans] == ["| Score | Control |", *rows]
+    assert "| --- | --- |" not in [span.text for span in spans]
+
+    view, _events = document_result_view("read_chunk", weaviate_search.ChunkReadResult(
+        summary="Read chunk 0.",
+        chunk=weaviate_search.ChunkReadContent(
+            chunk_id=piece["id"], chunk_index=0, content=piece["text"],
+            evidence_spans=[weaviate_search.EvidenceSpanResult(**span.to_dict()) for span in spans],
+            tables=weaviate_search._table_rows(chunk_table_segments(piece["metadata"])),
+        ),
+    ))
+    lines = view["chunk"]["text"].split("\n")
+    assert "this passage holds rows 1 to 3 of 3" in lines[0]
+    assert sum(line.startswith("[") for line in lines) - 1 == 3, "every data row the label counts is shown"
+    assert any(line.endswith("] | - | - |") for line in lines)
+
+
 def test_hash_salt_is_unchanged():
     assert EVIDENCE_SPANIZER_VERSION == "pdf_sentence_v1"
 

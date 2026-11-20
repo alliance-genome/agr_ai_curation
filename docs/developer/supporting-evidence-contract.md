@@ -132,11 +132,13 @@ These rules apply to text cut after this change. Stored pieces are not rewritten
 
 `build_evidence_spans` reads the piece's `table_segments` (the structural flag
 written at chunking, never a guess from the text). Inside a segment, each table
-row is one span of type `table_row`, and the Markdown separator line is no
-span. Text outside segments is split into sentences exactly as before, so a
+row is one span of type `table_row`; only the separator line chunking recorded
+(`separator_char_start`) is no span, so an all-dash data row stays a row. Text outside segments is split into sentences exactly as before, so a
 piece without table segments, including any table text stored before
 whole-row pieces, gets the same spans byte for byte. The span hash keeps the
-`pdf_sentence_v1` salt, so every span ID minted earlier still resolves.
+`pdf_sentence_v1` salt, so every span ID minted earlier still resolves. The
+`spanizer_version` on saved evidence therefore no longer tells the two
+segmentations apart; `span_type` does.
 `resolve_evidence_span_id` takes the same segments, and a span inside one
 resolves as `table_row`; `record_evidence` passes them from the stored chunk
 metadata, so a saved source fragment records `span_type: table_row`.

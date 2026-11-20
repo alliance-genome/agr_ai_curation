@@ -9,7 +9,6 @@ import json
 import re
 from typing import Any
 
-from agr_ai_curation_runtime.markdown_tables import is_table_separator_row
 
 EVIDENCE_SPANIZER_VERSION = "pdf_sentence_v1"
 EVIDENCE_SPAN_HASH_ALGORITHM = "sha256"
@@ -138,18 +137,28 @@ def chunk_table_segments(metadata: Any) -> list[dict[str, Any]]:
     return sorted((dict(segment) for segment in segments), key=lambda segment: segment["char_start"])
 
 
-def _table_ranges(chunk_text: str, table_segments: Sequence[Mapping[str, Any]]) -> list[tuple[int, int]]:
-    ranges = sorted((segment["char_start"], segment["char_end"]) for segment in table_segments)
+def _table_ranges(
+    chunk_text: str, table_segments: Sequence[Mapping[str, Any]],
+) -> list[tuple[int, int, int | None]]:
+    """``(start, end, separator_start)`` per segment; the separator is the one chunking recorded."""
+    ranges = sorted(
+        (segment["char_start"], segment["char_end"], segment.get("separator_char_start"))
+        for segment in table_segments
+    )
     previous_end = 0
-    for start, end in ranges:
+    for start, end, separator in ranges:
         if type(start) is not int or type(end) is not int or not previous_end <= start < end <= len(chunk_text):
             raise EvidenceSpanResolutionError("Chunk table segment does not fit the chunk text")
+        if separator is not None and (
+            type(separator) is not int or not start < separator < end or chunk_text[separator - 1] != "\n"
+        ):
+            raise EvidenceSpanResolutionError("Chunk table separator does not start a line of its segment")
         previous_end = end
     return ranges
 
 
-def _span_type(char_start: int, char_end: int, table_ranges: Sequence[tuple[int, int]]) -> str:
-    if any(start <= char_start and char_end <= end for start, end in table_ranges):
+def _span_type(char_start: int, char_end: int, table_ranges: Sequence[tuple[int, int, int | None]]) -> str:
+    if any(start <= char_start and char_end <= end for start, end, _separator in table_ranges):
         return _TABLE_ROW_SPAN_TYPE
     return _SENTENCE_SPAN_TYPE
 
@@ -167,7 +176,8 @@ def build_evidence_spans(
     Blank lines delimit source blocks; single newlines can be PDF line wraps.
     Inside the chunk's table segments (structural metadata written at
     chunking, see ``chunk_table_segments``), each table row is one span of type
-    ``table_row`` and the Markdown separator line is no span. Text outside them
+    ``table_row`` and only the separator line chunking recorded
+    (``separator_char_start``) is no span. Text outside them
     is split exactly as before, so a chunk without table segments gets the same
     spans byte for byte. The span ID/hash contract remains unchanged: existing
     IDs resolve directly by their stored offsets/hash, independent of current
@@ -240,26 +250,26 @@ def resolve_evidence_span_id(
     )
 
 
-def _iter_span_offsets(text: str, table_ranges: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+def _iter_span_offsets(text: str, table_ranges: Sequence[tuple[int, int, int | None]]) -> list[tuple[int, int]]:
     offsets: list[tuple[int, int]] = []
     cursor = 0
-    for start, end in table_ranges:
+    for start, end, separator in table_ranges:
         offsets.extend((cursor + lo, cursor + hi) for lo, hi in _iter_block_sentence_offsets(text[cursor:start]))
-        offsets.extend(_iter_table_row_offsets(text, start, end))
+        offsets.extend(_iter_table_row_offsets(text, start, end, separator))
         cursor = end
     offsets.extend((cursor + lo, cursor + hi) for lo, hi in _iter_block_sentence_offsets(text[cursor:]))
     return offsets
 
 
-def _iter_table_row_offsets(text: str, start: int, end: int) -> list[tuple[int, int]]:
+def _iter_table_row_offsets(text: str, start: int, end: int, separator: int | None) -> list[tuple[int, int]]:
+    """Every line of a segment is one row, except the separator line chunking recorded."""
     offsets: list[tuple[int, int]] = []
     line_start = start
     while line_start < end:
         line_end = text.find("\n", line_start, end)
         if line_end == -1:
             line_end = end
-        line = text[line_start:line_end]
-        if line.strip() and not is_table_separator_row(line):
+        if line_start != separator and text[line_start:line_end].strip():
             offsets.append((line_start, line_end))
         line_start = line_end + 1
     return offsets

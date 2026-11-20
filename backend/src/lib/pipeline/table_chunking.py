@@ -15,12 +15,13 @@ from dataclasses import dataclass
 import re
 from typing import List, Optional
 
-from agr_ai_curation_runtime.markdown_tables import is_table_separator_row, split_table_cells
 from src.lib.openai_agents.config import (
     get_document_table_header_max_rows,
     get_document_table_header_min_filled_fraction,
 )
 
+_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+_SEPARATOR_CELL = re.compile(r"^\s*:?-+:?\s*$")
 _LINE_BREAK_TAG = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _SPACE_RUN = re.compile(r"[ \t]{2,}")
 
@@ -160,6 +161,24 @@ class TableLayout:
             last_data_row=data_rows[-1] if data_rows else None,
             separator_offset=self.separator_offset(list(range(len(self.lines)))),
         )
+
+
+def split_table_cells(row: str) -> List[str]:
+    """Split one Markdown table row into cells on unescaped pipes."""
+
+    stripped = row.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|") and not stripped.endswith("\\|"):
+        stripped = stripped[:-1]
+    return _UNESCAPED_PIPE.split(stripped)
+
+
+def is_table_separator_row(row: str) -> bool:
+    """Whether a line is a Markdown table separator line such as ``|---|:-:|``."""
+
+    cells = split_table_cells(row)
+    return bool(cells) and all(_SEPARATOR_CELL.match(cell) for cell in cells)
 
 
 def normalize_table_row(row: str) -> str:

@@ -48,6 +48,7 @@ TABLE_SEGMENTS = {
         "table_index": 2, "char_start": 9, "char_end": 66, "first_data_row": 401, "last_data_row": 402,
         "total_data_rows": 2033, "header_row_count": 2,
         "header_text": "| Table S2. Made-up strains | | |\n| Strain | Genotype | Temp |",
+        "separator_char_start": None,
     }],
 }
 

@@ -147,6 +147,7 @@ class TableRows(BaseModel):
     total_data_rows: int
     header_row_count: int
     header_text: str
+    separator_char_start: Optional[int] = None
 
 
 def _table_rows(segments: List[dict]) -> Optional[List[TableRows]]:
@@ -432,15 +433,17 @@ def create_read_chunk_tool(document_id: str, user_id: str, tracker: Optional["To
     async def read_chunk(chunk_index: ChunkIndexRequest, span_offset: int = 0) -> ChunkReadResult:
         """Read one passage (chunk) of the paper, numbered sentence by sentence.
 
-        The passage comes back as numbered lines. Each line starts with a sentence
-        number in square brackets, for example "[3] Wingless expression was lost.",
-        followed by that sentence exactly as it appears in the paper. In a table, each row is its own numbered line. Above a table's rows, one line
-        without a number starts with "Columns of table" and shows the table's column
-        names and which of its rows the passage holds; further column-name rows follow
-        it, indented by four spaces. That label is for reading only and cannot be
-        recorded as evidence. Any
-        other sentence that spans several lines in the paper keeps its line breaks
-        under one number, and its later lines are indented by four spaces.
+        The passage comes back as numbered lines. Each line starts with a
+        sentence number in square brackets, for example "[3] Wingless expression
+        was lost.", followed by that sentence exactly as it appears in the
+        paper. When a passage numbers a table's rows one per line, one line
+        without a number above them starts with "Columns of table" and shows the
+        table's column names and which of its rows the passage holds; further
+        column-name rows follow it, indented by four spaces. That label is for
+        reading only and cannot be recorded as evidence. A sentence that spans
+        several lines, such as a table row in a passage without that label,
+        keeps its line breaks under one number, and its later lines are indented
+        by four spaces.
 
         To keep a sentence as evidence, pass the passage's chunk_index and the
         sentence number (span_index) to record_evidence. The application copies the
@@ -765,18 +768,20 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
         need everything a section says: complete lists such as every strain in the
         Methods, full tables and figure legends, or a full methods description.
 
-        Each passage shows its chunk_index, page and subsection, then its text as
-        numbered lines. Each line starts with a sentence number in square brackets,
-        for example "[2] Embryos were fixed in 4% formaldehyde.", followed by that
-        sentence exactly as it appears in the paper. In a table, each row is its own numbered line. Above a table's rows, one line
-        without a number starts with "Columns of table" and shows the table's column
-        names and which of its rows the passage holds; further column-name rows follow
-        it, indented by four spaces. That label is for reading only and cannot be
-        recorded as evidence. Any
-        other sentence that spans several lines keeps its line breaks under one
-        number, and its later lines are indented by four spaces. To keep a sentence as evidence,
-        pass the passage's chunk_index and the sentence number (span_index) to
-        record_evidence; there is no need to read the passage again with read_chunk.
+        Each passage shows its chunk_index, page and subsection, then its text
+        as numbered lines. Each line starts with a sentence number in
+        square brackets, for example "[2] Embryos were fixed in 4%
+        formaldehyde.", followed by that sentence exactly as it appears in the
+        paper. When a passage numbers a table's rows one per line, one line
+        without a number above them starts with "Columns of table" and shows the
+        table's column names and which of its rows the passage holds; further
+        column-name rows follow it, indented by four spaces. That label is for
+        reading only and cannot be recorded as evidence. A sentence that spans
+        several lines, such as a table row in a passage without that label,
+        keeps its line breaks under one number, and its later lines are indented
+        by four spaces. To keep a sentence as evidence, pass the passage's
+        chunk_index and the sentence number (span_index) to record_evidence;
+        there is no need to read the passage again with read_chunk.
 
         The section name is matched as part of a name: "Methods" also matches
         "Materials and Methods" and "Supplementary Methods". The result lists every
@@ -849,18 +854,20 @@ def create_read_subsection_tool(document_id: str, user_id: str, tracker: Optiona
         focused read of one part of a section, such as "Fly strains" in the Methods
         or one figure legend.
 
-        Each passage shows its chunk_index, page and subsection, then its text as
-        numbered lines. Each line starts with a sentence number in square brackets,
-        for example "[0] Flies were raised at 25 C.", followed by that sentence
-        exactly as it appears in the paper. In a table, each row is its own numbered line. Above a table's rows, one line
-        without a number starts with "Columns of table" and shows the table's column
-        names and which of its rows the passage holds; further column-name rows follow
-        it, indented by four spaces. That label is for reading only and cannot be
-        recorded as evidence. Any
-        other sentence that spans several lines keeps its line breaks under one
-        number, and its later lines are indented by four spaces. To keep a sentence as evidence, pass the
-        passage's chunk_index and the sentence number (span_index) to
-        record_evidence; there is no need to read the passage again with read_chunk.
+        Each passage shows its chunk_index, page and subsection, then its text
+        as numbered lines. Each line starts with a sentence number in
+        square brackets, for example "[0] Flies were raised at 25 C.", followed
+        by that sentence exactly as it appears in the paper. When a passage
+        numbers a table's rows one per line, one line without a number above
+        them starts with "Columns of table" and shows the table's column names
+        and which of its rows the passage holds; further column-name rows follow
+        it, indented by four spaces. That label is for reading only and cannot
+        be recorded as evidence. A sentence that spans several lines, such as a
+        table row in a passage without that label, keeps its line breaks under
+        one number, and its later lines are indented by four spaces. To keep a
+        sentence as evidence, pass the passage's chunk_index and the sentence
+        number (span_index) to record_evidence; there is
+        no need to read the passage again with read_chunk.
 
         Both names are matched as part of a name, so "Strains" also matches
         "Fly strains and genetics". The result lists every section and subsection
