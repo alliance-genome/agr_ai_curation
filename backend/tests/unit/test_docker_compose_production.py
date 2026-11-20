@@ -429,6 +429,21 @@ def test_production_compose_forwards_abstract_extraction_input_limit():
     )
 
 
+def test_compose_forwards_document_file_converted_text_cap():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[
+        "DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"
+    ]
+
+    assert documented_default == "1000000"
+    expected = f"${{DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES:-{documented_default}}}"
+    assert dev_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
+    assert production_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
+
+
 def test_compose_propagates_optional_openrouter_key_name_only():
     dev_env = _list_environment(
         _load_dev_compose()["services"]["backend"]["environment"]

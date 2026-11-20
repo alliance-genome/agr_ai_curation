@@ -24,6 +24,29 @@ class DocumentSourceAccessDenied(DocumentSourceError):
     """Raised when the provider denies access to a requested source artifact."""
 
 
+class DocumentSourceArtifactNotFound(DocumentSourceError):
+    """The provider lists the artifact but cannot serve its stored file.
+
+    Permanent: asking again returns the same answer until the provider's own
+    storage is fixed.
+    """
+
+
+class DocumentSourceUnavailable(DocumentSourceError):
+    """The provider, or the storage behind it, could not be reached.
+
+    Temporary: the same request may succeed when tried again later.
+    """
+
+
+class DocumentSourceArtifactTooLarge(DocumentSourceError):
+    """A download was stopped because the artifact is larger than the caller's limit."""
+
+    def __init__(self, message: str, *, max_bytes: int):
+        super().__init__(message)
+        self.max_bytes = max_bytes
+
+
 class SourceAccessScope(str, Enum):
     """Who may import a provider artifact.
 
@@ -40,8 +63,17 @@ class SourceAccessScope(str, Enum):
 
 
 class SourceArtifactRole(str, Enum):
+    """What a provider artifact is, independent of the provider's own file classes.
+
+    ``SOURCE_SUPPLEMENT``: an original supplementary file that is not a PDF,
+    such as a spreadsheet or a word-processor document. Its text is read from
+    a ``CONVERTED_TEXT`` artifact whose ``parent_artifact_id`` names it.
+    Supplementary PDFs stay ``SOURCE_PDF``.
+    """
+
     UNKNOWN = "unknown"
     SOURCE_PDF = "source_pdf"
+    SOURCE_SUPPLEMENT = "source_supplement"
     CONVERTED_TEXT = "converted_text"
     PROVIDER_METADATA = "provider_metadata"
 
@@ -259,8 +291,17 @@ class DocumentSourceProvider(Protocol):
         artifact_id: str,
         *,
         request_bearer_token: str | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
-        """Download artifact bytes using provider-specific authorization."""
+        """Download artifact bytes using provider-specific authorization.
+
+        With ``max_bytes`` the download stops as soon as more than that many
+        bytes have arrived and raises ``DocumentSourceArtifactTooLarge``; the
+        artifact is never read into memory beyond the limit. A stored file the
+        provider cannot find raises ``DocumentSourceArtifactNotFound``, and an
+        unreachable provider or provider storage raises
+        ``DocumentSourceUnavailable``.
+        """
         raise NotImplementedError
 
     async def request_conversion(

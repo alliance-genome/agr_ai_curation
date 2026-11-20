@@ -2070,6 +2070,18 @@ def get_document_source_import_timeout_seconds() -> float:
     )
 
 
+def get_document_file_max_converted_text_bytes() -> int:
+    """Largest converted text, in downloaded bytes, read for one provider file.
+
+    A download stops as soon as it passes this size, before the file is
+    parsed or held in memory beyond it.
+    """
+    return max(
+        1,
+        _get_env_int_with_fallback("DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES", 1_000_000),
+    )
+
+
 # --- Document retrieval ---
 
 

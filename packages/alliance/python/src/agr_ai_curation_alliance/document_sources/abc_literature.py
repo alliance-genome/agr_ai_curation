@@ -10,7 +10,10 @@ from typing import Any, Self, TypeGuard
 
 from src.lib.document_sources.models import (
     DocumentSourceAccessDenied,
+    DocumentSourceArtifactNotFound,
+    DocumentSourceArtifactTooLarge,
     DocumentSourceError,
+    DocumentSourceUnavailable,
     DocumentSourceReferenceNotFound,
     DocumentSourceHealth,
     DocumentSourceProvider,
@@ -33,10 +36,25 @@ from agr_ai_curation_alliance.literature.client import (
 
 from agr_ai_curation_alliance.document_sources import ABC_LITERATURE_PROVIDER_ID
 
+# Supplement extensions ABC converts to Markdown in-process
+# (``pdf2md_utils.OFFICE_SUPPLEMENT_FORMATS``, SCRUM-6589).
+_OFFICE_SUPPLEMENT_EXTENSIONS = frozenset({"xlsx", "xlsm", "docx", "docm"})
+
+# Converted text classes whose ``show_all`` row carries ``source``, the original
+# it was made from (``referencefile_crud._find_source_for_derived``). Such a row
+# is read only through that original and with its access policy.
+_SOURCE_LINKED_CONVERTED_FILE_CLASSES = frozenset({"converted_merged_supplement"})
+
 _FIGURE_METADATA_FILE_CLASSES = {
     "converted_main_figure_metadata",
     "converted_supplement_figure_metadata",
 }
+
+# Download answers meaning ABC or its storage could not be reached: 502 from
+# ABC's storage (PR 1392) or the client's transport failure, 503 when the
+# service in front of ABC reports it unavailable, 504 from the client's
+# timeout. Asking again may succeed.
+_UNAVAILABLE_HTTP_STATUSES = frozenset({502, 503, 504})
 
 _ARTIFACT_STATUS_KEYS = (
     "status",
@@ -333,8 +351,18 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         source_artifact: SourceArtifact,
         artifacts: list[SourceArtifact] | tuple[SourceArtifact, ...],
     ) -> tuple[SourceArtifact, ...]:
-        """Return ABC figure-metadata JSON sidecars for a source PDF."""
+        """Return ABC figure-metadata JSON sidecars of this source PDF only.
 
+        A sidecar must have the metadata class of the source's own file class
+        (``converted_main_figure_metadata`` for a main PDF) and be named after
+        one of the source's figures, or start with ``{source}_image_`` when ABC
+        lists no figure rows. A source without such sidecars gets none; another
+        file's sidecars are never used in their place.
+        """
+
+        expected_class = _expected_figure_metadata_file_class(source_artifact)
+        if expected_class is None:
+            return ()
         metadata_candidates = [
             artifact
             for artifact in artifacts
@@ -345,19 +373,10 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
                 SourceArtifactStatus.UNKNOWN,
             }
             and _same_reference(source_artifact, artifact)
+            and _artifact_file_class(artifact) == expected_class
         ]
         if not metadata_candidates:
             return ()
-
-        expected_class = _expected_figure_metadata_file_class(source_artifact)
-        if expected_class:
-            class_matched = [
-                artifact
-                for artifact in metadata_candidates
-                if _artifact_file_class(artifact) == expected_class
-            ]
-            if class_matched:
-                metadata_candidates = class_matched
 
         exact_display_names = _figure_artifact_display_names_for_source(
             source_artifact=source_artifact,
@@ -371,14 +390,11 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             ]
         else:
             display_prefixes = _source_display_prefixes(source_artifact)
-            if display_prefixes:
-                display_matched = [
-                    artifact
-                    for artifact in metadata_candidates
-                    if _artifact_display_name_matches_prefix(artifact, display_prefixes)
-                ]
-                if display_matched:
-                    metadata_candidates = display_matched
+            metadata_candidates = [
+                artifact
+                for artifact in metadata_candidates
+                if _artifact_display_name_matches_prefix(artifact, display_prefixes)
+            ]
 
         return tuple(
             sorted(
@@ -405,32 +421,54 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         except ABCLiteratureClientError as exc:
             raise DocumentSourceError("ABC Literature artifact listing failed") from exc
         files = _extract_referencefiles(payload)
-        artifacts: list[SourceArtifact] = []
-        seen_artifact_ids: set[str] = set()
-        for file_payload in files:
-            source_artifact = self._map_referencefile(
+        # ``show_all`` is one flat row per file. A converted text row names the
+        # file it was made from in ``source`` (ABC's own lineage); that row is
+        # mapped after its original so it can carry the original's id and
+        # access policy.
+        mapped: dict[int, SourceArtifact] = {}
+        artifacts_by_id: dict[str, SourceArtifact] = {}
+        linked_rows: list[tuple[int, Mapping[str, Any]]] = []
+        for index, file_payload in enumerate(files):
+            if _is_source_linked_converted_payload(file_payload):
+                linked_rows.append((index, file_payload))
+                continue
+            artifact = self._map_referencefile(
                 file_payload,
                 reference=reference,
                 default_available_when_status_missing=_is_converted_payload(
                     file_payload
                 ),
             )
-            if source_artifact.artifact_id not in seen_artifact_ids:
-                artifacts.append(source_artifact)
-                seen_artifact_ids.add(source_artifact.artifact_id)
-            for converted in _extract_converted_referencefiles(file_payload):
-                converted_artifact = self._map_referencefile(
-                    converted,
-                    parent_artifact_id=source_artifact.artifact_id,
-                    inherited_access_policy=source_artifact.access_policy,
-                    source_reference_id=source_artifact.reference_id,
-                    source_reference_curie=source_artifact.reference_curie,
-                    default_available_when_status_missing=True,
+            mapped[index] = artifact
+            artifacts_by_id.setdefault(artifact.artifact_id, artifact)
+        for index, file_payload in linked_rows:
+            source_id = _source_referencefile_id(file_payload)
+            if source_id is None:
+                # ABC could not tell which file this text came from, so it can
+                # carry no file's access rule: never offered.
+                continue
+            original = artifacts_by_id.get(source_id)
+            if original is None:
+                raise DocumentSourceError(
+                    "ABC Literature converted file names a source file missing "
+                    "from the reference listing"
                 )
-                if converted_artifact.artifact_id in seen_artifact_ids:
-                    continue
-                artifacts.append(converted_artifact)
-                seen_artifact_ids.add(converted_artifact.artifact_id)
+            mapped[index] = self._map_referencefile(
+                file_payload,
+                parent_artifact_id=original.artifact_id,
+                inherited_access_policy=original.access_policy,
+                source_reference_id=original.reference_id,
+                source_reference_curie=original.reference_curie,
+                default_available_when_status_missing=True,
+            )
+        artifacts: list[SourceArtifact] = []
+        seen_artifact_ids: set[str] = set()
+        for index in sorted(mapped):
+            artifact = mapped[index]
+            if artifact.artifact_id in seen_artifact_ids:
+                continue
+            artifacts.append(artifact)
+            seen_artifact_ids.add(artifact.artifact_id)
         return artifacts
 
     async def find_artifacts_by_checksum(
@@ -489,16 +527,40 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         artifact_id: str,
         *,
         request_bearer_token: str | None = None,
+        max_bytes: int | None = None,
     ) -> bytes:
+        """Download one ABC file, stopping mid-stream once ``max_bytes`` is passed.
+
+        ABC's ``download_file`` answers 403 when the caller may not read the
+        file, 404 when the stored file is missing and 502 when its storage
+        cannot be reached (ABC PR 1392; before it, a missing stored file was an
+        unhandled 500, which stays a generic download failure here). The client
+        reports a timeout as 504, a transport failure as 502 and a stream over
+        ``max_bytes`` as 413.
+        """
         try:
             return await self._client.download_referencefile(
                 artifact_id,
                 request_bearer_token=request_bearer_token,
+                max_bytes=max_bytes,
             )
         except ABCLiteratureHTTPError as exc:
             if exc.status_code == 403:
                 raise DocumentSourceAccessDenied(
                     "Document-source artifact access was denied"
+                ) from exc
+            if exc.status_code == 404:
+                raise DocumentSourceArtifactNotFound(
+                    "ABC Literature has no stored file for this artifact"
+                ) from exc
+            if exc.status_code in _UNAVAILABLE_HTTP_STATUSES:
+                raise DocumentSourceUnavailable(
+                    "ABC Literature or its file storage could not be reached"
+                ) from exc
+            if exc.status_code == 413 and max_bytes is not None:
+                raise DocumentSourceArtifactTooLarge(
+                    f"ABC Literature artifact is larger than {max_bytes} bytes",
+                    max_bytes=max_bytes,
                 ) from exc
             raise DocumentSourceError(
                 "ABC Literature artifact download failed"
@@ -606,7 +668,7 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
         access_policy = inherited_access_policy or _map_access_policy(
             payload,
             mod_abbreviations=mod_abbreviations,
-            source_pdf_null_mods_grant_any_group=role is SourceArtifactRole.SOURCE_PDF,
+            null_mod_grants_any_group=_is_original_file_class(file_class),
             license_access=_license_access(payload, reference),
         )
         metadata = dict(
@@ -755,6 +817,22 @@ def _extract_converted_referencefiles(
     return [item for item in value if isinstance(item, Mapping)]
 
 
+def _is_source_linked_converted_payload(payload: Mapping[str, Any]) -> bool:
+    """Whether a ``show_all`` row is converted text that ABC links to its original."""
+
+    file_class = (_first_string(payload, "file_class") or "").lower()
+    return file_class in _SOURCE_LINKED_CONVERTED_FILE_CLASSES
+
+
+def _source_referencefile_id(payload: Mapping[str, Any]) -> str | None:
+    """The ``referencefile_id`` of ABC's ``source`` object on a ``show_all`` row."""
+
+    source = payload.get("source")
+    if not isinstance(source, Mapping):
+        return None
+    return _first_string(source, "referencefile_id")
+
+
 def _is_converted_payload(payload: Mapping[str, Any]) -> bool:
     file_class = _first_string(payload, "file_class", "class") or ""
     extension = _first_string(
@@ -869,7 +947,7 @@ def _map_access_policy(
     payload: Mapping[str, Any],
     *,
     mod_abbreviations: set[str],
-    source_pdf_null_mods_grant_any_group: bool,
+    null_mod_grants_any_group: bool,
     license_access: _LicenseAccess,
 ) -> SourceAccessPolicy:
     """Map one ABC file row to the access ABC's ``download_file`` grants.
@@ -878,16 +956,19 @@ def _map_access_policy(
     (any caller); otherwise, unless the license's flag is unset (no caller),
     to a caller with some MOD access when any ``referencefile_mods`` row has
     no MOD, or to a caller whose MOD a row names. The no-MOD grant is honored
-    only on source PDFs: converted rows inherit their source PDF's policy, and
-    a no-MOD row on a converted row alone grants nothing. A file with no
-    usable MOD rows and no open-access signal stays ``UNKNOWN`` and is denied.
+    on every original file (main and supplement PDFs, Word and Excel
+    supplements, nXML). Converted text rows linked to their original inherit
+    the original's policy instead of being mapped here, and a no-MOD row on
+    any other derived row (figures, figure metadata, embeddings) alone grants
+    nothing. A file with no usable MOD rows and no open-access signal stays
+    ``UNKNOWN`` and is denied.
     """
 
     if license_access is _LicenseAccess.OPEN:
         return SourceAccessPolicy(scope=SourceAccessScope.GLOBAL)
     if license_access is _LicenseAccess.REFUSED:
         return SourceAccessPolicy(scope=SourceAccessScope.UNKNOWN)
-    if source_pdf_null_mods_grant_any_group and _has_null_mod_entry(payload):
+    if null_mod_grants_any_group and _has_null_mod_entry(payload):
         return SourceAccessPolicy(scope=SourceAccessScope.ANY_GROUP)
     if mod_abbreviations:
         return SourceAccessPolicy(
@@ -925,6 +1006,19 @@ def _has_null_mod_entry(payload: Mapping[str, Any]) -> bool:
         ):
             return True
     return False
+
+
+def _is_original_file_class(file_class: str) -> bool:
+    """Whether an ABC row is an uploaded original rather than one ABC derived.
+
+    ABC derives the ``converted_*`` classes (Markdown, figures, figure
+    metadata) and ``embedding`` parquets from other rows; every other class
+    (``main``, ``supplement``, ``nXML``, ``htp_supplement`` and the rest) is a
+    file someone uploaded.
+    """
+
+    normalized = file_class.strip().lower()
+    return not (normalized.startswith("converted") or normalized == "embedding")
 
 
 def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -> bool:
@@ -1023,6 +1117,11 @@ def _artifact_display_name_matches_prefix(
 def _map_artifact_role(*, file_class: str, extension: str) -> SourceArtifactRole:
     normalized_class = file_class.strip().lower()
     normalized_extension = extension.strip().lower()
+    if (
+        normalized_class == "supplement"
+        and normalized_extension in _OFFICE_SUPPLEMENT_EXTENSIONS
+    ):
+        return SourceArtifactRole.SOURCE_SUPPLEMENT
     if normalized_extension == "pdf" or normalized_class in {
         "main",
         "source_pdf",

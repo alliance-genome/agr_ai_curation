@@ -295,25 +295,32 @@ def _row(referencefile_id: int, file_class: str, extension: str, display: str, m
 class _MixedReferenceABC(_AllAccessABC):
     """One reference: an FB-restricted main PDF plus a GLOBAL PMC main PDF.
 
-    Reference-level (unparented) converted Markdown and figure metadata sit at
-    the top level, as ABC's flat ``show_all`` returns them. ``bound`` adds text
-    and figure metadata nested under (bound to) the GLOBAL PMC PDF.
+    Converted Markdown and figure metadata sit at the top level, as ABC's
+    flat ``show_all`` returns them. ``bound`` adds the PMC PDF's own text and
+    figure metadata, with ``source`` naming the PDF as ABC sets it.
     """
 
     def __init__(self, *, bound: bool):
         super().__init__("FB")
         pmc_pdf = _row(40, "main", "pdf", "PMC123", None, pdf_type="pdf", md5sum=CHECKSUM)
-        if bound:
-            pmc_pdf["converted_referencefiles"] = [
-                _row(41, "converted_merged_main", "md", "PMC123_nxml", None),
-                _row(42, "converted_main_figure_metadata", "json", "PMC123_figures", None),
-            ]
+        pmc_source = {
+            "referencefile_id": 40,
+            "display_name": "PMC123",
+            "file_class": "main",
+            "file_extension": "pdf",
+            "md5sum": CHECKSUM,
+        }
         self.files = [
             _row(20, "main", "pdf", "fb-main", "FB", pdf_type="pdf"),
             pmc_pdf,
             _row(30, "converted_merged_main", "md", "fb-main_nxml", None),
             _row(31, "converted_main_figure_metadata", "json", "fb-main_figures", None),
         ]
+        if bound:
+            self.files += [
+                _row(41, "converted_merged_main", "md", "PMC123_merged", None, source=pmc_source),
+                _row(42, "converted_main_figure_metadata", "json", "PMC123_image_1", None),
+            ]
 
     def conversion_requests(self) -> list[str]:
         return [
@@ -348,7 +355,11 @@ async def test_service_reader_ignores_reference_level_artifacts_on_a_mixed_refer
 
 
 @pytest.mark.asyncio
-async def test_service_reader_uses_only_artifacts_bound_to_the_authorized_pdf(monkeypatch):
+async def test_service_reader_does_not_take_listed_main_text_until_main_rows_are_linked(monkeypatch):
+    # ALL-1460 P2 links only converted supplement rows to their ``source``.
+    # Main-text rows stay unlinked (nXML lineage is an open design question),
+    # so a machine reader still parses the authorized PDF even when ABC names
+    # it as the main text's source.
     context = await _dev_context(monkeypatch, "WB")
     abc = _MixedReferenceABC(bound=True)
 
@@ -363,8 +374,8 @@ async def test_service_reader_uses_only_artifacts_bound_to_the_authorized_pdf(mo
 
     assert decision.status is ReferenceImportDecisionStatus.READY
     assert decision.selected.source_artifact.artifact_id == "40"
-    assert decision.selected.converted_artifact.artifact_id == "41"
-    assert [artifact.artifact_id for artifact in decision.selected.provider_metadata_artifacts] == ["42"]
+    assert decision.selected.converted_artifact is None
+    assert decision.selected.provider_metadata_artifacts == ()
     assert abc.conversion_requests() == []
 
 
@@ -386,7 +397,8 @@ async def test_curator_bearer_keeps_reference_level_artifact_selection():
     assert decision.status is ReferenceImportDecisionStatus.READY
     assert decision.selected.source_artifact.artifact_id == "40"
     assert decision.selected.converted_artifact.artifact_id == "30"
-    assert [artifact.artifact_id for artifact in decision.selected.provider_metadata_artifacts] == ["31"]
+    # Figure metadata named for another PDF is never used for this one.
+    assert decision.selected.provider_metadata_artifacts == ()
 
 
 class _MixedChecksumABC(_AllAccessABC):

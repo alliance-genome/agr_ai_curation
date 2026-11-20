@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Self
 
 import pytest
@@ -288,7 +289,10 @@ def _provider_metadata(
 
 def test_provider_metadata_artifacts_for_source_filters_by_class_and_display_prefix():
     provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
-    source = _source("paper", provider="abc_literature")
+    source = replace(
+        _source("paper", provider="abc_literature"),
+        metadata={"file_class": "main", "file_extension": "pdf"},
+    )
     main_metadata = _provider_metadata(
         "main-meta",
         display_name="paper_image_001",
@@ -340,7 +344,10 @@ async def test_checksum_match_provider_policy_can_require_exact_local_pdf():
 
 def test_provider_metadata_artifacts_for_source_prefers_exact_png_sidecar_match():
     provider = ABCLiteratureDocumentSourceProvider(client=None)  # type: ignore[arg-type]
-    source = _source("paper", provider="abc_literature")
+    source = replace(
+        _source("paper", provider="abc_literature"),
+        metadata={"file_class": "main", "file_extension": "pdf"},
+    )
     figure_png = SourceArtifact(
         provider="abc_literature",
         artifact_id="fig-png-1",
