@@ -277,6 +277,7 @@ def _serialize_match_range(match_range: MatchRange | None) -> PdfViewerFuzzyMatc
 @router.post("/evidence/fuzzy-match", response_model=PdfViewerFuzzyMatchResponse)
 def fuzzy_match_pdf_evidence_quote(
     request: PdfViewerFuzzyMatchRequest,
+    user: dict = get_auth_dependency(),
 ) -> PdfViewerFuzzyMatchResponse:
     result = match_quote_to_pdf_pages(
         request.quote,
