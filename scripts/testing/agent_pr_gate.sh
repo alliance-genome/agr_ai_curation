@@ -275,6 +275,12 @@ run_path_scoped_check \
   scripts/testing/llm_provider_smoke_local.sh scripts/tests/test_llm_provider_smoke_local.sh
 
 run_path_scoped_check \
+  "collect-agent-evidence-shell-regression-suite" \
+  "bash scripts/tests/test_collect_agent_evidence.sh" \
+  "scripts/utilities/collect_agent_evidence.sh, scripts/tests/test_collect_agent_evidence.sh" \
+  scripts/utilities/collect_agent_evidence.sh scripts/tests/test_collect_agent_evidence.sh
+
+run_path_scoped_check \
   "agent-lsp-diagnostics-shell-regression-suite" \
   "bash scripts/tests/test_agent_lsp_diagnostics.sh" \
   "scripts/utilities/agent_lsp.py, scripts/tests/test_agent_lsp_diagnostics.sh, scripts/tests/test_agent_lsp_typescript_prep.sh" \

@@ -10,7 +10,7 @@ _Primary goal: give engineers (or LLM agents) everything required to exercise th
 5. [Document Lifecycle API (`/weaviate/documents`)](#document-lifecycle-api-weaviatedocuments)
 6. [Chunk & Search API (`/weaviate/documents/{id}/chunks`)](#chunk--search-api)
 7. [Processing Controls (`/weaviate/documents/{id}/reprocess|reembed`)](#processing-controls)
-8. [Settings, Schema, and Chunking Strategies (`/weaviate`)](#settings-schema-and-chunking-strategies)
+8. [Settings and Schema (`/weaviate`)](#settings-and-schema)
 9. [Health & Monitoring (`/weaviate/health|readiness`)](#health--monitoring)
 10. [Feedback API (`/api/feedback`)](#feedback-api)
 11. [User & Auth Utilities (`/api/auth`, `/api/users`)](#user--auth-utilities)
@@ -177,7 +177,7 @@ If Okta isn't configured and `DEV_MODE=false`, protected endpoints return `401` 
 | Documents | GET/POST/DELETE | `/weaviate/documents*` | Upload PDFs (multipart), list, inspect, delete, download artifacts. |
 | Processing | POST/GET | `/weaviate/documents/{id}/status`, `/progress/stream`, `/reprocess`, `/reembed` | Track pipeline or trigger re-processing. |
 | Chunks | GET | `/weaviate/documents/{id}/chunks` | Paginated chunk + provenance retrieval. |
-| Config | GET/PUT | `/weaviate/settings`, `/weaviate/schema`, `/weaviate/chunking-strategies` | Inspect/update embeddings & schema. |
+| Config | GET/PUT | `/weaviate/settings`, `/weaviate/schema` | Inspect/update embeddings & schema. |
 | Health | GET | `/weaviate/health`, `/weaviate/readiness`, `/weaviate/documents/pdf-extraction-health` | Service readiness + PDF extraction connectivity. |
 | Feedback | POST | `/api/feedback/submit` | Two-phase handler (fast ack + background Langfuse enrichment). |
 | Users/Auth | GET/POST | `/api/users/me`, `/api/auth/login|logout|callback` | Identity & tokens. |
@@ -428,7 +428,7 @@ curl -X POST http://localhost:8000/weaviate/documents/$DOC_ID/reprocess \
   -H 'Content-Type: application/json' \
   -d '{"strategy_name": "research", "force_reparse": false}' | jq
 ```
-- `strategy_name`: must match one of `/weaviate/chunking-strategies` (e.g., `research` default).
+- `strategy_name`: must name a strategy configured in `backend/src/lib/pdf_processing/strategies.py` (e.g., `research` default).
 - `force_reparse`: true to re-run PDF extraction parsing instead of reusing stored JSON.
 
 ### 2. Re-embed
@@ -449,7 +449,7 @@ curl -X POST http://localhost:8000/weaviate/documents/$DOC_ID/reembed \
 
 ---
 
-## Settings, Schema, and Chunking Strategies
+## Settings and Schema
 
 ### Embedding + database settings
 ```bash
@@ -477,12 +477,6 @@ curl -X PUT http://localhost:8000/weaviate/schema \
   -d '{"vectorIndexConfig": {"distance": "cosine", "ef": 256}}'
 ```
 Payload validation ensures supported `dataType`s and HNSW parameters. Destructive changes should only occur during maintenance windows.
-
-### Chunking strategies catalogue
-```bash
-curl http://localhost:8000/weaviate/chunking-strategies | jq
-```
-Returns the statically configured strategies from `lib/pdf_processing/strategies.py` (fields: `name`, `method`, `max_characters`, `overlap`, `is_default`, `description`).
 
 ---
 

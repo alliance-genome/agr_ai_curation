@@ -14,7 +14,6 @@ __all__ = [
     "documents",
     "chunks",
     "processing",
-    "strategies",
     "settings",
     "schema",
     "health",
