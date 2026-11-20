@@ -265,7 +265,9 @@ def get_responses_input_item_id_retries() -> int:
     try of that call, is at most this value: with the default 1 it is resent
     only when the refusal is the call's first failure. 0 turns the resend off.
     The same window applies to the refusal of one replayed input position
-    (param ``input[N]``, ALL-1558), which a resend also clears.
+    (param ``input[N]``, ALL-1558) and to the refusal of a tool namespace on a
+    reused connection (param ``tools[N]``, ALL-1599), which a resend over a
+    fresh connection also clears.
     ``OPENAI_MODEL_MAX_RETRIES`` still bounds every runner-managed retry.
     """
 
@@ -665,6 +667,11 @@ RESPONSES_INPUT_ITEM_IDS_REFUSED = "responses_input_item_ids_refused"
 RESPONSES_REASONING_INPUT_REFUSED = "responses_reasoning_input_refused"
 # The provider's structured ``param`` for one input position, e.g. ``input[2]``.
 _INDEXED_INPUT_PARAM = re.compile(r"input\[(0|[1-9][0-9]*)\]")
+# Stable log marker and retry reason for a resent request OpenAI refused for a
+# tool namespace (hosted tool search) on a reused websocket connection (ALL-1599).
+RESPONSES_TOOL_NAMESPACE_REFUSED = "responses_tool_namespace_refused"
+# The provider's structured ``param`` for one tool position, e.g. ``tools[15]``.
+_INDEXED_TOOLS_PARAM = re.compile(r"tools\[(0|[1-9][0-9]*)\]")
 
 
 def unsupported_parameter_frame_param(error: object) -> Optional[str]:
@@ -696,6 +703,13 @@ def is_reasoning_input_refusal(error: object) -> bool:
 
     param = unsupported_parameter_frame_param(error)
     return param is not None and _INDEXED_INPUT_PARAM.fullmatch(param) is not None
+
+
+def is_tool_namespace_refusal(error: object) -> bool:
+    """Whether OpenAI refused one tool position (param ``tools[N]``) (ALL-1599)."""
+
+    param = unsupported_parameter_frame_param(error)
+    return param is not None and _INDEXED_TOOLS_PARAM.fullmatch(param) is not None
 
 
 def build_default_model_retry():
@@ -811,6 +825,37 @@ def build_default_model_retry():
         )
         return RetryDecision(retry=True, reason=RESPONSES_REASONING_INPUT_REFUSED)
 
+    def retry_responses_tool_namespace_refused(context):
+        """Resend, unchanged, a request refused for one tool namespace (ALL-1599).
+
+        Since about 2026-11-20 01:00 UTC OpenAI sometimes refuses a request whose
+        tools carry a namespace (hosted tool search) with ``invalid_request_error``,
+        ``unsupported_parameter`` and param ``tools[N]``, the first namespace's
+        position, when the request is not the first on its websocket connection;
+        the same request on a fresh connection was accepted. Any non-negative ``N``
+        matches. Same typed-field match, resend window (the shared
+        ``OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES``), runner safeguards and fresh
+        connection (the SDK drops the refused one) as the other two refusals. The
+        log names the structured param, never the frame message.
+        """
+        from agents.retry import RetryDecision
+
+        if not is_tool_namespace_refusal(context.error):
+            return False
+        if context.attempt > input_item_id_retries:
+            return False
+        param = unsupported_parameter_frame_param(context.error)
+        logger.warning(
+            "%s: resending a Responses request refused for tool namespace param %s "
+            "(retry attempt %s, resend window %s)",
+            RESPONSES_TOOL_NAMESPACE_REFUSED,
+            param,
+            context.attempt,
+            input_item_id_retries,
+            extra={"retry_marker": RESPONSES_TOOL_NAMESPACE_REFUSED, "refused_param": param},
+        )
+        return RetryDecision(retry=True, reason=RESPONSES_TOOL_NAMESPACE_REFUSED)
+
     try:
         max_retries = int(os.getenv("OPENAI_MODEL_MAX_RETRIES", "3"))
     except ValueError:
@@ -828,12 +873,13 @@ def build_default_model_retry():
             retry_responses_websocket_overload,
             retry_responses_input_item_ids_refused,
             retry_responses_reasoning_input_refused,
+            retry_responses_tool_namespace_refused,
             retry_policies.retry_after(),
             retry_policies.network_error(),
             retry_policies.http_status(list(_DEFAULT_RETRY_HTTP_STATUSES)),
         ),
         {
-            "id": "agr.default_model_retry", "revision": 2,
+            "id": "agr.default_model_retry", "revision": 3,
             "sdk_version": version("openai-agents"),
             "any": [
                 "provider_suggested",
@@ -847,6 +893,10 @@ def build_default_model_retry():
                 {"id": "responses_reasoning_input_refused", "revision": 1,
                  "event_type": "error", "error_type": "invalid_request_error",
                  "code": "unsupported_parameter", "param": "input[N]",
+                 "max_resends": input_item_id_retries, "approves_replay": False},
+                {"id": "responses_tool_namespace_refused", "revision": 1,
+                 "event_type": "error", "error_type": "invalid_request_error",
+                 "code": "unsupported_parameter", "param": "tools[N]",
                  "max_resends": input_item_id_retries, "approves_replay": False},
                 "retry_after", "network_error",
                 {"http_status": list(_DEFAULT_RETRY_HTTP_STATUSES)},
