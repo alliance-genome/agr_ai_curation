@@ -38,7 +38,7 @@ def require_owned_document(
         statement = statement.with_for_update()
     document = db.execute(statement).scalar_one_or_none()
     # Benchmark runtime copies belong to a curator for normal internal tool
-    # scoping, but are not editable/reprocessable curator-library documents.
+    # scoping, but are not editable curator-library documents.
     # Internal ingestion and document tools have separate owned read paths.
     if document is None or document.document_kind != DOCUMENT_KIND_LIBRARY:
         raise HTTPException(

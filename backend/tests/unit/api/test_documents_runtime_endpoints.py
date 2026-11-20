@@ -422,7 +422,7 @@ async def test_update_document_endpoint_rejects_active_processing_rename(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_update_document_endpoint_rejects_current_indexed_reprocess_with_terminal_prior_job(
+async def test_update_document_endpoint_rejects_current_indexed_reembed_with_terminal_prior_job(
     monkeypatch,
 ):
     document_id = str(uuid4())

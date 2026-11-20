@@ -267,7 +267,7 @@ def _canonical_processing_status(
         ProcessingStatus.EMBEDDING.value,
         ProcessingStatus.STORING.value,
     }
-    # A reprocess can update the indexed state before the SQL worker reaches
+    # A re-embed can update the indexed state before the SQL worker reaches
     # its first stage. Do not let an older completed job mask that current work.
     if indexed_status in active_statuses:
         return indexed_status

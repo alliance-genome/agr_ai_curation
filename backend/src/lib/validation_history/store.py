@@ -98,7 +98,7 @@ def _authorize(db, scope: HistoryScope):
         )
     )
     # History is an internal owned read/append surface, not a library edit or
-    # reprocessing route. Frozen benchmark copies retain their normal owner.
+    # re-embed route. Frozen benchmark copies retain their normal owner.
     if document is None:
         raise HistoryAccessError("Validation history source is not accessible")
     return document
