@@ -16,7 +16,7 @@ from copy import deepcopy
 from typing import Optional, List, Dict, Any, Tuple, Literal, Annotated, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, field_validator, model_validator
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 from agr_ai_curation_runtime.agr_lookup import (
     LOOKUP_STATUS_AMBIGUOUS,
@@ -459,7 +459,7 @@ class GeneExpressionFindInput(_StrictToolModel):
 
 
 class GeneExpressionFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(max_length=50)
+    candidate_ids: List[StrictStr]
 
 
 # Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
@@ -4535,7 +4535,7 @@ def _materialize_gene_expression_with_events(
 
 
 def _finalize_gene_expression_extraction_impl(
-    candidate_ids: Annotated[List[str], Field(max_length=50)],
+    candidate_ids: List[str],
 ) -> AgrQueryResult:
     """Finalize staged gene-expression candidates through the builder handoff contract.
 

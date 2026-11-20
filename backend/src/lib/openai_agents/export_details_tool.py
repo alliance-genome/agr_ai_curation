@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 
 from src.lib.context import get_current_session_id, get_current_user_id
 from src.lib.export_accounting import (

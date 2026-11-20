@@ -1,3 +1,4 @@
+from tests.sdk_tool_context_support import tool_context
 import json
 from copy import deepcopy
 from types import SimpleNamespace
@@ -224,7 +225,7 @@ def _tool_by_name(tools, name: str):
 
 
 async def _invoke(tool, payload: dict | None = None) -> dict:
-    tool_ctx = SimpleNamespace(tool_name=getattr(tool, "name", "tool"))
+    tool_ctx = tool_context(getattr(tool, "name", "tool"))
     raw = await tool.on_invoke_tool(tool_ctx, json.dumps(payload or {}))
     if isinstance(raw, str):
         return json.loads(raw)

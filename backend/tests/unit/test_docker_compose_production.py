@@ -549,6 +549,7 @@ def test_native_compaction_controls_reach_standalone_backend():
     for name, default in (
         ("AGENT_CONTEXT_COMPACTION_ENABLED", "true"),
         ("AGENT_CONTEXT_COMPACTION_TOKEN_THRESHOLD", "250000"),
+        ("AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS", "20000"),
     ):
         for service in ("backend", "benchmark_worker"):
             environment = _load_compose()["services"][service]["environment"]

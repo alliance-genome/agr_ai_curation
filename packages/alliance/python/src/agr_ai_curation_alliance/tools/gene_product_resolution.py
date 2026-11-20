@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping
 from typing import Any, Literal
 
 import requests
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from agr_ai_curation_runtime import get_curation_resolver

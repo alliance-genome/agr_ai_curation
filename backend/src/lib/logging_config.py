@@ -174,6 +174,9 @@ def configure_logging() -> None:
 
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # The OpenAI client (openai 3) sends requests through httpx2/httpcore2.
+    logging.getLogger("httpcore2").setLevel(logging.WARNING)
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("langfuse").setLevel(logging.WARNING)
     suppress_sensitive_aws_sdk_debug_logging()

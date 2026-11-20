@@ -1,4 +1,5 @@
 """Unit tests for /api/chat/execute-flow endpoint streaming behavior."""
+from tests.sdk_tool_context_support import tool_context
 from unittest.mock import AsyncMock
 
 import asyncio
@@ -3045,7 +3046,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
             from agents import UserError
             try:
                 await specialist_tool.on_invoke_tool(
-                    SimpleNamespace(tool_name=specialist_tool.name, run_config=None),
+                    tool_context(specialist_tool.name, run_config=None),
                     json.dumps({"query": "extract"}),
                 )
             except ResponsesWebSocketError as cause:

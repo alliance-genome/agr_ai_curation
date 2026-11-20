@@ -1643,7 +1643,8 @@ def run_package_scoped_validator_agent(
 ) -> Any:
     """Execute the package-owned validator through the unified agent runtime."""
 
-    from agents import AgentOutputSchema, function_tool
+    from agents import AgentOutputSchema
+    from agr_ai_curation_runtime.function_tools import function_tool
 
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,
@@ -1879,7 +1880,8 @@ def run_package_scoped_validator_agent_batch(
 ) -> Any:
     """Execute one package validator batch through the unified agent runtime."""
 
-    from agents import AgentOutputSchema, function_tool
+    from agents import AgentOutputSchema
+    from agr_ai_curation_runtime.function_tools import function_tool
 
     from src.lib.config.agent_loader import (
         canonical_system_agent_key,

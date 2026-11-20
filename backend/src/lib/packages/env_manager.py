@@ -21,6 +21,10 @@ from .paths import (
 )
 from .registry import LoadedPackage
 
+# Packages an isolated environment shares with the backend resolve to the backend's
+# exact versions: the backend lock is the pip constraints file for every install.
+BACKEND_DEPENDENCY_LOCK = Path(__file__).resolve().parents[3] / "requirements.lock.txt"
+
 
 @dataclass(frozen=True)
 class PackageEnvironment:
@@ -53,10 +57,16 @@ class PackageEnvironmentBootstrapError(RuntimeError):
 class PackageEnvironmentManager:
     """Create and reuse one isolated virtual environment per package."""
 
-    def __init__(self, *, host_python: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        host_python: Path | None = None,
+        constraints_path: Path = BACKEND_DEPENDENCY_LOCK,
+    ) -> None:
         self._host_python = (host_python or Path(sys.executable)).expanduser().resolve(
             strict=False
         )
+        self._constraints_path = constraints_path
 
     def ensure_environment(self, package: LoadedPackage) -> PackageEnvironment:
         """Create or reuse the virtual environment for one loaded package."""
@@ -70,8 +80,15 @@ class PackageEnvironmentManager:
                 details={"requirements_path": str(requirements_path)},
             )
 
+        if not self._constraints_path.is_file():
+            raise PackageEnvironmentBootstrapError(
+                package.package_id,
+                f"Backend dependency lock not found: {self._constraints_path}",
+                details={"constraints_path": str(self._constraints_path)},
+            )
         requirements_text = requirements_path.read_text(encoding="utf-8")
-        fingerprint = self._build_fingerprint(package, requirements_text)
+        constraints_text = self._constraints_path.read_text(encoding="utf-8")
+        fingerprint = self._build_fingerprint(package, requirements_text, constraints_text)
 
         state_dir = get_package_runner_package_state_dir(package.package_id)
         venv_dir = get_package_runner_venv_dir(package.package_id)
@@ -123,6 +140,8 @@ class PackageEnvironmentManager:
                         "install",
                         "-r",
                         str(requirements_path),
+                        "-c",
+                        str(self._constraints_path),
                     ],
                     package_id=package.package_id,
                     step="install_requirements",
@@ -135,6 +154,10 @@ class PackageEnvironmentManager:
                 "requirements_path": str(requirements_path),
                 "requirements_sha256": hashlib.sha256(
                     requirements_text.encode("utf-8")
+                ).hexdigest(),
+                "constraints_path": str(self._constraints_path),
+                "constraints_sha256": hashlib.sha256(
+                    constraints_text.encode("utf-8")
                 ).hexdigest(),
                 "python_package_root": package.manifest.python_package_root,
                 "python_executable": str(python_executable),
@@ -154,8 +177,13 @@ class PackageEnvironmentManager:
                 reused=False,
             )
 
-    def _build_fingerprint(self, package: LoadedPackage, requirements_text: str) -> str:
+    def _build_fingerprint(
+        self, package: LoadedPackage, requirements_text: str, constraints_text: str
+    ) -> str:
         payload = {
+            "constraints_sha256": hashlib.sha256(
+                constraints_text.encode("utf-8")
+            ).hexdigest(),
             "package_id": package.package_id,
             "package_version": package.version,
             "python_package_root": package.manifest.python_package_root,

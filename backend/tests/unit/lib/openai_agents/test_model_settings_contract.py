@@ -33,7 +33,7 @@ def test_real_default_policy_is_stable_and_retains_live_settings(monkeypatch):
     assert recorded["retry"]["backoff"] == first.retry.backoff.to_json_dict()
     policy = recorded["retry"]["policy"]
     assert policy["id"] == "agr.default_model_retry"
-    assert policy["revision"] == 2
+    assert policy["revision"] == 3
     assert policy["sdk_version"]
     assert policy["any"][-1] == {"http_status": [408, 409, 429, 500, 502, 503, 504]}
     refused, = [item for item in policy["any"]
@@ -46,8 +46,14 @@ def test_real_default_policy_is_stable_and_retains_live_settings(monkeypatch):
     assert reasoning == {"id": "responses_reasoning_input_refused", "revision": 1, "event_type": "error",
                          "error_type": "invalid_request_error", "code": "unsupported_parameter",
                          "param": "input[N]", "max_resends": 1, "approves_replay": False}
+    namespace, = [item for item in policy["any"]
+                  if isinstance(item, dict) and item.get("id") == "responses_tool_namespace_refused"]
+    assert namespace == {"id": "responses_tool_namespace_refused", "revision": 1, "event_type": "error",
+                         "error_type": "invalid_request_error", "code": "unsupported_parameter",
+                         "param": "tools[N]", "max_resends": 1, "approves_replay": False}
     ids = [item.get("id") if isinstance(item, dict) else item for item in policy["any"]]
     assert ids.index("responses_reasoning_input_refused") == ids.index("responses_input_item_ids_refused") + 1
+    assert ids.index("responses_tool_namespace_refused") == ids.index("responses_reasoning_input_refused") + 1
     monkeypatch.setenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES", "2")
     assert recorded != model_settings_contract(settings()), "a resend change is a pinned behaviour change"
     monkeypatch.delenv("OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES")

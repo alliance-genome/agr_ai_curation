@@ -19,7 +19,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, cast, get_args
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from agents.agent import ToolsToFinalOutputResult
 from pydantic import BaseModel, ValidationError
 

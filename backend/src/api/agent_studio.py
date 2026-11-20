@@ -22,7 +22,7 @@ import boto3
 import openai
 from agents import FunctionTool, MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
@@ -35,6 +35,7 @@ from .agent_studio_schemas import (
     CatalogResponse,
     ChatRequest,
     StopAgentStudioRequest,
+    StudioStreamProtocolReport,
     CloneAgentRequest,
     CombinedPromptRequest,
     CombinedPromptResponse,
@@ -4439,6 +4440,21 @@ async def chat_with_opus(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/chat/protocol-error", status_code=204, dependencies=[get_auth_dependency()])
+def report_studio_stream_protocol_error(report: StudioStreamProtocolReport) -> Response:
+    tags = {"failure_category": report.reason}
+    if report.session_id_hash is not None:
+        tags["ai_curation.chat.session_id_hash"] = report.session_id_hash
+    report_runtime_exception(
+        sanitized_runtime_error("Agent Studio stream protocol failure"),
+        component="agent_studio",
+        operation="chat_stream_protocol",
+        tags=tags,
+        fingerprint=["agent_studio", "chat_stream_protocol", report.reason],
+    )
+    return Response(status_code=204)
 
 
 @router.post("/chat/stop")

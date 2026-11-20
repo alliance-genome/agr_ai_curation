@@ -30,8 +30,8 @@ import re
 import time
 from typing import TYPE_CHECKING, Awaitable, Optional, List, Literal, Dict, Any, Callable, Sequence
 
-from agents import Agent, ModelSettings, RunConfig, RunContextWrapper, function_tool
-from agents.tool import default_tool_error_function
+from agents import Agent, ModelSettings, RunConfig, RunContextWrapper
+from agr_ai_curation_runtime.function_tools import function_tool, model_visible_tool_error
 
 from ..provider_errors import (
     chat_policy_failure,
@@ -940,7 +940,7 @@ def _create_streaming_tool(
                 trace_id=get_current_trace_id(), session_id=get_current_session_id(),
             )
             return json.dumps(chat_policy_failure())
-        return default_tool_error_function(ctx, error)
+        return model_visible_tool_error(ctx, error)
 
     tool_decorator = function_tool(
         name_override=tool_name,

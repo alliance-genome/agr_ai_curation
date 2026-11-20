@@ -828,6 +828,14 @@ Add explicit Sentry captures at meaningful application failure boundaries.
 
 ## Frontend Capture
 
+The Studio SSE reader posts unexpected protocol failures to the authenticated
+`POST /api/agent-studio/chat/protocol-error` endpoint. The backend runtime
+facade groups these events by failure category under `chat_stream_protocol`.
+The request accepts only the parser's reason and an optional session hash
+computed in the browser (the first 16 hex digits of SHA-256, prefixed with
+`sha256:`). Chat recovery proceeds independently of report delivery. Expected
+terminal events, including Stop, complete without a report.
+
 Frontend/browser Sentry capture is optional and currently deferred unless a
 dedicated frontend DSN and redaction plan are added. Do not enable browser
 session replay or capture curator-entered form/document text without a separate

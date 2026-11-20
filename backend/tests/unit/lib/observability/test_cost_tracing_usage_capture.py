@@ -12,7 +12,7 @@ import copy
 import json
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2
 import pytest
 from agents import (
     Agent,
@@ -26,6 +26,7 @@ from agents import (
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.retry import ModelRetrySettings
 from openai import APIConnectionError, AsyncOpenAI
+from openai._models import construct_type
 from openai.types.responses import Response, ResponseCompletedEvent
 from openinference.instrumentation import OITracer
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
@@ -88,7 +89,9 @@ def published(monkeypatch):
 
 
 def _response(*, response_id="resp_1", usage=USAGE, tools=(), output_messages=1):
-    return Response.model_validate({
+    # Build like the runtime: openai and the Agents SDK parse provider payloads with the
+    # lenient construct_type, so usage that omits cache_write_tokens stays omitted.
+    return construct_type(type_=Response, value={
         "id": response_id, "created_at": 1, "object": "response", "model": "gpt-test-2026-09",
         "status": "completed", "parallel_tool_calls": False, "tool_choice": "auto",
         "tools": [
@@ -218,7 +221,11 @@ def test_payload_free_trace_records_usage_from_the_sdk_span(exporter, published)
     assert cost["usage_status"] == "recorded"
     assert cost["model_request_id"] == published[0]["measurement_id"]
     assert span.attributes["llm.model_name"] == "gpt-test"
-    assert json.loads(span.attributes["langfuse.observation.usage_details"]) == EXCLUSIVE
+    # The SDK span's Usage (openai-agents 0.18.1+) always carries cache_write_tokens,
+    # reporting 0 when the provider payload omitted it.
+    assert json.loads(span.attributes["langfuse.observation.usage_details"]) == {
+        **EXCLUSIVE, "input_cache_creation": 0,
+    }
 
 
 def test_cancelled_stream_records_explicit_cancelled_status(exporter, published, cost_failure_report):
@@ -260,7 +267,7 @@ def test_cancelled_stream_records_explicit_cancelled_status(exporter, published,
 
 
 def test_retried_turn_records_failed_attempt_and_usage_once(exporter, published, cost_failure_report):
-    failure = APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    failure = APIConnectionError(request=httpx2.Request("POST", "https://api.openai.com/v1/responses"))
     agent = _agent(
         _FakeResponsesModel([failure, _response()]),
         retry=ModelRetrySettings(max_retries=2, policy=lambda _context: True),

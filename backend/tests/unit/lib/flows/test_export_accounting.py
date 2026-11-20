@@ -1,5 +1,6 @@
 """Measured export stages and durable diagnostic receipts (ALL-1391)."""
 
+from tests.sdk_tool_context_support import tool_context
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -139,7 +140,7 @@ async def test_intentional_empty_export_vs_absent_source(count, removed, success
     finalizer = next(t for t in tools if t.name == "finalize_and_save")
     payload = json.loads(
         await finalizer.on_invoke_tool(
-            SimpleNamespace(tool_name=finalizer.name),
+            tool_context(finalizer.name),
             json.dumps({"plan_json": plan().model_dump_json()}),
         )
     )
@@ -149,7 +150,7 @@ async def test_intentional_empty_export_vs_absent_source(count, removed, success
         assert payload["export_accounting"]["counts"]["exported_row_count"] == 0
         duplicate = json.loads(
             await finalizer.on_invoke_tool(
-                SimpleNamespace(tool_name=finalizer.name), "{}"
+                tool_context(finalizer.name), "{}"
             )
         )
         assert (
@@ -308,7 +309,7 @@ async def test_parallel_formatter_receipts_keep_counts_and_warnings_isolated():
         tool = next(t for t in tools if t.name == "finalize_and_save")
         return json.loads(
             await tool.on_invoke_tool(
-                SimpleNamespace(tool_name=tool.name),
+                tool_context(tool.name),
                 json.dumps({"plan_json": plan().model_dump_json()}),
             )
         )
@@ -361,7 +362,7 @@ async def test_multisection_chat_all_filtered_is_intentional_empty():
     }
     out = json.loads(
         await tool.on_invoke_tool(
-            SimpleNamespace(tool_name=tool.name),
+            tool_context(tool.name),
             json.dumps({"report_json": json.dumps(report)}),
         )
     )
@@ -396,7 +397,7 @@ async def test_empty_report_requires_each_section_to_be_intentionally_filtered()
     }
     out = json.loads(
         await tool.on_invoke_tool(
-            SimpleNamespace(tool_name=tool.name),
+            tool_context(tool.name),
             json.dumps({"report_json": json.dumps(report)}),
         )
     )

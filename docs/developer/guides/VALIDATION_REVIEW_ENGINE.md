@@ -475,6 +475,16 @@ selected checkpoint. Curation preparation checks that checkpoint against the sam
 source hash and refuses pending results. Initial validation is not repeated by
 curation bootstrap.
 
+A saved plan (`review_chat_plan`) and each selected-source plan
+(`review_source_plan`) store every part their matches share once: the record
+set a match was built on, its binding, object definition, field definition and
+policy live in the body's `match_parts`, keyed by the SHA-256 of their canonical
+JSON, and a saved match names those keys plus its object's position in the
+envelope (`saved_matches.py`). A match on the body's own `envelope` names it
+instead of storing a copy. Plan size therefore grows with the record count, not
+with matches times records. Reading rebuilds every match of a body once on one
+parsed copy of each part.
+
 Candidate recipes retain the authenticated group context used for that exact
 validator execution, separately from the scientific request and original plan.
 Group-scoped bindings record normalized groups; unscoped bindings record explicit

@@ -10,6 +10,7 @@ unchanged.
 """
 
 from __future__ import annotations
+from tests.sdk_tool_context_support import tool_context
 
 import importlib
 import json
@@ -239,7 +240,7 @@ def run_output_step(install_formatter):
         events: list[dict[str, Any]] = []
         set_live_event_list(events)
         try:
-            ctx = SimpleNamespace(tool_name=_TOOL_NAME, run_config=RunConfig(tracing_disabled=True))
+            ctx = tool_context(_TOOL_NAME, run_config=RunConfig(tracing_disabled=True))
             result = await tool.on_invoke_tool(
                 ctx,
                 json.dumps({"query": "Export the saved results", "output_filename_descriptor": "expression"}),
@@ -288,8 +289,8 @@ def run_chat_output_step(install_formatter, monkeypatch):
         set_live_event_list(events)
         try:
             with chat_output_delivery_scope() as delivery:
-                ctx = SimpleNamespace(
-                    tool_name=_CHAT_TOOL_NAME, run_config=RunConfig(tracing_disabled=True)
+                ctx = tool_context(
+                    _CHAT_TOOL_NAME, run_config=RunConfig(tracing_disabled=True)
                 )
                 result = await tool.on_invoke_tool(ctx, json.dumps({"query": "Show the table"}))
         finally:

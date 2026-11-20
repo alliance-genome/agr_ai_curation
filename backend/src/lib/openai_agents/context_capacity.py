@@ -1,6 +1,8 @@
 """Capacity recovery for native Responses requests; no per-tool context quota.
 
-A request whose byte-bounded wire body fits the token capacity needs no count.
+A request whose byte-bounded wire body fits the input limit needs no count. The
+input limit is the model's verified input capacity minus a configured headroom, so
+no request is sent at the exact provider limit.
 Otherwise the token-counting endpoint measures the SDK's actual wire input.
 Native compaction handles the ordinary threshold. This module acts only when a
 request would exceed the configured model's verified input/context capability.
@@ -94,7 +96,7 @@ async def fitting_closed_prefix(request, items, stop, *, after=0):
     low, high = 0, len(boundaries)
     while low < high:
         mid = (low + high + 1) // 2
-        if await request.count(items[:boundaries[mid - 1]]) <= request.capacity:
+        if await request.count(items[:boundaries[mid - 1]]) <= request.input_limit:
             low = mid
         else:
             high = mid - 1
@@ -241,14 +243,15 @@ class ContextCapacityPolicy:
         request_bytes = request.provable_fit_bytes(prepared)
         count = None if request_bytes is not None else await request.count(prepared)
         self.metrics = {"input_tokens_before": count, "input_capacity": request.capacity,
+            "input_limit": request.input_limit,
             "count_skipped": count is None, "request_bytes": request_bytes,
             "standalone_compactions": 0, "capacity_ingress_payloads": 0}
-        if count is not None and count > request.capacity:
+        if count is not None and count > request.input_limit:
             if self.history is None or not self.history.healthy:
                 from .model_context_view import HistoryStorageUnavailable
                 raise HistoryStorageUnavailable("Exact context storage is required before capacity recovery.")
             compacted_prefix_size = 0
-            while count > request.capacity:
+            while count > request.input_limit:
                 stop = pending_start(prepared)
                 # /compact input must fit too. Each iteration consumes additional
                 # original history; opaque state alone is never retried.
@@ -264,7 +267,7 @@ class ContextCapacityPolicy:
                 prepared, count = candidate, after
                 compacted_prefix_size = len(compacted)
                 self.metrics["standalone_compactions"] += 1
-            if count > request.capacity:
+            if count > request.input_limit:
                 if self.history is None or not request.has_context_tool:
                     raise ContextRecoveryError("This runtime has no exact context-ingestion tool for an input larger than model capacity.")
                 # Only actual overflow reaches this path. Consider text anywhere
@@ -315,11 +318,11 @@ class ContextCapacityPolicy:
                     prepared, count = candidate, after
                     queued.append((index, PendingPayload(ref, body, source)))
                     self.metrics["capacity_ingress_payloads"] += 1
-                    if count <= request.capacity:
+                    if count <= request.input_limit:
                         break
                 self.pending.extend(payload for _, payload in sorted(queued, key=lambda entry: entry[0]))
                 count = await request.count(prepared)
-                if count > request.capacity or not self.pending:
+                if count > request.input_limit or not self.pending:
                     raise ContextRecoveryError("The request's instructions, tool definitions, or non-text inputs exceed model capacity; textual ingestion cannot reduce them.")
             self.state_dirty = True
         self.last_input, self.last_output = deepcopy(prepared), []
@@ -356,7 +359,7 @@ class ContextCapacityPolicy:
                                         [*self.last_input, *self.last_output])
 
     async def next_page(self, call_id: str) -> dict:
-        """Return the largest exact page fitting this actual request's capacity."""
+        """Return the largest exact page fitting this actual request's input limit."""
         from .context_compaction import compacted_window
         from .model_context_view import ContextRecoveryError
         if not self.pending or self.request is None:
@@ -369,7 +372,7 @@ class ContextCapacityPolicy:
             return {**payload.page(end), "pending_payloads": len(self.pending) - int(end == len(payload.body))}
         def with_page(end):
             return [*prefix, {"type": "function_call_output", "call_id": call_id, "output": str(render(end))}]
-        if await self.request.count(with_page(payload.cursor + 1)) > self.request.capacity:
+        if await self.request.count(with_page(payload.cursor + 1)) > self.request.input_limit:
             stop = pending_start(prefix + [{"type": "function_call_output", "call_id": call_id, "output": ""}])
             boundary = await fitting_closed_prefix(self.request, prefix, stop)
             if not boundary:
@@ -381,7 +384,7 @@ class ContextCapacityPolicy:
         while low < high:
             mid = (low + high + 1) // 2
             proposal = with_page(mid)
-            if await self.request.count(proposal) <= self.request.capacity:
+            if await self.request.count(proposal) <= self.request.input_limit:
                 low = mid
             else:
                 high = mid - 1
@@ -409,7 +412,7 @@ class NativeCapacityRequest:
                  previous_response_id=None, conversation_id=None, prompt=None, compact_call=None):
         from .model_context_view import ContextRecoveryError
         from src.lib.config.models_loader import get_model
-        from .config import get_agent_model_capacity_overrides
+        from .config import get_agent_context_capacity_headroom_tokens, get_agent_model_capacity_overrides
         self.model = model
         self.client = model._get_client()
         self.kwargs = dict(system_instructions=instructions, model_settings=settings,
@@ -429,6 +432,14 @@ class NativeCapacityRequest:
         if type(output_tokens) is not int or not 0 < output_tokens <= limits["max_output_tokens"]:
             raise ContextRecoveryError("Requested output exceeds the configured model's output capability.")
         self.capacity = min(limits["max_input_tokens"], limits["context_window_tokens"] - output_tokens)
+        # Nothing is sent at the exact limit: every fit check uses capacity minus
+        # headroom (AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS).
+        self.headroom = get_agent_context_capacity_headroom_tokens()
+        if self.headroom >= self.capacity:
+            raise ContextRecoveryError(
+                f"AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS ({self.headroom}) must be below the input "
+                f"capacity of {self.effective_model} ({self.capacity}).")
+        self.input_limit = self.capacity - self.headroom
         self.has_context_tool = any(getattr(tool, "name", None) == CONTEXT_READ_TOOL for tool in tools)
         self.compact_call = compact_call
         self.count_calls = 0
@@ -468,14 +479,14 @@ class NativeCapacityRequest:
         """Return the count body's UTF-8 size when it provably fits, else None.
 
         Tokens never outnumber the bytes of a byte-bounded input (see
-        ``byte_bounded_input``), so a body no larger than the token capacity fits.
+        ``byte_bounded_input``), so a body no larger than the input limit fits.
         """
         wire = self._wire(items)
         if not byte_bounded_input(wire["input"]):
             return None
         body = {key: value for key, value in wire.items() if key in _COUNT_FIELDS}
         size = len(exact_json(body).encode("utf-8"))
-        return size if size <= self.capacity else None
+        return size if size <= self.input_limit else None
 
     async def count(self, items):
         wire = self._wire(items)

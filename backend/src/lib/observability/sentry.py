@@ -64,7 +64,7 @@ _TRACE_CONTEXT_KEYS = {
 }
 _TRACE_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{32}$")
 _SPAN_ID_PATTERN = re.compile(r"^[0-9a-fA-F]{16}$")
-_HASHED_IDENTIFIER_PATTERN = re.compile(r"^sha256:[0-9a-f]{16}$")
+SENTRY_IDENTIFIER_HASH_PATTERN = re.compile(r"^sha256:[0-9a-f]{16}$")
 _SAFE_TRACE_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/-]{1,100}$")
 _SAFE_GEN_AI_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9_.:/() -]{1,160}$")
 _TRACE_TEXT_KEYS = {"op", "origin", "status", "type"}
@@ -97,19 +97,28 @@ _ROUTINE_TRANSACTION_NAMES = {
     "/weaviate/documents/{document_id}/status",
 }
 _SUCCESSFUL_TRANSACTION_STATUSES = {"ok"}
-_KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURE = (
-    ("httpx._client", "aclose"),
-    ("httpx._transports.default", "aclose"),
-    ("httpcore._async.connection_pool", "aclose"),
-    ("httpcore._async.connection_pool", "_close_connections"),
-    ("httpcore._async.connection", "aclose"),
-    ("httpcore._async.http11", "aclose"),
-    ("httpcore._backends.anyio", "aclose"),
-    ("anyio.streams.tls", "aclose"),
-    ("anyio._backends._asyncio", "aclose"),
-    ("asyncio.selector_events", "close"),
-    ("asyncio.base_events", "call_soon"),
-    ("asyncio.base_events", "_check_closed"),
+def _httpx_closed_loop_frame_signature(httpx_module: str, httpcore_module: str) -> tuple:
+    return (
+        (f"{httpx_module}._client", "aclose"),
+        (f"{httpx_module}._transports.default", "aclose"),
+        (f"{httpcore_module}._async.connection_pool", "aclose"),
+        (f"{httpcore_module}._async.connection_pool", "_close_connections"),
+        (f"{httpcore_module}._async.connection", "aclose"),
+        (f"{httpcore_module}._async.http11", "aclose"),
+        (f"{httpcore_module}._backends.anyio", "aclose"),
+        ("anyio.streams.tls", "aclose"),
+        ("anyio._backends._asyncio", "aclose"),
+        ("asyncio.selector_events", "close"),
+        ("asyncio.base_events", "call_soon"),
+        ("asyncio.base_events", "_check_closed"),
+    )
+
+
+# Our own HTTP clients use httpx; the OpenAI client (openai 3) uses httpx2, whose
+# close path has the same shape under its own module names.
+_KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURES = (
+    _httpx_closed_loop_frame_signature("httpx", "httpcore"),
+    _httpx_closed_loop_frame_signature("httpx2", "httpcore2"),
 )
 _RUNTIME_IDENTIFIER_CONTEXT_KEYS = {
     "artifact_id",
@@ -978,7 +987,7 @@ def _hash_identifier(value: Any) -> str | None:
     text = value.strip()
     if not text:
         return None
-    if _HASHED_IDENTIFIER_PATTERN.fullmatch(text):
+    if SENTRY_IDENTIFIER_HASH_PATTERN.fullmatch(text):
         return text
     if _scrub_string(text) != text:
         return _REDACTED
@@ -1549,7 +1558,7 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
                 if (
                     canonical_key not in raw_tags
                     and isinstance(value, str)
-                    and _HASHED_IDENTIFIER_PATTERN.fullmatch(value)
+                    and SENTRY_IDENTIFIER_HASH_PATTERN.fullmatch(value)
                 ):
                     scrubbed_tags[canonical_key] = value
             for tag_key in _SENTRY_CORRELATION_TAG_KEYS.values():
@@ -1559,7 +1568,7 @@ def _redact_event(event: dict[str, Any]) -> dict[str, Any]:
                 scrubbed_tags[tag_key] = (
                     tag_value
                     if isinstance(tag_value, str)
-                    and _HASHED_IDENTIFIER_PATTERN.fullmatch(tag_value)
+                    and SENTRY_IDENTIFIER_HASH_PATTERN.fullmatch(tag_value)
                     else _REDACTED
                 )
 
@@ -1974,7 +1983,7 @@ def _is_known_httpcore_closed_loop_cleanup(event: Mapping[str, Any]) -> bool:
         if isinstance(frame, Mapping)
     )
     return (
-        frame_signatures == _KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURE
+        frame_signatures in _KNOWN_HTTPX_CLOSED_LOOP_FRAME_SIGNATURES
         and not any(
             frame.get("in_app") is True
             for frame in frames

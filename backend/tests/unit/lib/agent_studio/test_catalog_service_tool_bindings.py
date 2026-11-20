@@ -1,5 +1,6 @@
 """Unit tests for catalog_service tool binding resolution."""
 
+from tests.sdk_tool_context_support import tool_context
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -977,7 +978,7 @@ async def test_runtime_formatter_context_enforces_enabled_evidence():
     tool = catalog_service.resolve_tools(["validate_output_projection"], context)[0]
     plan = {"format": "csv", "row_source": "object",
             "columns": [{"key": "label", "field_ref": "object.label"}]}
-    raw = await tool.on_invoke_tool(SimpleNamespace(tool_name=tool.name), json.dumps({"plan_json": json.dumps(plan)}))
+    raw = await tool.on_invoke_tool(tool_context(tool.name), json.dumps({"plan_json": json.dumps(plan)}))
     result = json.loads(raw)
     assert result["status"] == "invalid"
     assert "object.supporting_evidence" in json.dumps(result)

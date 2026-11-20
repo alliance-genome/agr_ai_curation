@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any, List, Mapping, Optional, Sequence
 
-from agents import function_tool
+from agr_ai_curation_runtime.function_tools import function_tool
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -465,7 +465,7 @@ class DiseaseFindInput(_StrictToolModel):
 
 
 class DiseaseFinalizeInput(_StrictToolModel):
-    candidate_ids: List[StrictStr] = Field(max_length=50)
+    candidate_ids: List[StrictStr]
 
 
 def _emit_disease_builder_event(

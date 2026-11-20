@@ -101,7 +101,7 @@ def test_stream_context_isolated_and_flow_identity_preserved():
 @pytest.mark.asyncio
 @pytest.mark.parametrize('streamed', [False, True])
 async def test_raw_openrouter_charge_reaches_same_measured_attempt(monkeypatch, streamed):
-    import httpx
+    import httpx2
     import json
     from openai import AsyncOpenAI
     from src.lib.openai_agents.provider_model import ProviderConfiguredChatCompletionsModel
@@ -116,15 +116,15 @@ async def test_raw_openrouter_charge_reaches_same_measured_attempt(monkeypatch, 
                 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'done'}, 'finish_reason': 'stop'}],
                 'usage': {'prompt_tokens': 7, 'completion_tokens': 8, 'total_tokens': 15, 'cost': '0.000000000000000123'},
             }
-            return httpx.Response(200, headers={'content-type': 'text/event-stream'},
+            return httpx2.Response(200, headers={'content-type': 'text/event-stream'},
                                   content='data: '+json.dumps(chunk)+'\n\ndata: [DONE]\n\n')
-        return httpx.Response(200, json={
+        return httpx2.Response(200, json={
             'id': 'synthetic', 'object': 'chat.completion', 'created': 1, 'model': 'test-model',
             'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': 'done'}, 'finish_reason': 'stop'}],
             'usage': {'prompt_tokens': 7, 'completion_tokens': 8, 'total_tokens': 15, 'cost': '0.000000000000000123'},
         })
     async with AsyncOpenAI(api_key='test-key', base_url='https://provider.invalid/v1',
-                           http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond))) as client:
+                           http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond))) as client:
         model = ProviderConfiguredChatCompletionsModel(
             model='test-model', openai_client=client, provider_id='openrouter',
             request_extra_body={}, request_headers={}, forbidden_request_fields=(),

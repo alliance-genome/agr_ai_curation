@@ -4,7 +4,7 @@ import asyncio
 from contextlib import contextmanager, nullcontext
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 from agents import FunctionTool, ToolSearchTool
 
@@ -137,9 +137,9 @@ def test_tracked_sentry_span_treats_refusal_as_typed_outcome_without_content(mon
         (
             runtime.BadRequestError(
                 "Request exceeded the context length token limit",
-                response=httpx.Response(
+                response=httpx2.Response(
                     400,
-                    request=httpx.Request("POST", "https://api.openai.com/v1/responses"),
+                    request=httpx2.Request("POST", "https://api.openai.com/v1/responses"),
                 ),
                 body={},
             ),

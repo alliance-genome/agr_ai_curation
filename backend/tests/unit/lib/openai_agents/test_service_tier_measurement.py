@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2
 import pytest
 from agents import Agent, ModelSettings, RunConfig, Runner
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
@@ -125,11 +125,11 @@ async def test_raw_tier_survives_normalization_without_inference(monkeypatch, ap
             payload["usage"]["completion_tokens_details"] = {"reasoning_tokens": 0}
         if streamed:
             event = {"type": "response.completed", "sequence_number": 1, "response": payload} if api == "responses" else payload
-            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+            return httpx2.Response(200, headers={"content-type": "text/event-stream"},
                                   content="data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n")
-        return httpx.Response(200, json=payload)
+        return httpx2.Response(200, json=payload)
 
-    async with AsyncOpenAI(api_key="fixture", http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond))) as client:
+    async with AsyncOpenAI(api_key="fixture", http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond))) as client:
         model_type = OpenAIResponsesModel if api == "responses" else OpenAIChatCompletionsModel
         model = model_type(model="test", openai_client=client)
         if api == "policy_chat":
@@ -197,7 +197,10 @@ async def test_websocket_override_preserves_reported_tier(monkeypatch, streamed)
     measurement.install_model_request_measurement()
     sink = Mock()
     monkeypatch.setattr(runtime_writes, "reserve_runtime_request", Mock(return_value=sink))
-    payload = Response.model_validate({
+    from openai._models import construct_type
+    # Parse like the SDK's websocket path (openai's lenient construct_type), so usage
+    # that omits cache_write_tokens stays omitted.
+    payload = construct_type(type_=Response, value={
         "id": "resp_ws", "object": "response", "created_at": 1, "model": "test",
         "status": "completed", "parallel_tool_calls": False, "tool_choice": "auto", "tools": [],
         "service_tier": "priority", "output": [],

@@ -1,4 +1,5 @@
 """Tests for flow executor custom_instructions wiring."""
+from tests.sdk_tool_context_support import tool_context
 from src.lib.document_context import DocumentContext
 from agents import RunConfig as SDKRunConfig
 
@@ -2098,7 +2099,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         tools, _ = get_all_agent_tools(flow)
         # Extraction must refuse missing durable identity before invoking a model.
         with pytest.raises(ValueError, match="durable run, document and owner"):
-            await tools[0].on_invoke_tool(SimpleNamespace(tool_name="flow", run_config=None), json.dumps({"query": "run"}))
+            await tools[0].on_invoke_tool(tool_context("flow", run_config=None), json.dumps({"query": "run"}))
         assert observed == []
         assert current_flow_validator_selections() == {}
 
@@ -2130,7 +2131,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _make_flow([_agent_node("n1", "gene")]),
             include_unavailable=True,
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
 
         owner = asyncio.create_task(
             tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "owner"}))
@@ -2182,7 +2183,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             ]),
             include_unavailable=True,
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
 
         current = asyncio.create_task(
             tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "current"}))
@@ -2234,7 +2235,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         flow = _make_flow([_agent_node("n1", "gene")])
         first_tools, _ = get_non_extraction_step_tools(flow)
         second_tools, _ = get_non_extraction_step_tools(flow)
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
 
         first = asyncio.create_task(
             first_tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "first"}))
@@ -2278,7 +2279,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             _make_flow([_agent_node("n1", "gene")]),
             include_unavailable=True,
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
 
         owner = asyncio.create_task(
             tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "owner"}))
@@ -2320,7 +2321,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ])
 
         tools, _ = get_non_extraction_step_tools(flow)
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
 
         # Step 1 executes normally.
         out1 = asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "q1"})))
@@ -2385,7 +2386,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             flow_run_id="flow-run-123",
         )
 
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "ignored-q1"})))
         asyncio.run(
             tools[1].on_invoke_tool(
@@ -2450,7 +2451,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         clear_collected_events()
         try:
             tools, _, _, execution_state = get_stub_review_step_tools(flow, include_unavailable=True)
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            tool_ctx = tool_context("flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
         finally:
             clear_collected_events()
@@ -2521,7 +2522,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 flow,
                 include_unavailable=True,
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            tool_ctx = tool_context("flow_step_tool", run_config=None)
             result = asyncio.run(
                 tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
             )
@@ -2669,7 +2670,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                     flow_run_id="flow-run-123",
                     benchmark_routes=benchmark_routes,
                 )
-                tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+                tool_ctx = tool_context("flow_step_tool", run_config=None)
                 asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
                 result_text = asyncio.run(
                     tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
@@ -2818,7 +2819,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             flow,
             include_unavailable=True,
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
         result_text = asyncio.run(
             tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"}))
@@ -2885,7 +2886,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         ])
 
         tools, _ = get_non_extraction_step_tools(flow, user_query="Original flow input")
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "supervisor-query"})))
 
         assert len(invocations) == 1
@@ -3013,7 +3014,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         for tool in formatter_tools
                         if getattr(tool, "name", "") == "finalize_and_save"
                     )
-                    tool_ctx = SimpleNamespace(tool_name="finalize_and_save")
+                    tool_ctx = tool_context("finalize_and_save")
                     return await finalize_tool.on_invoke_tool(
                         tool_ctx,
                         json.dumps({"plan_json": "", "filename_hint": ""}),
@@ -3048,7 +3049,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
         stub_completed_review(monkeypatch, {"domain_pack_id": "gene", "envelope_id": "env-gene-1",
             "extracted_objects": [{"object_type": "Gene", "payload": {"symbol": "BRCA1"}}]})
         tools, _, _, _ = get_stub_review_step_tools(flow, include_unavailable=True, document_name="Smith et al. (2024).pdf")
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
         asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format now"})))
 
@@ -3204,7 +3205,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
             assert created_names == {"ask_gene_specialist", "ask_curation_prep_specialist"}
 
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            tool_ctx = tool_context("flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
             prep_output = asyncio.run(
                 tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare for review"}))
@@ -3344,7 +3345,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
             assert created_names == {"ask_gene_specialist", "ask_curation_handoff_specialist"}
 
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            tool_ctx = tool_context("flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
             handoff_output = asyncio.run(
                 tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "prepare review"}))
@@ -3438,7 +3439,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 include_unavailable=True,
                 doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
             )
-            tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+            tool_ctx = tool_context("flow_step_tool", run_config=None)
             asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
             with pytest.raises(RuntimeError, match=failure_boundary.split("_")[0]):
                 asyncio.run(
@@ -3482,7 +3483,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
         )
 
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract first"})))
         with pytest.raises(
             RuntimeError,
@@ -3522,7 +3523,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             flow,
             include_unavailable=True,
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
 
         with pytest.raises(RuntimeError, match="sentinel specialist failure"):
             asyncio.run(
@@ -3558,7 +3559,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             include_unavailable=True,
             doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
 
         with pytest.raises(
             RuntimeError,
@@ -3607,7 +3608,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             include_unavailable=True,
             doc_context=DocumentContext(document_id="doc-123", user_id="user-123"),
         )
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         asyncio.run(
             tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"}))
         )
@@ -4189,7 +4190,7 @@ class TestFlowEvidenceAccumulation:
                         {"type": "function_call", "call_id": f"call-{index}"},
                     ]})
                 for index, tool in enumerate(tools):
-                    ctx = SimpleNamespace(tool_name=tool.name, tool_call_id=f"call-{index}", run_config=None)
+                    ctx = tool_context(tool.name, tool_call_id=f"call-{index}", run_config=None)
                     asyncio.run(tool.on_invoke_tool(ctx, json.dumps({"query": "extract"})))
         assert [stage.identity.node_id for stage in observed] == ["n1", "n2"]
         assert [stage.parent_invocation_sequence for stage in observed] == [1, 2]
@@ -4257,7 +4258,7 @@ class TestFlowEvidenceAccumulation:
             "ask_gene_step2_specialist",
         }
 
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "step one"})))
         asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "step two"})))
 
@@ -4494,7 +4495,7 @@ class TestCreateFlowSupervisorNoTools:
 
         supervisor = create_flow_supervisor(flow, inspection_context=context)
         inspect_tool = next(tool for tool in supervisor.tools if tool.name == "inspect_results")
-        tool_ctx = SimpleNamespace(tool_name="inspect_results", run_config=None)
+        tool_ctx = tool_context("inspect_results", run_config=None)
         rejected = await inspect_tool.on_invoke_tool(
             tool_ctx,
             json.dumps(
@@ -5058,7 +5059,7 @@ class TestExecuteFlowTermination:
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
-            tool_ctx = SimpleNamespace(tool_name="inspect_results", run_config=None)
+            tool_ctx = tool_context("inspect_results", run_config=None)
             response = await inspect_tool.on_invoke_tool(
                 tool_ctx,
                 json.dumps({"action": "search", "result_ref": result_ref}),
@@ -7911,7 +7912,7 @@ def test_flow_chat_step_takes_rendered_output_from_delivery_scope_not_tool_resul
     tools, _, _, execution_state = get_non_extraction_step_tools(
         flow, document_id="doc-1", include_unavailable=True
     , doc_context=DocumentContext(document_id="doc-1", user_id="user"),)
-    tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+    tool_ctx = tool_context("flow_step_tool", run_config=None)
 
     asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "read"})))
     result = asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "show"})))
@@ -7940,7 +7941,7 @@ class TestFlowStepProgressEvents:
             get_collected_events,
         )
 
-        tool_ctx = SimpleNamespace(tool_name="flow_step_tool", run_config=None)
+        tool_ctx = tool_context("flow_step_tool", run_config=None)
         clear_collected_events()
         results = []
         try:
@@ -8194,7 +8195,7 @@ async def test_fresh_flow_extract_inspect_then_next_step(monkeypatch, caplog, se
     supervisor = create_flow_supervisor(flow, document_id=DOCUMENT_ID, user_id="curator-1", session_id=session_id, flow_run_id=run_id, doc_context=DocumentContext(document_id=DOCUMENT_ID, user_id="curator-1"))
     tools = {t.name: t for t in supervisor.tools}
     inspect = tools["inspect_results"]
-    ctx = SimpleNamespace(tool_name="test", run_config=None)
+    ctx = tool_context("test", run_config=None)
     initial = json.loads(await inspect.on_invoke_tool(ctx, json.dumps({"action": "list", "target": "this_chat"})))
     assert initial["results"] == []
     if persistence_fails:
@@ -8273,7 +8274,7 @@ async def test_inspection_manifest_eligibility_is_checked_before_persistence(mon
         user_id="owner", session_id="chat", document_id=DOCUMENT_ID,
         doc_context=DocumentContext(document_id=DOCUMENT_ID, user_id="owner"),
     )
-    ctx = SimpleNamespace(tool_name="test", run_config=None)
+    ctx = tool_context("test", run_config=None)
     if failure_message is not None:
         with pytest.raises(RuntimeError) as caught:
             await tools[0].on_invoke_tool(ctx, json.dumps({"query": "extract"}))

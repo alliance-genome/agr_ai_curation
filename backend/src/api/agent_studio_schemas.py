@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.lib.agent_studio import ChatContext, ChatMessage, PromptCatalog
 from src.lib.agent_studio.application_events import ApplicationEvent
+from src.lib.observability.sentry import SENTRY_IDENTIFIER_HASH_PATTERN
 
 
 class ChatRequest(BaseModel):
@@ -34,6 +35,16 @@ class StopAgentStudioRequest(BaseModel):
 
     session_id: str = Field(min_length=1)
     turn_id: str = Field(min_length=1)
+
+
+class StudioStreamProtocolReport(BaseModel):
+    """Content-free diagnostics from the Studio SSE reader."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Literal["malformed_json", "invalid_shape", "unknown_type", "correlation_mismatch", "missing_terminal"]
+    session_id_hash: str | None = Field(default=None, pattern=SENTRY_IDENTIFIER_HASH_PATTERN.pattern)
+
 
 class CatalogResponse(BaseModel):
     """Response for prompt catalog."""
