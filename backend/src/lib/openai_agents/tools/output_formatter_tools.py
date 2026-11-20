@@ -634,9 +634,14 @@ def _projection_plan_from_tool_payload(
 
 
 def _set_aside_summary(projections: Sequence[FlowOutputProjectionResult]) -> dict[str, int] | None:
-    """Records the review set aside in these outputs' sources: in the output, or left out (ALL-1561)."""
-    included = sum(projection.set_aside_included for projection in projections)
-    left_out = sum(projection.set_aside_left_out for projection in projections)
+    """Records the review set aside in one output's sources: in the output, or left out (ALL-1561).
+
+    An output made of several projections (a chat report's sections) counts each
+    record once: it is in the output when any projection shows it.
+    """
+    records = {key for projection in projections for key in projection.set_aside_record_keys}
+    included = len({key for projection in projections for key in projection.set_aside_included_keys})
+    left_out = len(records) - included
     return {"included": included, "left_out": left_out} if included or left_out else None
 
 

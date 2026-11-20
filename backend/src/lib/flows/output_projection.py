@@ -466,6 +466,10 @@ class FlowOutputProjectionResult(BaseModel):
     # output when it selects Review status, else left out.
     set_aside_included: int = 0
     set_aside_left_out: int = 0
+    # The same records by identity (``_set_aside_record_key``), so outputs made
+    # of several projections over one source count each record once.
+    set_aside_record_keys: list[str] = Field(default_factory=list)
+    set_aside_included_keys: list[str] = Field(default_factory=list)
 
 
 class FlowOutputProjectionPreview(BaseModel):
@@ -3489,9 +3493,15 @@ def _shows_review_status(plan: FlowOutputProjectionPlan, artifact: FlowOutputArt
     )
 
 
+def _set_aside_record_key(artifact: FlowOutputArtifact, record: Sequence[str]) -> str:
+    """A set-aside record's identity across projections of one bundle: its source step and result, and its object keys."""
+
+    return "|".join([artifact.node_id, artifact.extraction_result_id or "", *sorted(record)])
+
+
 def _set_aside_rows(
     bundle: FlowOutputArtifactBundle, plan: FlowOutputProjectionPlan,
-) -> tuple[int, set[int], dict[int, tuple[int, int]]]:
+) -> tuple[list[str], set[int], dict[int, str]]:
     """Set-aside records in the plan's sources, the rows left out, and the record each kept row names.
 
     Decided per source: an artifact's set-aside records stay in the output
@@ -3499,24 +3509,24 @@ def _set_aside_rows(
     Otherwise each row of the plan's row source that names one of them
     (object, evidence and finding rows alike) is left out, and so is an
     envelope-level evidence row whose saved evidence ID only set-aside records
-    cite. Kept rows map to ``(artifact index, record index)`` so the caller can
-    count the records that actually reach the output. Rows are identified by
-    object, as ``bundle_row_refs``.
+    cite. Kept rows map to the record's identity (``_set_aside_record_key``) so
+    the caller can count the records that actually reach the output. Rows are
+    identified by object, as ``bundle_row_refs``.
     """
 
-    count, left_out, kept = 0, set(), {}
-    for artifact_index, artifact in enumerate(_plan_artifacts(bundle, plan)):
+    records, left_out, kept = [], set(), {}
+    for artifact in _plan_artifacts(bundle, plan):
         if not artifact.set_aside_records:
             continue
-        count += len(artifact.set_aside_records)
-        record_of = {key: record_index for record_index, record in enumerate(artifact.set_aside_records)
-                     for key in record}
+        records.extend(_set_aside_record_key(artifact, record) for record in artifact.set_aside_records)
+        record_of = {key: _set_aside_record_key(artifact, record)
+                     for record in artifact.set_aside_records for key in record}
         rows = artifact.rows_by_source.get(plan.row_source) or []
         if _shows_review_status(plan, artifact):
             for row in rows:
                 for key in _object_keys(row):
                     if key in record_of:
-                        kept[id(row)] = (artifact_index, record_of[key])
+                        kept[id(row)] = record_of[key]
             continue
         cited: dict[bool, set[str]] = {True: set(), False: set()}
         for row in artifact.rows_by_source.get("object") or []:
@@ -3527,7 +3537,7 @@ def _set_aside_rows(
                     or (plan.row_source == "evidence" and not _object_keys(row)
                         and row.get("evidence.evidence_record_id") in only_set_aside)):
                 left_out.add(id(row))
-    return count, left_out, kept
+    return records, left_out, kept
 
 
 def _object_keys(row: Mapping[str, Any]) -> list[str]:
@@ -3596,7 +3606,7 @@ def apply_projection_plan(
             columns=columns, rows=[], total_count=0, empty_reason="all_records_retired",
             warnings=[*warnings, "All records were explicitly retired; original records and decisions remain in history."])
     rows = _rows_for_plan(bundle, plan)
-    set_aside_count, left_out, set_aside_kept = _set_aside_rows(bundle, plan)
+    set_aside_keys, left_out, set_aside_kept = _set_aside_rows(bundle, plan)
     all_set_aside = False
     if left_out:
         kept = [row for row in rows if id(row) not in left_out]
@@ -3775,11 +3785,13 @@ def apply_projection_plan(
         filter_count=len(plan.filters), warning_count=len(warnings),
     )
     # Included: set-aside records whose rows reach the output after filters and limits.
-    included = len({set_aside_kept[id(row)] for row in limited_rows if id(row) in set_aside_kept})
+    included = sorted({set_aside_kept[id(row)] for row in limited_rows if id(row) in set_aside_kept})
     return FlowOutputProjectionResult(
         empty_reason="all_records_set_aside" if all_set_aside else None,
-        set_aside_included=included,
-        set_aside_left_out=set_aside_count - included,
+        set_aside_included=len(included),
+        set_aside_left_out=len(set_aside_keys) - len(included),
+        set_aside_record_keys=set_aside_keys,
+        set_aside_included_keys=included,
         export_accounting=accounting, applied_filters=applied_filters,
         format=plan.format,
         row_source=plan.row_source,

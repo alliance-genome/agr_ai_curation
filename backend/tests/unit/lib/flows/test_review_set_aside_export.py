@@ -430,3 +430,23 @@ def test_viewer_fields_of_a_pack_record_are_its_declared_pack_fields(reviewed):
     assert (STATEMENT, dict(declared)[STATEMENT]) in shown
     common = {field["ref"] for field in export_fields.COMMON_FIELDS + export_fields.REVIEW_FIELDS}
     assert not common & {ref for ref, _ in shown}
+
+
+def test_a_chat_report_counts_each_set_aside_record_once_across_its_sections(reviewed):
+    """A report with two sections over one source names one set-aside record once."""
+
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
+    one = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
+    two = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
+    assert (one.set_aside_left_out, two.set_aside_left_out) == (1, 1)
+    assert _set_aside_summary([one, two]) == {"included": 0, "left_out": 1}
+
+
+def test_a_chat_report_counts_a_record_one_section_shows_as_in_the_report(reviewed):
+    """Mixed sections: the record is in the report, marked, when any section shows Review status."""
+
+    bundle = _bundle(reviewed, [_object("kept", "in the gut"), _object("aside", "near the gut")], aside={"aside"})
+    plain = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT)]))
+    marked = apply_projection_plan(bundle, _object_plan("chat", [("statement", STATEMENT), ("status", STATUS)]))
+    assert _set_aside_summary([plain, marked]) == {"included": 1, "left_out": 0}
+    assert _set_aside_summary([marked, plain]) == {"included": 1, "left_out": 0}
