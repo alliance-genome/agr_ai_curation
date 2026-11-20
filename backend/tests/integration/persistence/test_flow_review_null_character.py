@@ -73,7 +73,7 @@ async def _run_flow(item, monkeypatch, quote):
     # The evidence id is minted over the raw quote, as record_evidence does.
     record = {"entity": "eco:1", "verified_quote": quote, "page": 1, "section": "Results",
               "chunk_id": "chunk-1"}
-    record["evidence_record_id"] = build_evidence_record_id(record)
+    record["evidence_record_id"] = build_evidence_record_id(evidence_record=record)
     source_scope = store.HistoryScope(item.scope.owner_id, item.scope.document_id, uuid4().hex)
     env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id=item.pack.pack_id,
         metadata={"evidence_records": [record]},
@@ -180,7 +180,7 @@ def _captured(scope, quote):
 
     record = {"entity": "eco:1", "verified_quote": quote, "page": 1, "section": "Results",
               "chunk_id": "chunk-1"}
-    record["evidence_record_id"] = build_evidence_record_id(record)
+    record["evidence_record_id"] = build_evidence_record_id(evidence_record=record)
     env = DomainEnvelope(envelope_id=uuid4().hex, domain_pack_id="fixture",
         metadata={"evidence_records": [record], "note": quote},
         extracted_objects=[CuratableObjectEnvelope(object_type="Annotation", pending_ref_id="one",
@@ -232,3 +232,96 @@ def test_nul_capture_continues_with_the_stored_form(scope):
     stored = store.read_baseline(
         scope, captured.metadata["validation_history"]["artifact_id"])["normalized"]
     assert stored == sanitize_persisted_json_value(before)
+
+
+@pytest.mark.parametrize("text", [CLEAN, WITH_NUL])
+def test_chat_review_result_with_null_character_is_saved_and_redelivered(scope, text):
+    """KANBAN-2075: a direct chat result is stored in its saved form."""
+    from src.lib.validation_review import chat_dispatch
+
+    context = SimpleNamespace(owner_id=scope.owner_id, document_id=scope.document_id,
+                              session_id=scope.session_id, turn_id=uuid4().hex)
+    event = {"type": "RUN_FINISHED", "data": {"response": text, "trace_id": "trace"}}
+    claimed = chat_dispatch.claim(context, "direct:fixture", "query")
+    assert claimed["claimed"]
+    chat_dispatch.complete(context, claimed["id"], event)
+    # A retry of the same result is the same completion, not a conflict.
+    chat_dispatch.complete(context, claimed["id"], event)
+    replay = chat_dispatch.claim(context, "direct:fixture", "query")
+    assert replay["state"] == "completed"
+    assert replay["result"] == {"type": "RUN_FINISHED", "data": {"response": CLEAN, "trace_id": "trace"}}
+    with pytest.raises(store.HistoryConflict, match="different completion"):
+        chat_dispatch.complete(context, claimed["id"], {**event, "data": {"response": "Other"}})
+
+
+def test_direct_validator_result_with_null_character_is_saved_under_the_clean_identity():
+    """KANBAN-2075: the standalone original is saved, and clean digests are unchanged."""
+    import json
+    from hashlib import sha256
+    from sqlalchemy import delete
+    from src.lib.domain_packs.validator_result_records import validator_result_snapshot
+    from src.lib.domain_packs.validator_result_storage import persist_validator_result, read_validator_result
+    from src.models.sql.validator_result import ValidatorResultRecord
+
+    def payload(text):
+        return {"status": "resolved", "explanation": text, "resolved_values": {"curie": "ECO:1"},
+                "evidence": [{"verified_quote": text, "page": 1}], "unresolved_questions": []}
+
+    clean_ref, _ = validator_result_snapshot(payload(CLEAN))
+    # The encoding used before this change, for content without NUL.
+    encoded = json.dumps({"schema_version": 1, "source_envelope_revision": None, "request": None,
+                          "result": payload(CLEAN)}, sort_keys=True, ensure_ascii=True,
+                         separators=(",", ":"), allow_nan=False)
+    assert clean_ref == "validator-result:" + sha256(encoded.encode("utf-8")).hexdigest()
+    assert validator_result_snapshot(payload(WITH_NUL)) == validator_result_snapshot(payload(CLEAN))
+
+    user = "validator-nul-test-" + uuid4().hex
+    kwargs = dict(user_id=user, session_id=uuid4().hex, invocation_id=uuid4().hex, agent_key="fixture_validator")
+    try:
+        reference = persist_validator_result(payload(WITH_NUL), **kwargs)
+        assert persist_validator_result(payload(WITH_NUL), **kwargs) == reference
+        saved = read_validator_result(reference.split(":", 1)[1], user_id=user, session_id=kwargs["session_id"])
+        assert saved["original"]["result"] == payload(CLEAN)
+        assert "validator-result:" + saved["original_sha256"] == clean_ref
+    finally:
+        with store.SessionLocal() as db:
+            db.execute(delete(ValidatorResultRecord).where(ValidatorResultRecord.user_id == user))
+            db.commit()
+
+
+@pytest.mark.parametrize("planned, quote", [({"evidence_quote": CLEAN}, CLEAN),
+                                            ({"evidence_quote": WITH_NUL}, WITH_NUL)], indirect=["planned"])
+def test_followup_that_re_records_an_original_sentence_keeps_its_proposal(planned, quote):
+    """KANBAN-2075 (F3b): the follow-up's own evidence meets the stored original.
+
+    The follow-up extractor records the same sentence again, so record_evidence
+    mints the same id over the same quote. The original is stored stripped; the
+    new record still holds the NUL until it is saved.
+    """
+    from src.lib.openai_agents.evidence_summary import build_evidence_record_id
+    from src.lib.validation_review import extraction_results, extraction_scheduling, work
+    from src.lib.validation_review.decisions import ReviewContext
+    from tests.integration.persistence.test_extraction_followup_admission import request_args
+
+    item = planned
+    stored = item.source_envelope.metadata["evidence_records"][0]
+    assert stored["verified_quote"] == CLEAN
+    rerecorded = {key: value for key, value in stored.items() if key != "evidence_record_id"}
+    rerecorded["verified_quote"] = quote
+    rerecorded["evidence_record_id"] = build_evidence_record_id(evidence_record=rerecorded)
+    assert rerecorded["evidence_record_id"] == stored["evidence_record_id"]
+
+    args = request_args(item)
+    wid = extraction_scheduling.request(ReviewContext(item.scope, item.ep, "supervisor"), **args)
+    claim = work.claim(item.scope, wid)
+    work.mark_submitted(item.scope, wid, claim["lease_token"])
+    result = {"entries": [{"entry_id": args["entry_ids"][0], "outcome": "additional_information",
+        "assessment": "The same sentence answers the question", "remaining_uncertainty": "",
+        "proposed_values": [], "evidence_record_ids": [stored["evidence_record_id"]]}]}
+    retained = extraction_results.retain(item.scope, wid, claim["lease_token"], result,
+                                         evidence_records=[rerecorded])
+    body = store.read_fact(item.scope, item.aid, retained["contributions"][0]["fact_id"])["content"]
+    assert body["structural_failure"] is None
+    assert body["selectable"] is True
+    assert [entry["origin"] for entry in body["evidence"]] == ["original"]
+    assert body["evidence"][0]["record"]["verified_quote"] == CLEAN

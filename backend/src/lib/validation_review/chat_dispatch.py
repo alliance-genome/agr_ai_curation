@@ -51,6 +51,8 @@ def claim(context, tool, query):
 def complete(context, key, result):
     from sqlalchemy import select
 
+    # Store and compare the saved form: PostgreSQL JSONB cannot hold NUL.
+    result = store.canonical(result)[1]
     with store.SessionLocal.begin() as db:
         store._authorize(
             db,
