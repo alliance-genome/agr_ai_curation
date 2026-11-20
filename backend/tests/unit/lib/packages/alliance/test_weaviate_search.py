@@ -411,6 +411,76 @@ async def test_read_chunk_missing_chunk_with_failed_count_still_fails(monkeypatc
     assert str(caught.value.__cause__) == "count blew up"
 
 
+def _sdk_read_chunk_tool(monkeypatch):
+    """The read_chunk tool as the model calls it: the real function_tool wrapper."""
+    from agr_ai_curation_runtime.function_tools import function_tool
+
+    monkeypatch.setattr(weaviate_search, "function_tool", function_tool)
+    return weaviate_search.create_read_chunk_tool("doc-12345678", "user-1")
+
+
+async def _invoke(tool, payload):
+    return await tool.on_invoke_tool(_build_tool_context(tool.name, payload), json.dumps(payload))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_index", [-1, -349, 349, 1000])
+async def test_read_chunk_index_outside_the_document_reaches_the_model_through_the_sdk_tool(
+    monkeypatch, chunk_index
+):
+    """A negative index and an index past the end both name the valid range; neither ends the run."""
+    _missing_chunk_store(monkeypatch, chunk_count=349)
+
+    async def _no_lookup_for_negative(**kwargs):
+        assert kwargs["chunk_index"] >= 0, "a negative index must not reach the store lookup"
+        return None
+
+    monkeypatch.setattr(weaviate_search, "get_chunk_by_index", _no_lookup_for_negative)
+    tool = _sdk_read_chunk_tool(monkeypatch)
+
+    result = await _invoke(tool, {"chunk_index": chunk_index})
+
+    assert result.summary == (
+        f"Invalid read_chunk request: chunk_index {chunk_index} does not exist; "
+        "this document has chunks 0 to 348."
+    )
+    assert result.chunk is None
+    assert result.error_code == "invalid_result_cursor"
+
+
+@pytest.mark.asyncio
+async def test_read_chunk_negative_index_in_a_document_with_no_chunks_still_fails(monkeypatch):
+    _missing_chunk_store(monkeypatch, chunk_count=0)
+    tool = _sdk_read_chunk_tool(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="required PDF"):
+        await _invoke(tool, {"chunk_index": -1})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{}, {"chunk_index": "3"}, {"chunk_index": 1.5}, {"chunk_index": None}])
+async def test_read_chunk_other_invalid_chunk_index_arguments_still_end_the_read(monkeypatch, payload):
+    """Only the integer range changed: a missing or non-integer chunk_index fails as before."""
+    _missing_chunk_store(monkeypatch, chunk_count=349)
+    tool = _sdk_read_chunk_tool(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="required PDF") as caught:
+        await _invoke(tool, payload)
+    assert "Invalid JSON input for tool read_chunk" in str(caught.value.__cause__)
+
+
+def test_read_chunk_schema_keeps_chunk_index_a_required_strict_integer(monkeypatch):
+    tool = _sdk_read_chunk_tool(monkeypatch)
+
+    schema = tool.params_json_schema
+    assert schema["required"] == ["chunk_index", "span_offset"]
+    assert schema["properties"]["chunk_index"] == {
+        "description": "The passage number, as shown by search_document, read_section or read_subsection.",
+        "title": "Chunk Index",
+        "type": "integer",
+    }
+
+
 @pytest.mark.asyncio
 async def test_read_chunk_found_chunk_does_not_count_the_document(monkeypatch):
     async def _fake_get_chunk_by_index(**_kwargs):
