@@ -524,6 +524,32 @@ async def test_provider_figure_chunk_does_not_invent_absent_or_malformed_page(
 
 
 @pytest.mark.asyncio
+async def test_literal_asterisks_survive_from_markdown_to_quotable_lines() -> None:
+    markdown = (
+        "# Results\n\n"
+        "The \\*escaped\\* allele carries p.Tyr318*/c.954C>G.\n\n"
+        "| Variant | Mark |\n| --- | --- |\n| p.Gln12* | **** |\n"
+    )
+    elements = markdown_to_pipeline_elements(markdown)
+
+    chunks = await chunk_parsed_document(
+        elements,
+        ChunkingStrategy.get_research_strategy(),
+        "doc-literal-asterisks",
+    )
+    stored_text = "\n".join(chunk.content for chunk in chunks)
+    quotable_lines = [
+        span.text
+        for chunk in chunks
+        for span in build_evidence_spans(chunk_id=f"chunk-{chunk.chunk_index}", chunk_text=chunk.content)
+    ]
+
+    assert "The *escaped* allele carries p.Tyr318*/c.954C>G." in stored_text
+    assert "| p.Gln12* | **** |" in stored_text
+    assert "The *escaped* allele carries p.Tyr318*/c.954C>G." in quotable_lines
+
+
+@pytest.mark.asyncio
 async def test_ingest_provider_markdown_document_indexes_provider_figure_metadata(
     monkeypatch,
 ) -> None:

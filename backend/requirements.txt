@@ -28,6 +28,7 @@ sqlalchemy>=2.0
 psycopg2-binary
 alembic
 agr-abc-document-parsers>=1.5.0
+markdown-it-py>=4.3.0  # CommonMark parser for the stored-text Markdown clean-up; 4.3.0 fixes quadratic-time inline parsing.
 agr-curation-api-client==0.16.0  # opensearch-py client (urllib3 2 compatible); rank allele hints before bounded discovery.
 
 # Ontology processing

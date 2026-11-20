@@ -7,8 +7,12 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Set
 
-from agr_abc_document_parsers import strip_markdown_formatting
 from pydantic import BaseModel, Field
+
+from src.lib.markdown_plain_text import (
+    markdown_inline_to_plain_text,
+    markdown_table_to_plain_text,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -93,11 +97,8 @@ class NormalizedElement(BaseModel):
         return mapping.get(self.content_type, "NarrativeText")
 
 
-def normalize_text(value: str) -> str:
-    """Normalize extracted text for comparison and embeddings."""
-
-    if not value:
-        return ""
+def _normalize_characters(value: str) -> str:
+    """Apply NFKC and repair PDF ligature and unicode-escape artifacts."""
 
     normalized = unicodedata.normalize("NFKC", value)
 
@@ -113,8 +114,35 @@ def normalize_text(value: str) -> str:
         except ValueError:
             return match.group(0)
 
-    normalized = _UNICODE_ESCAPE_PATTERN.sub(_replace_unicode_escape, normalized)
-    return strip_markdown_formatting(normalized).strip()
+    return _UNICODE_ESCAPE_PATTERN.sub(_replace_unicode_escape, normalized)
+
+
+def normalize_text(value: str) -> str:
+    """Normalize one element's raw text into plain text for pieces and embeddings.
+
+    Runs the Markdown clean-up, which must be applied exactly once per raw
+    text: never pass text this function already returned.
+    """
+
+    if not value:
+        return ""
+    return markdown_inline_to_plain_text(_normalize_characters(value)).strip()
+
+
+def normalize_table_text(value: str) -> str:
+    """Normalize a raw Markdown table, cleaning each cell on its own (once)."""
+
+    if not value:
+        return ""
+    return markdown_table_to_plain_text(_normalize_characters(value)).strip()
+
+
+def normalize_code_block_text(value: str) -> str:
+    """Normalize a raw fenced code block: characters only, its text kept as written."""
+
+    if not value:
+        return ""
+    return _normalize_characters(value).strip()
 
 
 def normalize_section_path(section_path: List[str]) -> List[str]:
@@ -154,7 +182,10 @@ def normalize_elements(response: PDFXResponse) -> List[NormalizedElement]:
             )
             continue
 
-        text = normalize_text(element.cleaned_text())
+        if element.content_type == "table":
+            text = normalize_table_text(element.cleaned_text())
+        else:
+            text = normalize_text(element.cleaned_text())
         normalized_section_title = normalize_text(element.section_title) if element.section_title else None
         normalized_section_path = normalize_section_path(element.section_path)
 
@@ -272,7 +303,7 @@ def build_pipeline_elements(elements: List[NormalizedElement]) -> List[Dict[str,
                 "original_type": elem.original_type,
             }
         )
-        embedding_text = normalize_text(elem.embedding_text)  # Keep: safety-net for callers bypassing normalize_elements.
+        embedding_text = elem.embedding_text
 
         if not embedding_text.strip():
             logger.warning(

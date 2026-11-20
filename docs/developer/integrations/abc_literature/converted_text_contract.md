@@ -138,6 +138,34 @@ retrieved Markdown as AI Curation source Markdown and keep compact provenance
 with the source PDF referencefile ID, converted Markdown referencefile ID,
 source MD5, file class/extension, and source access scope.
 
+### From Markdown to stored text
+
+The saved source Markdown is never changed. The text that is cut into pieces,
+embedded and quoted is built from it by `markdown_to_pipeline_elements`
+(`backend/src/lib/pipeline/pdfx_parser.py`), the same step that PDF extraction
+output and benchmark document conversions go through. Each element's raw text
+is cleaned exactly once by `backend/src/lib/markdown_plain_text.py`, which
+reads it with a CommonMark parser (`markdown-it-py`):
+
+- Only markup the parser reads as formatting is removed: `*` and `_` emphasis,
+  `~~` strikethrough, code span backticks and link brackets. Literal
+  characters stay, for example `p.Tyr318*`, `****` and `~5 kb`.
+- `<u>`, `<sup>` and `<sub>` tag pairs are removed first, so
+  `Ca**<sup>2+</sup>**` becomes `Ca2+`. Other HTML stays as literal text.
+- Backslash escapes are undone (`\*` becomes `*`) and character references
+  are decoded (`&amp;` becomes `&`).
+- Tables are cleaned cell by cell, so markup never pairs across cells, and an
+  escaped pipe (`\|`) stays escaped inside its cell.
+- Fenced code blocks keep their text as written.
+
+A second pass would turn an escaped `\*x\*` back into emphasis and delete
+the asterisks, so the clean-up is never applied to text it already returned.
+Known limit: a pair of literal asterisks that the converted text does not
+escape, such as `w[*]; y[*]`, still reads as emphasis and loses both
+asterisks (ABC ticket SCRUM-6973).
+
+Papers imported before 0.12.0 keep the pieces they were stored with.
+
 ## Fixture Evidence
 
 Stage evidence from 2026-06-25:
