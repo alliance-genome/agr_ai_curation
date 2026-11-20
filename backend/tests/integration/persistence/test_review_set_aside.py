@@ -22,6 +22,7 @@ from src.models.sql.validation_review import FlowReviewStep
 from tests.integration.persistence.test_chat_review_adapter import (
     entries_for, migrated as migrated, planned as planned, scope as scope,
 )
+from tests.sdk_tool_context_support import tool_context
 
 STATUS = "object.review_status"
 REASON = "object.review_reason"
@@ -505,9 +506,9 @@ async def test_every_accepted_view_listing_marks_the_set_aside_records(planned, 
     session_token = _current_session_id.set(flow.session_id)
     user_token = _current_user_id.set(item.scope.owner_id)
     try:
+        arguments = json.dumps({"action": "objects", "result_ref": result_ref, "result_view": "accepted"})
         response = json.loads(await inspector.on_invoke_tool(
-            SimpleNamespace(tool_name="inspect_results", run_config=None),
-            json.dumps({"action": "objects", "result_ref": result_ref, "result_view": "accepted"})))
+            tool_context("inspect_results", arguments), arguments))
     finally:
         _current_user_id.reset(user_token)
         _current_session_id.reset(session_token)
