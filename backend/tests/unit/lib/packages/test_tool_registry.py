@@ -554,9 +554,7 @@ def test_repo_alliance_package_runtime_requirements_include_shared_runtime_depen
         if line.strip() and not line.lstrip().startswith("#")
     }
 
-    backend_lock = (REPO_ROOT / "backend" / "requirements.lock.txt").read_text(encoding="utf-8")
-    [sdk_pin] = [line for line in backend_lock.splitlines() if line.startswith("openai-agents==")]
-    assert sdk_pin in normalized
+    assert "openai-agents" in normalized
     assert "psycopg2-binary" in normalized
 
 

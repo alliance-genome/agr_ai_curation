@@ -253,6 +253,82 @@ def test_environment_manager_serializes_concurrent_bootstrap(monkeypatch, tmp_pa
     assert steps.count("install_requirements") == 1
 
 
+def _demo_package(monkeypatch, tmp_path):
+    package_dir = _stage_fixture_package(tmp_path)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    (package_dir / "requirements" / "runtime.txt").write_text(
+        "demo-dependency\n", encoding="utf-8",
+    )
+    registry = load_package_registry(
+        package_dir.parent,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+    return registry.get_package("demo.runner")
+
+
+def _recording_manager(monkeypatch, constraints_path):
+    manager = PackageEnvironmentManager(
+        host_python=Path(sys.executable), constraints_path=constraints_path,
+    )
+    commands: list[list[str]] = []
+
+    def fake_run_command(command, *, package_id, step):
+        commands.append(command)
+        if step == "create_venv":
+            python_path = get_package_runner_venv_dir(package_id) / "bin" / "python"
+            python_path.parent.mkdir(parents=True, exist_ok=True)
+            python_path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+
+    monkeypatch.setattr(manager, "_run_command", fake_run_command)
+    return manager, commands
+
+
+def test_package_environment_installs_with_the_backend_lock_as_constraints(monkeypatch, tmp_path):
+    from src.lib.packages.env_manager import BACKEND_DEPENDENCY_LOCK
+
+    assert BACKEND_DEPENDENCY_LOCK == BACKEND_ROOT / "requirements.lock.txt"
+    assert BACKEND_DEPENDENCY_LOCK.is_file()
+    package = _demo_package(monkeypatch, tmp_path)
+    manager, commands = _recording_manager(monkeypatch, BACKEND_DEPENDENCY_LOCK)
+
+    environment = manager.ensure_environment(package)
+
+    assert commands[-1][-4:] == [
+        "-r", str(environment.requirements_path), "-c", str(BACKEND_DEPENDENCY_LOCK),
+    ]
+    metadata = json.loads(
+        get_package_runner_metadata_path(package.package_id).read_text(encoding="utf-8"))
+    assert metadata["constraints_path"] == str(BACKEND_DEPENDENCY_LOCK)
+
+
+def test_changed_backend_lock_rebuilds_the_package_environment(monkeypatch, tmp_path):
+    package = _demo_package(monkeypatch, tmp_path)
+    lock = tmp_path / "requirements.lock.txt"
+    lock.write_text("demo-dependency==1.0\n", encoding="utf-8")
+    manager, commands = _recording_manager(monkeypatch, lock)
+
+    first = manager.ensure_environment(package)
+    assert manager.ensure_environment(package).reused is True
+    lock.write_text("demo-dependency==2.0\n", encoding="utf-8")
+    rebuilt = manager.ensure_environment(package)
+
+    assert rebuilt.fingerprint != first.fingerprint
+    assert rebuilt.reused is False
+    assert [command for command in commands if "-c" in command][-1][-1] == str(lock)
+
+
+def test_missing_backend_lock_fails_the_environment_build(monkeypatch, tmp_path):
+    from src.lib.packages.env_manager import PackageEnvironmentBootstrapError
+
+    package = _demo_package(monkeypatch, tmp_path)
+    manager, commands = _recording_manager(monkeypatch, tmp_path / "absent.lock.txt")
+
+    with pytest.raises(PackageEnvironmentBootstrapError, match="Backend dependency lock not found"):
+        manager.ensure_environment(package)
+    assert commands == []
+
+
 def test_package_runner_returns_import_failure(monkeypatch, tmp_path):
     package_dir = _stage_fixture_package(tmp_path)
     monkeypatch.setenv("AGR_RUNTIME_ROOT", str(tmp_path / "runtime"))
@@ -1576,3 +1652,10 @@ def _write_fake_agents_dependency(tmp_path: Path) -> Path:
     )
     (package_root / "tool.py").write_text("class FunctionTool:\n    pass\n", encoding="utf-8")
     return dependency_root
+
+
+def test_production_image_ships_the_backend_lock_for_package_environments():
+    dockerfile = (BACKEND_ROOT / "Dockerfile.prod").read_text(encoding="utf-8")
+    runtime_stage = dockerfile.split(" AS runtime", 1)[1]
+    assert "WORKDIR /app/backend" in runtime_stage
+    assert "requirements.lock.txt ./" in runtime_stage

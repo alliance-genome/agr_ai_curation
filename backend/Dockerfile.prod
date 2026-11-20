@@ -66,6 +66,8 @@ COPY --chown=${APP_UID}:${APP_GID} src/ ./src/
 COPY --chown=${APP_UID}:${APP_GID} main.py ./
 COPY --chown=${APP_UID}:${APP_GID} alembic/ ./alembic/
 COPY --chown=${APP_UID}:${APP_GID} alembic.ini ./
+# Isolated package environments install with the backend lock as pip constraints.
+COPY --chown=${APP_UID}:${APP_GID} requirements.lock.txt ./
 
 EXPOSE 8000
 

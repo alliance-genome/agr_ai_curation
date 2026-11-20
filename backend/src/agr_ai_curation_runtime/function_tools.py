@@ -77,6 +77,25 @@ def _with_argument_detail(
     return failure_error_function
 
 
+def _propagate_with_argument_detail(
+    params_model: type[BaseModel],
+) -> Callable[[Any, Exception], None]:
+    """Propagation policy (``failure_error_function=None``) with argument detail restored.
+
+    An invalid-argument error is raised again with its validation detail, as the SDK
+    raised it before the upgrade. Every other error returns ``None``, which makes the
+    SDK re-raise the original exception exactly as it does for ``None``.
+    """
+
+    def failure_error_function(ctx: Any, error: Exception) -> None:
+        detailed = _argument_error_with_detail(ctx, error, params_model)
+        if detailed is not error:
+            raise detailed
+        return None
+
+    return failure_error_function
+
+
 def function_tool(
     func: Callable[..., Any] | None = None,
     *,
@@ -87,24 +106,27 @@ def function_tool(
 
     Omitting ``failure_error_function`` uses ``model_visible_tool_error``. An explicit
     handler receives argument errors with their validation detail restored. ``None``
-    still propagates the error unchanged. All other keywords pass to the SDK.
+    still propagates every error; an invalid-argument error propagates with its
+    validation detail. All other keywords pass to the SDK.
     """
 
     def create(the_func: Callable[..., Any]) -> FunctionTool:
-        handler = (
-            model_visible_tool_error
-            if failure_error_function is _DEFAULT
-            else failure_error_function
-        )
-        if handler is not None:
-            params_model = function_schema(
-                func=the_func,
-                docstring_style=kwargs.get("docstring_style"),
-                name_override=kwargs.get("name_override"),
-                use_docstring_info=kwargs.get("use_docstring_info", True),
-                strict_json_schema=kwargs.get("strict_mode", True),
-            ).params_pydantic_model
-            handler = _with_argument_detail(handler, params_model)
+        params_model = function_schema(
+            func=the_func,
+            docstring_style=kwargs.get("docstring_style"),
+            name_override=kwargs.get("name_override"),
+            use_docstring_info=kwargs.get("use_docstring_info", True),
+            strict_json_schema=kwargs.get("strict_mode", True),
+        ).params_pydantic_model
+        if failure_error_function is None:
+            handler = _propagate_with_argument_detail(params_model)
+        else:
+            handler = _with_argument_detail(
+                model_visible_tool_error
+                if failure_error_function is _DEFAULT
+                else failure_error_function,
+                params_model,
+            )
         return _sdk_function_tool(the_func, failure_error_function=handler, **kwargs)
 
     if callable(func):
