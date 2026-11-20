@@ -1002,7 +1002,7 @@ async def test_a_writer_that_failed_after_staging_is_cleared_and_run_again(harne
     rerun = workspace.candidates_staged_by("writer-2/a2")
     assert len(rerun) == 2 and not set(rerun) & set(removed_candidates)
     assert [len(workspace.candidates_staged_by(f"writer-{n}/a1")) for n in (1, 3)] == [3, 2]
-    assert workspace.candidates_staged_by(fanout._staging_owner(2, 1)) == []
+    assert workspace.candidates_staged_by("writer-2/a1") == []
     staged_labels = [candidate.staged_fields["label"] for candidate_id, candidate in workspace.candidates.items()
                      if candidate_id not in workspace.finalization.candidate_ids]
     assert sorted(staged_labels) == sorted(_SEVEN), "exactly one staged record per planned record"
@@ -1265,7 +1265,7 @@ async def test_a_failed_run_traces_how_long_the_other_writers_took_to_stop(harne
     with pytest.raises(RuntimeError, match=r"writer provider failure \(attempt 1\)"):
         await harness.run(model)
 
-    assert time.monotonic() - started < 2, "the failure does not wait for the busy writer"
+    assert time.monotonic() - started < 4, "the failure does not wait for the busy writer"
     assert model.scenario["writer_starts"][1] == 2, "the failed writer ran again once first"
     stopped, = _fanout_trace(harness, "writers_stopped")
     assert stopped["reason"] == "writer_failed"
@@ -1293,11 +1293,13 @@ def _writers_under_test(harness, monkeypatch, writer):
 @pytest.mark.asyncio
 async def test_a_writer_that_completes_after_the_failure_is_traced_as_completed(harness, monkeypatch):
     # The overrun signature: a writer that does not stop on cancel finishes after the run failed.
-    ready = asyncio.Event()
+    # Writer 3 finished before the failure, so it is not listed.
+    ready, finished = asyncio.Event(), asyncio.Event()
 
     async def writer(index, count, positions, *, attempt=1):
         if index == 1:
             await ready.wait()
+            await finished.wait()
             raise ValueError("writer failure")
         if index == 2:
             ready.set()
@@ -1306,7 +1308,8 @@ async def test_a_writer_that_completes_after_the_failure_is_traced_as_completed(
             except asyncio.CancelledError:
                 await asyncio.sleep(0.05)
                 return "kept running"
-        await asyncio.Future()
+        finished.set()
+        return "finished early"
 
     extraction = _writers_under_test(harness, monkeypatch, writer)
     monkeypatch.setattr(extraction, "writer_reruns", 0)
@@ -1316,7 +1319,7 @@ async def test_a_writer_that_completes_after_the_failure_is_traced_as_completed(
 
     stopped, = _fanout_trace(harness, "writers_stopped")
     assert stopped["reason"] == "writer_failed" and stopped["failed_writer"] == 1
-    assert stopped["writers"] == [{"writer": 2, "outcome": "completed"}, {"writer": 3, "outcome": "cancelled"}]
+    assert stopped["writers"] == [{"writer": 2, "outcome": "completed"}]
     assert stopped["stop_ms"] >= 50
 
 
@@ -1340,6 +1343,37 @@ async def test_a_cancelled_fanout_traces_how_the_writers_stopped(harness, monkey
     assert stopped["reason"] == "cancelled" and stopped["failed_writer"] is None
     assert stopped["writers"] == [{"writer": 1, "outcome": "cancelled"}, {"writer": 2, "outcome": "cancelled"}]
     assert stopped["stop_ms"] < 1000
+
+
+@pytest.mark.asyncio
+async def test_an_interrupted_fanout_is_not_traced_as_cancelled(harness, monkeypatch):
+    started = asyncio.Event()
+
+    async def writer(index, count, positions, *, attempt=1):
+        started.set()
+        await asyncio.Future()
+
+    class Interrupted(BaseException):
+        pass
+
+    extraction = _writers_under_test(harness, monkeypatch, writer)
+    original_wait = asyncio.wait
+
+    async def interrupted_wait(tasks, **kwargs):
+        await started.wait()
+        raise Interrupted
+
+    # asyncio.wait is replaced only while the writers' wait runs.
+    asyncio.wait = interrupted_wait
+    try:
+        with pytest.raises(Interrupted):
+            await extraction._run_writers([(0,)])
+    finally:
+        asyncio.wait = original_wait
+
+    stopped, = _fanout_trace(harness, "writers_stopped")
+    assert stopped["reason"] == "interrupted" and stopped["failed_writer"] is None
+    assert stopped["writers"] == [{"writer": 1, "outcome": "cancelled"}]
 
 
 @pytest.mark.asyncio

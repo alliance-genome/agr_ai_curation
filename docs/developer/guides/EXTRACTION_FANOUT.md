@@ -157,14 +157,15 @@ audit when the writers finish, with their recorded start and end times.
   message text or record content is traced. TraceReview groups them under
   `extraction_fanout`, which is absent when fan-out did not run.
 - `extraction_fanout.writers_stopped` is written once when the writing step ends early:
-  `reason` is `writer_failed` (a writer failed for good, after its re-runs) or `cancelled`
-  (the step was cancelled from outside). `failed_writer` is that writer's number, or `null`
-  when cancelled. `stop_ms` is the time from the failure (or cancellation) reaching the
+  `reason` is `writer_failed` (a writer failed for good, after its re-runs), `cancelled`
+  (the step was cancelled from outside) or `interrupted` (any other exception ended the
+  wait). `failed_writer` is that writer's number, or `null` otherwise. `stop_ms` is the time from the failure (or cancellation) reaching the
   step until every writer still running then had stopped. `writers` lists those writers,
   each with `outcome`: `cancelled` (stopped on the cancel, the expected case), `failed`
   (ended with an error while being cancelled), `completed` (ignored the cancel and finished
-  its work after the run had failed) or `running` (the wait was itself interrupted). It is
-  not written when every writer finished normally. Example:
+  its work after the run had failed) or `running` (the wait was itself interrupted). A
+  writer that had already finished before the failure is not listed. The event is not
+  written when every writer finished normally. Example:
 
   ```json
   {"reason": "writer_failed", "failed_writer": 1, "stop_ms": 3,
