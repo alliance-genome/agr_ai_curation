@@ -24,6 +24,7 @@ from src.lib.document_sources.models import (
     SourceArtifactFormat,
     SourceArtifactRole,
     SourceArtifactStatus,
+    SupplementFileCategory,
     SourceConversionResult,
     SourceConversionStatus,
     SourceReference,
@@ -50,6 +51,16 @@ _OFFICE_SUPPLEMENT_EXTENSIONS = frozenset({"xlsx", "xlsm", "docx", "docm"})
 # is linked to that original and keeps its own access rule; both must allow a
 # reader.
 _SOURCE_LINKED_CONVERTED_FILE_CLASSES = frozenset({"converted_merged_supplement"})
+
+# ABC's supplementary file classes listed as files of a paper: ``supplement`` (Office,
+# PDF and other uploads) and ``htp_supplement`` (large data files ABC keeps but does
+# not convert).
+_SUPPLEMENT_FILE_CLASS = "supplement"
+_LARGE_DATA_FILE_CLASS = "htp_supplement"
+# Extensions whose supplements ABC converts to ``converted_merged_supplement`` text:
+# Office files in-process and PDFs through its PDF converter.
+_CONVERTIBLE_SUPPLEMENT_EXTENSIONS = _OFFICE_SUPPLEMENT_EXTENSIONS | {"pdf"}
+_PUBLISHED_STATUS = "final"
 
 _FIGURE_METADATA_FILE_CLASSES = {
     "converted_main_figure_metadata",
@@ -230,6 +241,41 @@ class ABCLiteratureDocumentSourceProvider(DocumentSourceProvider):
             str(artifact.metadata.get("file_class") or "").strip().casefold() == "main"
             and artifact.artifact_format is SourceArtifactFormat.PDF
         )
+
+    def supplement_file_category(self, artifact: SourceArtifact) -> SupplementFileCategory | None:
+        """List published ``supplement`` and ``htp_supplement`` originals only.
+
+        Main files, derived rows (converted text, figures, metadata, embeddings)
+        and rows whose ``file_publication_status`` is not ``final`` are not files of
+        the listing.
+        """
+
+        if not _is_published(artifact):
+            return None
+        file_class = _artifact_file_class(artifact)
+        if file_class == _LARGE_DATA_FILE_CLASS:
+            return SupplementFileCategory.LARGE_DATA_FILE
+        if file_class != _SUPPLEMENT_FILE_CLASS:
+            return None
+        extension = str(artifact.metadata.get("file_extension") or "").strip().lower()
+        if extension in _CONVERTIBLE_SUPPLEMENT_EXTENSIONS:
+            return SupplementFileCategory.CONVERTIBLE
+        return SupplementFileCategory.UNSUPPORTED_TYPE
+
+    def is_listed_converted_supplement_text(self, artifact: SourceArtifact) -> bool:
+        """Only published ``converted_merged_supplement`` rows linked to their original."""
+
+        return (
+            _artifact_file_class(artifact) in _SOURCE_LINKED_CONVERTED_FILE_CLASSES
+            and _is_published(artifact)
+            and artifact.parent_artifact_id is not None
+        )
+
+    def converted_text_has_single_title(self, original: SourceArtifact) -> bool:
+        """ABC's Office converter gives a converted Word or Excel file exactly one title."""
+
+        extension = str(original.metadata.get("file_extension") or "").strip().lower()
+        return extension in _OFFICE_SUPPLEMENT_EXTENSIONS
 
     def reference_source_artifact_sort_key(
         self,
@@ -1092,6 +1138,13 @@ def _same_reference(source_artifact: SourceArtifact, artifact: SourceArtifact) -
     if source_artifact.reference_curie and artifact.reference_curie:
         return source_artifact.reference_curie == artifact.reference_curie
     return not artifact.reference_id and not artifact.reference_curie
+
+
+def _is_published(artifact: SourceArtifact) -> bool:
+    return (
+        str(artifact.metadata.get("file_publication_status") or "").strip().casefold()
+        == _PUBLISHED_STATUS
+    )
 
 
 def _artifact_file_class(artifact: SourceArtifact) -> str:

@@ -9,6 +9,7 @@ from src.lib.document_sources.file_assessment import (
     FileCheckReason,
     FileProfile,
     assess_converted_file,
+    summarize_assessments,
 )
 
 
@@ -126,3 +127,13 @@ def test_check_version_changes_with_every_threshold():
     assert _limits(few_characters_below=21).check_version != base
     assert _limits(row_token_limit=51).check_version != base
     assert _limits(count_tokens=lambda text: 0).check_version == base
+
+
+def test_the_summary_counts_results_and_notes_only():
+    summary = summarize_assessments(
+        [TABLE.encode(), b"\xff", "short".encode()], PLAIN, _limits(),
+    )
+    assert summary["files"] == 3
+    assert summary["results"] == {"invalid_text": 1, "ok": 2}
+    assert summary["few_characters_notes"] == 1
+    assert summary["check_version"] == _limits().check_version

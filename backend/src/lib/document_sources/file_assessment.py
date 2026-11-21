@@ -137,3 +137,22 @@ def assess_converted_file(content: bytes, profile: FileProfile, limits: FileChec
         refused=False,
         few_characters_count=readable if readable < limits.few_characters_below else None,
     )
+
+
+def summarize_assessments(contents, profile: FileProfile, limits: FileCheckLimits) -> dict:
+    """Counts by result and reason over many files' bytes; no names, ids or text."""
+
+    from collections import Counter
+
+    results: Counter[str] = Counter()
+    notes = 0
+    for content in contents:
+        assessment = assess_converted_file(content, profile, limits)
+        results[assessment.reason.value if assessment.refused else "ok"] += 1
+        notes += 1 if assessment.few_characters_count is not None else 0
+    return {
+        "files": sum(results.values()),
+        "results": dict(sorted(results.items())),
+        "few_characters_notes": notes,
+        "check_version": limits.check_version,
+    }

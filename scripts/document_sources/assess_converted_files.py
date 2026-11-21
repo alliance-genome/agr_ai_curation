@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,32 +41,19 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def summarize(paths, profile, limits) -> dict:
-    from src.lib.document_sources.file_assessment import assess_converted_file
-
-    results: Counter[str] = Counter()
-    notes = 0
-    for path in paths:
-        assessment = assess_converted_file(path.read_bytes(), profile, limits)
-        results[assessment.reason.value if assessment.refused else "ok"] += 1
-        notes += 1 if assessment.few_characters_count is not None else 0
-    return {
-        "files": sum(results.values()),
-        "results": dict(sorted(results.items())),
-        "few_characters_notes": notes,
-        "check_version": limits.check_version,
-    }
-
-
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    from src.lib.document_sources.file_assessment import FileProfile
+    from src.lib.document_sources.file_assessment import FileProfile, summarize_assessments
     from src.lib.document_sources.file_listing import current_file_check_limits
 
     paths = sorted(
         path for directory in args.directories for path in directory.rglob(args.pattern) if path.is_file()
     )
-    summary = summarize(paths, FileProfile(single_title_required=args.single_title), current_file_check_limits())
+    summary = summarize_assessments(
+        (path.read_bytes() for path in paths),
+        FileProfile(single_title_required=args.single_title),
+        current_file_check_limits(),
+    )
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:

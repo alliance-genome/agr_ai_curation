@@ -78,6 +78,20 @@ class SourceArtifactRole(str, Enum):
     PROVIDER_METADATA = "provider_metadata"
 
 
+class SupplementFileCategory(str, Enum):
+    """How a provider classifies one supplementary original for the file listing.
+
+    ``CONVERTIBLE``: its text is read from a converted text artifact whose
+    ``parent_artifact_id`` names it (the listing says whether one exists).
+    ``LARGE_DATA_FILE``: a data file the provider keeps but does not convert.
+    ``UNSUPPORTED_TYPE``: any other supplementary file.
+    """
+
+    CONVERTIBLE = "convertible"
+    LARGE_DATA_FILE = "large_data_file"
+    UNSUPPORTED_TYPE = "unsupported_type"
+
+
 class SourceArtifactFormat(str, Enum):
     UNKNOWN = "unknown"
     PDF = "pdf"
@@ -243,6 +257,30 @@ class DocumentSourceProvider(Protocol):
         Identifier imports consider only these PDFs as the paper; other source
         PDFs (for example supplements or superseded files) are never imported
         as the paper, even when they are the only accessible one.
+        """
+        raise NotImplementedError
+
+    def supplement_file_category(self, artifact: SourceArtifact) -> SupplementFileCategory | None:
+        """Classify a listed artifact as a supplementary original, or ``None``.
+
+        ``None`` for everything the file listing does not show as its own file:
+        the paper's main files, derived artifacts (converted text, figures,
+        metadata) and files the provider has not published.
+        """
+        raise NotImplementedError
+
+    def is_listed_converted_supplement_text(self, artifact: SourceArtifact) -> bool:
+        """Whether an artifact is the published converted text of a supplementary original.
+
+        Only these are read for a supplement; other conversions are never used.
+        Such an artifact names its original in ``parent_artifact_id``.
+        """
+        raise NotImplementedError
+
+    def converted_text_has_single_title(self, original: SourceArtifact) -> bool:
+        """Whether this original's converted text starts with exactly one top-level title.
+
+        When true the file checks require exactly one top-level title.
         """
         raise NotImplementedError
 

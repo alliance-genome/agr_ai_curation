@@ -312,6 +312,36 @@ async def select_reference_import_candidate(
         reference,
         request_bearer_token=request_bearer_token,
     )
+    return await decide_reference_import(
+        provider=provider,
+        identifier=identifier,
+        reference=reference,
+        artifacts=artifacts,
+        authorized_group_ids=authorized_group_ids,
+        bearer_kind=bearer_kind,
+        request_bearer_token=request_bearer_token,
+        allow_conversion_request=allow_conversion_request,
+    )
+
+
+async def decide_reference_import(
+    *,
+    provider: DocumentSourceProvider,
+    identifier: str,
+    reference: SourceReference,
+    artifacts: list[SourceArtifact],
+    authorized_group_ids: tuple[str, ...] | list[str] | set[str],
+    bearer_kind: ProviderBearerKind,
+    request_bearer_token: str | None = None,
+    allow_conversion_request: bool = True,
+) -> ReferenceImportDecision:
+    """Choose the source PDF and converted main text from a reference's listed artifacts.
+
+    The rule ``select_reference_import_candidate`` applies after resolving and
+    listing; the file listing calls it on the listing it already holds, so the
+    main paper it shows is the one an import would choose.
+    """
+
     source_artifacts: tuple[SourceArtifact, ...] = tuple(
         artifact
         for artifact in artifacts

@@ -157,3 +157,36 @@ Persist compact provenance on AI Curation documents:
 
 Raw Literature payloads, if retained for debugging, belong in storage paths or
 debug/download surfaces, not the main document list or Weaviate metadata.
+
+### File listing and per-file checks (KANBAN-1976 / ALL-1460, P6)
+
+`GET /weaviate/document-sources/files?identifier=...` (before import) and
+`GET /weaviate/documents/{document_id}/source-files` (an imported paper, owner only) list a
+paper's ABC files for the signed-in curator. Backend only; the response holds codes and
+numbers, never wording (`src/lib/document_sources/file_listing.py`).
+
+- The reference is always resolved first; the listing refuses a bare identifier, because the
+  licence step of ABC's access rule applies only to a resolved reference.
+- The main paper is one entry, chosen as an import chooses it (`decide_reference_import`); its
+  converted text is not listed separately and is not checked here.
+- Supplements: published (`file_publication_status == "final"`) `supplement` and
+  `htp_supplement` rows. Status `ready` (a published `converted_merged_supplement` names it as
+  its `source`), `no_converted_text`, `large_data_file` (`htp_supplement`) or
+  `type_not_supported`. Other converter variants are never read.
+- Access: a supplement is shown only when the curator passes both the original's rule and the
+  converted row's own rule, checked separately. Files the curator cannot open appear only in
+  `not_shown_count` (ABC's own `show_all` lists every file's metadata to any signed-in caller,
+  so a bare count shows less). A converted row whose source is missing from ABC's listing is
+  left out by the adapter and is not counted.
+- Copies with the same MD5 collapse to the copy the curator can open, the lowest provider file
+  id among several; the others are counted in `duplicate_copies_count`.
+- File role an import would give: `main` for the paper's main PDF; `supplement` for a
+  supplementary PDF (`SOURCE_PDF`) or another supplement (`SOURCE_SUPPLEMENT`); any other role
+  is a named error.
+- Checks R1 to R7 (`file_assessment.py`) run on the downloaded converted text of each `ready`
+  supplement not checked before, at most `DOCUMENT_FILE_DOWNLOAD_CONCURRENCY` at once (default 4)
+  and never past `DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES`. R7 (one top-level title) applies to
+  converted Word and Excel files. R3 is a note only (`DOCUMENT_FILE_FEW_CHARACTERS_NOTE_BELOW`).
+  Results are stored in `document_file_assessments` by provider file id, MD5 and a check version
+  that includes every threshold, and reused only after the access checks. A refusal found while
+  listing sends no Sentry event. The listing does not clean or parse text.
