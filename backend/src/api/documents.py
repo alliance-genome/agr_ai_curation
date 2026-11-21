@@ -620,7 +620,23 @@ async def _update_owned_document_metadata(
                     detail="Document filename cannot be changed while processing is active",
                 )
 
-            main_file = document.main_file
+            main_file = document.main_file_or_none
+            if main_file is None:
+                # A paper without a main file has no stored main PDF to rename;
+                # only its Library name and the search index change.
+                old_filename = document.filename
+                await update_document_filename(user_sub, document_id, request.filename)
+                index_updated = True
+                document.filename = request.filename
+                if request.title is not None:
+                    document.title = request.title
+                session.commit()
+                logger.info("Updated metadata for document %s", document_id)
+                return DocumentUpdateResponse(
+                    document_id=document_id,
+                    title=document.title,
+                    filename=document.filename,
+                )
             target_relative_path = FilePath(main_file.file_path).with_name(
                 request.filename
             ).as_posix()
@@ -699,6 +715,17 @@ async def _update_owned_document_metadata(
             )
             if recovery_failure is not None:
                 sanitized_failure = recovery_failure
+        elif moved_paths is None and index_updated and old_filename is not None:
+            # A paper without a main file: put the index's name back.
+            try:
+                await update_document_filename(user_sub, document_id, old_filename)
+            except Exception as rollback_exc:
+                report_runtime_exception(
+                    _sanitized_document_metadata_error(rollback_exc),
+                    component="documents",
+                    operation="filename_index_rollback_failed",
+                    context={"document_id": document_id},
+                )
         if sanitized_failure is None:
             if isinstance(exc, HTTPException):
                 raise
@@ -1356,7 +1383,9 @@ async def get_document_endpoint(
             upload_timestamp=pg_doc.upload_timestamp,
             processing_started_at=pg_doc.processing_started_at,
             processing_completed_at=pg_doc.processing_completed_at,
-            file_size_bytes=pg_doc.main_file.file_size,
+            file_size_bytes=(
+                pg_doc.main_file_or_none.file_size if pg_doc.main_file_or_none is not None else None
+            ),
             weaviate_tenant=tenant_name,
             chunk_count=doc_data.get("chunk_count"),
             error_message=(
@@ -1595,7 +1624,7 @@ async def delete_document_endpoint(
                         label="PDFX JSON",
                     )
 
-                    # 3. Delete Processed JSON: {user_id}/processed_json/{doc_id}.json
+                    # 3. Delete Processed JSON: the file's stored processed_json_path
                     _unlink_user_storage_file_if_present(
                         base_storage=base_storage,
                         relative_path=file_values["processed_json_path"],
@@ -1604,7 +1633,7 @@ async def delete_document_endpoint(
                         label="Processed JSON",
                     )
 
-                    # 4. Delete provider/source Markdown: {user_id}/source_markdown/{doc_id}.md
+                    # 4. Delete provider/source Markdown: the file's stored source_markdown_path
                     _unlink_user_storage_file_if_present(
                         base_storage=base_storage,
                         relative_path=file_values["source_markdown_path"],
@@ -2116,7 +2145,23 @@ async def get_download_info(
 
             doc = require_owned_document(session, document_uuid, db_user.id)
 
-            main_file = doc.main_file
+            main_file = doc.main_file_or_none
+            if main_file is None:
+                # Downloads are of the main file; a paper of supplements only has none.
+                return {
+                    "pdf_available": False,
+                    "pdf_size": None,
+                    "pdfx_json_available": False,
+                    "pdfx_json_size": None,
+                    "processed_json_available": False,
+                    "processed_json_size": None,
+                    "source_markdown_available": False,
+                    "source_markdown_size": None,
+                    "viewer_mode": None,
+                    "has_main_file": False,
+                    "source_provenance": build_document_source_provenance(doc),
+                    "filename": doc.filename,
+                }
             viewer_mode = main_file.display_mode
             is_text_only = viewer_mode == DISPLAY_MODE_TEXT
 
@@ -2145,7 +2190,7 @@ async def get_download_info(
                 pdfx_json_size = pdfx_path.stat().st_size if pdfx_json_available else None
 
             # Check processed JSON file with path validation (T032)
-            # Note: processed_json_path is stored relative to pdf_storage: {user_id}/processed_json/{doc_id}.json
+            # Note: processed_json_path is stored relative to pdf_storage ({user_id}/processed_json/..., named by paper id for older and PDF-processed files, by file id for provider imports)
             processed_json_available = False
             processed_json_size = None
             if main_file.processed_json_path:
@@ -2184,6 +2229,7 @@ async def get_download_info(
                 "source_markdown_available": source_markdown_available,
                 "source_markdown_size": source_markdown_size,
                 "viewer_mode": viewer_mode,
+                "has_main_file": True,
                 "source_provenance": build_document_source_provenance(doc),
                 "filename": doc.filename
             }
@@ -2242,7 +2288,12 @@ async def download_document_file(
             file_path = None
             filename = None
             media_type = "application/octet-stream"
-            main_file = doc.main_file
+            main_file = doc.main_file_or_none
+            if main_file is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"{file_type} file not available for document {document_id}"
+                )
             viewer_mode = main_file.display_mode
             is_text_only = viewer_mode == DISPLAY_MODE_TEXT
 
@@ -2267,7 +2318,7 @@ async def download_document_file(
                     media_type = "application/json"
 
             elif file_type == 'processed_json':
-                # Note: processed_json_path is stored relative to pdf_storage: {user_id}/processed_json/{doc_id}.json
+                # Note: processed_json_path is stored relative to pdf_storage ({user_id}/processed_json/..., named by paper id for older and PDF-processed files, by file id for provider imports)
                 if main_file.processed_json_path:
                     pdf_storage = get_pdf_storage_path()
                     # Construct full path from pdf_storage (paths are relative to pdf_storage root)

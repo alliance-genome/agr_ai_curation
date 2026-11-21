@@ -285,25 +285,25 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
         assert user_id == "user-provider"
         assert owner_user_id == 42
 
-    async def _save_source_markdown(*, markdown, document_id, user_id):
+    async def _save_source_markdown(*, markdown, file_id, user_id):
         source_markdown_writes.append(
             {
                 "markdown": markdown,
-                "document_id": document_id,
+                "file_id": file_id,
                 "user_id": user_id,
             }
         )
-        return f"{user_id}/source_markdown/{document_id}.md"
+        return f"{user_id}/source_markdown/{file_id}.md"
 
-    async def _save_processed_json(*, elements, document_id, user_id):
+    async def _save_processed_json(*, elements, file_id, user_id):
         processed_json_writes.append(
             {
                 "elements": elements,
-                "document_id": document_id,
+                "file_id": file_id,
                 "user_id": user_id,
             }
         )
-        return f"{user_id}/processed_json/{document_id}.json"
+        return f"{user_id}/processed_json/{file_id}.json"
 
     async def _persist_ingestion_metadata(**kwargs):
         persisted_metadata.append(kwargs)
@@ -537,11 +537,11 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert source_markdown_writes == [
         {
             "markdown": markdown,
-            "document_id": result.document_id,
+            "file_id": main_file_uuid,
             "user_id": "user-provider",
         }
     ]
-    assert processed_json_writes[0]["document_id"] == result.document_id
+    assert processed_json_writes[0]["file_id"] == main_file_uuid
     assert persisted_metadata[0]["document_id"] == result.document_id
     assert persisted_metadata[0]["owner_user_id"] == 42
     assert persisted_metadata[0]["source_provenance"]["provider"] == "mock_literature"
@@ -551,7 +551,7 @@ async def test_upload_intake_ready_provider_markdown_runs_generic_ingestion(
     assert "token" not in persisted_metadata[0]["source_provenance"]["external_ids"]
     assert persisted_metadata[0]["source_provenance"]["access_group_ids"] == ["FAKE"]
     assert persisted_metadata[0]["source_markdown_path"] == (
-        f"user-provider/source_markdown/{result.document_id}.md"
+        f"user-provider/source_markdown/{main_file_uuid}.md"
     )
     assert stored_chunks == [
         {

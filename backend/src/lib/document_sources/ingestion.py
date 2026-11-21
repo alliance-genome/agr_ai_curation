@@ -186,12 +186,12 @@ async def ingest_provider_markdown_document(
 
         source_markdown_path = await _save_source_markdown(
             markdown=markdown,
-            document_id=document_id,
+            file_id=file_id,
             user_id=user_id,
         )
         processed_json_path = await _save_processed_json(
             elements=elements,
-            document_id=document_id,
+            file_id=file_id,
             user_id=user_id,
         )
         await _persist_ingestion_metadata(
@@ -449,14 +449,15 @@ def _require_ingestable_provenance(raw: Mapping[str, Any]) -> dict[str, Any]:
 async def _save_source_markdown(
     *,
     markdown: str,
-    document_id: str,
+    file_id: UUID,
     user_id: str,
 ) -> str:
+    """Save one file's provider Markdown under its file id (a paper may hold several)."""
     from src.config import get_pdf_storage_path
 
     pdf_storage = get_pdf_storage_path()
     output_dir = ensure_writable_directory(Path(pdf_storage) / user_id / "source_markdown")
-    file_path = output_dir / f"{document_id}.md"
+    file_path = output_dir / f"{file_id}.md"
     await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: file_path.write_text(markdown, encoding="utf-8"),
@@ -467,14 +468,15 @@ async def _save_source_markdown(
 async def _save_processed_json(
     *,
     elements: list[dict[str, Any]],
-    document_id: str,
+    file_id: UUID,
     user_id: str,
 ) -> str:
+    """Save one file's processed elements under its file id (a paper may hold several)."""
     from src.config import get_pdf_storage_path
 
     pdf_storage = get_pdf_storage_path()
     output_dir = ensure_writable_directory(Path(pdf_storage) / user_id / "processed_json")
-    file_path = output_dir / f"{document_id}.json"
+    file_path = output_dir / f"{file_id}.json"
     await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: file_path.write_text(json.dumps(elements, indent=2), encoding="utf-8"),

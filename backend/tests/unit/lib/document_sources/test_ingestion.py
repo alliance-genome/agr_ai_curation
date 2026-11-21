@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -162,10 +163,35 @@ async def test_persist_ingestion_metadata_stores_digest_with_downloaded_artifact
 async def test_original_source_file_preserves_utf8_and_crlf_bytes(monkeypatch, tmp_path):
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     original = "\ufeff # Résults\r\n\r\nβ cells.  \r\n".encode("utf-8")
+    file_id = uuid.uuid4()
     relative = await ingestion._save_source_markdown(
-        markdown=original.decode("utf-8"), document_id="doc-1", user_id="user-1",
+        markdown=original.decode("utf-8"), file_id=file_id, user_id="user-1",
     )
+    assert relative == f"user-1/source_markdown/{file_id}.md"
     assert (tmp_path / relative).read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_each_file_of_a_paper_keeps_its_own_markdown_and_processed_elements(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    main_id, supplement_id = uuid.uuid4(), uuid.uuid4()
+
+    paths = [
+        await ingestion._save_source_markdown(markdown=f"# {name}\n", file_id=file_id, user_id="user-1")
+        for name, file_id in (("Main", main_id), ("Table S1", supplement_id))
+    ] + [
+        await ingestion._save_processed_json(
+            elements=[{"type": "Title", "text": name}], file_id=file_id, user_id="user-1"
+        )
+        for name, file_id in (("Main", main_id), ("Table S1", supplement_id))
+    ]
+
+    assert len(set(paths)) == 4
+    assert (tmp_path / paths[0]).read_text(encoding="utf-8") == "# Main\n"
+    assert (tmp_path / paths[1]).read_text(encoding="utf-8") == "# Table S1\n"
+    assert json.loads((tmp_path / paths[3]).read_text(encoding="utf-8"))[0]["text"] == "Table S1"
 
 
 @pytest.mark.asyncio

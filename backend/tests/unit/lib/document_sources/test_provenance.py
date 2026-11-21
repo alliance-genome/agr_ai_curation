@@ -32,7 +32,7 @@ def _document(**values):
     assert not unknown, unknown
     main_file = SimpleNamespace(**{field: values.get(field) for field in _FILE_FIELDS})
     return SimpleNamespace(
-        main_file=main_file, **{field: values.get(field) for field in _PAPER_FIELDS}
+        main_file=main_file, main_file_or_none=main_file, **{field: values.get(field) for field in _PAPER_FIELDS}
     )
 
 

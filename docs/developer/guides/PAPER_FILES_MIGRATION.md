@@ -51,6 +51,69 @@ keeps a text paper active without the PDF viewer, and still refuses a PDF paper
 without a page count (`chatDocumentRehydration.ts`; the shapes are pinned in
 `backend/tests/unit/api/test_pdf_viewer_text_only.py`).
 
+## A paper without a main file
+
+A paper can be imported from its supplements alone, so a paper with no `main`
+file row is a valid state (more than one is not: `uq_pdf_document_files_one_main`).
+Readers that show any paper use `PDFDocument.main_file_or_none` and report the
+absence plainly; nothing invents a main file:
+
+- Library and viewer lists, paper detail and the viewer URL report
+  `viewer_mode`, `viewer_url`, `page_count`, `file_size` (`file_size_bytes`)
+  and `file_hash` as `null`.
+- The PDF content route and every main-file download return 404; download info
+  lists nothing available.
+- Renaming changes the paper's name and the search index only (there is no
+  stored main PDF to rename).
+- Source provenance holds the paper's own fields only; execution provenance,
+  validation history and cost attribution record no main-file values; the
+  document outline has no hierarchy; a curation session has no viewer URL or
+  page count.
+- A benchmark cannot use such a paper as a local source (benchmarks read main
+  files only).
+
+`PDFDocument.main_file` stays for paths that only ever act on a main file (main
+paper imports, uploads, benchmark papers) and raises `MissingMainFileError`
+when there is none.
+
+## Stored files per file
+
+New provider imports save each file's converted Markdown and processed
+elements under the file's id: `{user}/source_markdown/{file_id}.md` and
+`{user}/processed_json/{file_id}.json`. Files stored earlier keep their paths
+(named by paper id); every reader and the delete path use the paths stored on
+the file row, never a rebuilt one.
+
+## One active job per paper (Alembic `d7e8f9a0b1c2`)
+
+A partial unique index, `uq_pdf_processing_jobs_one_active_per_document`, allows
+at most one job per paper in `pending`, `running` or `cancel_requested`.
+`pdf_jobs.service.create_job` raises `ActiveJobExistsError` for a second one.
+
+The migration fails, changing nothing, if a paper already has two or more
+active jobs. It names the papers (`ActivePdfJobsMigrationError`) and never
+picks a job to keep. Before the release, run this read-only check against the
+deployment (it works on the previous release's schema too):
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+SELECT document_id,
+       count(*) AS active_jobs,
+       array_agg(status ORDER BY created_at) AS statuses,
+       min(created_at) AS first_created,
+       max(updated_at) AS last_updated
+FROM pdf_processing_jobs
+WHERE status IN ('pending', 'running', 'cancel_requested')
+GROUP BY document_id
+HAVING count(*) > 1
+ORDER BY document_id;
+ROLLBACK;
+```
+
+No rows means the migration will apply. Any row is a paper whose jobs must be
+looked at by hand (stale jobs are normally finished by the stale-job
+reconciler) before upgrading.
+
 ## The migration (Alembic `c6d7e8f9a0b1`)
 
 It changes only PostgreSQL. For every paper it creates one `main` file that

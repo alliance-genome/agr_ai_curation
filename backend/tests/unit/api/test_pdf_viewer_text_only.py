@@ -50,7 +50,7 @@ def _record(**file_overrides):
         last_accessed=datetime(2026, 6, 25, tzinfo=timezone.utc),
         user_id=7,
         document_kind="library",
-        main_file=SimpleNamespace(**main_file),
+        main_file_or_none=SimpleNamespace(**main_file),
     )
 
 
@@ -133,6 +133,7 @@ def test_viewer_response_schema_serializes_stored_page_counts_above_legacy_limit
             "upload_timestamp": datetime(2026, 6, 25, tzinfo=timezone.utc),
             "viewer_url": f"/api/pdf-viewer/documents/{_DOC_ID}/content",
             "viewer_mode": "local_pdf",
+            "has_main_file": True,
         }
     )
 
@@ -151,6 +152,7 @@ def test_viewer_response_schema_serializes_size_above_current_admission_limit():
             "upload_timestamp": datetime(2026, 6, 25, tzinfo=timezone.utc),
             "viewer_url": f"/api/pdf-viewer/documents/{_DOC_ID}/content",
             "viewer_mode": "local_pdf",
+            "has_main_file": True,
         }
     )
 
@@ -210,4 +212,32 @@ def test_viewer_api_shapes_for_a_text_paper_and_a_plain_upload(
         "viewer_url": expected_url,
         "viewer_mode": display_mode,
     }
-    assert url == {"viewer_url": expected_url, "viewer_mode": display_mode}
+    assert url == {"viewer_url": expected_url, "viewer_mode": display_mode, "has_main_file": True}
+    assert detail["has_main_file"] is True
+
+
+def test_viewer_api_shape_for_a_paper_without_a_main_file():
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    paper = new_supplements_only_paper(
+        id=_DOC_ID, user_id=7, filename="supplements-only-paper",
+        upload_timestamp=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        last_accessed=datetime(2026, 6, 25, tzinfo=timezone.utc), document_kind="library",
+    )
+    user = {"sub": "user123"}
+
+    detail = pdf_viewer.get_document_detail(
+        document_id=_DOC_ID, db=_FakeDb(paper), user=user
+    ).model_dump(mode="json")
+    url = pdf_viewer.get_document_viewer_url(
+        document_id=_DOC_ID, db=_FakeDb(paper), user=user
+    ).model_dump(mode="json")
+
+    # The shape the frontend fixtures copy: an explicit has_main_file, every main-file field null.
+    assert {key: detail[key] for key in (
+        "has_main_file", "viewer_mode", "viewer_url", "page_count", "file_size", "file_hash"
+    )} == {
+        "has_main_file": False, "viewer_mode": None, "viewer_url": None,
+        "page_count": None, "file_size": None, "file_hash": None,
+    }
+    assert url == {"viewer_url": None, "viewer_mode": None, "has_main_file": False}

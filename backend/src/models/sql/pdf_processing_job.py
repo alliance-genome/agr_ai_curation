@@ -11,10 +11,12 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
@@ -32,6 +34,9 @@ class PdfJobStatus(str, enum.Enum):
     FAILED = "failed"
     CANCEL_REQUESTED = "cancel_requested"
     CANCELLED = "cancelled"
+
+
+ONE_ACTIVE_JOB_PER_PAPER_INDEX = "uq_pdf_processing_jobs_one_active_per_document"
 
 
 class PdfProcessingJob(Base):
@@ -99,6 +104,16 @@ class PdfProcessingJob(Base):
         CheckConstraint(
             "progress_percentage >= 0 AND progress_percentage <= 100",
             name="ck_pdf_processing_jobs_progress_percentage",
+        ),
+        # One active job per paper: a second import or add into the same paper
+        # while one is running is refused, never queued beside it.
+        Index(
+            ONE_ACTIVE_JOB_PER_PAPER_INDEX,
+            "document_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('pending', 'running', 'cancel_requested')"
+            ),
         ),
     )
 

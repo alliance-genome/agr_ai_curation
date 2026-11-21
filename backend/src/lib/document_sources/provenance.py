@@ -174,11 +174,12 @@ def _serialize_datetime(value: object) -> str | None:
 
 def _raw_provenance_from_document(document: PDFDocument) -> dict[str, Any]:
     raw: dict[str, Any] = {}
-    main_file = document.main_file
-    for source, fields in (
-        (document, _PAPER_SQL_TO_PUBLIC_FIELD),
-        (main_file, _FILE_SQL_TO_PUBLIC_FIELD),
-    ):
+    # A paper of supplements only reports its paper-level provenance alone.
+    main_file = document.main_file_or_none
+    sources: list[tuple[Any, dict[str, str]]] = [(document, _PAPER_SQL_TO_PUBLIC_FIELD)]
+    if main_file is not None:
+        sources.append((main_file, _FILE_SQL_TO_PUBLIC_FIELD))
+    for source, fields in sources:
         for sql_field, public_field in fields.items():
             value = getattr(source, sql_field)
             if value is not None:

@@ -137,7 +137,7 @@ def test_verified_paper_uses_subject_ownership_and_preserves_artifact(monkeypatc
     query.filter.return_value.one_or_none.return_value = SimpleNamespace(
         source_provider="example", source_provider_reference_curie="EX:paper-A",
         source_provider_reference_id="123",
-        main_file=SimpleNamespace(source_md5=None, file_hash="checksum"),
+        main_file_or_none=SimpleNamespace(source_md5=None, file_hash="checksum"),
     )
     monkeypatch.setattr(database, "SessionLocal", lambda: db)
     first = execution_context(activity="interactive_chat", document_id="artifact-A", user_id="auth-sub")
@@ -329,4 +329,28 @@ def test_missing_attribution_does_not_report(monkeypatch, document_id, user_id):
     result = execution_context(activity="interactive_chat", document_id=document_id, user_id=user_id)
 
     assert result["paper_category"] == ("artifact_only" if document_id else "not_associated")
+    report.assert_not_called()
+
+
+def test_a_paper_without_a_main_file_has_no_artifact_revision(monkeypatch):
+    from src.lib.observability import cost_context
+    from src.models.sql import database
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    db = MagicMock()
+    db.__enter__.return_value = db
+    query = db.query.return_value.join.return_value
+    query.filter.return_value.one_or_none.return_value = new_supplements_only_paper(
+        user_id=1, filename="supplements-only-paper", source_provider="example",
+        source_provider_reference_curie="EX:paper-B",
+    )
+    monkeypatch.setattr(database, "SessionLocal", lambda: db)
+    report = MagicMock()
+    monkeypatch.setattr(cost_context, "report_runtime_exception", report)
+
+    context = execution_context(activity="interactive_chat", document_id="artifact-C", user_id="auth-sub")
+
+    assert context["paper"] == {"namespace": "example", "id": "EX:paper-B"}
+    assert "artifact_revision" not in context
+    # A paper without a main file is a normal state, not a lookup failure.
     report.assert_not_called()

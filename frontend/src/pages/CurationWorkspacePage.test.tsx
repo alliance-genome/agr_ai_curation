@@ -1139,6 +1139,32 @@ describe('CurationWorkspacePage', () => {
     expect(serviceMocks.dispatchPDFDocumentChanged).not.toHaveBeenCalled()
   })
 
+  it('clears the shared viewer for a paper without a main file', async () => {
+    // The session serializer sends the same shape for a paper that holds supplements
+    // only: no PDF URL, no viewer URL, no pages.
+    const workspace = buildWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue({
+      ...workspace,
+      session: {
+        ...workspace.session,
+        document: {
+          ...workspace.session.document,
+          filename: 'supplements-only-paper',
+          pdf_url: null,
+          viewer_url: null,
+          page_count: null,
+        },
+      },
+    })
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => {
+      expect(serviceMocks.dispatchPDFViewerDocumentCleared).toHaveBeenCalledWith('curation:session-1')
+    })
+    expect(serviceMocks.dispatchPDFDocumentChanged).not.toHaveBeenCalled()
+  })
+
   it('loads a PDF paper normally after a text paper session', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildTextPaperWorkspace())
     const textView = renderPage('/curation/session-1/candidate-accepted')

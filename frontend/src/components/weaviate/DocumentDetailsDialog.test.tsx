@@ -288,4 +288,42 @@ describe('DocumentDetailsDialog', () => {
     expect(screen.getByText('Uploaded PDF')).toBeInTheDocument();
     expect(screen.queryByText('Genome Archive')).not.toBeInTheDocument();
   });
+
+  it('shows a paper without a main file with no file size', () => {
+    // The detail the backend returns for a paper that holds supplements only.
+    const supplementsOnly = normalizeDocumentDetailResponse({
+      document_id: 'doc-no-main',
+      job_id: null,
+      user_id: 5,
+      filename: 'supplements-only-paper',
+      title: null,
+      status: 'COMPLETED',
+      upload_timestamp: '2026-11-21T00:00:00Z',
+      processing_started_at: null,
+      processing_completed_at: null,
+      file_size_bytes: null,
+      weaviate_tenant: 'tenant-user-1',
+      chunk_count: 3,
+      error_message: null,
+      source_provenance: null,
+    });
+    useDocumentMock.mockReturnValue({
+      data: supplementsOnly,
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <DocumentDetailsDialog
+        open
+        documentId="doc-no-main"
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText('supplements-only-paper').length).toBeGreaterThan(0);
+    expect(screen.getByText('File Size').parentElement).toHaveTextContent('—');
+  });
 });

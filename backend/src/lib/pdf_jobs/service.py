@@ -11,7 +11,7 @@ from typing import Iterable, Optional
 from uuid import UUID
 
 from sqlalchemy import exists, func, select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
 from src.lib.openai_agents.config import (
@@ -29,7 +29,11 @@ from src.lib.pipeline.processing_receipt import (
 )
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import FILE_STATUS_FAILED, FILE_STATUS_PENDING, PDFDocument
-from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
+from src.models.sql.pdf_processing_job import (
+    ONE_ACTIVE_JOB_PER_PAPER_INDEX,
+    PdfJobStatus,
+    PdfProcessingJob,
+)
 from src.schemas.pdf_jobs import PdfJobListResponse, PdfJobResponse
 from src.services.processing_status_policy import (
     PDF_JOB_STATUS_TO_PROCESSING_STATUS,
@@ -202,9 +206,12 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     }:
         return False
 
-    # Lock the document before checking the latest job. Inserting another job
-    # takes a foreign-key key-share lock on this row, so the latest-job decision
-    # remains valid through the document mutation.
+    # Lock the document before checking the latest job. A job insert's
+    # foreign-key key-share lock would wait on this row, but a second job for a
+    # paper that still has an active job waits on the one-active-job unique index
+    # instead, which is released only when this transaction ends. So this lock
+    # alone does not order such an insert after the decision below: a caller
+    # adding a job to an existing paper must lock the paper row first.
     document = session.execute(
         select(PDFDocument).where(PDFDocument.id == job.document_id).with_for_update()
     ).scalar_one_or_none()
@@ -448,8 +455,27 @@ def reconcile_pending_documents_without_jobs(
     raise RuntimeError("No-job orphan reconciliation exhausted its retry loop")
 
 
+def _violates_constraint(error: IntegrityError, name: str) -> bool:
+    """Whether PostgreSQL reports ``name`` as the violated constraint or index."""
+
+    diag = getattr(getattr(error, "orig", None), "diag", None)
+    return getattr(diag, "constraint_name", None) == name
+
+
+class ActiveJobExistsError(RuntimeError):
+    """The paper already has an active processing job; a second one is refused."""
+
+    def __init__(self, document_id: UUID | str) -> None:
+        super().__init__(f"Document {document_id} already has an active processing job")
+        self.document_id = document_id
+
+
 def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str] = None) -> PdfJobResponse:
-    """Create a new pending job for an uploaded PDF document."""
+    """Create a new pending job for a paper.
+
+    A paper has at most one active job (``ONE_ACTIVE_JOB_PER_PAPER_INDEX``);
+    a second one raises ``ActiveJobExistsError``.
+    """
     session = SessionLocal()
     try:
         job = PdfProcessingJob(
@@ -463,7 +489,13 @@ def create_job(*, document_id: UUID | str, user_id: int, filename: Optional[str]
             cancel_requested=False,
         )
         session.add(job)
-        session.commit()
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            if _violates_constraint(exc, ONE_ACTIVE_JOB_PER_PAPER_INDEX):
+                raise ActiveJobExistsError(document_id) from exc
+            raise
         session.refresh(job)
         return _to_response(job)
     finally:

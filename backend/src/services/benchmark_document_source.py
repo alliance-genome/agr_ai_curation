@@ -79,7 +79,14 @@ def load_owned_local_document(
                 else "Local benchmark document was not found"
             )
             raise BenchmarkSourceError(code, message) from exc
-        processed_json_path = document.main_file.processed_json_path
+        # Benchmarks read a paper's main file only (KANBAN-2135).
+        main_file = document.main_file_or_none
+        if main_file is None:
+            raise BenchmarkSourceError(
+                "missing_source",
+                "Local benchmark document has no main file",
+            )
+        processed_json_path = main_file.processed_json_path
         if document.processing_completed_at is None or not processed_json_path:
             raise BenchmarkSourceError(
                 "missing_source",
