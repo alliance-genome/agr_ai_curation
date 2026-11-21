@@ -34,6 +34,7 @@ from .profile_validator_capability import ProfileValidatorCapability, ProfileVal
 from .curation_flow import CurationFlow
 from .curation_flow_agent_revision import CurationFlowAgentRevision
 from .database import Base, SessionLocal, engine, get_db
+from .document_file_assessment import DocumentFileAssessment
 from .file_output import FileOutput, FileType
 from .ontology import Ontology
 from .ontology_term import OntologyTerm
@@ -103,6 +104,7 @@ __all__ = [
     "DocumentReferenceLink",
     "PDFDocument",
     "PDFDocumentFile",
+    "DocumentFileAssessment",
     "PdfProcessingJob",
     "PdfJobStatus",
     "PromptTemplate",

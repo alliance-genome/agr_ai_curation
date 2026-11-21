@@ -121,3 +121,25 @@ async def test_blocked_sql_can_be_cancelled_without_crossing_session_threads(mon
         await asyncio.gather(task, return_exceptions=True)
         assert await asyncio.to_thread(closed.wait, 5)
     downstream.assert_not_awaited()
+
+
+def test_a_receipt_saved_before_text_preparation_versions_still_loads():
+    import json
+    from uuid import uuid4
+
+    from src.lib.benchmarks.document_preparation import PreparedBenchmarkDocument
+
+    saved = {
+        "document_id": str(uuid4()),
+        "snapshot_digest": "sha256:" + "a" * 64,
+        "source_path": "benchmark_documents/x/source",
+        "processed_json_path": "benchmark_documents/x/elements.json",
+        "processed_json_digest": "sha256:" + "b" * 64,
+        "chunk_count": 3,
+    }
+    receipt = PreparedBenchmarkDocument.model_validate_json(json.dumps(saved))
+    assert receipt.text_preparation_version is None
+    recorded = PreparedBenchmarkDocument.model_validate_json(
+        json.dumps({**saved, "text_preparation_version": "2"})
+    )
+    assert recorded.text_preparation_version == "2"

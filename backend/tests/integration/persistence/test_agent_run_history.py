@@ -31,7 +31,7 @@ def test_history_downgrade_cannot_remove_retained_originals():
         counts = [db.scalar(select(func.count()).select_from(model))
                   for model in (AgentHistoryEvent, AgentHistoryPayload)]
     # The newest forward-only migration stops the downgrade first.
-    with pytest.raises(RuntimeError, match="Paper files are forward-only"):
+    with pytest.raises(RuntimeError, match="File check results are forward-only"):
         command.downgrade(config, "b8a2d3f4e5c6")
     with SessionLocal() as db:
         assert MigrationContext.configure(db.connection()).get_current_heads() == before
