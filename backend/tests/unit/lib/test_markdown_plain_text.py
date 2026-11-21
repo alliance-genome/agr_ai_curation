@@ -143,22 +143,48 @@ def test_empty_text_stays_empty():
     assert markdown_table_to_plain_text("") == ""
 
 
-_HOSTILE_INPUT_BYTES = 1_000_000
-# Generous: the slowest input ("![") took 23.8 s for prose plus one table
-# cell in the Python 3.11 test image, and scales linearly; the old tag
-# regexes took over 700 s on 1 MB of "<sup>".
-_HOSTILE_INPUT_SECONDS = 120
+_HOSTILE_UNITS = ["<sup>", "<u>", "<sub>", "<sup>*", "&", "<", "*", "_", "~", "`", "![", "[", "\\\\"]
 
 
-@pytest.mark.parametrize(
-    "unit",
-    ["<sup>", "<u>", "<sub>", "<sup>*", "&", "<", "*", "_", "~", "`", "![", "[", "\\\\"],
-)
-def test_one_megabyte_of_hostile_input_finishes_in_linear_time(unit):
-    text = (unit * (_HOSTILE_INPUT_BYTES // len(unit) + 1))[:_HOSTILE_INPUT_BYTES]
+def _repeat_to(unit: str, size: int) -> str:
+    return (unit * (size // len(unit) + 1))[:size]
 
-    started = time.perf_counter()
+
+def _clean_both_ways(text: str) -> None:
     markdown_inline_to_plain_text(text)
     markdown_table_to_plain_text(f"| {text} |")
 
-    assert time.perf_counter() - started < _HOSTILE_INPUT_SECONDS
+
+def _best_seconds(text: str, runs: int = 2) -> float:
+    best = float("inf")
+    for _ in range(runs):
+        started = time.perf_counter()
+        _clean_both_ways(text)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+@pytest.mark.parametrize("unit", _HOSTILE_UNITS)
+def test_hostile_input_cost_grows_linearly(unit):
+    # Eight times the input costs about eight times the time on a linear path
+    # and about sixty-four times on a quadratic one; 24 leaves room for a busy
+    # machine either way. A ratio does not depend on how fast the machine is.
+    small = _best_seconds(_repeat_to(unit, 16_000))
+    large = _best_seconds(_repeat_to(unit, 128_000))
+
+    assert large < 24 * max(small, 0.002)
+
+
+# The tag pre-strip and escape handling are this module's own code; 1 MB of
+# each (the converted-file cap) must finish. The old regexes took over 700 s
+# on 1 MB of "<sup>"; these took 8 to 16 s on the CI runner.
+_ONE_MEGABYTE = 1_000_000
+_ONE_MEGABYTE_SECONDS = 120
+
+
+@pytest.mark.parametrize("unit", ["<sup>", "<u>", "<sub>", "<sup>*", "\\\\"])
+def test_one_megabyte_of_unclosed_tags_finishes(unit):
+    started = time.perf_counter()
+    _clean_both_ways(_repeat_to(unit, _ONE_MEGABYTE))
+
+    assert time.perf_counter() - started < _ONE_MEGABYTE_SECONDS
