@@ -51,4 +51,4 @@ def test_many_record_plan_stores_the_record_set_once_and_reads_back_equal(planne
     # One parsed record set serves every match, and later reads reuse it.
     assert len({id(match.envelope) for match in restored.values()}) == 1
     assert fresh.match(targets[0]) is restored[targets[0]]
-    assert saved_matches.decode(body) == restored
+    assert saved_matches.decode(body, registry=item.plan.registry) == restored
