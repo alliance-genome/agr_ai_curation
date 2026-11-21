@@ -284,7 +284,12 @@ def _list_documents_sync(
                         "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
                         "processing_started_at": pg_doc.processing_started_at.isoformat() if pg_doc.processing_started_at else None,
                         "processing_completed_at": pg_doc.processing_completed_at.isoformat() if pg_doc.processing_completed_at else None,
-                        "file_size_bytes": pg_doc.main_file.file_size,  # Contract field name from PostgreSQL
+                        # Contract field name from PostgreSQL; none for a paper without a main file.
+                        "file_size_bytes": (
+                            pg_doc.main_file_or_none.file_size
+                            if pg_doc.main_file_or_none is not None
+                            else None
+                        ),
                         "weaviate_tenant": tenant_name,  # Required by contract
                         "chunk_count": doc_props.get("chunkCount"),
                         "vector_count": doc_props.get("vectorCount"),

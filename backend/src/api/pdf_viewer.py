@@ -33,11 +33,13 @@ router = APIRouter(prefix="/api/pdf-viewer", tags=["PDF Viewer"])
 class PDFDocumentSummary(BaseModel):
     id: UUID = Field(..., description="Unique identifier for the document")
     filename: str = Field(..., min_length=1, max_length=255)
-    page_count: int | None = Field(..., ge=1, description="Pages of the main file; none for a text file")
-    file_size: int = Field(
+    page_count: int | None = Field(
+        ..., ge=1, description="Pages of the main file; none for a text file or a paper without a main file"
+    )
+    file_size: int | None = Field(
         ...,
         gt=0,
-        description="File size in bytes",
+        description="Main file size in bytes; none for a paper without a main file",
     )
     upload_timestamp: datetime
     viewer_url: str | None = Field(
@@ -49,7 +51,10 @@ class PDFDocumentSummary(BaseModel):
 
 class PDFDocumentDetail(PDFDocumentSummary):
     last_accessed: datetime
-    file_hash: str = Field(..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
+    file_hash: str | None = Field(
+        ..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$",
+        description="Main file hash; none for a paper without a main file",
+    )
 
 
 class ViewerURLResponse(BaseModel):
@@ -116,15 +121,33 @@ class PdfViewerFuzzyMatchResponse(BaseModel):
     note: str
 
 
-def _viewer_mode(record: PdfDocumentModel) -> str:
-    """The main file's display mode, which the viewer reads until it shows one tab per file."""
-    return record.main_file.display_mode
+def _viewer_mode(record: PdfDocumentModel) -> str | None:
+    """The main file's display mode, which the viewer reads until it shows one tab per file.
+
+    None for a paper without a main file (its supplements only).
+    """
+    main_file = record.main_file_or_none
+    return main_file.display_mode if main_file is not None else None
 
 
 def _document_viewer_url(record: PdfDocumentModel) -> str | None:
-    if _viewer_mode(record) == DISPLAY_MODE_TEXT:
+    viewer_mode = _viewer_mode(record)
+    if viewer_mode is None or viewer_mode == DISPLAY_MODE_TEXT:
         return None
     return protected_pdf_url(record.id)
+
+
+def _document_summary(record: PdfDocumentModel) -> PDFDocumentSummary:
+    main_file = record.main_file_or_none
+    return PDFDocumentSummary(
+        id=record.id,
+        filename=record.filename,
+        page_count=main_file.page_count if main_file is not None else None,
+        file_size=main_file.file_size if main_file is not None else None,
+        upload_timestamp=record.upload_timestamp,
+        viewer_url=_document_viewer_url(record),
+        viewer_mode=_viewer_mode(record),
+    )
 
 
 def _document_select(owner_user_id: int) -> Select[tuple[PdfDocumentModel]]:
@@ -152,18 +175,7 @@ def list_documents(
         .all()
     )
 
-    documents = [
-        PDFDocumentSummary(
-            id=record.id,
-            filename=record.filename,
-            page_count=record.main_file.page_count,
-            file_size=record.main_file.file_size,
-            upload_timestamp=record.upload_timestamp,
-            viewer_url=_document_viewer_url(record),
-            viewer_mode=_viewer_mode(record),
-        )
-        for record in records
-    ]
+    documents = [_document_summary(record) for record in records]
 
     return DocumentListResponse(
         documents=documents,
@@ -197,16 +209,11 @@ def get_document_detail(
     db.commit()
     db.refresh(record)
 
+    main_file = record.main_file_or_none
     return PDFDocumentDetail(
-        id=record.id,
-        filename=record.filename,
-        page_count=record.main_file.page_count,
-        file_size=record.main_file.file_size,
-        upload_timestamp=record.upload_timestamp,
+        **_document_summary(record).model_dump(),
         last_accessed=record.last_accessed,
-        viewer_url=_document_viewer_url(record),
-        viewer_mode=_viewer_mode(record),
-        file_hash=record.main_file.file_hash,
+        file_hash=main_file.file_hash if main_file is not None else None,
     )
 
 
@@ -237,7 +244,8 @@ def get_document_pdf_content(
     """Serve owned PDF bytes without exposing the tenant storage path."""
     access = _get_document(db, document_id, user)
     record = access.record
-    if _viewer_mode(record) == DISPLAY_MODE_TEXT:
+    main_file = record.main_file_or_none
+    if main_file is None or main_file.display_mode == DISPLAY_MODE_TEXT:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"PDF file not available for document {document_id}",
@@ -245,7 +253,7 @@ def get_document_pdf_content(
 
     storage_root = get_pdf_storage_path()
     file_path = validate_user_file_path(
-        storage_root / record.main_file.file_path,
+        storage_root / main_file.file_path,
         storage_root,
         access.owner_auth_sub,
     )

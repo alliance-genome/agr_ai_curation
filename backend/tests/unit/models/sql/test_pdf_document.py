@@ -4,7 +4,12 @@ from sqlalchemy import CheckConstraint, Index
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Mapped
 
-from src.models.sql.pdf_document import MissingMainFileError, PDFDocument, PDFDocumentFile
+from src.models.sql.pdf_document import (
+    MissingMainFileError,
+    MultipleMainFilesError,
+    PDFDocument,
+    PDFDocumentFile,
+)
 
 
 def _constraint(model, name: str) -> CheckConstraint:
@@ -94,6 +99,33 @@ class TestPDFDocumentModel:
 
         with pytest.raises(MissingMainFileError):
             doc.main_file
+
+    def test_a_supplements_only_paper_has_no_main_file(self):
+        doc = PDFDocument(user_id=1, filename="test.pdf")
+        doc.files.append(
+            _main_file(role="supplement", display_mode="text", page_count=None)
+        )
+
+        assert doc.main_file_or_none is None
+        with pytest.raises(MissingMainFileError):
+            doc.main_file
+
+    def test_main_file_or_none_returns_the_main_file(self):
+        doc = PDFDocument(user_id=1, filename="test.pdf")
+        main = _main_file()
+        doc.files.extend(
+            [_main_file(role="supplement", display_mode="text", page_count=None), main]
+        )
+
+        assert doc.main_file_or_none is main
+        assert doc.main_file is main
+
+    def test_two_main_files_are_a_named_error(self):
+        doc = PDFDocument(user_id=1, filename="test.pdf")
+        doc.files.extend([_main_file(), _main_file()])
+
+        with pytest.raises(MultipleMainFilesError):
+            doc.main_file_or_none
 
 
 class TestPDFDocumentFileModel:

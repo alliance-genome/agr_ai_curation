@@ -363,7 +363,7 @@ async def test_hierarchy_helper(monkeypatch):
     )
     chunk_collection.query.fetch_objects.return_value = hier_response
 
-    fake_sql_doc = SimpleNamespace(main_file=SimpleNamespace(hierarchy_metadata={"abstract_section_title": "Abstract"}))
+    fake_sql_doc = SimpleNamespace(main_file_or_none=SimpleNamespace(hierarchy_metadata={"abstract_section_title": "Abstract"}))
 
     class _Session:
         def query(self, *_args, **_kwargs):
@@ -593,7 +593,7 @@ async def test_section_outline_counts_every_chunk_of_a_document_over_five_hundre
 async def test_document_hierarchy_fetches_db_metadata(monkeypatch):
     _sync_to_thread(monkeypatch)
 
-    fake_sql_doc = SimpleNamespace(main_file=SimpleNamespace(hierarchy_metadata={"sections": [{"name": "Intro"}]}))
+    fake_sql_doc = SimpleNamespace(main_file_or_none=SimpleNamespace(hierarchy_metadata={"sections": [{"name": "Intro"}]}))
 
     class _Session:
         def query(self, *_args, **_kwargs):
@@ -605,6 +605,25 @@ async def test_document_hierarchy_fetches_db_metadata(monkeypatch):
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _Session())
     hierarchy = await chunks.get_document_hierarchy("11111111-1111-1111-1111-111111111111", "user-1")
     assert hierarchy == {"sections": [{"name": "Intro"}]}
+
+
+@pytest.mark.asyncio
+async def test_a_paper_without_a_main_file_has_no_document_hierarchy(monkeypatch):
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    _sync_to_thread(monkeypatch)
+    paper = new_supplements_only_paper(user_id=1, filename="supplements-only-paper")
+
+    class _Session:
+        def query(self, *_args, **_kwargs):
+            return SimpleNamespace(filter=lambda *_a, **_k: SimpleNamespace(first=lambda: paper))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _Session())
+
+    assert await chunks.get_document_hierarchy("11111111-1111-1111-1111-111111111111", "user-1") is None
 
 
 _PREPARATION_QUERIES = [

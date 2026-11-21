@@ -60,7 +60,7 @@ def _record(*, owner_id=7, display_mode="local_pdf", file_path="owner/pdf/paper.
         last_accessed=timestamp,
         user_id=owner_id,
         document_kind="library",
-        main_file=SimpleNamespace(
+        main_file_or_none=SimpleNamespace(
             page_count=None if display_mode == "text" else 3,
             file_size=512,
             file_hash="a" * 64,
@@ -237,3 +237,54 @@ def test_main_application_has_no_public_uploads_route():
     from main import app
 
     assert not any(getattr(route, "path", None) == "/uploads" for route in app.routes)
+
+
+def _supplements_only_record(*, owner_id=7):
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    timestamp = datetime(2026, 7, 11, tzinfo=timezone.utc)
+    return new_supplements_only_paper(
+        id=UUID("33333333-3333-3333-3333-333333333333"),
+        user_id=owner_id,
+        filename="supplements-only-paper",
+        upload_timestamp=timestamp,
+        last_accessed=timestamp,
+        document_kind="library",
+    )
+
+
+def test_a_paper_without_a_main_file_is_listed_beside_other_papers():
+    db = _Db(_Result(scalar=2), _Result(records=[_record(), _supplements_only_record()]))
+
+    response = pdf_viewer.list_documents(limit=100, offset=0, db=db, user={"sub": "owner"})
+
+    regular, supplements_only = response.documents
+    assert regular.viewer_mode == "local_pdf" and regular.page_count == 3
+    assert supplements_only.filename == "supplements-only-paper"
+    assert (
+        supplements_only.viewer_mode,
+        supplements_only.viewer_url,
+        supplements_only.page_count,
+        supplements_only.file_size,
+    ) == (None, None, None, None)
+
+
+def test_a_paper_without_a_main_file_has_detail_and_url_but_no_pdf_bytes():
+    record = _supplements_only_record()
+
+    detail = pdf_viewer.get_document_detail(
+        document_id=record.id, db=_Db(_Result(record=record)), user={"sub": "owner"}
+    )
+    url = pdf_viewer.get_document_viewer_url(
+        document_id=record.id, db=_Db(_Result(record=record)), user={"sub": "owner"}
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        pdf_viewer.get_document_pdf_content(
+            document_id=record.id, db=_Db(_Result(record=record)), user={"sub": "owner"}
+        )
+
+    assert (detail.viewer_mode, detail.viewer_url, detail.file_hash, detail.page_count) == (
+        None, None, None, None,
+    )
+    assert (url.viewer_mode, url.viewer_url) == (None, None)
+    assert exc_info.value.status_code == 404

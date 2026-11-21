@@ -50,7 +50,7 @@ def _record(**file_overrides):
         last_accessed=datetime(2026, 6, 25, tzinfo=timezone.utc),
         user_id=7,
         document_kind="library",
-        main_file=SimpleNamespace(**main_file),
+        main_file_or_none=SimpleNamespace(**main_file),
     )
 
 

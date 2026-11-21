@@ -34,7 +34,7 @@ def _doc(*, display_mode="local_pdf", document_kind="library", **values):
     paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
     main_file = SimpleNamespace(id="main-file", role="main", **file_values)
     return SimpleNamespace(
-        document_kind=document_kind, main_file=main_file, files=[main_file],
+        document_kind=document_kind, main_file=main_file, main_file_or_none=main_file, files=[main_file],
         **paper_values, **values,
     )
 
@@ -675,3 +675,74 @@ async def test_cancelled_listing_worker_closes_its_sql_session(monkeypatch):
         release.set()
     await asyncio.wait_for(closed, timeout=5)
     assert worker_threads[0] == worker_threads[1] != threading.get_ident()
+
+
+@pytest.mark.asyncio
+async def test_a_paper_without_a_main_file_is_listed_with_its_paper_provenance_only():
+    from datetime import datetime
+
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    paper_id = UUID("00000000-0000-0000-0000-000000000002")
+    fetch_result = SimpleNamespace(
+        objects=[
+            SimpleNamespace(
+                uuid=paper_id,
+                properties={
+                    "filename": "supplements-only-paper",
+                    "creationDate": "2024-01-01T00:00:00",
+                    "processingStatus": "completed",
+                    "embeddingStatus": "completed",
+                    "chunkCount": 3,
+                    "vectorCount": 3,
+                },
+            )
+        ]
+    )
+    mock_collection = DummyCollection(fetch_result, SimpleNamespace(total_count=1))
+    mock_client = MagicMock()
+    mock_client.collections.get.return_value = mock_collection
+
+    @contextmanager
+    def fake_session():
+        yield mock_client
+
+    mock_connection = MagicMock()
+    mock_connection.session.side_effect = fake_session
+    mock_db_user = MagicMock()
+    mock_db_user.id = 123
+    paper = new_supplements_only_paper(
+        id=paper_id,
+        user_id=123,
+        filename="supplements-only-paper",
+        status="completed",
+        upload_timestamp=datetime(2024, 1, 1),
+        document_kind="library",
+        source_provider="abc_literature",
+        source_provider_reference_curie="AGRKB:101",
+    )
+    mock_db_session = MagicMock()
+    mock_db_execute_result = MagicMock()
+    mock_db_execute_result.scalar_one_or_none.return_value = mock_db_user
+    mock_db_execute_result.scalars.return_value.all.return_value = [paper]
+    mock_db_session.execute.return_value = mock_db_execute_result
+
+    def mock_get_db():
+        yield mock_db_session
+
+    with patch("src.lib.weaviate_client.documents.get_connection", return_value=mock_connection), \
+         patch("src.lib.weaviate_client.documents.get_db", mock_get_db), \
+         patch("src.lib.weaviate_client.documents.get_user_collections", return_value=(mock_collection, mock_collection)), \
+         patch("src.lib.weaviate_helpers.get_tenant_name", return_value="test_tenant"):
+        from src.models.api_schemas import DocumentFilter, PaginationParams
+
+        result = await _documents_module().async_list_documents(
+            "test_user_user_id", DocumentFilter(), PaginationParams(page=1, page_size=10).model_dump()
+        )
+
+    (document,) = result["documents"]
+    assert document["filename"] == "supplements-only-paper"
+    assert document["file_size_bytes"] is None
+    provenance = document["source_provenance"]
+    assert provenance["reference_curie"] == "AGRKB:101"
+    assert "viewer_mode" not in provenance and "source_file_id" not in provenance
