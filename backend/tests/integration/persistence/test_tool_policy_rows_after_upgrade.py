@@ -104,7 +104,7 @@ def _policy_rows(session):
     }
 
 
-def test_custom_topic_tag_agent_saves_and_runs_after_the_backfill(policy_db, monkeypatch):  # noqa: F811
+def test_custom_topic_tag_agent_saves_and_builds_after_the_backfill(policy_db, monkeypatch):  # noqa: F811
     """Without the five rows (as on production at v0.11.12), a curator cannot save a
     copy of the topic-tag agent: inherited helpers need an executable policy row.
     After the backfill the copy saves and builds with all five tools."""

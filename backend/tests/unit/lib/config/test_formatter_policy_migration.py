@@ -74,12 +74,17 @@ def test_extraction_resolver_helpers_stop_being_inherited(monkeypatch):
         assert values['value'] == 'false'
 
 
-def test_topic_entity_tag_policy_backfill_seeds_the_five_builder_tools(monkeypatch):
+def _topic_entity_tag_migration():
     root = find_repo_root(Path(__file__))
     path = root / 'backend/alembic/versions/a9b8c7d6e5f4_backfill_topic_entity_tag_tool_policies.py'
     spec = spec_from_file_location('topic_entity_tag_policy_migration_test', path)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_topic_entity_tag_policy_backfill_seeds_the_five_builder_tools(monkeypatch):
+    module = _topic_entity_tag_migration()
     assert module.down_revision == 'b5c6d7e8f9a0'
     for key in ['AGR_RUNTIME_ROOT', 'AGR_RUNTIME_CONFIG_DIR', 'AGR_RUNTIME_PACKAGES_DIR',
                 'TOOL_POLICY_DEFAULTS_CONFIG_PATH', 'APP_VERSION', 'AGR_RUNTIME_PACKAGE_API_VERSION']:
@@ -103,3 +108,17 @@ def test_topic_entity_tag_policy_backfill_seeds_the_five_builder_tools(monkeypat
         assert json.loads(values['config']) == {'system_managed_inheritance': True}
     module.downgrade()
     assert len(calls) == 5
+
+
+def test_topic_entity_tag_policy_backfill_inserts_nothing_without_the_owning_package(monkeypatch, tmp_path):
+    """A deployment with only the core package migrates cleanly and gets no rows."""
+    module = _topic_entity_tag_migration()
+    (tmp_path / 'core').symlink_to(find_repo_root(Path(__file__)) / 'packages/core', target_is_directory=True)
+    for key in ['AGR_RUNTIME_ROOT', 'AGR_RUNTIME_CONFIG_DIR',
+                'TOOL_POLICY_DEFAULTS_CONFIG_PATH', 'APP_VERSION', 'AGR_RUNTIME_PACKAGE_API_VERSION']:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv('AGR_RUNTIME_PACKAGES_DIR', str(tmp_path))
+    calls = []
+    monkeypatch.setattr(module.op, 'get_bind', lambda: SimpleNamespace(execute=lambda sql, values: calls.append((str(sql), values))))
+    module.upgrade()
+    assert calls == []
