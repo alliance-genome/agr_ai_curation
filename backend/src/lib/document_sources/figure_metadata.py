@@ -8,6 +8,8 @@ from collections import defaultdict, deque
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from src.schemas.pdfx_schema import normalize_text
+
 PROVIDER_FIGURE_METADATA_SECTION = "Provider Figure Metadata"
 PROVIDER_FIGURE_SUBSECTION_PREFIX = "Provider Figure:"
 
@@ -105,7 +107,8 @@ def apply_provider_figure_page_provenance(
         ),
         key=_entry_sort_key,
     ):
-        pages_by_heading[_entry_heading(entry)].append(
+        # Element titles are the cleaned heading text, so key by the same form.
+        pages_by_heading[normalize_text(_entry_heading(entry))].append(
             _positive_page_number(entry.get("page_number"))
         )
 

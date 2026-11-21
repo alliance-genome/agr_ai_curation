@@ -10,7 +10,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry, ValidatorRoute
 from src.lib.validation_review.saved_matches import BINDING, serialize_binding
-from src.lib.validation_review.validator_adapter import REGISTRY
+from src.lib.validation_review.validator_adapter import REGISTRY, saved_registry
 from src.schemas.domain_pack_metadata import DomainPackInputSelector
 
 
@@ -25,8 +25,7 @@ def package_registry(name):
 @pytest.mark.parametrize("name", ["allele", "gene_expression"])
 def test_real_package_registry_roundtrip_preserves_nested_selector_keys(name):
     registry = package_registry(name)
-    dumped = REGISTRY.dump_python(registry, mode="json")
-    dumped["bindings"] = [serialize_binding(binding) for binding in registry.bindings]
+    dumped = saved_registry(registry)
     restored = REGISTRY.validate_python(dumped)
     assert restored == registry
     contexts = 0
