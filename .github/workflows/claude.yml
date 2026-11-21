@@ -63,12 +63,12 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
-      id-token: write
       actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@main
         with:
+          persist-credentials: false
           fetch-depth: 0
           ref: ${{ needs.authorize.outputs.review-sha }}
 
@@ -87,6 +87,7 @@ jobs:
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@main
         with:
+          github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           path_to_claude_code_executable: ${{ steps.claude_install.outputs.path }}
           trigger_phrase: "@claude"
