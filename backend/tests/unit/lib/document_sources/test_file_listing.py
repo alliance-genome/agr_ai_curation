@@ -18,9 +18,14 @@ from src.lib.document_sources.file_listing import (
     FileRoleMappingError,
     ListedFileCheckStatus,
     ListedFileStatus,
+    ConvertedTextDownloadFailure,
+    converted_text_access_allowed,
+    download_converted_texts,
     file_role_for_artifact_role,
     list_reference_files,
+    listing_to_payload,
 )
+from src.lib.document_sources.models import SupplementFileCategory
 from src.lib.document_sources.models import ProviderBearerKind, SourceArtifactRole
 from agr_ai_curation_alliance.literature.client import ABCLiteratureHTTPError
 from tests.unit.lib.document_sources.test_abc_literature_provider import (
@@ -292,3 +297,59 @@ def test_file_roles_are_mapped_explicitly():
     ]:
         with pytest.raises(FileRoleMappingError):
             file_role_for_artifact_role(role, is_main=is_main)
+
+
+@pytest.mark.asyncio
+async def test_entries_carry_both_md5s_format_category_and_profile_for_an_import():
+    rows = [_abc_show_all_main_pdf(10, "WB"), *_pair(20, "WB", md5="original-md5")]
+    rows[2]["md5sum"] = "converted-md5"
+    listing, _ = await _listing(rows, payloads={"21": GOOD_TABLE})
+    files = _by_id(listing)
+    supplement = files["20"]
+    assert supplement.md5 == "original-md5"
+    assert supplement.converted_md5 == "converted-md5"
+    # Core formats only: an Office original is "unknown"; a PDF supplement is "pdf".
+    assert supplement.artifact_format == "unknown"
+    assert supplement.category is SupplementFileCategory.CONVERTIBLE
+    assert supplement.single_title_required is True
+    assert files["10"].category is None and files["10"].single_title_required is False
+
+    entry = {item["provider_file_id"]: item for item in listing_to_payload(listing)["files"]}["20"]
+    assert entry["md5"] == "original-md5" and entry["converted_md5"] == "converted-md5"
+    assert entry["format"] == "unknown" and entry["category"] == "convertible"
+
+
+@pytest.mark.parametrize(("original_mods", "converted_mods", "allowed"), [
+    (("WB",), ("WB",), True),
+    (("WB",), ("FB",), False),
+    (("FB",), ("WB",), False),
+])
+@pytest.mark.asyncio
+async def test_converted_text_access_checks_both_rules(original_mods, converted_mods, allowed):
+    client = _Client({})
+    client.show_reference_payload = _abc_reference_record()
+    client.show_referencefiles_payload = _pair(20, *original_mods, converted_mods=converted_mods)  # type: ignore[assignment]
+    provider = provider_from_fake(client)
+    reference = await provider.resolve_reference("AGRKB:101", request_bearer_token="curator-token")
+    artifacts = {item.artifact_id: item for item in await provider.list_artifacts(
+        reference, request_bearer_token="curator-token",
+    )}
+    assert converted_text_access_allowed(
+        artifacts["21"], artifacts["20"], authorized_group_ids=("WB",),
+    ) is allowed
+
+
+@pytest.mark.asyncio
+async def test_the_shared_download_helper_bounds_size_and_reports_failure_codes():
+    client = _Client({"1": b"text", "2": _http_error(404), "3": _http_error(502), "4": _http_error(403)})
+    provider = provider_from_fake(client)
+    results = await download_converted_texts(
+        provider, ["1", "2", "3", "4", "1"], request_bearer_token="curator-token",
+        max_bytes=50, concurrency=2,
+    )
+    assert results["1"].content == b"text" and results["1"].failure is None
+    assert results["2"].failure is ConvertedTextDownloadFailure.MISSING
+    assert results["3"].failure is ConvertedTextDownloadFailure.UNAVAILABLE
+    assert results["4"].failure is ConvertedTextDownloadFailure.ACCESS_DENIED
+    downloads = [kwargs for name, kwargs in client.calls if name == "download_referencefile"]
+    assert len(downloads) == 4 and all(item["max_bytes"] == 50 for item in downloads)

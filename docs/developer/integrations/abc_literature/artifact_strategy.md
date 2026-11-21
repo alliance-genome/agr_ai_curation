@@ -190,3 +190,13 @@ numbers, never wording (`src/lib/document_sources/file_listing.py`).
   Results are stored in `document_file_assessments` by provider file id, MD5 and a check version
   that includes every threshold, and reused only after the access checks. A refusal found while
   listing sends no Sentry event. The listing does not clean or parse text.
+- Each entry is named by the original's provider file id (an import writes it to
+  `source_provider_source_file_id`; "in this paper" matches it). It carries the original's MD5
+  (`md5`), the converted text's MD5 (`converted_md5`, which an import sends back to detect a
+  change since listing), the core `format`, the `category` code and the provider's
+  `single_title_required` profile flag.
+- Shared with the import (P7): `list_files_for_identifier` / `list_files_for_paper`
+  (`file_listing_service.py`), `converted_text_access_allowed` (both rules, separately),
+  `download_converted_texts` (bounded concurrency and size; failure codes `too_large`,
+  `text_unavailable`, `text_missing`, `text_access_denied`), `assess_converted_file` with
+  `FileCheckReason`, and `stored_assessment` / `store_assessment`.

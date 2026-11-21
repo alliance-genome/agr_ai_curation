@@ -95,6 +95,8 @@ class ListedFileCheck:
 
 @dataclass(frozen=True, slots=True)
 class ListedFile:
+    # Names the file: the ORIGINAL's provider file id. An import writes it to
+    # ``source_provider_source_file_id``, and "in this paper" matches it.
     provider_file_id: str
     converted_text_id: str | None
     display_name: str | None
@@ -105,6 +107,13 @@ class ListedFile:
     check: ListedFileCheck
     in_this_paper: bool
     md5: str | None
+    # The converted text's MD5: what an import sends back to detect a change since listing.
+    converted_md5: str | None
+    artifact_format: str
+    # The provider's category for a supplement; ``None`` for the main paper.
+    category: SupplementFileCategory | None
+    # The provider's profile: the converted text's first top-level title is the file's title.
+    single_title_required: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +145,77 @@ def file_role_for_artifact_role(role: SourceArtifactRole, *, is_main: bool) -> s
     elif role in (SourceArtifactRole.SOURCE_SUPPLEMENT, SourceArtifactRole.SOURCE_PDF):
         return FILE_ROLE_SUPPLEMENT
     raise FileRoleMappingError(f"Artifact role {role.value} has no file role (main={is_main})")
+
+
+def converted_text_access_allowed(
+    converted: SourceArtifact,
+    original: SourceArtifact,
+    *,
+    authorized_group_ids: Iterable[str],
+) -> bool:
+    """A converted text is readable only when both rules allow the curator, checked separately.
+
+    The original's access rule and the converted row's own rule (which can be
+    narrower before the provider syncs them) are each checked on their own;
+    one merged rule would not mean the same as "both allow".
+    """
+
+    groups = tuple(authorized_group_ids)
+    return _authorized(original, groups) and _authorized(converted, groups)
+
+
+class ConvertedTextDownloadFailure(str, Enum):
+    """Why a converted text could not be downloaded. Values are codes; never rename one."""
+
+    TOO_LARGE = "too_large"
+    UNAVAILABLE = "text_unavailable"
+    MISSING = "text_missing"
+    ACCESS_DENIED = "text_access_denied"
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadedText:
+    content: bytes | None = None
+    failure: ConvertedTextDownloadFailure | None = None
+    limit_value: int | None = None
+
+
+async def download_converted_texts(
+    provider: DocumentSourceProvider,
+    artifact_ids: Iterable[str],
+    *,
+    request_bearer_token: str,
+    max_bytes: int,
+    concurrency: int,
+) -> dict[str, DownloadedText]:
+    """Download converted texts, at most ``concurrency`` at once and never past ``max_bytes``.
+
+    Each id gets its bytes or a failure code; other provider errors propagate.
+    Shared by the listing and the import, so both download the same way.
+    """
+
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def one(artifact_id: str) -> tuple[str, DownloadedText]:
+        async with semaphore:
+            try:
+                content = await provider.download_artifact(
+                    artifact_id, request_bearer_token=request_bearer_token, max_bytes=max_bytes,
+                )
+            except DocumentSourceArtifactTooLarge as exc:
+                return artifact_id, DownloadedText(
+                    failure=ConvertedTextDownloadFailure.TOO_LARGE, limit_value=exc.max_bytes,
+                )
+            except DocumentSourceUnavailable:
+                return artifact_id, DownloadedText(failure=ConvertedTextDownloadFailure.UNAVAILABLE)
+            except DocumentSourceArtifactNotFound:
+                return artifact_id, DownloadedText(failure=ConvertedTextDownloadFailure.MISSING)
+            except DocumentSourceAccessDenied:
+                return artifact_id, DownloadedText(failure=ConvertedTextDownloadFailure.ACCESS_DENIED)
+        return artifact_id, DownloadedText(content=content)
+
+    unique_ids = list(dict.fromkeys(artifact_ids))
+    return dict(await asyncio.gather(*(one(artifact_id) for artifact_id in unique_ids)))
 
 
 def current_file_check_limits() -> FileCheckLimits:
@@ -228,6 +308,10 @@ async def list_reference_files(
             check=ListedFileCheck(ListedFileCheckStatus.NOT_CHECKED),
             in_this_paper=source.artifact_id in in_paper,
             md5=source.md5sum,
+            converted_md5=converted.md5sum if converted is not None else None,
+            artifact_format=source.artifact_format.value,
+            category=None,
+            single_title_required=False,
         ))
 
     candidates: dict[str, _Candidate] = {}
@@ -252,7 +336,10 @@ async def list_reference_files(
         )
         if texts:
             # Both rules, separately: the original's (already passed) and the text's own.
-            readable = [text for text in texts if _authorized(text, groups)]
+            readable = [
+                text for text in texts
+                if converted_text_access_allowed(text, candidate.original, authorized_group_ids=groups)
+            ]
             if not readable:
                 not_shown += 1
                 continue
@@ -280,46 +367,55 @@ async def list_reference_files(
             kept.duplicates.append(candidate.original)
             duplicate_copies += 1
 
-    semaphore = asyncio.Semaphore(max(1, download_concurrency))
-
-    async def check(candidate: _Candidate) -> ListedFileCheck:
+    ready = [candidate for candidate in unique if candidate.converted is not None]
+    checks: dict[str, ListedFileCheck] = {}
+    to_download: list[_Candidate] = []
+    for candidate in ready:
         text = candidate.converted
         assert text is not None
-        profile = FileProfile(
-            single_title_required=provider.converted_text_has_single_title(candidate.original),
+        stored = (
+            await asyncio.to_thread(load_stored, text.artifact_id, text.md5sum, limits.check_version)
+            if text.md5sum else None
         )
-        if text.md5sum:
-            stored = await asyncio.to_thread(load_stored, text.artifact_id, text.md5sum, limits.check_version)
-            if stored is not None:
-                return _check_from_assessment(stored)
-        async with semaphore:
-            try:
-                content = await provider.download_artifact(
-                    text.artifact_id,
-                    request_bearer_token=request_bearer_token,
-                    max_bytes=limits.max_bytes,
-                )
-            except DocumentSourceArtifactTooLarge as exc:
-                assessment = FileAssessment(
-                    refused=True, reason=FileCheckReason.TOO_LARGE, limit_value=exc.max_bytes,
-                )
-                content = None
-            except DocumentSourceUnavailable:
-                return ListedFileCheck(ListedFileCheckStatus.TEXT_UNAVAILABLE)
-            except DocumentSourceArtifactNotFound:
-                return ListedFileCheck(ListedFileCheckStatus.TEXT_MISSING)
-            except DocumentSourceAccessDenied:
-                return ListedFileCheck(ListedFileCheckStatus.TEXT_ACCESS_DENIED)
-        if content is not None:
-            assessment = await asyncio.to_thread(assess_converted_file, content, profile, limits)
-        md5 = text.md5sum or (hashlib.md5(content).hexdigest() if content is not None else None)
+        if stored is not None:
+            checks[candidate.original.artifact_id] = _check_from_assessment(stored)
+        else:
+            to_download.append(candidate)
+
+    downloads = await download_converted_texts(
+        provider,
+        (candidate.converted.artifact_id for candidate in to_download if candidate.converted),
+        request_bearer_token=request_bearer_token,
+        max_bytes=limits.max_bytes,
+        concurrency=download_concurrency,
+    )
+    for candidate in to_download:
+        text = candidate.converted
+        assert text is not None
+        downloaded = downloads[text.artifact_id]
+        if downloaded.failure is ConvertedTextDownloadFailure.TOO_LARGE:
+            assessment = FileAssessment(
+                refused=True, reason=FileCheckReason.TOO_LARGE, limit_value=downloaded.limit_value,
+            )
+        elif downloaded.failure is not None:
+            # Not a check result: reported, never stored.
+            checks[candidate.original.artifact_id] = ListedFileCheck(
+                ListedFileCheckStatus(downloaded.failure.value)
+            )
+            continue
+        else:
+            assert downloaded.content is not None
+            profile = FileProfile(
+                single_title_required=provider.converted_text_has_single_title(candidate.original),
+            )
+            assessment = await asyncio.to_thread(assess_converted_file, downloaded.content, profile, limits)
+        md5 = text.md5sum or (
+            hashlib.md5(downloaded.content, usedforsecurity=False).hexdigest()
+            if downloaded.content is not None else None
+        )
         if md5 is not None:
             await asyncio.to_thread(save_assessment, text.artifact_id, md5, limits.check_version, assessment)
-        return _check_from_assessment(assessment)
-
-    ready = [candidate for candidate in unique if candidate.converted is not None]
-    results = await asyncio.gather(*(check(candidate) for candidate in ready))
-    checks = dict(zip((candidate.original.artifact_id for candidate in ready), results))
+        checks[candidate.original.artifact_id] = _check_from_assessment(assessment)
 
     for candidate in unique:
         original = candidate.original
@@ -344,6 +440,10 @@ async def list_reference_files(
             in_this_paper=original.artifact_id in in_paper
             or any(copy.artifact_id in in_paper for copy in candidate.duplicates),
             md5=original.md5sum,
+            converted_md5=candidate.converted.md5sum if candidate.converted else None,
+            artifact_format=original.artifact_format.value,
+            category=candidate.category,
+            single_title_required=provider.converted_text_has_single_title(original),
         ))
 
     return FileListing(
@@ -385,6 +485,10 @@ def listing_to_payload(listing: FileListing) -> dict[str, Any]:
                 "converted_text_id": item.converted_text_id,
                 "display_name": item.display_name,
                 "file_role": item.file_role,
+                "md5": item.md5,
+                "converted_md5": item.converted_md5,
+                "format": item.artifact_format,
+                "category": item.category.value if item.category else None,
                 "status": item.status.value,
                 "in_this_paper": item.in_this_paper,
                 "check": {
