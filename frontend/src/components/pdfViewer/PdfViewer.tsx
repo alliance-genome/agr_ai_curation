@@ -5,6 +5,7 @@ import {
   PDFViewerDocumentChangedEvent,
   dispatchPDFViewerEvidenceAnchorSelected,
   onPDFDocumentChanged,
+  onPDFViewerDocumentCleared,
   onPDFViewerNavigateEvidence,
 } from '@/components/pdfViewer/pdfEvents'
 import { normalizePdfViewerDocumentUrl } from '@/components/pdfViewer/viewerDocumentUrl'
@@ -1266,8 +1267,22 @@ export function PdfViewer({
     }
     window.addEventListener('chat-document-changed', handleChatDocumentChange)
 
+    // The new chat document has nothing to show here (a text paper): end the load
+    // started above and stop showing the previous PDF.
+    const unregisterCleared = onPDFViewerDocumentCleared((event) => {
+      if (
+        activeDocumentOwnerToken
+        && event.detail.ownerToken
+        && event.detail.ownerToken !== activeDocumentOwnerToken
+      ) {
+        return
+      }
+      resetViewerToIdle()
+    })
+
     return () => {
       unregisterDocument()
+      unregisterCleared()
       window.removeEventListener('chat-document-changed', handleChatDocumentChange)
     }
   }, [

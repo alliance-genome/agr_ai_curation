@@ -1,6 +1,7 @@
 import {
   HOME_PDF_VIEWER_OWNER,
   dispatchPDFDocumentChanged,
+  dispatchPDFViewerDocumentCleared,
   type PDFViewerDocumentChangedDetail,
 } from '@/components/pdfViewer/pdfEvents'
 import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
@@ -182,7 +183,10 @@ export async function rehydrateChatDocument(
     }
   }
 
-  if (pdfView) {
+  if (!pdfView) {
+    // A text paper has no PDF: clear the viewer so it neither waits nor keeps the previous PDF.
+    dispatchPDFViewerDocumentCleared(ownerToken)
+  } else {
     dispatchPDFDocumentChanged(
       document.id,
       pdfView.viewerUrl,
