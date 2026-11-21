@@ -12,6 +12,8 @@ import yaml
 
 from src.lib.openai_agents.config import (
     get_batch_zip_metadata_chunk_size,
+    get_document_table_header_max_rows,
+    get_document_table_header_min_filled_fraction,
     get_langfuse_timeout,
     get_max_parallel_validators,
     get_pdf_max_file_size_bytes,
@@ -90,6 +92,34 @@ def test_compose_forwards_weaviate_chunk_fetch_page_size(monkeypatch, configured
     else:
         monkeypatch.setenv(key, configured)
     assert get_weaviate_chunk_fetch_page_size() == expected
+
+
+@pytest.mark.parametrize(
+    "key,default,configured,expected,getter",
+    [
+        ("DOCUMENT_TABLE_HEADER_MAX_ROWS", "5", None, 5, get_document_table_header_max_rows),
+        ("DOCUMENT_TABLE_HEADER_MAX_ROWS", "5", "3", 3, get_document_table_header_max_rows),
+        ("DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION", "0.5", None, 0.5, get_document_table_header_min_filled_fraction),
+        ("DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION", "0.5", "0.75", 0.75, get_document_table_header_min_filled_fraction),
+    ],
+)
+def test_compose_forwards_table_header_rule_to_every_chunking_service(
+    monkeypatch, key, default, configured, expected, getter
+):
+    """The backend and the benchmark worker both cut text into pieces."""
+    production = _load_compose()["services"]
+    development = _load_dev_compose()["services"]
+    reference = "${" + key + ":-" + default + "}"
+    for service in ("backend", "benchmark_worker"):
+        assert production[service]["environment"][key] == reference
+    assert dict(item.split("=", 1) for item in development["backend"]["environment"])[key] == reference
+    assert development["benchmark_worker"]["environment"][key] == reference
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
+    assert getter() == expected
 
 
 def _load_dev_compose() -> dict:
