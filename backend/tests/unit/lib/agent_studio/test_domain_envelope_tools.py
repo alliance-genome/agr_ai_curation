@@ -34,6 +34,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
@@ -51,6 +52,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
+from tests.pdf_document_test_support import new_paper
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -65,6 +67,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 
 TEST_TABLES = [
     PDFDocument.__table__,
+    PDFDocumentFile.__table__,
     DocumentReferenceLink.__table__,
     CurationReviewSession.__table__,
     CurationSessionAgentRevision.__table__,
@@ -374,7 +377,7 @@ def _now() -> datetime:
 
 def _persist_document(db, *, suffix: str = "1"):
     now = _now()
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         user_id=1,
         filename=f"paper-{suffix}.pdf",

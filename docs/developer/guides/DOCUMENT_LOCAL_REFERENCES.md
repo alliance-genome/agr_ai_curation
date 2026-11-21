@@ -13,7 +13,7 @@ and audit history. See `generate_deterministic_uuid` in `pipeline/store.py` for
 the storage-boundary rationale. Numeric references remove the model's need to
 copy opaque strings; they do not make an incorrect selection impossible.
 
-## Durable meaning and reprocessing
+## Durable meaning and re-ingestion
 
 The canonical `agent_history_events` / `agent_history_payloads` store retains
 backend-owned source bindings independently of model context and compaction.
@@ -26,7 +26,7 @@ must commit `processing` before replacing Weaviate content and commit a new
 completion timestamp afterward. Document tools verify this generation before
 and after source I/O. Brief SQL row locks serialize initial generation binding;
 no row lock spans asynchronous tool I/O. A failed status write prevents ingestion
-from continuing. Reprocessing requires a new conversation; an old selection
+from continuing. A new ingestion of a paper requires a new conversation; an old selection
 cannot silently acquire a new source meaning.
 
 A successful chunk read, whether by `read_chunk` or as a passage of `read_section`

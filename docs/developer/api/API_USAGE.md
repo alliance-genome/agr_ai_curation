@@ -9,8 +9,8 @@ _Primary goal: give engineers (or LLM agents) everything required to exercise th
 4. [Chat & Conversation API (`/api/chat`)](#chat--conversation-api-apichat)
 5. [Document Lifecycle API (`/weaviate/documents`)](#document-lifecycle-api-weaviatedocuments)
 6. [Chunk & Search API (`/weaviate/documents/{id}/chunks`)](#chunk--search-api)
-7. [Processing Controls (`/weaviate/documents/{id}/reprocess|reembed`)](#processing-controls)
-8. [Settings, Schema, and Chunking Strategies (`/weaviate`)](#settings-schema-and-chunking-strategies)
+7. [Processing Controls (`/weaviate/documents/{id}/reembed`)](#processing-controls)
+8. [Settings and Schema (`/weaviate`)](#settings-and-schema)
 9. [Health & Monitoring (`/weaviate/health|readiness`)](#health--monitoring)
 10. [Feedback API (`/api/feedback`)](#feedback-api)
 11. [User & Auth Utilities (`/api/auth`, `/api/users`)](#user--auth-utilities)
@@ -175,9 +175,9 @@ If Okta isn't configured and `DEV_MODE=false`, protected endpoints return `401` 
 | Chat context | POST/GET/DELETE | `/api/chat/document/load`, `/api/chat/document` | Manage the active PDF for the current user. |
 | Sessions | POST/GET/PATCH/DELETE | `/api/chat/session*`, `/api/chat/history*`, `/api/chat/conversation*` | Create durable sessions, browse/search history, fetch detail, rename/delete sessions, reset memory. |
 | Documents | GET/POST/DELETE | `/weaviate/documents*` | Upload PDFs (multipart), list, inspect, delete, download artifacts. |
-| Processing | POST/GET | `/weaviate/documents/{id}/status`, `/progress/stream`, `/reprocess`, `/reembed` | Track pipeline or trigger re-processing. |
+| Processing | POST/GET | `/weaviate/documents/{id}/status`, `/progress/stream`, `/reembed` | Track pipeline or trigger re-embedding. |
 | Chunks | GET | `/weaviate/documents/{id}/chunks` | Paginated chunk + provenance retrieval. |
-| Config | GET/PUT | `/weaviate/settings`, `/weaviate/schema`, `/weaviate/chunking-strategies` | Inspect/update embeddings & schema. |
+| Config | GET/PUT | `/weaviate/settings`, `/weaviate/schema` | Inspect/update embeddings & schema. |
 | Health | GET | `/weaviate/health`, `/weaviate/readiness`, `/weaviate/documents/pdf-extraction-health` | Service readiness + PDF extraction connectivity. |
 | Feedback | POST | `/api/feedback/submit` | Two-phase handler (fast ack + background Langfuse enrichment). |
 | Users/Auth | GET/POST | `/api/users/me`, `/api/auth/login|logout|callback` | Identity & tokens. |
@@ -422,16 +422,10 @@ The current evidence-navigation design uses the real PDF.js text layer as the vi
 
 ## Processing Controls
 
-### 1. Reprocess (re-chunk)
-```bash
-curl -X POST http://localhost:8000/weaviate/documents/$DOC_ID/reprocess \
-  -H 'Content-Type: application/json' \
-  -d '{"strategy_name": "research", "force_reparse": false}' | jq
-```
-- `strategy_name`: must match one of `/weaviate/chunking-strategies` (e.g., `research` default).
-- `force_reparse`: true to re-run PDF extraction parsing instead of reusing stored JSON.
+There is no reprocess route. To read a paper with a newer pipeline, delete it
+and import or upload it again.
 
-### 2. Re-embed
+### Re-embed
 ```bash
 curl -X POST http://localhost:8000/weaviate/documents/$DOC_ID/reembed \
   -H 'Content-Type: application/json' \
@@ -449,7 +443,7 @@ curl -X POST http://localhost:8000/weaviate/documents/$DOC_ID/reembed \
 
 ---
 
-## Settings, Schema, and Chunking Strategies
+## Settings and Schema
 
 ### Embedding + database settings
 ```bash
@@ -477,12 +471,6 @@ curl -X PUT http://localhost:8000/weaviate/schema \
   -d '{"vectorIndexConfig": {"distance": "cosine", "ef": 256}}'
 ```
 Payload validation ensures supported `dataType`s and HNSW parameters. Destructive changes should only occur during maintenance windows.
-
-### Chunking strategies catalogue
-```bash
-curl http://localhost:8000/weaviate/chunking-strategies | jq
-```
-Returns the statically configured strategies from `lib/pdf_processing/strategies.py` (fields: `name`, `method`, `max_characters`, `overlap`, `is_default`, `description`).
 
 ---
 
@@ -1059,22 +1047,7 @@ Handle both streams with resilient parsers—events are newline-separated but ma
 5. **Persist trace for feedback**
    Grab the `trace_id` from `TEXT_MESSAGE_*` events; pass it to `/api/feedback/submit` later if you want to audit the run.
 
-### Workflow B – Reprocess with a different strategy
-```bash
-DOC_ID=<uuid created earlier>
-
-curl -X POST http://localhost:8000/weaviate/documents/$DOC_ID/reprocess \
-  -H 'Content-Type: application/json' \
-  -d '{"strategy_name": "research", "force_reparse": true}' | jq
-
-# Watch progress (same SSE endpoint as before)
-curl -N http://localhost:8000/weaviate/documents/$DOC_ID/progress/stream
-
-# Verify chunk count jumped or metadata changed
-curl http://localhost:8000/weaviate/documents/$DOC_ID | jq '.chunk_count'
-```
-
-### Workflow C – Submit curator feedback referencing Langfuse trace
+### Workflow B – Submit curator feedback referencing Langfuse trace
 ```bash
 TRACE_ID="<from TEXT_MESSAGE events>"
 SESSION_ID="<chat session uuid>"
@@ -1106,7 +1079,7 @@ curl -X POST http://localhost:8000/api/feedback/submit \
 | 401 | Missing/invalid Cognito token when `DEV_MODE=false`. |
 | 403 | Document owned by another tenant. |
 | 404 | Document/chunk not found or deleted. |
-| 409 | Document still processing; reprocess/reembed refused. |
+| 409 | Document still processing; re-embed refused. |
 | 422 | FastAPI validation error (body/body field missing). |
 | 500 | Unexpected backend failure (see `detail`). |
 | 503 | Downstream dependency down (`/weaviate/health`, Cognito misconfig). |
@@ -1144,7 +1117,7 @@ Armed with the instructions above, an automated agent can:
 1. Stand up the stack (DEV mode or Cognito-authenticated).
 2. Upload and process PDFs, watching progress via SSE.
 3. Load processed docs into the chat orchestrator, stream responses, and capture Langfuse traces.
-4. Reprocess/re-embed as needed, download structured outputs, and file curator feedback with trace IDs.
+4. Re-embed as needed, download structured outputs, and file curator feedback with trace IDs.
 5. Validate chunk provenance and settings to ensure regression coverage.
 
 ## Project-shared curation flows

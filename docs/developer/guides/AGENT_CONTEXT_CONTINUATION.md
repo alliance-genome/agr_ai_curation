@@ -14,7 +14,7 @@ not conversation history.
    storage. Never summarize scientific findings in application code.
 2. Assemble the actual installed SDK Responses request, including instructions,
    tools, structured output, reasoning and provider settings. When the request's
-   count body, as UTF-8 JSON, is no larger than the token capacity and every input
+   count body, as UTF-8 JSON, is no larger than the input limit (capacity minus the headroom) and every input
    item is byte-bounded (text, or reasoning and compaction items carrying their
    encrypted content inline), it fits and no count call is made. Byte-level BPE
    gives every text token at least one byte, the encrypted items measured
@@ -26,12 +26,12 @@ not conversation history.
    through `/responses/input_tokens` first. Count failures stop before generation
    and are recorded. The OpenAI client's existing retry policy applies, without
    an extra retry loop.
-3. Send complete input that fits the model's verified input/context capacity.
+3. Send complete input that fits the input limit: the model's verified input/context capacity minus `AGENT_CONTEXT_CAPACITY_HEADROOM_TOKENS`.
    `context_management` requests native compaction at the configured token
    threshold (default 250000). Crossing this threshold is not a local rejection
    or permission to clip a tool result. Provider-returned native compaction items
    are retained; only their covered, completed prefix may be omitted later.
-4. If incoming content exceeds actual capacity, first compact closed historical
+4. If incoming content exceeds the input limit, first compact closed historical
    prefixes that themselves fit `/responses/compact`. Preserve pending parallel
    calls/results and their reasoning. The standalone response's **whole output
    window** becomes canonical; do not extract just its opaque item. Each iteration
