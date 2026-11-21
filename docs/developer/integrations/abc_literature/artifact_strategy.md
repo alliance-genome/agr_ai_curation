@@ -98,9 +98,53 @@ Important constraints:
 
 ## Access And Provenance
 
-Converted Markdown inherits access from its source/main PDF. Historical
+Converted main Markdown inherits access from its source/main PDF. Historical
 converted rows can have null/global MOD metadata, so UI and backend code must
-not infer public access from the converted row alone.
+not infer public access from the converted row alone. Converted supplements
+keep their own rule and are allowed only when their original's rule also
+allows the curator (below).
+
+### File lineage and per-file access (KANBAN-1976 / ALL-1460, P2)
+
+`GET /reference/referencefile/show_all/{curie}` returns one flat row per file.
+It never nests converted rows under their original; instead each
+`converted_merged_*` row carries `source`, the original ABC resolved it from
+(`referencefile_crud._find_source_for_derived`), or `null` when ABC cannot
+resolve it. The adapter reads these fields only:
+
+- A `converted_merged_supplement` row is linked to its original through
+  `source.referencefile_id` (`parent_artifact_id`) and keeps its own access
+  rule, exactly as ABC's `download_file` applies it to that row (license, then
+  its own `referencefile_mods`, no-MOD grant included). The original's rule
+  stays on the original. A reader must allow the converted text only when both
+  rules allow the curator, checked separately (P6 does this); one precomputed
+  intersected policy is not the same thing. ABC's sync only adds MOD links to
+  converted rows, so after sync the two usually agree; before sync the
+  converted row can be narrower.
+- A `converted_merged_supplement` row with a `null` source is never listed: no
+  original means no access rule to apply. A row whose `source` names a file
+  missing from the same listing (an inconsistent ABC answer, since ABC builds
+  `source` from that list) is left out too; the paper's other files are still
+  listed, a WARNING log names the raw file ids and the reference, and one
+  Sentry warning (`document_source` / `converted_source_not_listed`) carries
+  only hashed ids.
+- Every row whose class is not `converted_*` or `embedding` (the originals,
+  plus a few classes ABC derives without that prefix: `tei`, `figure`,
+  `thumbnail`, `inline_image`, `bw_duplicate`) gets ABC's own `download_file`
+  rule, which ABC applies to every class: open-access license, or a no-MOD
+  `referencefile_mods` row (any caller with some MOD access), or the caller's
+  MOD among the rows. A license whose `open_access` is unset refuses everyone.
+  Before P2 the no-MOD grant applied only to PDFs.
+- Word and Excel supplements (`file_class` `supplement` with extension `xlsx`,
+  `xlsm`, `docx` or `docm`, the formats ABC converts in-process) map to the
+  core role `SOURCE_SUPPLEMENT`. Supplementary PDFs stay `SOURCE_PDF`. Large
+  data files (`htp_supplement`) and other extensions keep role `UNKNOWN`.
+- Figure-metadata sidecars must have the metadata class matching the source's
+  class (`converted_main_figure_metadata` for a main PDF). Names from the
+  source's figure rows, or `{source}_image_`, are preferred; when none match,
+  every sidecar of that class is kept, as before, so a paper whose main text
+  came from another main PDF keeps that text's sidecars. A main paper without
+  main-figure metadata no longer gets supplement sidecars.
 
 Persist compact provenance on AI Curation documents:
 
