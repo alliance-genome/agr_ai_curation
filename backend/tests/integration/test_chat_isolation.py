@@ -32,8 +32,8 @@ from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatHistoryRepo
 from src.models.sql.chat_message import ChatMessage as ChatMessageModel
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
 from src.models.sql.user import User
-from src.models.sql.pdf_document import PDFDocument
 from src.lib.weaviate_helpers import get_tenant_name
+from tests.pdf_document_test_support import new_paper
 
 # Note: test_db and cleanup_db fixtures are now in conftest.py
 # Note: curator1_user and curator2_user are pre-registered as "chat1" and "chat2" in conftest.py
@@ -213,7 +213,7 @@ class TestChatIsolation:
 
         # Create documents for each user
         doc1_id = str(uuid4())
-        doc1 = PDFDocument(
+        doc1 = new_paper(
             id=doc1_id,
             user_id=user1.id,
             filename="test_user1_doc.pdf",
@@ -227,7 +227,7 @@ class TestChatIsolation:
         test_db.commit()
 
         doc2_id = str(uuid4())
-        doc2 = PDFDocument(
+        doc2 = new_paper(
             id=doc2_id,
             user_id=user2.id,
             filename="test_user2_doc.pdf",

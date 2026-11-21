@@ -241,7 +241,7 @@ def test_unlinked_manual_preparation_is_not_a_workspace_record(world):
 
 def test_document_check_requires_the_callers_own_curator_document(world):
     db = world["db"]
-    frozen = add_document(db, owner=world["owner"], viewer_mode="benchmark_frozen")
+    frozen = add_document(db, owner=world["owner"], display_mode="text", document_kind="benchmark_frozen")
     db.commit()
 
     assert ownership.require_owned_document(db, world["document"].id, OWNER) is None

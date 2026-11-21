@@ -176,6 +176,49 @@ class ProviderFigureReference(BaseModel):
         return self
 
 
+class ChunkTableSegment(BaseModel):
+    """Whole rows of one source table held in a chunk, written at chunking time.
+
+    ``char_start``/``char_end`` locate the rows in the chunk text, and
+    ``separator_char_start`` the separator line (only in the table's first
+    piece; every other line in the range is a row). Data rows are
+    numbered from 1 after the table's header rows; the Markdown separator line
+    is not a row. ``header_text`` is the header rows' text, kept here so readers
+    can show column names beside any piece of the table; it is never copied
+    into the stored chunk text.
+    """
+
+    table_index: int = Field(..., ge=1, description="Table number within the file, from 1")
+    char_start: int = Field(..., ge=0)
+    char_end: int = Field(..., gt=0)
+    first_data_row: Optional[int] = Field(None, ge=1)
+    last_data_row: Optional[int] = Field(None, ge=1)
+    total_data_rows: int = Field(..., ge=0)
+    header_row_count: int = Field(..., ge=0)
+    header_text: str
+    separator_char_start: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Start of the table's Markdown separator line in the chunk text, when the chunk holds it",
+    )
+
+    @model_validator(mode="after")
+    def validate_segment(self) -> "ChunkTableSegment":
+        if self.char_end <= self.char_start:
+            raise ValueError("char_end must be greater than char_start")
+        if self.separator_char_start is not None and not (
+            self.char_start < self.separator_char_start < self.char_end
+        ):
+            raise ValueError("separator_char_start must lie inside the segment")
+        if (self.first_data_row is None) != (self.last_data_row is None):
+            raise ValueError("first_data_row and last_data_row must both be set or both be absent")
+        if self.first_data_row is not None and not (
+            self.first_data_row <= self.last_data_row <= self.total_data_rows
+        ):
+            raise ValueError("data row range must be ordered and within total_data_rows")
+        return self
+
+
 class ChunkMetadata(BaseModel):
     """Chunk-specific metadata."""
 
@@ -197,6 +240,10 @@ class ChunkMetadata(BaseModel):
     provider_figure_reference: Optional[ProviderFigureReference] = Field(
         None,
         description="Structured provider-sidecar figure/table reference",
+    )
+    table_segments: List[ChunkTableSegment] = Field(
+        default_factory=list,
+        description="Whole table rows held in this chunk, in text order",
     )
 
 

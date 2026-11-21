@@ -16,6 +16,7 @@ from src.lib.chat_history_repository import (
 )
 from src.models.sql.chat_message import ChatMessage
 from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.models.sql.chat_session import ChatSession
 from src.models.sql.user import User
 
@@ -32,6 +33,7 @@ def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
 def _ensure_chat_history_tables_exist(db_session) -> None:
     User.__table__.create(bind=db_session.get_bind(), checkfirst=True)
     PDFDocument.__table__.create(bind=db_session.get_bind(), checkfirst=True)
+    PDFDocumentFile.__table__.create(bind=db_session.get_bind(), checkfirst=True)
     ChatSession.__table__.create(bind=db_session.get_bind(), checkfirst=True)
     ChatMessage.__table__.create(bind=db_session.get_bind(), checkfirst=True)
 

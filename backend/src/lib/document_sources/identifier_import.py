@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from fastapi import BackgroundTasks
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
@@ -74,7 +74,14 @@ from src.models.document import (
     ProcessingStatus,
 )
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument as ViewerPDFDocument
+from src.models.sql.pdf_document import (
+    DOCUMENT_KIND_LIBRARY,
+    FILE_ROLE_MAIN,
+    FILE_STATUS_PENDING,
+    PDFDocument as ViewerPDFDocument,
+    PDFDocumentFile,
+)
+from src.lib.document_files.service import owned_paper_by_main_file_hash
 from src.services.user_service import principal_from_claims, provision_user_async, ProvisionedUser
 
 logger = logging.getLogger(__name__)
@@ -1039,13 +1046,7 @@ class IdentifierImportService:
         try:
             existing_hash_document = (
                 session.execute(
-                    select(ViewerPDFDocument).where(
-                        ViewerPDFDocument.user_id == db_user.id,
-                        or_(
-                            ViewerPDFDocument.file_hash == scoped_file_hash,
-                            ViewerPDFDocument.file_hash == raw_checksum,
-                        ),
-                    )
+                    owned_paper_by_main_file_hash(db_user.id, (scoped_file_hash, raw_checksum))
                 )
                 .scalars()
                 .first()
@@ -1074,21 +1075,29 @@ class IdentifierImportService:
             record = ViewerPDFDocument(
                 id=uuid.UUID(document_id),
                 filename=filename,
+                user_id=db_user.id,
+                document_kind=DOCUMENT_KIND_LIBRARY,
+                next_chunk_index=0,
+                source_provider=source_provenance.get("provider"),
+                source_provider_reference_id=source_provenance.get("reference_id"),
+                source_provider_reference_curie=source_provenance.get("reference_curie"),
+                source_external_ids=source_provenance.get("external_ids"),
+            )
+            record.files.append(PDFDocumentFile(
+                role=FILE_ROLE_MAIN,
+                display_name=filename,
+                status=FILE_STATUS_PENDING,
+                tab_order=0,
+                display_mode=ViewerMode.LOCAL_PDF.value,
                 file_path=relative_path,
                 file_hash=scoped_file_hash,
                 file_size=file_size_bytes,
                 page_count=1,
-                user_id=db_user.id,
-                viewer_mode=ViewerMode.LOCAL_PDF.value,
-                source_provider=source_provenance.get("provider"),
-                source_provider_reference_id=source_provenance.get("reference_id"),
-                source_provider_reference_curie=source_provenance.get("reference_curie"),
                 source_provider_source_file_id=source_provenance.get("source_file_id"),
                 source_provider_pdf_artifact_id=source_provenance.get("pdf_artifact_id"),
                 source_provider_converted_artifact_id=source_provenance.get(
                     "converted_artifact_id"
                 ),
-                source_external_ids=source_provenance.get("external_ids"),
                 source_md5=source_provenance.get("source_md5"),
                 source_file_class=source_provenance.get("file_class"),
                 source_file_extension=source_provenance.get("file_extension"),
@@ -1100,7 +1109,7 @@ class IdentifierImportService:
                 ),
                 source_access_scope=source_provenance.get("access_scope"),
                 source_access_group_ids=source_provenance.get("access_group_ids"),
-            )
+            ))
             session.add(record)
             session.commit()
         except Exception:

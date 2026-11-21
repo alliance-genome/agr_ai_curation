@@ -23,26 +23,6 @@ export class AuthenticationError extends Error {
   }
 }
 
-export interface PDFDocument {
-  id: string;
-  filename: string;
-  fileSize: number;
-  creationDate: Date;
-  lastAccessedDate: Date;
-  processingStatus: string;
-  embeddingStatus: string;
-  chunkCount: number;
-  vectorCount: number;
-  metadata: {
-    pageCount?: number;
-    author?: string;
-    title?: string;
-    checksum: string;
-    documentType: string;
-    lastProcessedStage: string;
-  };
-}
-
 export interface OperationResult {
   success: boolean;
   message: string;
@@ -1009,24 +989,6 @@ export const useReembedDocument = (
   return useMutation({
     mutationFn: (id: string) =>
       fetchApi<OperationResult>(`/documents/${id}/reembed`, {
-        method: 'POST',
-      }),
-    onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ['documents'] });
-      queryClient.invalidateQueries({ queryKey: ['document', id] });
-    },
-    ...options,
-  });
-};
-
-export const useReprocessDocument = (
-  options?: UseMutationOptions<PDFDocument, Error, string>
-) => {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (id: string) =>
-      fetchApi<PDFDocument>(`/documents/${id}/reprocess`, {
         method: 'POST',
       }),
     onSuccess: (_data, id) => {

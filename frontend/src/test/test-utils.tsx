@@ -36,27 +36,6 @@ const customRender = (
 ) => render(ui, { wrapper: AllTheProviders, ...options });
 
 // Mock data generators
-export const createMockDocument = (overrides = {}) => ({
-  id: '1',
-  filename: 'test-document.pdf',
-  fileSize: 1024000,
-  creationDate: new Date('2024-01-01'),
-  lastAccessedDate: new Date('2024-01-02'),
-  processingStatus: 'completed',
-  embeddingStatus: 'completed',
-  chunkCount: 10,
-  vectorCount: 100,
-  metadata: {
-    pageCount: 5,
-    author: 'Test Author',
-    title: 'Test Document',
-    checksum: 'abc123',
-    documentType: 'research',
-    lastProcessedStage: 'completed',
-  },
-  ...overrides,
-});
-
 export const createMockChunk = (overrides = {}) => ({
   id: 'chunk-1',
   documentId: '1',

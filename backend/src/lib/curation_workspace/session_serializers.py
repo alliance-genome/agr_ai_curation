@@ -31,7 +31,7 @@ from src.lib.curation_workspace.models import (
     CurationValidationSnapshot as ValidationSnapshotModel,
 )
 from src.lib.curation_workspace.session_common import _latest_snapshot_record
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DISPLAY_MODE_TEXT, PDFDocument
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
     CurationActionLogEntry,
@@ -123,9 +123,10 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
             detail="Session document metadata is missing",
         )
 
+    main_file = document.main_file
     viewer_url = (
         None
-        if str(document.viewer_mode or "").strip().lower() == "text_only"
+        if main_file.display_mode == DISPLAY_MODE_TEXT
         else protected_pdf_url(document.id)
     )
     from src.lib.curation_workspace.document_reference import effective_document_reference
@@ -140,7 +141,7 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
         doi=_external_id(external_ids, "doi"),
         pdf_url=viewer_url,
         viewer_url=viewer_url,
-        page_count=document.page_count,
+        page_count=main_file.page_count,
         reference_curie=reference.curie if reference is not None else None,
         reference_source=reference.source if reference is not None else None,
     )

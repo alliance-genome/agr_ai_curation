@@ -17,6 +17,7 @@ from src.models.sql.agent_run_history import AgentHistoryEvent, AgentHistoryPayl
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
+from tests.pdf_document_test_support import new_paper
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ def source_record():
         db.add(user)
         db.flush()
         user_id = user.id
-        db.add(PDFDocument(id=document_id, user_id=user_id, filename="fixture.pdf",
+        db.add(new_paper(id=document_id, user_id=user_id, filename="fixture.pdf",
             file_path="/test/" + document_id.hex, file_hash=document_id.hex * 2,
             file_size=1, page_count=1, status="completed",
             processing_completed_at=datetime.now(timezone.utc)))

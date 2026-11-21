@@ -8,10 +8,16 @@ from src.models.chunk import (
     DocumentChunk,
     ElementType,
     ChunkMetadata,
+    ChunkTableSegment,
     ChunkDocItemProvenance,
     ChunkBoundingBox,
 )
 from src.models.strategy import ChunkingStrategy
+from src.lib.pipeline.table_chunking import (
+    current_table_header_rule,
+    layout_table,
+    pack_table_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +110,12 @@ class ChunkingError(Exception):
     pass
 
 
+def is_chunked_element(element: Dict[str, Any]) -> bool:
+    """True for every parsed element whose text is cut into pieces (page footers are not)."""
+
+    return element.get("metadata", {}).get("doc_item_label") != "page_footer"
+
+
 async def chunk_parsed_document(
     elements: List[Dict[str, Any]],
     strategy: ChunkingStrategy,
@@ -122,11 +134,7 @@ async def chunk_parsed_document(
     Raises:
         ChunkingError: If chunking fails
     """
-    filtered_elements = [
-        element
-        for element in elements
-        if element.get("metadata", {}).get("doc_item_label") != "page_footer"
-    ]
+    filtered_elements = [element for element in elements if is_chunked_element(element)]
 
     if not filtered_elements:
         raise ChunkingError("No elements to chunk")
@@ -187,83 +195,187 @@ async def chunk_parsed_document(
         raise ChunkingError(error_msg) from e
 
 
+def _new_chunk(content: str = "", elements: List[Dict[str, Any]] | None = None, metadata: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    return {
+        "content": content,
+        "elements": list(elements or []),
+        "metadata": dict(metadata or {}),
+        "table_segments": [],
+    }
+
+
+def _holds_only_headings(chunk: Dict[str, Any]) -> bool:
+    elements = chunk["elements"]
+    return bool(chunk["content"]) and bool(elements) and all(
+        element.get("type") == "Title" for element in elements
+    )
+
+
+def _joins_heading_stack(chunk: Dict[str, Any], heading: Dict[str, Any], max_characters: int) -> bool:
+    """Whether a heading may join a chunk that holds only headings.
+
+    Structural metadata only: the stacked innermost heading must be an ancestor
+    of the new one (its section path a proper prefix of the new heading's, in
+    the same parent section), so the merged chunk's metadata still reaches every
+    stacked heading. A sibling heading starts its own chunk, as does a heading
+    that would push the stack past max_characters.
+    """
+    if not _holds_only_headings(chunk):
+        return False
+    if len(chunk["content"]) + 2 + len(heading.get("text", "")) > max_characters:
+        return False
+    stacked = chunk["elements"][-1].get("metadata") or {}
+    incoming = heading.get("metadata") or {}
+    stacked_path = stacked.get("section_path") or []
+    incoming_path = incoming.get("section_path") or []
+    return (
+        len(stacked_path) < len(incoming_path)
+        and incoming_path[: len(stacked_path)] == stacked_path
+        and stacked.get("parent_section") == incoming.get("parent_section")
+    )
+
+
 def _chunk_by_title(
     elements: List[Dict[str, Any]],
     strategy: ChunkingStrategy
 ) -> List[Dict[str, Any]]:
     """Chunk elements by title boundaries.
 
-    Groups content under each title, respecting max_characters limit.
+    Groups content under each title, respecting max_characters limit. Tables
+    are cut only between whole rows (``table_chunking``). A heading followed by
+    a heading under it stays with it (``_joins_heading_stack``), and a heading
+    that does not fit beside its next element is carried into that element's
+    first piece, which can then exceed max_characters by the headings' length.
+    A heading followed by a sibling heading, or with nothing after it, is
+    still a piece of its own, so it keeps its section metadata.
     """
-    chunks = []
-    current_chunk = {
-        "content": "",
-        "elements": [],
-        "metadata": {}
-    }
+    chunks: List[Dict[str, Any]] = []
+    current_chunk = _new_chunk()
+    header_rule = current_table_header_rule()
+    table_index = 0
+
+    def take_carried_headings() -> Dict[str, Any] | None:
+        """Flush the current chunk, or return it when it holds only headings."""
+        nonlocal current_chunk
+        carried = current_chunk if _holds_only_headings(current_chunk) else None
+        if carried is None and current_chunk["content"]:
+            chunks.append(current_chunk)
+        current_chunk = _new_chunk()
+        return carried
+
+    def with_carried(carried: Dict[str, Any] | None, content: str, element: Dict[str, Any]) -> Dict[str, Any]:
+        if carried is None:
+            return _new_chunk(content, [element], element.get("metadata", {}))
+        return _new_chunk(
+            f"{carried['content']}\n\n{content}",
+            carried["elements"] + [element],
+            carried["metadata"],
+        )
 
     for element in elements:
         element_type = element.get("type", "")
         element_text = element.get("text", "")
 
-        # Start new chunk on title
         if element_type == "Title" and current_chunk["content"]:
+            if _joins_heading_stack(current_chunk, element, strategy.max_characters):
+                # A heading under the stacked one stays with it; the innermost
+                # heading owns the section metadata of the text that follows,
+                # and its section path still names every stacked heading.
+                current_chunk["content"] = f"{current_chunk['content']}\n\n{element_text}"
+                current_chunk["elements"].append(element)
+                current_chunk["metadata"] = dict(element.get("metadata", {}))
+                continue
             chunks.append(current_chunk)
             # A new section owns its own text/provenance. Borrowing the prior
             # section's tail misattributes it to this heading/page.
-            current_chunk = {
-                "content": element_text,
-                "elements": [element],
-                "metadata": dict(element.get("metadata", {}))
-            }
-        else:
-            # Add to current chunk if within size limit
-            new_content = current_chunk["content"] + "\n\n" + element_text if current_chunk["content"] else element_text
+            current_chunk = _new_chunk(element_text, [element], element.get("metadata", {}))
+            continue
 
-            if len(new_content) > strategy.max_characters:
-                # Save current chunk and start new one
-                if current_chunk["content"]:
-                    chunks.append(current_chunk)
-
-                # Keep source elements independent across chunk boundaries.
-                # Overlap remains available within an oversized element below.
-                combined_content = element_text
-                if len(combined_content) > strategy.max_characters:
-                    logger.warning(
-                        "Single element exceeds max_characters (%d > %d). Splitting element of type '%s'.",
-                        len(combined_content),
-                        strategy.max_characters,
-                        element_type,
-                    )
-                    split_contents = _split_oversized_text(
-                        combined_content,
-                        strategy.max_characters,
-                        strategy.overlap_characters,
-                    )
-                    for split_content in split_contents[:-1]:
-                        chunks.append(
-                            {
-                                "content": split_content,
-                                "elements": [element],
-                                "metadata": dict(element.get("metadata", {})),
-                            }
-                        )
-                    current_chunk = {
-                        "content": split_contents[-1],
-                        "elements": [element],
-                        "metadata": dict(element.get("metadata", {})),
-                    }
-                else:
-                    current_chunk = {
-                        "content": combined_content,
-                        "elements": [element],
-                        "metadata": dict(element.get("metadata", {}))
-                    }
-            else:
-                current_chunk["content"] = new_content
+        if element_type == "Table":
+            layout = layout_table(element_text, header_rule)
+            if not layout.lines:
+                continue
+            table_index += 1
+            table_text = layout.text
+            separator = "\n\n" if current_chunk["content"] else ""
+            if len(current_chunk["content"]) + len(separator) + len(table_text) <= strategy.max_characters:
+                char_start = len(current_chunk["content"]) + len(separator)
+                current_chunk["content"] = f"{current_chunk['content']}{separator}{table_text}"
                 current_chunk["elements"].append(element)
                 if not current_chunk["metadata"]:
                     current_chunk["metadata"] = dict(element.get("metadata", {}))
+                current_chunk["table_segments"].append(
+                    layout.segment(
+                        table_index=table_index,
+                        char_start=char_start,
+                        piece=layout.whole_table_piece(),
+                    ).to_metadata()
+                )
+                continue
+
+            carried = take_carried_headings()
+            pieces = pack_table_rows(layout, strategy.max_characters)
+            if len(pieces) > 1 or len(pieces[0].text) > strategy.max_characters:
+                logger.info(
+                    "Table %d (%d characters) cut into %d whole-row pieces.",
+                    table_index,
+                    len(table_text),
+                    len(pieces),
+                )
+            for piece_number, piece in enumerate(pieces):
+                if piece_number == 0:
+                    chunk = with_carried(carried, piece.text, element)
+                else:
+                    chunk = _new_chunk(piece.text, [element], element.get("metadata", {}))
+                chunk["table_segments"].append(
+                    layout.segment(
+                        table_index=table_index,
+                        char_start=len(chunk["content"]) - len(piece.text),
+                        piece=piece,
+                    ).to_metadata()
+                )
+                if piece_number < len(pieces) - 1:
+                    chunks.append(chunk)
+                else:
+                    current_chunk = chunk
+            continue
+
+        # Add to current chunk if within size limit
+        new_content = current_chunk["content"] + "\n\n" + element_text if current_chunk["content"] else element_text
+
+        if len(new_content) <= strategy.max_characters:
+            current_chunk["content"] = new_content
+            current_chunk["elements"].append(element)
+            if not current_chunk["metadata"]:
+                current_chunk["metadata"] = dict(element.get("metadata", {}))
+            continue
+
+        # Keep source elements independent across chunk boundaries.
+        # Overlap remains available within an oversized element below.
+        carried = take_carried_headings()
+        if len(element_text) > strategy.max_characters:
+            logger.warning(
+                "Single element exceeds max_characters (%d > %d). Splitting element of type '%s'.",
+                len(element_text),
+                strategy.max_characters,
+                element_type,
+            )
+            split_contents = _split_oversized_text(
+                element_text,
+                strategy.max_characters,
+                strategy.overlap_characters,
+            )
+        else:
+            split_contents = [element_text]
+        for piece_number, split_content in enumerate(split_contents):
+            if piece_number == 0:
+                chunk = with_carried(carried, split_content, element)
+            else:
+                chunk = _new_chunk(split_content, [element], element.get("metadata", {}))
+            if piece_number < len(split_contents) - 1:
+                chunks.append(chunk)
+            else:
+                current_chunk = chunk
 
     # Add final chunk
     if current_chunk["content"]:
@@ -591,6 +703,9 @@ def _create_document_chunk(
         section_path=section_path,
         content_type=content_type_meta,
         doc_items=doc_items,
+        table_segments=[
+            ChunkTableSegment(**segment) for segment in chunk_data.get("table_segments", [])
+        ],
     )
 
     chunk_obj = DocumentChunk(
@@ -609,6 +724,23 @@ def _create_document_chunk(
         metadata=metadata,
     )
     return chunk_obj
+
+
+def offset_chunk_indices(chunks: List[DocumentChunk], start: int) -> List[DocumentChunk]:
+    """Move a file's chunks to its reserved range, which begins at ``start``.
+
+    A paper's first file starts at 0, so its chunks keep the indices and IDs
+    chunking gave them.
+    """
+    if start < 0:
+        raise ChunkingError("A file's chunk range cannot start below 0")
+    for position, chunk in enumerate(chunks):
+        if chunk.chunk_index != position:
+            raise ChunkingError("Chunks must be numbered from 0 before they are offset")
+        index = start + position
+        chunk.chunk_index = index
+        chunk.id = f"{chunk.document_id}_chunk_{index:04d}"
+    return chunks
 
 
 def assign_chunk_indices(chunks: List[DocumentChunk]) -> List[DocumentChunk]:

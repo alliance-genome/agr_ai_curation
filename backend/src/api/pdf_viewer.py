@@ -19,7 +19,7 @@ from src.config import get_pdf_storage_path
 from src.api.auth import get_auth_dependency
 from src.api.documents import validate_user_file_path
 from src.models.sql.database import get_db
-from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
+from src.models.sql.pdf_document import DISPLAY_MODE_TEXT, PDFDocument as PdfDocumentModel
 from src.services.document_access import (
     owned_documents_select,
     protected_pdf_url,
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/pdf-viewer", tags=["PDF Viewer"])
 class PDFDocumentSummary(BaseModel):
     id: UUID = Field(..., description="Unique identifier for the document")
     filename: str = Field(..., min_length=1, max_length=255)
-    page_count: int = Field(..., ge=1)
+    page_count: int | None = Field(..., ge=1, description="Pages of the main file; none for a text file")
     file_size: int = Field(
         ...,
         gt=0,
@@ -117,11 +117,12 @@ class PdfViewerFuzzyMatchResponse(BaseModel):
 
 
 def _viewer_mode(record: PdfDocumentModel) -> str:
-    return str(record.viewer_mode or "local_pdf").strip().lower() or "local_pdf"
+    """The main file's display mode, which the viewer reads until it shows one tab per file."""
+    return record.main_file.display_mode
 
 
 def _document_viewer_url(record: PdfDocumentModel) -> str | None:
-    if _viewer_mode(record) == "text_only":
+    if _viewer_mode(record) == DISPLAY_MODE_TEXT:
         return None
     return protected_pdf_url(record.id)
 
@@ -155,8 +156,8 @@ def list_documents(
         PDFDocumentSummary(
             id=record.id,
             filename=record.filename,
-            page_count=record.page_count,
-            file_size=record.file_size,
+            page_count=record.main_file.page_count,
+            file_size=record.main_file.file_size,
             upload_timestamp=record.upload_timestamp,
             viewer_url=_document_viewer_url(record),
             viewer_mode=_viewer_mode(record),
@@ -199,13 +200,13 @@ def get_document_detail(
     return PDFDocumentDetail(
         id=record.id,
         filename=record.filename,
-        page_count=record.page_count,
-        file_size=record.file_size,
+        page_count=record.main_file.page_count,
+        file_size=record.main_file.file_size,
         upload_timestamp=record.upload_timestamp,
         last_accessed=record.last_accessed,
         viewer_url=_document_viewer_url(record),
         viewer_mode=_viewer_mode(record),
-        file_hash=record.file_hash,
+        file_hash=record.main_file.file_hash,
     )
 
 
@@ -236,7 +237,7 @@ def get_document_pdf_content(
     """Serve owned PDF bytes without exposing the tenant storage path."""
     access = _get_document(db, document_id, user)
     record = access.record
-    if _viewer_mode(record) == "text_only":
+    if _viewer_mode(record) == DISPLAY_MODE_TEXT:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"PDF file not available for document {document_id}",
@@ -244,7 +245,7 @@ def get_document_pdf_content(
 
     storage_root = get_pdf_storage_path()
     file_path = validate_user_file_path(
-        storage_root / record.file_path,
+        storage_root / record.main_file.file_path,
         storage_root,
         access.owner_auth_sub,
     )

@@ -9,6 +9,7 @@ from threading import Event, Lock
 from uuid import UUID, uuid4
 
 import pytest
+from tests.pdf_document_test_support import new_paper
 from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
@@ -151,6 +152,7 @@ def seeded_review_sessions(client: TestClient, test_db):
     )
     from src.models.sql.database import Base
     from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+    from src.models.sql.pdf_document import PDFDocumentFile
     from src.models.sql.user import User
     from src.schemas.curation_workspace import (
         CurationCandidateSource,
@@ -175,6 +177,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            PDFDocumentFile.__table__,
             DocumentReferenceLink.__table__,
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
@@ -217,7 +220,7 @@ def seeded_review_sessions(client: TestClient, test_db):
     document_gamma_id = uuid4()
 
     documents = [
-        PDFDocument(
+        new_paper(
             id=document_alpha_id,
             user_id=users[0].id,
             filename="test_cw_alpha.pdf",
@@ -227,7 +230,7 @@ def seeded_review_sessions(client: TestClient, test_db):
             file_size=4096,
             page_count=3,
         ),
-        PDFDocument(
+        new_paper(
             id=document_beta_id,
             user_id=users[1].id,
             filename="test_cw_beta.pdf",
@@ -237,7 +240,7 @@ def seeded_review_sessions(client: TestClient, test_db):
             file_size=4096,
             page_count=4,
         ),
-        PDFDocument(
+        new_paper(
             id=document_gamma_id,
             user_id=users[2].id,
             filename="test_cw_gamma.pdf",

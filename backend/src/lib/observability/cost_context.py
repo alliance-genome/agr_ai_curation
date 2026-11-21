@@ -89,7 +89,8 @@ def execution_context(*, activity: str, document_id: str | None = None,
                 if document.source_provider and reference:
                     context["paper"] = {"namespace": document.source_provider, "id": reference}
                     context["paper_category"] = "paper"
-                context["artifact_revision"] = document.file_hash or document.source_md5
+                main_file = document.main_file
+                context["artifact_revision"] = main_file.file_hash or main_file.source_md5
     except Exception as exc:
         try:
             report_runtime_exception(

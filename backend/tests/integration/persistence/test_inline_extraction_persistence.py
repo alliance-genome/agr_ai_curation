@@ -44,6 +44,7 @@ from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -78,7 +79,7 @@ def document_id(db_session):
         auth_sub="test_pdf_owner_inline_extraction",
     )
     db_session.add(
-        PDFDocument(
+        new_paper(
             id=doc_id,
             user_id=owner_id,
             filename=f"test_inline_persistence_{hex_value}.pdf",

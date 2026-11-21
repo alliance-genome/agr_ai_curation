@@ -1138,9 +1138,9 @@ async def get_document_hierarchy(
                 PDFDocument.id == UUID(document_id)
             ).first()
 
-            if doc and doc.hierarchy_metadata:
+            if doc and doc.main_file.hierarchy_metadata:
                 logger.info("Retrieved hierarchy metadata for document %s", document_id)
-                return doc.hierarchy_metadata
+                return doc.main_file.hierarchy_metadata
             else:
                 logger.info("No hierarchy metadata found for document %s", document_id)
                 return None

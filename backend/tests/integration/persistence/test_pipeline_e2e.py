@@ -50,7 +50,8 @@ class TestPipelineE2E:
 
         with patch("src.lib.pipeline.store.update_document_status_detailed", new=AsyncMock()):
             stats = await store_to_weaviate(
-                chunks, document_id, weaviate_connection, user_id=TEST_USER_ID
+                chunks, document_id, weaviate_connection, user_id=TEST_USER_ID,
+                chunk_range=(0, expected_count - 1),
             )
 
         persisted_count = count_persisted_chunks(weaviate_connection, document_id)

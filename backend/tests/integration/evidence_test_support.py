@@ -20,6 +20,7 @@ from tests.fixtures.evidence.harness import (
     build_expected_sse_records,
     load_evidence_fixture,
 )
+from tests.pdf_document_test_support import new_paper
 
 
 def _hash(document_id: UUID) -> str:
@@ -48,7 +49,7 @@ def client(test_db, get_auth_mock, monkeypatch):
     from src.models.sql.chat_session import ChatSession
     from src.models.sql.database import Base
     from src.models.sql.database import get_db
-    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument, PDFDocumentFile
     from src.models.sql.user import User
 
     app = create_app()
@@ -61,6 +62,7 @@ def client(test_db, get_auth_mock, monkeypatch):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            PDFDocumentFile.__table__,
             DocumentReferenceLink.__table__,
             ChatSession.__table__,
             ChatMessage.__table__,
@@ -102,7 +104,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
         DomainValidationFinding,
     )
     from src.models.sql.database import Base
-    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+    from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument, PDFDocumentFile
     from src.models.sql.user import User
 
     Base.metadata.create_all(
@@ -110,6 +112,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            PDFDocumentFile.__table__,
             DocumentReferenceLink.__table__,
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
@@ -141,7 +144,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
     test_db.add(owner)
     test_db.flush()
     test_db.add(
-        PDFDocument(
+        new_paper(
             id=document_id,
             user_id=owner.id,
             filename=str(paper["filename"]),

@@ -28,7 +28,7 @@ from src.lib.pipeline.processing_receipt import (
     minimal_terminal_receipt,
 )
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import FILE_STATUS_FAILED, FILE_STATUS_PENDING, PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
 from src.schemas.pdf_jobs import PdfJobListResponse, PdfJobResponse
 from src.services.processing_status_policy import (
@@ -237,6 +237,11 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     document.error_message = terminal_message[
         :get_pdf_document_error_message_max_chars()
     ]
+    # A new paper's files cannot outlive its failed or cancelled import as pending.
+    for file_row in document.files:
+        if file_row.status == FILE_STATUS_PENDING:
+            file_row.status = FILE_STATUS_FAILED
+            file_row.error_message = document.error_message
     return True
 
 

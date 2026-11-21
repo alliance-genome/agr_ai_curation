@@ -80,7 +80,8 @@ def test_context_guide_explains_a_skipped_token_count():
     guide = read_studio_guide(template=template, render_diagnostic_tools=str, topic="token_budget")["content"]
     assert "The estimate is advisory; request admission uses the provider's token count." not in guide
     for phrase in ("count_skipped=true", "request_bytes", "an empty `input_tokens_before`",
-                   "A skipped count is not missing data."):
+                   "A skipped count is not missing data.", "less a configured safety margin",
+                   "the input limit (capacity minus that margin)", "`input_capacity` and `input_limit`"):
         assert phrase in guide
 
 
