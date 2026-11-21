@@ -419,7 +419,6 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "hierarchy": {},
             "sections": [],
-            "abstract": None,
             "document_name": "Paper A",
         },
         canonical_tool_ids=["search_document", "record_evidence"],
@@ -437,7 +436,6 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "hierarchy": {},
             "sections": [],
-            "abstract": None,
             "document_name": "Paper A",
         },
         canonical_tool_ids=["search_document", "record_evidence"],
@@ -1071,3 +1069,30 @@ def test_missing_or_inaccessible_agent_remains_an_identity_failure(monkeypatch):
     monkeypatch.setattr(catalog_service, "_get_db_agent_row", lambda *args: None)
     with pytest.raises(ValueError, match="Unknown agent_id"):
         catalog_service.get_agent_by_id("missing")
+
+
+@pytest.mark.parametrize("document_tool", sorted(catalog_service.DOCUMENT_TOOL_IDS))
+def test_runtime_context_has_section_list_but_no_abstract_for_paper_with_abstract(document_tool):
+    """No agent's built runtime context carries the paper's abstract, even if a caller still passes one."""
+    from src.lib.openai_agents.prompt_utils import format_hierarchy_for_prompt
+
+    hierarchy = {
+        "sections": [
+            {"name": "Abstract", "page_numbers": [1], "chunk_count": 1, "subsections": []},
+            {"name": "Results", "page_numbers": [2], "chunk_count": 3, "subsections": []},
+        ],
+        "top_level_sections": ["Abstract", "Results"],
+    }
+    runtime_context = catalog_service._build_runtime_context(
+        runtime_kwargs={
+            "document_name": "Paper A",
+            "hierarchy": hierarchy,
+            "sections": ["Abstract", "Results"],
+            "abstract": "SYNTHETIC ABSTRACT TEXT THAT MUST NOT APPEAR",
+        },
+        canonical_tool_ids=[document_tool],
+    )
+
+    assert format_hierarchy_for_prompt(hierarchy).strip() in runtime_context
+    assert "SYNTHETIC ABSTRACT TEXT" not in runtime_context
+    assert "## Paper Abstract" not in runtime_context

@@ -4293,8 +4293,8 @@ async def execute_flow(
         with cost_scope(flow_cost_context), runtime_cost_scope(preparation_accounting):
             doc_context = await DocumentContext.fetch(document_id, user_id, document_name)
         logger.info(
-            f"[Flow Executor] Pre-fetched document context: {doc_context.section_count()} sections, "
-            f"abstract={'yes' if doc_context.abstract else 'no'}"
+            "[Flow Executor] Pre-fetched document context: %s sections",
+            doc_context.section_count(),
         )
 
     # Create flow supervisor with restricted tools
