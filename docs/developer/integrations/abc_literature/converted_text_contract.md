@@ -138,6 +138,47 @@ retrieved Markdown as AI Curation source Markdown and keep compact provenance
 with the source PDF referencefile ID, converted Markdown referencefile ID,
 source MD5, file class/extension, and source access scope.
 
+### From Markdown to stored text
+
+The saved source Markdown is never changed. The text that is cut into pieces,
+embedded and quoted is built from it by `markdown_to_pipeline_elements`
+(`backend/src/lib/pipeline/pdfx_parser.py`), the same step that PDF extraction
+output and benchmark document conversions go through. Each element's raw text
+is cleaned exactly once by `backend/src/lib/markdown_plain_text.py`, which
+reads it with a CommonMark parser (`markdown-it-py`):
+
+- Only markup the parser reads as formatting is removed: `*` and `_` emphasis,
+  `~~` strikethrough, code span backticks, link brackets and image syntax (the
+  description is kept). Literal characters stay, for example `p.Tyr318*`,
+  `****` and `~5 kb`. Underscores inside a word are never emphasis
+  (`snake_case`); a pair at the edges of a word is (`_x_`, `__init__`).
+- Text in angle brackets is kept exactly as written, for example `<UAS:GFP>`,
+  `Tg(<lexAop:GFP>)`, `Pax6<Sey>`, web addresses and e-mail addresses:
+  autolinks and raw HTML are both off.
+- `<u>`, `<sup>` and `<sub>` tag pairs are removed first, so
+  `Ca**<sup>2+</sup>**` becomes `Ca2+`. Characters that were inside such a
+  pair are never read as markup (`val<sup>*</sup>` keeps its asterisk). Other
+  HTML stays as literal text.
+- Backslash escapes are undone (`\*` becomes `*`), except an escaped
+  backslash, which stays as two backslashes: in a table cell undoing it would
+  make the next pipe part of the cell, and prose follows the same rule.
+- Character references are decoded (`&amp;` becomes `&`, `&nbsp;` a no-break
+  space, `&#0;` and NUL the replacement character U+FFFD). A carriage return
+  becomes a line feed.
+- Tables are cleaned cell by cell, so markup never pairs across cells, and an
+  escaped pipe (`\|`) stays escaped inside its cell.
+- Fenced code blocks keep their text as written.
+- Every step is linear in the length of the text (1 MB of hostile input is
+  tested).
+
+A second pass would turn an escaped `\*x\*` back into emphasis and delete
+the asterisks, so the clean-up is never applied to text it already returned.
+Known limit: a pair of literal asterisks that the converted text does not
+escape, such as `w[*]; y[*]`, still reads as emphasis and loses both
+asterisks (ABC ticket SCRUM-6973).
+
+Papers imported before 0.12.0 keep the pieces they were stored with.
+
 ## Fixture Evidence
 
 Stage evidence from 2026-06-25:
