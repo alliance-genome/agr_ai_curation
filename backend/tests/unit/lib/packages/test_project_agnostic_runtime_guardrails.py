@@ -190,6 +190,9 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Re-saving a legacy extractor withholds the Alliance lookup tools it
     # inherited (ALL-1276 review S1/S4).
     Path("backend/tests/integration/persistence/test_inherited_tool_policy_persistence.py"),
+    # Upgrades from the Alliance production tool-policy rows and saves a copy of
+    # the Alliance topic-tag agent.
+    Path("backend/tests/integration/persistence/test_tool_policy_rows_after_upgrade.py"),
     # Bundled Alliance package contracts and prompt/tool policy coverage.
     Path("backend/tests/integration/persistence/test_validator_agent_identity_migration.py"),
     Path("backend/tests/unit/test_config_loaders.py"),

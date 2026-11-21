@@ -23,7 +23,7 @@ from src.models.sql.database import SessionLocal
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
-PREVIOUS_HEAD = "b5c6d7e8f9a0"
+PREVIOUS_HEAD = "a9b8c7d6e5f4"
 REVISION = "c6d7e8f9a0b1"
 
 _MOVED = (

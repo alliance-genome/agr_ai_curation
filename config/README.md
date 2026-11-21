@@ -312,6 +312,14 @@ Notes:
   restrictions still apply. Defaults are database seeds, not startup overrides:
   forward backfills insert missing installed policies without changing existing
   operator decisions.
+- Rows come only from migrations; nothing adds them at startup. A fresh database
+  gets a row for every default because the table seed reads today's defaults,
+  but an existing database does not. A new tool that an agent template lists or
+  a package installs needs a migration that inserts its row from these
+  defaults, as `a9b8c7d6e5f4` does for the topic-tag builder tools. Without the
+  row, Agent Studio refuses to save a curator's copy of an agent that uses it.
+  `backend/tests/integration/persistence/test_tool_policy_rows_after_upgrade.py`
+  fails when such a row is missing after upgrading from production's rows.
 
 ### maintenance_message.txt
 

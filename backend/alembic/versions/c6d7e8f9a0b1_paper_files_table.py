@@ -23,7 +23,7 @@ locks on ``pdf_documents``; run it only in the release maintenance window with
 traffic stopped (see docs/developer/guides/PAPER_FILES_MIGRATION.md).
 
 Revision ID: c6d7e8f9a0b1
-Revises: b5c6d7e8f9a0
+Revises: a9b8c7d6e5f4
 Create Date: 2026-11-20
 """
 
@@ -36,7 +36,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "c6d7e8f9a0b1"
-down_revision: Union[str, Sequence[str], None] = "b5c6d7e8f9a0"
+down_revision: Union[str, Sequence[str], None] = "a9b8c7d6e5f4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -175,7 +175,7 @@ def _create_files_table() -> None:
         sa.CheckConstraint("file_size > 0", name="ck_pdf_document_files_file_size"),
         sa.CheckConstraint(
             "(display_mode = 'text' AND page_count IS NULL) "
-            "OR (display_mode <> 'text' AND page_count > 0)",
+            "OR (display_mode <> 'text' AND page_count IS NOT NULL AND page_count > 0)",
             name="ck_pdf_document_files_page_count",
         ),
         sa.CheckConstraint(
