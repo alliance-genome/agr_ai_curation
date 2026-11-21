@@ -727,6 +727,8 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit(log_
             patch.object(worker, "SessionLocal", MagicMock()),
             patch("src.lib.prompts.cache.initialize"),
             patch("src.lib.config.groups_loader.load_groups"),
+            # Search index I/O: the engine-version check at start connects here.
+            patch("src.lib.weaviate_client.connection.get_connection"),
             patch("langfuse.api.projects.client.ProjectsClient.get",
                   side_effect=AttributeError("synthetic-private-auth")),
             patch("opentelemetry.exporter.otlp.proto.http.trace_exporter.time", return_value=100),
@@ -755,6 +757,7 @@ def test_standalone_worker_emits_sanitized_sentry_event_and_flushes_at_exit(log_
         BENCHMARK_WORKER_ENABLED="true",
         BENCHMARK_EXECUTION_ENABLED="true",
         BENCHMARK_WORKER_CONCURRENCY="1",
+        WEAVIATE_EXPECTED_VERSION="1.31.18",
     )
     completed = subprocess.run(
         [sys.executable, "-c", script], env=env, capture_output=True, text=True,
