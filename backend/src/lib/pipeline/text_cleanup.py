@@ -21,8 +21,9 @@ T = TypeVar("T")
 
 # Exactly one worker, by design. Do not raise it:
 # - Correctness: the clean-up uses one shared Markdown parser whose rule caches
-#   are built lazily and are not safe for concurrent first use. Serial clean-ups
-#   cannot race on that state.
+#   are built lazily and are not safe for concurrent first use. The caches are
+#   built at import (``src/lib/markdown_plain_text.py``), and serial clean-ups
+#   keep any state the parser does not build up front from being shared at once.
 # - A clean-up cannot be stopped once it runs. If its import times out or is
 #   cancelled, it finishes in the background and its result is dropped. One
 #   worker bounds that to a single thread (the backend has a pids limit).

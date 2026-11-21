@@ -247,3 +247,50 @@ def test_one_megabyte_of_unclosed_tags_finishes(unit):
     _clean_both_ways(_repeat_to(unit, _ONE_MEGABYTE))
 
     assert time.perf_counter() - started < _ONE_MEGABYTE_SECONDS
+
+
+def _run_fresh_import(script: str) -> str:
+    """Run ``script`` in a new interpreter, so the parser module is imported anew."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    backend_dir = Path(__file__).resolve().parents[3]
+    completed = subprocess.run(
+        [sys.executable, "-c", script], cwd=backend_dir, capture_output=True, text=True, timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.strip()
+
+
+def test_the_parser_rule_caches_are_built_at_import():
+    # The text clean-up runs off the event loop; markdown-it builds rule caches
+    # lazily, which is unsafe for concurrent first use, so import builds them.
+    output = _run_fresh_import(
+        "import src.lib.markdown_plain_text as m\n"
+        "p = m._PARSER\n"
+        "rulers = (p.core.ruler, p.block.ruler, p.inline.ruler, p.inline.ruler2)\n"
+        "print(all(r.__cache__ is not None for r in rulers))\n"
+    )
+    assert output == "True"
+
+
+def test_two_threads_cleaning_at_once_right_after_import_get_the_same_text():
+    output = _run_fresh_import(
+        "import threading\n"
+        "import src.lib.markdown_plain_text as m\n"
+        "text = 'Signal in **B cells**, p.Tyr318*/c.954C>G and ~~old~~ [link](x)'\n"
+        "barrier = threading.Barrier(2)\n"
+        "results = []\n"
+        "def clean():\n"
+        "    barrier.wait()\n"
+        "    results.append(m.markdown_inline_to_plain_text(text))\n"
+        "threads = [threading.Thread(target=clean) for _ in range(2)]\n"
+        "[t.start() for t in threads]\n"
+        "[t.join() for t in threads]\n"
+        "results.append(m.markdown_inline_to_plain_text(text))\n"
+        "print(len(set(results)), repr(results[-1]))\n"
+    )
+    count, cleaned = output.split(" ", 1)
+    assert count == "1"
+    assert cleaned == repr("Signal in B cells, p.Tyr318*/c.954C>G and old link")
