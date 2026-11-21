@@ -91,7 +91,8 @@ class PDFDocument(Base):
     # The next free piece number in the search index. A file's range is reserved
     # from it under a row lock and numbers are never reused. NULL only on papers
     # saved before the files table existed, until the one-time fill step measures them.
-    next_chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    # Every code path that creates a paper sets it to 0 explicitly.
+    next_chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # A curator's statement of which source paper this file is. Loaded only when
     # read, and kept in its own table, apart from where the file itself came from.
@@ -235,7 +236,7 @@ class PDFDocumentFile(Base):
         CheckConstraint("file_size > 0", name="ck_pdf_document_files_file_size"),
         CheckConstraint(
             f"(display_mode = '{DISPLAY_MODE_TEXT}' AND page_count IS NULL) "
-            f"OR (display_mode <> '{DISPLAY_MODE_TEXT}' AND page_count > 0)",
+            f"OR (display_mode <> '{DISPLAY_MODE_TEXT}' AND page_count IS NOT NULL AND page_count > 0)",
             name="ck_pdf_document_files_page_count",
         ),
         CheckConstraint(

@@ -107,7 +107,7 @@ class TestPDFDocumentFileModel:
 
         assert str(constraint.sqltext) == (
             "(display_mode = 'text' AND page_count IS NULL) "
-            "OR (display_mode <> 'text' AND page_count > 0)"
+            "OR (display_mode <> 'text' AND page_count IS NOT NULL AND page_count > 0)"
         )
 
     def test_chunk_range_constraint_ties_the_range_to_the_count(self):

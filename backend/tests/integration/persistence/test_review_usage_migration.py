@@ -21,9 +21,11 @@ def test_old_policy_archived_without_resetting_history(historical_migration_data
     doc, owner = uuid4(), "migration-" + uuid4().hex
     with h.SessionLocal.begin() as db:
         uid = ensure_test_pdf_owner(db, auth_sub=owner)
-        db.add(new_paper(id=doc, user_id=uid, filename="history.pdf",
-            file_path=f"{doc}/history.pdf", file_hash=doc.hex * 2,
-            file_size=1024, page_count=1, status="processed"))
+        # The schema of this revision, not today's ORM: papers still hold their file columns.
+        db.execute(text(
+            "INSERT INTO pdf_documents (id, user_id, filename, file_path, file_hash, file_size, "
+            "page_count, status) VALUES (:id, :uid, 'history.pdf', :path, :hash, 1024, 1, 'processed')"
+        ), {"id": doc, "uid": uid, "path": f"{doc}/history.pdf", "hash": doc.hex * 2})
     scope = h.HistoryScope(owner, str(doc), uuid4().hex)
     aid = artifact(scope)
     ep = episode(scope, aid, binding(scope, aid))

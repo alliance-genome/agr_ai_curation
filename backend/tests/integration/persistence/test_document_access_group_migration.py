@@ -68,9 +68,10 @@ def test_legacy_access_groups_migrate_without_widening_or_loss(historical_migrat
                 connection.execute(
                     sa.text(
                         """
-                        SELECT id, source_access_group_ids
-                        FROM pdf_documents
-                        WHERE id IN (:retained_id, :malformed_id, :malformed_item_id)
+                        SELECT document_id, source_access_group_ids
+                        FROM pdf_document_files
+                        WHERE role = 'main'
+                          AND document_id IN (:retained_id, :malformed_id, :malformed_item_id)
                         """
                     ),
                     {
