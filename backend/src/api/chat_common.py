@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
+from ..lib.evidence_search_text import with_fragment_search_texts
 from .chat_models import *
 from ..lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
@@ -984,7 +985,7 @@ def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
         role=record.role,
         message_type=record.message_type,
         content=record.content,
-        payload_json=payload_json,
+        payload_json=with_fragment_search_texts(payload_json),
         trace_id=record.trace_id,
         created_at=record.created_at,
     )
@@ -1113,9 +1114,9 @@ def _stream_event_payload(
 
 
 def _stream_event_sse(event_payload: Dict[str, Any]) -> str:
-    """Serialize one SSE payload."""
+    """Serialize one SSE payload, with read-time search text on table-row evidence."""
 
-    return f"data: {json.dumps(event_payload, default=str)}\n\n"
+    return f"data: {json.dumps(with_fragment_search_texts(event_payload), default=str)}\n\n"
 
 
 def _build_terminal_turn_event(
