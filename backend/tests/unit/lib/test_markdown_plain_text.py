@@ -275,22 +275,28 @@ def test_the_parser_rule_caches_are_built_at_import():
     assert output == "True"
 
 
-def test_two_threads_cleaning_at_once_right_after_import_get_the_same_text():
-    output = _run_fresh_import(
-        "import threading\n"
+def test_threads_cleaning_at_once_right_after_import_all_get_correct_text():
+    """Eight threads make their first parse at the same moment, in 30 fresh processes.
+
+    A near-zero switch interval makes the lazy-cache race show: without the
+    import-time warm-up about one process in five returns wrong text, so 30
+    processes fail this test reliably.
+    """
+    script = (
+        "import sys, threading\n"
+        "sys.setswitchinterval(1e-6)\n"
         "import src.lib.markdown_plain_text as m\n"
         "text = 'Signal in **B cells**, p.Tyr318*/c.954C>G and ~~old~~ [link](x)'\n"
-        "barrier = threading.Barrier(2)\n"
+        "barrier = threading.Barrier(8)\n"
         "results = []\n"
         "def clean():\n"
         "    barrier.wait()\n"
         "    results.append(m.markdown_inline_to_plain_text(text))\n"
-        "threads = [threading.Thread(target=clean) for _ in range(2)]\n"
+        "threads = [threading.Thread(target=clean) for _ in range(8)]\n"
         "[t.start() for t in threads]\n"
         "[t.join() for t in threads]\n"
-        "results.append(m.markdown_inline_to_plain_text(text))\n"
-        "print(len(set(results)), repr(results[-1]))\n"
+        "print(sorted(set(results)))\n"
     )
-    count, cleaned = output.split(" ", 1)
-    assert count == "1"
-    assert cleaned == repr("Signal in B cells, p.Tyr318*/c.954C>G and old link")
+    expected = repr(["Signal in B cells, p.Tyr318*/c.954C>G and old link"])
+    outputs = [_run_fresh_import(script) for _ in range(30)]
+    assert outputs == [expected] * 30

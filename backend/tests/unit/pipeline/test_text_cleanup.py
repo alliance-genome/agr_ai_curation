@@ -104,9 +104,62 @@ async def test_each_clean_up_logs_queue_wait_and_run_time_without_text(caplog):
 
     messages = [r.getMessage() for r in caplog.records if r.name == text_cleanup.__name__]
     assert len(messages) == 2
-    assert messages[0].startswith("Text clean-up completed for doc-1: waited ")
-    assert messages[1].startswith("Text clean-up failed for doc-2: waited ")
-    assert all(" s in queue, ran " in m and "secret" not in m for m in messages)
+    assert messages[0].startswith("Text clean-up completed for doc-1: 0 ahead in queue, waited ")
+    assert messages[1].startswith("Text clean-up failed for doc-2: 0 ahead in queue, waited ")
+    assert all(" s, ran " in m and "secret" not in m for m in messages)
+
+
+class _RecordContext(logging.Handler):
+    """Capture each record with the request id the logging filter would attach."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self.seen: list[tuple[str | None, str]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        from src.lib.logging_config import request_id_var
+
+        self.seen.append((request_id_var.get(), record.getMessage()))
+
+
+@pytest.mark.asyncio
+async def test_each_log_line_carries_its_own_callers_context_and_queue_depth():
+    from src.lib.logging_config import request_id_var
+
+    handler = _RecordContext()
+    log = logging.getLogger(text_cleanup.__name__)
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+
+    async def call(request_id: str, seconds: float) -> None:
+        request_id_var.set(request_id)
+        await run_text_cleanup(busy_cpu, seconds, log_id=f"doc-{request_id}")
+
+    try:
+        first = asyncio.ensure_future(call("req-a", 0.3))
+        await asyncio.sleep(0.05)
+        second = asyncio.ensure_future(call("req-b", 0.0))
+        await asyncio.gather(first, second)
+    finally:
+        log.removeHandler(handler)
+
+    assert [request_id for request_id, _ in handler.seen] == ["req-a", "req-b"]
+    assert handler.seen[0][1].startswith("Text clean-up completed for doc-req-a: 0 ahead in queue, ")
+    assert handler.seen[1][1].startswith("Text clean-up completed for doc-req-b: 1 ahead in queue, ")
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_queued_clean_up_leaves_the_queue_count():
+    running = asyncio.ensure_future(run_text_cleanup(busy_cpu, 0.3, log_id="doc-1"))
+    await asyncio.sleep(0.05)
+    queued = asyncio.ensure_future(run_text_cleanup(busy_cpu, 0.0, log_id="doc-2"))
+    await asyncio.sleep(0)
+    assert text_cleanup._in_flight == 2
+    queued.cancel()
+    await running
+    with pytest.raises(asyncio.CancelledError):
+        await queued
+    assert text_cleanup._in_flight == 0
 
 
 @pytest.mark.asyncio
