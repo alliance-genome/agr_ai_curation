@@ -62,7 +62,7 @@ def test_canonical_processing_status_uses_active_pipeline_when_no_durable_job():
     assert status == "chunking"
 
 
-def test_canonical_processing_status_does_not_let_old_completed_job_hide_reprocess():
+def test_canonical_processing_status_does_not_let_old_completed_job_hide_reembed():
     old_job = SimpleNamespace(status=PdfJobStatus.COMPLETED.value)
 
     status = documents._canonical_processing_status(

@@ -149,10 +149,10 @@ Previously saved evidence and IDs therefore remain valid against unchanged
 stored chunks, including historical mixed spans. Existing fused text without
 boundaries is not repaired by deploying this correction.
 
-Existing documents need explicit reprocessing to benefit from corrected ingestion.
-Do not replace indexed text beneath existing evidence references or silently
-rewrite historical quotes. Before repairing an existing document, verify the
-chosen import/reprocessing workflow preserves the historical source identity and
+Existing documents benefit from corrected ingestion only when they are imported
+again; there is no reprocess route. Do not replace indexed text beneath existing
+evidence references or silently rewrite historical quotes. Before repairing an
+existing document, verify the chosen import workflow preserves the historical source identity and
 audit records (use a distinct document/source identity when necessary). Broad
 reindexing and repair of stored curator documents are separate operational work.
 

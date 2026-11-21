@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import yaml
+from tests.pdf_document_test_support import new_paper
 from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
@@ -642,6 +643,7 @@ def submission_e2e_context(client: TestClient, test_db):
     )
     from src.models.sql.database import Base
     from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+    from src.models.sql.pdf_document import PDFDocumentFile
     from src.models.sql.user import User
 
     Base.metadata.create_all(
@@ -649,6 +651,7 @@ def submission_e2e_context(client: TestClient, test_db):
         tables=[
             User.__table__,
             PDFDocument.__table__,
+            PDFDocumentFile.__table__,
             DocumentReferenceLink.__table__,
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
@@ -678,7 +681,7 @@ def submission_e2e_context(client: TestClient, test_db):
 
     document_id = uuid4()
     test_db.add(
-        PDFDocument(
+        new_paper(
             id=document_id,
             user_id=owner.id,
             filename="test_submission_e2e.pdf",

@@ -10,7 +10,6 @@ from sqlalchemy.exc import DBAPIError
 
 from src.lib.validation_history import store as h
 from src.lib.validation_review import admission as a
-from src.models.sql.pdf_document import PDFDocument
 from tests.pdf_document_test_support import ensure_test_pdf_owner
 from tests.integration.persistence.test_validation_review import artifact, binding, episode
 
@@ -18,13 +17,12 @@ from tests.integration.persistence.test_validation_review import artifact, bindi
 def test_old_policy_archived_without_resetting_history(historical_migration_database):
     config = Config(str(Path(__file__).resolve().parents[3] / "alembic.ini"))
     command.upgrade(config, "d2e6f7a8b9c0")
-    doc, owner = uuid4(), "migration-" + uuid4().hex
+    owner = "migration-" + uuid4().hex
     with h.SessionLocal.begin() as db:
-        uid = ensure_test_pdf_owner(db, auth_sub=owner)
-        db.add(PDFDocument(id=doc, user_id=uid, filename="history.pdf",
-            file_path=f"{doc}/history.pdf", file_hash=doc.hex * 2,
-            file_size=1024, page_count=1, status="processed"))
-    scope = h.HistoryScope(owner, str(doc), uuid4().hex)
+        ensure_test_pdf_owner(db, auth_sub=owner)
+    # A documentless scope: the paper tables at this revision predate today's
+    # ORM, and the policy archive under test does not depend on a paper.
+    scope = h.HistoryScope(owner, None, uuid4().hex)
     aid = artifact(scope)
     ep = episode(scope, aid, binding(scope, aid))
     sid = a.create_scope(scope, operation_id=uuid4().hex, kind="discovered_document_run", targets=0, episodes=0)

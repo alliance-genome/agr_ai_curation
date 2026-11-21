@@ -3477,7 +3477,7 @@ def test_shared_execution_uses_caller_identity(monkeypatch, agents_available):
         yield {"type": "RUN_FINISHED", "data": {}}
     _patch_chat_impl(monkeypatch, "execute_flow", run)
     db = _DummyDB(flow)
-    monkeypatch.setattr(db, "scalar", lambda _: "standard", raising=False)
+    monkeypatch.setattr(db, "scalar", lambda _: "library", raising=False)
     request = chat.ExecuteFlowRequest(flow_id=flow.id, session_id="shared-session", document_id=uuid4())
     if not agents_available:
         with pytest.raises(chat.HTTPException) as exc:

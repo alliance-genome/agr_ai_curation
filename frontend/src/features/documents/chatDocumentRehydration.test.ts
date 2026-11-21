@@ -77,7 +77,7 @@ describe('chatDocumentRehydration', () => {
       if (url.endsWith('/url')) {
         return new Response(JSON.stringify({
           viewer_url: null,
-          viewer_mode: 'text_only',
+          viewer_mode: 'text',
         }), { status: 200 })
       }
 
@@ -105,7 +105,7 @@ describe('chatDocumentRehydration', () => {
       chatStorageKeys: storageKeys,
     })).resolves.toMatchObject({
       viewerUrl: null,
-      viewerMode: 'text_only',
+      viewerMode: 'text',
       filename: 'provider-paper.md',
       pageCount: 1,
     })

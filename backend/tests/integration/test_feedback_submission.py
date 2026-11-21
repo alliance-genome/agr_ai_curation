@@ -36,8 +36,11 @@ def _ensure_chat_history_tables_exist(db) -> None:
     from src.models.sql.chat_message import ChatMessage
     from src.models.sql.chat_session import ChatSession
     from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import PDFDocumentFile
 
     PDFDocument.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+    PDFDocumentFile.__table__.create(bind=db.get_bind(), checkfirst=True)
     ChatSession.__table__.create(bind=db.get_bind(), checkfirst=True)
     ChatMessage.__table__.create(bind=db.get_bind(), checkfirst=True)
 

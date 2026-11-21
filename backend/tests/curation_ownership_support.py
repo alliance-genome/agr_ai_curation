@@ -34,6 +34,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.models.sql.user import User
 from src.models.sql.validation_review import WorkspaceReviewOperation
 from src.schemas.curation_workspace import (
@@ -45,6 +46,7 @@ from src.schemas.curation_workspace import (
     SubmissionMode,
 )
 from src.schemas.domain_envelope import DomainEnvelopeStatus
+from tests.pdf_document_test_support import new_paper
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -60,6 +62,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 OWNERSHIP_TABLES = [
     User.__table__,
     PDFDocument.__table__,
+    PDFDocumentFile.__table__,
     DocumentReferenceLink.__table__,
     CurationReviewSession.__table__,
     CurationSessionAgentRevision.__table__,
@@ -132,8 +135,10 @@ def add_user(db, auth_sub: str) -> User:
     return user
 
 
-def add_document(db, *, owner: User | None, viewer_mode: str | None = None) -> PDFDocument:
-    document = PDFDocument(
+def add_document(
+    db, *, owner: User | None, display_mode: str = "local_pdf", document_kind: str = "library",
+) -> PDFDocument:
+    document = new_paper(
         id=uuid4(),
         user_id=owner.id if owner is not None else None,
         filename="paper.pdf",
@@ -141,11 +146,12 @@ def add_document(db, *, owner: User | None, viewer_mode: str | None = None) -> P
         file_path=f"/tmp/{uuid4().hex}.pdf",
         file_hash=uuid4().hex + uuid4().hex,
         file_size=1024,
-        page_count=1,
+        page_count=None if display_mode == "text" else 1,
         upload_timestamp=NOW,
         last_accessed=NOW,
         status="processed",
-        viewer_mode=viewer_mode,
+        display_mode=display_mode,
+        document_kind=document_kind,
     )
     db.add(document)
     db.flush()

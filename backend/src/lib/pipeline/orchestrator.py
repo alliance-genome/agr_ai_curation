@@ -124,6 +124,8 @@ class DocumentPipelineOrchestrator:
         """
         # Store user_id for use in error handling
         self._current_user_id = user_id
+        # The PDF pipeline processes a paper's main file.
+        self._current_file_id = None
 
         start_time = datetime.now()
         stages_completed = []
@@ -145,6 +147,15 @@ class DocumentPipelineOrchestrator:
                 if not validation["is_valid"]:
                     raise PipelineError(f"PDF validation failed: {validation['errors']}")
                 logger.info("PDF validation passed for document %s", document_id)
+
+            from src.lib.document_files.service import (
+                element_text_bytes,
+                main_file_id,
+                mark_file_ready,
+                reserve_file_chunk_range,
+            )
+
+            self._current_file_id = await asyncio.to_thread(main_file_id, document_id)
 
             # Initialize pipeline status
             await self._initialize_pipeline(document_id)
@@ -184,12 +195,14 @@ class DocumentPipelineOrchestrator:
 
             # Extract elements and file paths from the result
             elements = parse_result["elements"]
+            # Measured from the elements saved as the processed JSON.
+            text_bytes = element_text_bytes(elements)
             pdfx_json_path = parse_result.get("pdfx_json_path")
             processed_json_path = parse_result.get("processed_json_path")
             await self._raise_if_cancel_requested(cancel_requested_callback)
 
             # Update database with file paths
-            await self._update_file_paths(document_id, pdfx_json_path, processed_json_path)
+            await self._update_file_paths(self._current_file_id, pdfx_json_path, processed_json_path)
 
             stages_completed.append(ProcessingStage.PARSING)
             parse_duration_ms = (time.monotonic() - parse_start) * 1000
@@ -218,7 +231,7 @@ class DocumentPipelineOrchestrator:
 
                     # Store hierarchy metadata in document record for later trace injection
                     if hierarchy_metadata:
-                        await self._store_hierarchy_metadata(document_id, hierarchy_metadata)
+                        await self._store_hierarchy_metadata(self._current_file_id, hierarchy_metadata)
                         hierarchy_duration_ms = (time.monotonic() - hierarchy_start) * 1000
                         logger.info(
                             "Stored hierarchy metadata with %s top-level sections",
@@ -233,10 +246,14 @@ class DocumentPipelineOrchestrator:
             await self._raise_if_cancel_requested(cancel_requested_callback)
             await self._update_status(document_id, ProcessingStage.CHUNKING)
 
-            from .chunk import chunk_parsed_document
+            from .chunk import chunk_parsed_document, offset_chunk_indices
             chunk_start = time.monotonic()
             with receipt.observe_stage("chunking"):
                 chunks = await chunk_parsed_document(elements, strategy, document_id)
+            range_start = await asyncio.to_thread(
+                reserve_file_chunk_range, document_id, self._current_file_id, len(chunks)
+            )
+            chunks = offset_chunk_indices(chunks, range_start)
             stages_completed.append(ProcessingStage.CHUNKING)
             chunk_duration_ms = (time.monotonic() - chunk_start) * 1000
             logger.info(
@@ -256,15 +273,24 @@ class DocumentPipelineOrchestrator:
             await self._raise_if_cancel_requested(cancel_requested_callback)
             await self._update_status(document_id, ProcessingStage.STORING)
 
-            from .store import store_to_weaviate
+            from .store import store_to_weaviate, update_document_metadata
             store_start = time.monotonic()
             with receipt.observe_stage("embedding_storage"):
                 await store_to_weaviate(
                     chunks,
                     document_id,
                     self.weaviate_client,
-                    user_id
+                    user_id,
+                    chunk_range=(range_start, range_start + len(chunks) - 1),
                 )
+            await asyncio.to_thread(mark_file_ready, self._current_file_id, text_bytes=text_bytes)
+            # The paper part: the paper's only file is stored.
+            await update_document_metadata(
+                document_id,
+                {"stored_chunks": len(chunks), "failed_chunks": 0},
+                self.weaviate_client,
+                user_id,
+            )
             stages_completed.append(ProcessingStage.STORING)
             store_duration_ms = (time.monotonic() - store_start) * 1000
             logger.info(
@@ -290,6 +316,7 @@ class DocumentPipelineOrchestrator:
 
         except PDFCancellationError as e:
             logger.info("Pipeline cancelled for document %s: %s", document_id, e)
+            await self._fail_current_file(str(e))
             await self._sync_sql_document_status(
                 document_id,
                 status="failed",
@@ -543,50 +570,62 @@ class DocumentPipelineOrchestrator:
 
     async def _update_file_paths(
         self,
-        document_id: str,
+        file_id: Any,
         pdfx_json_path: Optional[str],
         processed_json_path: Optional[str],
     ):
-        """Update file paths in the database."""
+        """Record the main file's extraction artifact paths."""
         from src.models.sql.database import SessionLocal
-        from src.models.sql.pdf_document import PDFDocument
-        from uuid import UUID
+        from src.models.sql.pdf_document import PDFDocumentFile
 
         session = SessionLocal()
         try:
-            # Find and update the document
-            doc = session.query(PDFDocument).filter(PDFDocument.id == UUID(document_id)).first()
-            if doc:
-                doc.pdfx_json_path = pdfx_json_path
-                doc.processed_json_path = processed_json_path
+            file_row = session.get(PDFDocumentFile, file_id)
+            if file_row:
+                file_row.pdfx_json_path = pdfx_json_path
+                file_row.processed_json_path = processed_json_path
                 session.commit()
-                logger.info("Updated file paths for document %s", document_id)
+                logger.info("Updated file paths for file %s", file_id)
         except Exception as e:
-            logger.error("Error updating file paths for document %s: %s", document_id, e)
+            logger.error("Error updating file paths for file %s: %s", file_id, e)
             session.rollback()
         finally:
             session.close()
 
-    async def _store_hierarchy_metadata(self, document_id: str, hierarchy_metadata):
-        """Store hierarchy metadata in the database for later trace injection."""
+    async def _store_hierarchy_metadata(self, file_id: Any, hierarchy_metadata):
+        """Store the main file's hierarchy metadata for later trace injection."""
         from src.models.sql.database import SessionLocal
-        from src.models.sql.pdf_document import PDFDocument
-        from uuid import UUID
+        from src.models.sql.pdf_document import PDFDocumentFile
 
         session = SessionLocal()
         try:
-            doc = session.query(PDFDocument).filter(PDFDocument.id == UUID(document_id)).first()
-            if doc:
-                # Store as JSON in hierarchy_metadata column
-                # Note: Column must be added to PDFDocument model if not present
-                doc.hierarchy_metadata = hierarchy_metadata.model_dump()
+            file_row = session.get(PDFDocumentFile, file_id)
+            if file_row:
+                file_row.hierarchy_metadata = hierarchy_metadata.model_dump()
                 session.commit()
-                logger.info("Stored hierarchy metadata for document %s", document_id)
+                logger.info("Stored hierarchy metadata for file %s", file_id)
         except Exception as e:
-            logger.error("Error storing hierarchy metadata for document %s: %s", document_id, e)
+            logger.error("Error storing hierarchy metadata for file %s: %s", file_id, e)
             session.rollback()
         finally:
             session.close()
+
+    async def _fail_current_file(self, error_message: str) -> None:
+        """Record that the file being processed failed; the paper status is set separately."""
+        if self._current_file_id is None:
+            return
+        from src.lib.document_files.service import mark_file_failed
+
+        try:
+            await asyncio.to_thread(
+                mark_file_failed, self._current_file_id, error_message=error_message
+            )
+        except Exception as status_error:
+            # Like the paper status write below, a failed status notification
+            # must not replace the original pipeline error.
+            logger.error(
+                "Failed to mark file %s failed: %s", self._current_file_id, status_error
+            )
 
     async def _handle_failure(
         self,
@@ -598,6 +637,7 @@ class DocumentPipelineOrchestrator:
     ):
         """Handle pipeline failure."""
         safe_message = public_error_message or _public_pipeline_error_message(error)
+        await self._fail_current_file(safe_message)
         await self._sync_sql_document_status(
             document_id,
             status="failed",

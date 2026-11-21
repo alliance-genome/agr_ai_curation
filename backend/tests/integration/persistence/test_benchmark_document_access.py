@@ -9,9 +9,9 @@ from fastapi import HTTPException
 import pytest
 
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
 from src.services.document_access import owned_documents_select, require_owned_document
+from tests.pdf_document_test_support import new_paper
 
 
 def test_library_policy_excludes_benchmark_copies_but_preserves_normal_ownership():
@@ -21,12 +21,13 @@ def test_library_policy_excludes_benchmark_copies_but_preserves_normal_ownership
         session.add(user)
         session.flush()
         documents = []
-        for mode in (None, "local_pdf", "benchmark_frozen"):
+        for kind, mode in (("library", "local_pdf"), ("library", "text"), ("benchmark_frozen", "text")):
             identifier = uuid4()
-            document = PDFDocument(
+            document = new_paper(
                 id=identifier, filename=f"{identifier}.pdf", user_id=user.id,
                 file_path=f"synthetic-access-test/{identifier}", file_hash=identifier.hex * 2,
-                file_size=1, page_count=1, viewer_mode=mode,
+                file_size=1, page_count=None if mode == "text" else 1, display_mode=mode,
+                document_kind=kind,
             )
             session.add(document)
             documents.append(document)

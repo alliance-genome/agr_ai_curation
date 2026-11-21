@@ -58,6 +58,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
 )
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 # Profile tests retain immutable agent revisions owned by this fixture. Keep
@@ -150,7 +151,7 @@ def _create_review_session_for_action_log(
         session,
         auth_sub=RETAINED_DOMAIN_OWNER,
     )
-    document = PDFDocument(
+    document = new_paper(
         id=document_id or uuid4(),
         user_id=owner_id,
         filename=f"field_patch_constraint_{uuid4()}.pdf",

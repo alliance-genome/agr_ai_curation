@@ -30,6 +30,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -44,7 +45,7 @@ def migrated_database():
 def _document(*, title: str, user_id: int) -> PDFDocument:
     document_id = uuid4()
     hex_value = document_id.hex
-    return PDFDocument(
+    return new_paper(
         id=document_id,
         user_id=user_id,
         filename=f"flow_idempotency_{hex_value}.pdf",

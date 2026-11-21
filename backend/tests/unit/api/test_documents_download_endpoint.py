@@ -13,6 +13,33 @@ from src.api import documents
 
 _DOC_ID = "11111111-1111-1111-1111-111111111111"
 
+_FILE_FIELDS = (
+    "file_path", "file_hash", "file_size", "page_count", "pdfx_json_path", "processed_json_path",
+    "hierarchy_metadata", "source_provider_source_file_id", "source_provider_converted_artifact_id",
+    "source_provider_pdf_artifact_id", "source_md5", "source_converted_artifact_sha256",
+    "source_file_class", "source_file_extension", "source_artifact_status", "source_import_status",
+    "source_imported_at", "source_payload_path", "source_markdown_path", "source_access_scope",
+    "source_access_group_ids",
+)
+_PAPER_PROVENANCE_FIELDS = (
+    "source_provider", "source_provider_reference_id", "source_provider_reference_curie",
+    "source_external_ids",
+)
+
+
+def _doc(*, display_mode="local_pdf", document_kind="library", **values):
+    """A paper record whose per-file values live on its main file."""
+    file_values = {field: values.pop(field, None) for field in _FILE_FIELDS}
+    file_values["display_mode"] = display_mode
+    if display_mode == "text":
+        file_values["page_count"] = None
+    paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
+    main_file = SimpleNamespace(id="main-file", role="main", **file_values)
+    return SimpleNamespace(
+        document_kind=document_kind, main_file=main_file, files=[main_file],
+        **paper_values, **values,
+    )
+
 
 class _FakeResult:
     def __init__(self, doc):
@@ -78,14 +105,13 @@ async def test_download_document_file_returns_404_when_document_missing(monkeypa
 
 @pytest.mark.asyncio
 async def test_download_document_file_returns_403_for_cross_user_access(monkeypatch):
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=99,
         file_path="user123/original.pdf",
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -103,14 +129,13 @@ async def test_download_document_file_returns_403_for_cross_user_access(monkeypa
 async def test_download_document_file_returns_404_when_file_missing(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="user123/original.pdf",
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -133,14 +158,13 @@ async def test_download_document_file_returns_pdf_response(monkeypatch, tmp_path
     pdf_path = user_dir / "original.pdf"
     pdf_path.write_bytes(b"%PDF-1.7 test")
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="user123/original.pdf",
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -164,14 +188,13 @@ async def test_download_document_file_returns_pdfx_json_response(monkeypatch, tm
     user_dir.mkdir(parents=True)
     (user_dir / "doc.json").write_text('{"raw": true}')
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
         pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -194,14 +217,13 @@ async def test_download_document_file_returns_processed_json_response(monkeypatc
     user_dir.mkdir(parents=True)
     (user_dir / "doc.json").write_text('{"processed": true}')
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
         pdfx_json_path=None,
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -224,14 +246,14 @@ async def test_download_document_file_returns_source_markdown_response(monkeypat
     user_dir.mkdir(parents=True)
     (user_dir / "doc.md").write_text("# Provider Markdown\n")
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="document_sources/fake_provider/doc.md",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path="user123/source_markdown/doc.md",
-        viewer_mode="text_only",
+        display_mode="text",
         filename="paper.pdf",
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
@@ -248,17 +270,17 @@ async def test_download_document_file_returns_source_markdown_response(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_download_document_file_text_only_pdf_is_not_available(monkeypatch, tmp_path):
+async def test_download_document_file_text_pdf_is_not_available(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="document_sources/fake_provider/doc.md",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path="user123/source_markdown/doc.md",
-        viewer_mode="text_only",
+        display_mode="text",
         filename="paper.pdf",
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
@@ -277,14 +299,13 @@ async def test_download_document_file_text_only_pdf_is_not_available(monkeypatch
 async def test_download_document_file_blocks_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="../outside.pdf",
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -379,14 +400,13 @@ async def test_download_document_file_sanitizes_unexpected_error(monkeypatch, ca
 
 @pytest.mark.asyncio
 async def test_get_download_info_returns_403_for_cross_user_access(monkeypatch):
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=99,
         file_path="user123/original.pdf",
         pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -410,14 +430,13 @@ async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch
     (user_dir / "pdfx_json" / "doc.json").write_text('{"raw": true}')
     (user_dir / "processed_json" / "doc.json").write_text('{"processed": true}')
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="user123/original.pdf",
         pdfx_json_path="user123/pdfx_json/doc.json",
         processed_json_path="user123/processed_json/doc.json",
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -437,21 +456,21 @@ async def test_get_download_info_reports_file_availability_and_sizes(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_get_download_info_reports_text_only_source_markdown(monkeypatch, tmp_path):
+async def test_get_download_info_reports_text_source_markdown(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
     user_dir = tmp_path / "user123" / "source_markdown"
     user_dir.mkdir(parents=True)
     (user_dir / "doc.md").write_text("# Provider Markdown\n")
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="document_sources/fake_provider/doc.md",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path="user123/source_markdown/doc.md",
-        viewer_mode="text_only",
+        display_mode="text",
         filename="paper.pdf",
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
@@ -461,7 +480,7 @@ async def test_get_download_info_reports_text_only_source_markdown(monkeypatch, 
         user={"sub": "user123"},
     )
 
-    assert payload["viewer_mode"] == "text_only"
+    assert payload["viewer_mode"] == "text"
     assert payload["pdf_available"] is False
     assert payload["pdf_size"] is None
     assert payload["source_markdown_available"] is True
@@ -478,14 +497,13 @@ async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatc
     (user_dir / "11111111-1111-1111-1111-111111111111" / "paper.pdf").write_bytes(b"%PDF-1.7 provider")
     (user_dir / "source_markdown" / "doc.md").write_text("# Provider Markdown\n")
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="user123/11111111-1111-1111-1111-111111111111/paper.pdf",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path="user123/source_markdown/doc.md",
-        viewer_mode="local_pdf",
         filename="paper.pdf",
         source_provider="abc_literature",
         source_provider_reference_id="ref-123",
@@ -558,14 +576,13 @@ async def test_get_download_info_reports_pdf_backed_provider_markdown(monkeypatc
 async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -586,14 +603,13 @@ async def test_get_download_info_handles_missing_optional_paths(monkeypatch, tmp
 async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="../outside.pdf",
         pdfx_json_path=None,
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -610,14 +626,13 @@ async def test_get_download_info_blocks_path_traversal(monkeypatch, tmp_path):
 async def test_download_document_file_blocks_pdfx_json_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
         pdfx_json_path="../outside.json",
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -635,14 +650,13 @@ async def test_download_document_file_blocks_pdfx_json_path_traversal(monkeypatc
 async def test_download_document_file_blocks_processed_json_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
         pdfx_json_path=None,
         processed_json_path="../outside.json",
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -660,14 +674,13 @@ async def test_download_document_file_blocks_processed_json_path_traversal(monke
 async def test_get_download_info_blocks_pdfx_json_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
         pdfx_json_path="../outside.json",
         processed_json_path=None,
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -684,14 +697,13 @@ async def test_get_download_info_blocks_pdfx_json_path_traversal(monkeypatch, tm
 async def test_get_download_info_blocks_processed_json_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path=None,
         pdfx_json_path=None,
         processed_json_path="../outside.json",
         filename="paper.pdf",
-        viewer_mode=None,
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
 
@@ -708,14 +720,14 @@ async def test_get_download_info_blocks_processed_json_path_traversal(monkeypatc
 async def test_download_document_file_blocks_source_markdown_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="document_sources/fake_provider/doc.md",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path="../outside.md",
-        viewer_mode="text_only",
+        display_mode="text",
         filename="paper.pdf",
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)
@@ -734,14 +746,14 @@ async def test_download_document_file_blocks_source_markdown_path_traversal(monk
 async def test_get_download_info_blocks_source_markdown_path_traversal(monkeypatch, tmp_path):
     _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
 
-    doc = SimpleNamespace(
+    doc = _doc(
         id=_DOC_ID,
         user_id=1,
         file_path="document_sources/fake_provider/doc.md",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path="../outside.md",
-        viewer_mode="text_only",
+        display_mode="text",
         filename="paper.pdf",
     )
     _mock_session(monkeypatch, doc=doc, user_id=1)

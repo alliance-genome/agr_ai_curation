@@ -1,11 +1,16 @@
 """Admin API for connection health monitoring.
 
-Provides endpoints for checking external service health:
-- GET /admin/health/connections - Check health of all configured services
-- GET /admin/health/connections/{service_id} - Check health of a specific service
+Provides endpoints for checking external service and runtime health:
+- GET /api/admin/health/connections - Cached health of all configured services
+- GET /api/admin/health/connections/{service_id} - One service from that cache
+- GET /api/admin/health/llm-providers - LLM provider and model configuration
+- GET /api/admin/health/packages - Runtime package discovery and compatibility
 
-Authorization: None required (health endpoints are public for monitoring).
-This allows load balancers and monitoring systems to check service health.
+Authorization: the two connection routes are public so load balancers,
+monitoring and deployment scripts can poll them without a login. Both answer
+from the same bounded-age, per-worker snapshot; neither starts a probe per
+request. The llm-providers and packages routes describe how the system is
+configured and require login like the neighbouring protected routes.
 """
 
 import logging
@@ -13,6 +18,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from src.api.auth import get_auth_dependency
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin/health", tags=["Admin - Health"])
@@ -156,7 +163,7 @@ class PackagesHealthResponse(BaseModel):
     description="""
     Shares a bounded-age, per-worker observation of configured services.
     observed_at is the UTC sweep start, preserved on cache hits.
-    Direct single-service diagnostics always probe freshly.
+    The single-service route reads the same observation.
 
     Health checks are performed based on each service's configuration:
     - HTTP endpoints: Makes request to configured endpoint
@@ -238,23 +245,15 @@ async def check_all_connections(request: Request) -> ConnectionsHealthResponse:
     response_model=ServiceHealthResponse,
     summary="Check health of a specific service",
     description="""
-    Performs a health check on a single service by its service_id.
-
-    Returns detailed status including:
-    - Current health status
-    - Last error message (if any)
-    - Service configuration
+    Returns one service's entry from the same bounded-age, per-worker
+    observation the summary route shares. It never starts a probe of its own;
+    an expired observation is refreshed by one shared sweep, exactly as for
+    the summary route.
     """,
 )
-async def check_single_connection(service_id: str) -> ServiceHealthResponse:
-    """Check health of a specific service."""
-    from src.lib.config.connections_loader import (
-        check_service_health,
-        get_connection,
-        get_connection_display_url,
-        is_initialized,
-        sanitize_error_message,
-    )
+async def check_single_connection(service_id: str, request: Request) -> ServiceHealthResponse:
+    """Return the cached health observation for one configured service."""
+    from src.lib.config.connections_loader import is_initialized
 
     if not is_initialized():
         raise HTTPException(
@@ -262,24 +261,20 @@ async def check_single_connection(service_id: str) -> ServiceHealthResponse:
             detail="Connections not loaded. Service may still be starting up.",
         )
 
-    conn = get_connection(service_id)
-    if not conn:
+    from src.lib.config.connections_monitor import SnapshotUnavailable
+
+    try:
+        snapshot = await request.app.state.connections_health_monitor.get()
+    except SnapshotUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    service = snapshot.services.get(service_id)
+    if service is None:
         raise HTTPException(
             status_code=404,
             detail=f"Unknown service: {service_id}",
         )
-
-    # Perform health check
-    await check_service_health(service_id)
-
-    return ServiceHealthResponse(
-        service_id=conn.service_id,
-        description=conn.description,
-        url=get_connection_display_url(conn),
-        required=conn.required,
-        is_healthy=conn.is_healthy,
-        last_error=sanitize_error_message(conn.last_error),  # Sanitize error messages
-    )
+    return ServiceHealthResponse(**service)
 
 
 @router.get(
@@ -295,7 +290,9 @@ async def check_single_connection(service_id: str) -> ServiceHealthResponse:
     - It reports env var names and presence booleans only.
     """,
 )
-async def check_llm_providers() -> LLMProvidersHealthResponse:
+async def check_llm_providers(
+    user: dict = get_auth_dependency(),
+) -> LLMProvidersHealthResponse:
     """Check health and configuration status for LLM providers/models."""
     from src.lib.config.provider_validation import (
         build_provider_runtime_report,
@@ -328,7 +325,9 @@ async def check_llm_providers() -> LLMProvidersHealthResponse:
     or failed with explicit reasons.
     """,
 )
-async def check_runtime_packages() -> PackagesHealthResponse:
+async def check_runtime_packages(
+    user: dict = get_auth_dependency(),
+) -> PackagesHealthResponse:
     """Check runtime package discovery and compatibility status."""
     from src.lib.packages.health import build_package_health_report
 
