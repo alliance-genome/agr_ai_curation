@@ -2182,6 +2182,15 @@ def test_provider_import_deadline_default_and_override(monkeypatch):
     assert get_document_source_import_timeout_seconds() == 900.0
 
 
+def test_document_file_converted_text_cap_default_and_override(monkeypatch):
+    from src.lib.openai_agents.config import get_document_file_max_converted_text_bytes
+
+    monkeypatch.delenv("DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES", raising=False)
+    assert get_document_file_max_converted_text_bytes() == 1_000_000
+    monkeypatch.setenv("DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES", "250000")
+    assert get_document_file_max_converted_text_bytes() == 250_000
+
+
 def test_inspect_results_object_pages_are_env_configured(monkeypatch):
     from src.lib.openai_agents.config import (
         get_inspect_results_object_max_page_size,

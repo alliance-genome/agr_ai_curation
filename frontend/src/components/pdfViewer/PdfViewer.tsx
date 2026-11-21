@@ -185,6 +185,9 @@ export function PdfViewer({
   const resetViewerToIdle = useCallback((nextError: string | null = null) => {
     handledNavigationKeyRef.current = null
     navigationRequestIdRef.current += 1
+    // A queued evidence navigation names no document; it must not run against
+    // whichever PDF loads next.
+    setEventPendingNavigation(null)
     viewerStateRef.current = {
       ...DEFAULT_STATE,
       lastInteraction: new Date().toISOString(),
