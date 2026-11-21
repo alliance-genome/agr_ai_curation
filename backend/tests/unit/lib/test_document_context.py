@@ -21,51 +21,61 @@ def cache():
 
 @pytest.fixture
 def retrieval(monkeypatch):
-    hierarchy = AsyncMock(return_value={"sections": [{"name": "Methods"}, {}], "abstract_section_title": "Synopsis"})
-    abstract = AsyncMock(return_value="Abstract")
+    hierarchy = AsyncMock(return_value={"sections": [{"name": "Methods"}, {}], "top_level_sections": ["Methods"]})
     monkeypatch.setattr("src.lib.weaviate_client.chunks.get_document_sections_hierarchical", hierarchy)
-    monkeypatch.setattr("src.lib.openai_agents.prompt_utils.fetch_document_abstract", abstract)
-    return hierarchy, abstract
+    return hierarchy
 
 
 @pytest.mark.asyncio
 async def test_cold_warm_expired_and_tenant_cache(retrieval, monkeypatch):
-    hierarchy, abstract = retrieval
     first = await DocumentContext.fetch("doc", "user", "paper.pdf")
     assert first.document_name == "paper.pdf" and first.sections == ["Methods"]
-    abstract.assert_awaited_once_with("doc", "user", first.hierarchy)
+    retrieval.assert_awaited_once_with("doc", "user")
     warm = await DocumentContext.fetch("doc", "user", "new.pdf")
-    assert warm.document_name == "new.pdf" and warm.abstract == first.abstract
-    hierarchy.assert_awaited_once()
+    assert warm.document_name == "new.pdf" and warm.hierarchy == first.hierarchy
+    retrieval.assert_awaited_once()
     await DocumentContext.fetch("doc", "other")
-    assert hierarchy.await_count == 2
+    assert retrieval.await_count == 2
     monkeypatch.setenv("DOCUMENT_CONTEXT_CACHE_TTL_SECONDS", "1")
     document_cache._cache[("user", "doc")].fetched_at -= 2
     await DocumentContext.fetch("doc", "user")
-    assert hierarchy.await_count == 3
+    assert retrieval.await_count == 3
 
 
 @pytest.mark.asyncio
 async def test_negative_cache(retrieval):
-    hierarchy, abstract = retrieval
-    hierarchy.return_value = abstract.return_value = None
+    retrieval.return_value = None
     result = await DocumentContext.fetch("doc", "user")
     assert result.sections is None and not result.has_structure()
     await DocumentContext.fetch("doc", "user")
-    hierarchy.assert_awaited_once()
-    abstract.assert_awaited_once_with("doc", "user", None)
+    retrieval.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", [0, 1])
-async def test_delayed_stage_yields_and_cancellation_never_publishes(retrieval, stage):
+async def test_prepared_context_carries_no_abstract(retrieval):
+    """The paper's abstract is no longer looked up or handed to agents."""
+    retrieval.return_value = {
+        "sections": [{"name": "Abstract"}, {"name": "Results"}],
+        "top_level_sections": ["Abstract", "Results"],
+    }
+    result = await DocumentContext.fetch("doc", "user", "paper.pdf")
+
+    assert result.sections == ["Abstract", "Results"]
+    assert not hasattr(result, "abstract")
+    assert "abstract" not in result.to_agent_kwargs()
+    cached = document_cache.get_cached_metadata("user", "doc")
+    assert cached is not None and not hasattr(cached, "abstract")
+
+
+@pytest.mark.asyncio
+async def test_delayed_fetch_yields_and_cancellation_never_publishes(retrieval):
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def delayed(*args):
         entered.set()
         await release.wait()
 
-    retrieval[stage].side_effect = delayed
+    retrieval.side_effect = delayed
     task = asyncio.create_task(DocumentContext.fetch("doc", "user"))
     try:
         await asyncio.wait_for(entered.wait(), 5)
@@ -75,8 +85,6 @@ async def test_delayed_stage_yields_and_cancellation_never_publishes(retrieval, 
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 5)
         assert document_cache.get_cached_metadata("user", "doc") is None
-        if stage == 0:
-            retrieval[1].assert_not_awaited()
     finally:
         release.set()
         if not task.done():
@@ -85,10 +93,9 @@ async def test_delayed_stage_yields_and_cancellation_never_publishes(retrieval, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", [0, 1])
 @pytest.mark.parametrize("timeout", [False, True])
 @pytest.mark.parametrize("capture_fails", [False, True])
-async def test_partial_failure_timeout_and_sanitized_reporting(retrieval, monkeypatch, caplog, stage, timeout, capture_fails):
+async def test_failure_timeout_and_sanitized_reporting(retrieval, monkeypatch, caplog, timeout, capture_fails):
     report = Mock(side_effect=RuntimeError("SECRET telemetry") if capture_fails else None)
     monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
     monkeypatch.setenv("DOCUMENT_CONTEXT_STAGE_TIMEOUT_SECONDS", "0.02")
@@ -98,14 +105,11 @@ async def test_partial_failure_timeout_and_sanitized_reporting(retrieval, monkey
             await asyncio.Event().wait()
         raise RuntimeError("SECRET query")
 
-    retrieval[stage].side_effect = failure
+    retrieval.side_effect = failure
     result = await asyncio.wait_for(DocumentContext.fetch("doc", "user"), 5)
-    if stage == 0:
-        assert result.hierarchy is None and result.abstract == "Abstract"
-        retrieval[1].assert_awaited_once_with("doc", "user", None)
-    else:
-        assert result.hierarchy and result.abstract is None
+    assert result.hierarchy is None and result.sections is None
     report.assert_called_once()
+    assert report.call_args.kwargs["context"] == {"stage": "hierarchy"}
     assert "SECRET" not in caplog.text + str(report.call_args)
     exc = report.call_args.args[0]
     assert exc.__cause__ is None and exc.__context__ is None
@@ -114,25 +118,26 @@ async def test_partial_failure_timeout_and_sanitized_reporting(retrieval, monkey
 @pytest.mark.asyncio
 async def test_invalidation_revokes_old_fill_but_allows_new_fill(retrieval):
     entered, release = asyncio.Event(), asyncio.Event()
+    fresh = {"sections": [{"name": "Fresh"}]}
 
     async def old(*args):
         entered.set()
         await release.wait()
-        return "obsolete"
+        return {"sections": [{"name": "Obsolete"}]}
 
-    retrieval[1].side_effect = old
+    retrieval.side_effect = old
     task = asyncio.create_task(DocumentContext.fetch("doc", "user"))
     try:
         await asyncio.wait_for(entered.wait(), 5)
         document_cache.invalidate_cache("user", "doc")
-        retrieval[1].side_effect = None
-        retrieval[1].return_value = "fresh"
+        retrieval.side_effect = None
+        retrieval.return_value = fresh
         await DocumentContext.fetch("doc", "user")
     finally:
         release.set()
         await asyncio.wait_for(task, 5)
     cached = document_cache.get_cached_metadata("user", "doc")
-    assert cached is not None and cached.abstract == "fresh"
+    assert cached is not None and cached.hierarchy == fresh
 
 
 @pytest.mark.asyncio
@@ -141,14 +146,14 @@ async def test_concurrent_misses_are_independent_and_keep_context(retrieval):
     arrived, release = asyncio.Event(), asyncio.Event()
     seen = []
 
-    async def abstract(doc, user, hierarchy):
+    async def hierarchy(doc, user):
         seen.append((user, run.get()))
         if len(seen) == 3:
             arrived.set()
         await release.wait()
-        return run.get()
+        return {"sections": [{"name": run.get()}]}
 
-    retrieval[1].side_effect = abstract
+    retrieval.side_effect = hierarchy
     async def prepare(user, value):
         token = run.set(value)
         try:
@@ -167,7 +172,7 @@ async def test_concurrent_misses_are_independent_and_keep_context(retrieval):
         release.set()
         results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
     assert all(isinstance(r, DocumentContext) for r in results[1:])
-    assert [r.abstract for r in results[1:] if isinstance(r, DocumentContext)] == ["b", "c"]
+    assert [r.sections for r in results[1:] if isinstance(r, DocumentContext)] == [["b"], ["c"]]
     assert seen == [("one", "a"), ("one", "b"), ("two", "c")]
 
 
@@ -177,7 +182,6 @@ def test_document_context_helper_methods():
         user_id="user-1",
         document_name="paper.pdf",
         hierarchy={"sections": [{"name": "One"}, {"name": "Two"}]},
-        abstract="A",
         sections=["One", "Two"],
     )
 
@@ -186,7 +190,6 @@ def test_document_context_helper_methods():
         "user_id": "user-1",
         "document_name": "paper.pdf",
         "hierarchy": {"sections": [{"name": "One"}, {"name": "Two"}]},
-        "abstract": "A",
         "sections": ["One", "Two"],
     }
     assert ctx.has_structure() is True

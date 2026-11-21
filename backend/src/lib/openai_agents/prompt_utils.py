@@ -2,7 +2,7 @@
 Shared utility functions for agent prompt injection.
 
 This module provides common functions used by multiple agents for injecting
-document context (hierarchy, abstract) into their prompts.
+document context (section hierarchy) into their prompts.
 
 IMPORTANT: This is the SINGLE SOURCE OF TRUTH for prompt injection utilities.
 Do not duplicate these functions in individual agent files.
@@ -11,8 +11,6 @@ Do not duplicate these functions in individual agent files.
 import logging
 from typing import Optional, List, Dict, Any, Type
 
-from src.lib.observability.runtime import report_runtime_exception, sanitized_runtime_error
-from src.lib.observability.cost_context import costed_document_processing
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 logger = logging.getLogger(__name__)
@@ -160,14 +158,6 @@ of a numbered sentence shown by `read_section`, `read_subsection` or
 `read_chunk(chunk_index)` to `record_evidence`.
 """
 
-# Template for abstract injection
-ABSTRACT_TEMPLATE = """
-## Paper Abstract
-
-{abstract_text}
-"""
-
-
 def format_hierarchy_for_prompt(hierarchy: Dict[str, Any]) -> str:
     """
     Format hierarchical structure for injection into an agent prompt.
@@ -249,43 +239,24 @@ def format_sections_for_prompt(sections: List[Dict[str, Any]]) -> str:
     return SECTION_LIST_TEMPLATE.format(section_list=section_list)
 
 
-def format_abstract_for_prompt(abstract: Optional[str]) -> str:
-    """
-    Format abstract text for injection into an agent prompt.
-
-    Args:
-        abstract: Abstract text, or None if not available.
-
-    Returns:
-        Formatted string ready for prompt injection, or empty string if no abstract.
-    """
-    if not abstract or not abstract.strip():
-        return ""
-
-    return ABSTRACT_TEMPLATE.format(abstract_text=abstract.strip())
-
-
 def format_document_context_for_prompt(
     hierarchy: Optional[Dict[str, Any]] = None,
     sections: Optional[List[Dict[str, Any]]] = None,
-    abstract: Optional[str] = None
 ) -> tuple[str, str]:
     """
     Format all document context for injection into an agent prompt.
 
-    This is the main entry point for document context injection. It combines:
-    - Paper hierarchy (or flat sections as fallback)
-    - Paper abstract (if available)
+    This is the main entry point for document context injection: the paper
+    hierarchy, or the flat section list when no hierarchy is available.
 
     Args:
         hierarchy: Hierarchical structure from get_document_sections_hierarchical
         sections: Flat list of sections (fallback if hierarchy not available)
-        abstract: Abstract text from the paper
 
     Returns:
         Tuple of (context_text, structure_info) where:
         - context_text: Combined formatted text ready for prompt injection
-        - structure_info: Short description for logging (e.g., "hierarchy with 5 sections + abstract")
+        - structure_info: Short description for logging (e.g., "hierarchy with 5 sections")
     """
     parts = []
     info_parts = []
@@ -302,339 +273,7 @@ def format_document_context_for_prompt(
     else:
         info_parts.append("no structure")
 
-    # Add abstract if available
-    if abstract and abstract.strip():
-        abstract_text = format_abstract_for_prompt(abstract)
-        parts.append(abstract_text)
-        info_parts.append("abstract")
-
     context_text = "\n".join(parts)
     structure_info = " + ".join(info_parts)
 
     return context_text, structure_info
-
-
-async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
-    """
-    Use a fast LLM to extract just the abstract from raw chunk text.
-
-    This handles cases where chunks contain mixed content (keywords, headers,
-    introduction text) alongside the actual abstract.
-
-    Args:
-        raw_text: Combined text from chunks that may contain abstract
-
-    Returns:
-        Clean extracted abstract text, or None if extraction fails
-    """
-    try:
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI()
-        try:
-            # Use the configured abstract-extraction model (.env, no code fallback).
-            from src.lib.config.env import require_env
-            model = require_env("ABSTRACT_EXTRACTION_MODEL")
-
-            from src.lib.openai_agents.config import (
-                get_abstract_extraction_input_max_chars,
-                require_model_reasoning_effort,
-                supports_reasoning,
-                supports_temperature,
-            )
-            input_max_chars = get_abstract_extraction_input_max_chars()
-            completion_kwargs = {
-                "model": model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Extract ONLY the abstract from the provided text. "
-                            "The abstract is typically a single paragraph summarizing the paper's "
-                            "purpose, methods, key findings, and conclusions. "
-                            "Do NOT include: keywords, article info, author affiliations, "
-                            "introduction text, or section headers. "
-                            "Return ONLY the abstract text, nothing else. "
-                            "If no clear abstract is found, return 'NO_ABSTRACT_FOUND'."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Extract the abstract from this text:\n\n{raw_text[:input_max_chars]}"
-                    }
-                ],
-            }
-
-            # Use catalog capabilities for Astra and future registered models.
-            if supports_temperature(model):
-                completion_kwargs["temperature"] = 0
-
-            if supports_reasoning(model):
-                completion_kwargs["reasoning_effort"] = require_model_reasoning_effort(
-                    model, require_env("ABSTRACT_EXTRACTION_REASONING")
-                )
-
-            from src.lib.openai_agents.model_request_measurement import (
-                call_measured_direct_request,
-            )
-
-            from src.lib.cost_ledger.runtime_context import (
-                child_invocation, current_runtime_cost_context, runtime_cost_scope,
-            )
-            with runtime_cost_scope(child_invocation(current_runtime_cost_context())):
-                response = await call_measured_direct_request(
-                    surface="abstract_extraction",
-                    provider="openai",
-                    api="chat_completions",
-                    kwargs=completion_kwargs,
-                    call=client.chat.completions.create,
-                )
-
-            content = response.choices[0].message.content
-            if content is None:
-                logger.warning("LLM returned None content for abstract extraction")
-                return None
-
-            result = content.strip()
-            logger.debug('LLM abstract extraction result: %s chars', len(result))
-
-            if result == "NO_ABSTRACT_FOUND" or not result:
-                logger.debug('LLM returned no abstract')
-                return None
-
-            return result
-        finally:
-            try:
-                await client.close()
-            except Exception:
-                try:
-                    report_runtime_exception(
-                        sanitized_runtime_error("Failed to close abstract extraction LLM client"),
-                        component="abstract_extraction",
-                        operation="client_close_failed",
-                        level="warning",
-                    )
-                except Exception:
-                    pass
-                logger.warning(
-                    'Failed to close abstract extraction LLM client',
-                    extra={"sentry_skip_event": True},
-                )
-
-    except Exception as exc:
-        try:
-            report_runtime_exception(
-                sanitized_runtime_error("LLM abstract extraction failed"),
-                component="abstract_extraction",
-                operation="extraction_failed",
-                level="error",
-                context={"error_type": type(exc).__name__},
-            )
-        except Exception:
-            pass
-        logger.warning(
-            'LLM abstract extraction failed',
-            extra={"sentry_skip_event": True},
-        )
-        return None
-
-
-def _report_abstract_context_failure(operation: str, strategy: str, message: str) -> None:
-    """Report optional-context failures without exposing document/provider content."""
-    try:
-        report_runtime_exception(
-            sanitized_runtime_error(message),
-            component="abstract_context",
-            operation=operation,
-            context={"strategy": strategy},
-            level="error",
-        )
-    except Exception:
-        # Observability must not change the optional-context result.
-        pass
-    logger.warning(message, extra={"sentry_skip_event": True})
-
-
-@costed_document_processing
-async def fetch_document_abstract(
-    document_id: str,
-    user_id: str,
-    hierarchy: Optional[Dict[str, Any]] = None
-) -> Optional[str]:
-    """
-    Fetch the abstract section from a document (async version).
-
-    Search strategy (in order):
-    1. LLM-identified abstract section (from hierarchy metadata)
-    2. Common section names: "Abstract", "Summary"
-    3. Keyword search: find chunks containing "abstract" in early pages
-
-    Args:
-        document_id: The document UUID
-        user_id: The user's ID for tenant isolation
-        hierarchy: Optional hierarchy metadata with LLM-identified abstract_section_title
-
-    Returns:
-        Abstract text if found, None otherwise.
-    """
-    from src.lib.weaviate_client.chunks import (
-        get_chunks_by_parent_section,
-        search_chunks_by_keyword
-    )
-
-    failure_reported = False
-
-    def report_failure(strategy: str) -> None:
-        nonlocal failure_reported
-        # A dependency outage can fail every strategy. Report only the first
-        # failure, even if a later strategy succeeds or capture is unavailable.
-        if not failure_reported:
-            failure_reported = True
-            _report_abstract_context_failure(
-                "retrieval_failed", strategy, "Document abstract retrieval failed"
-            )
-
-    # Build list of section names to try
-    # Priority: LLM-identified section first, then common names
-    abstract_names = []
-
-    # If hierarchy has LLM-identified abstract section, try it first
-    if hierarchy and hierarchy.get("abstract_section_title"):
-        llm_abstract_section = hierarchy["abstract_section_title"]
-        abstract_names.append(llm_abstract_section)
-        logger.debug("Using LLM-identified abstract section: '%s'", llm_abstract_section)
-
-    # Add common fallback names (will be tried if LLM section not found)
-    for name in ["Abstract", "Summary"]:
-        if name not in abstract_names:
-            abstract_names.append(name)
-
-    # Strategy 1 & 2: Try section-based retrieval
-    for section_name in abstract_names:
-        try:
-            chunks = await get_chunks_by_parent_section(
-                document_id=document_id,
-                parent_section=section_name,
-                user_id=user_id
-            )
-            if chunks:
-                # Combine chunk texts in order
-                texts = [c.get("text", "") for c in chunks if c.get("text")]
-                if texts:
-                    abstract_text = " ".join(texts)
-                    logger.debug(
-                        f"Found abstract in '{section_name}' section: "
-                        f"{len(texts)} chunks, {len(abstract_text)} chars"
-                    )
-                    return abstract_text
-        except Exception:
-            report_failure("section")
-            continue
-
-    # Strategy 3: Keyword search fallback
-    # Search for "abstract" in early pages (1-3) when no dedicated section exists
-    # Try multiple patterns since some PDFs have spaced-out headers like "A B S T R A C T"
-    from src.lib.weaviate_client.chunks import get_chunks_from_index
-
-    keywords_to_try = ["abstract", "A B S T R A C T"]
-
-    for keyword in keywords_to_try:
-        try:
-            logger.debug("Trying keyword search for '%s'...", keyword)
-            keyword_chunks = await search_chunks_by_keyword(
-                document_id=document_id,
-                keyword=keyword,
-                user_id=user_id,
-                max_page=3,
-                limit=2  # Get a couple matches to find the best one
-            )
-
-            if not keyword_chunks:
-                continue
-
-            # Find the chunk with the most content AFTER the keyword
-            # (The abstract content, not just the header)
-            best_chunk = None
-            best_content_after = 0
-
-            for chunk in keyword_chunks:
-                text = chunk.get("text", "")
-                pos = text.lower().find(keyword.lower())
-                if pos >= 0:
-                    content_after = len(text) - pos - len(keyword)
-                    if content_after > best_content_after:
-                        best_content_after = content_after
-                        best_chunk = chunk
-
-            if not best_chunk:
-                continue
-
-            # Get consecutive chunks starting from the best match
-            # Stop when section title changes
-            start_index = best_chunk.get("chunk_index", 0)
-            consecutive_chunks = await get_chunks_from_index(
-                document_id=document_id,
-                start_index=start_index,
-                user_id=user_id,
-                max_chunks=3,  # Abstract rarely spans more than 3 chunks
-                stop_on_section_change=True
-            )
-
-            if consecutive_chunks:
-                # Combine all chunk texts
-                combined_text = " ".join(
-                    c.get("text", "") for c in consecutive_chunks if c.get("text")
-                )
-
-                if combined_text:
-                    # Try to extract just the abstract using LLM
-                    extracted = await _extract_abstract_with_llm(combined_text)
-                    if extracted:
-                        logger.info(
-                            f"Extracted abstract via LLM from {len(consecutive_chunks)} chunks: "
-                            f"{len(extracted)} chars"
-                        )
-                        return extracted
-
-                    # Fallback: return combined text as-is
-                    logger.info(
-                        f"Found abstract via keyword search ('{keyword}'): "
-                        f"{len(consecutive_chunks)} chunks, {len(combined_text)} chars"
-                    )
-                    return combined_text
-
-        except Exception:
-            report_failure("keyword")
-            continue
-
-    # Strategy 4: Last resort - send first 5 chunks to LLM
-    # The abstract is almost always in the first few chunks of any paper
-    try:
-        logger.debug("Trying last resort: first 5 chunks to LLM...")
-        first_chunks = await get_chunks_from_index(
-            document_id=document_id,
-            start_index=0,
-            user_id=user_id,
-            max_chunks=5,
-            stop_on_section_change=False  # Get all 5 regardless of section
-        )
-
-        if first_chunks:
-            combined_text = " ".join(
-                c.get("text", "") for c in first_chunks if c.get("text")
-            )
-
-            if combined_text:
-                extracted = await _extract_abstract_with_llm(combined_text)
-                if extracted:
-                    logger.info(
-                        f"Extracted abstract from first {len(first_chunks)} chunks via LLM: "
-                        f"{len(extracted)} chars"
-                    )
-                    return extracted
-
-    except Exception:
-        report_failure("first_chunks")
-
-    logger.debug('No abstract found for document %s...', document_id[:8])
-    return None

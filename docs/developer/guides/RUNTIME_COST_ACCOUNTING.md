@@ -29,12 +29,6 @@ classifiers inherit those values. Database integer user IDs are not auth subject
 Package workers hydrate and reset the same context rather than creating a second
 accounting collector.
 
-Document abstract fallback calls retain ownership across the synchronous worker
-handoff and receive their own invocation identity. Flow preparation shares the
-eventual flow/turn identity, so a paid abstract lookup before supervisor creation
-is included in that run. Standalone abstract lookup retains the owned document
-without inventing a conversation.
-
 Agent-run boundaries assign invocation IDs and record actual parent invocation
 IDs. Requests in the same invocation retain that ID across model turns and
 structured retries. Synchronous-to-asynchronous owned-runner delegation does not

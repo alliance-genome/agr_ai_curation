@@ -159,9 +159,6 @@ class CanaryProvider:
         monkeypatch.setattr(runtime, "run_agent_streamed", self.stream)
         monkeypatch.setattr(runtime, "_flow_from_recipe", lambda target, groups: SimpleNamespace(id=target))
         monkeypatch.setattr(runtime, "execute_flow", self.flow)
-        async def abstract(raw_text):
-            return "Synthetic canary abstract."
-        monkeypatch.setattr("src.lib.openai_agents.prompt_utils._extract_abstract_with_llm", abstract)
         async def hierarchy(elements):
             return elements, {}
         async def figures(chunks, **kwargs):
@@ -170,12 +167,12 @@ class CanaryProvider:
         monkeypatch.setattr("src.lib.pipeline.figure_locator_resolution.resolve_figure_locators", figures)
 
     async def stream(self, **kwargs):
-        from src.lib.weaviate_client.chunks import get_chunks_from_index
+        from src.lib.weaviate_client.chunks import get_chunk_by_index
         selected = kwargs["agent"].selected
         assert kwargs["doc_context"] is not None
         assert selected["db_user_id"] is not None
-        chunks = await get_chunks_from_index(kwargs["document_id"], 0, kwargs["user_id"])
-        assert chunks and "Synthetic replacement canary evidence." in str(chunks)
+        chunk = await get_chunk_by_index(chunk_index=0, user_id=kwargs["user_id"], document_id=kwargs["document_id"])
+        assert chunk and "Synthetic replacement canary evidence." in str(chunk)
         provider, model = selected["model_provider_override"], selected["model_id_override"]
         slot = selected["benchmark_route_slot"]
         self.calls.append((slot, provider, model, kwargs["document_id"]))

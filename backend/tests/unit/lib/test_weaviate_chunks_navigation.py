@@ -312,42 +312,6 @@ async def test_hybrid_search_chunks_guardrails(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_keyword_and_index_helpers(monkeypatch):
-    _sync_to_thread(monkeypatch)
-
-    chunk_collection = MagicMock()
-    connection = _connection_with_client(MagicMock())
-
-    # search_chunks_by_keyword + get_chunks_from_index
-    keyword_response = SimpleNamespace(
-        objects=[
-            SimpleNamespace(properties={"content": "Contains ABSTRACT text", "pageNumber": 1, "chunkIndex": 0, "sectionTitle": "Abstract", "parentSection": "Abstract"}),
-            SimpleNamespace(properties={"content": "No hit", "pageNumber": 2, "chunkIndex": 1, "sectionTitle": "Intro", "parentSection": "Intro"}),
-        ]
-    )
-    index_response = SimpleNamespace(
-        objects=[
-            SimpleNamespace(properties={"content": "M1", "pageNumber": 2, "chunkIndex": 5, "sectionTitle": "Methods", "parentSection": "Methods"}),
-            SimpleNamespace(properties={"content": "M2", "pageNumber": 2, "chunkIndex": 6, "sectionTitle": "Methods", "parentSection": "Methods"}),
-            SimpleNamespace(properties={"content": "R1", "pageNumber": 3, "chunkIndex": 7, "sectionTitle": "Results", "parentSection": "Results"}),
-        ]
-    )
-    chunk_collection.query.bm25.return_value = keyword_response
-    chunk_collection.query.fetch_objects.side_effect = [index_response]
-
-    with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
-        "src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())
-    ):
-        keyword_rows = await chunks.search_chunks_by_keyword("doc-1", "abstract", "user-1", max_page=3, limit=1)
-        index_rows = await chunks.get_chunks_from_index("doc-1", start_index=5, user_id="user-1", max_chunks=5)
-
-    assert len(keyword_rows) == 1
-    assert keyword_rows[0]["section_title"] == "Abstract"
-    assert len(index_rows) == 2
-    assert index_rows[-1]["chunk_index"] == 6
-
-
-@pytest.mark.asyncio
 async def test_hierarchy_helper(monkeypatch):
     _sync_to_thread(monkeypatch)
 
@@ -363,16 +327,10 @@ async def test_hierarchy_helper(monkeypatch):
     )
     chunk_collection.query.fetch_objects.return_value = hier_response
 
-    fake_sql_doc = SimpleNamespace(main_file=SimpleNamespace(hierarchy_metadata={"abstract_section_title": "Abstract"}))
+    def no_sql():
+        pytest.fail("The section outline is read from the chunk store only")
 
-    class _Session:
-        def query(self, *_args, **_kwargs):
-            return SimpleNamespace(filter=lambda *_a, **_k: SimpleNamespace(first=lambda: fake_sql_doc))
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _Session())
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", no_sql)
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(
         "src.lib.weaviate_helpers.get_user_collections", return_value=(chunk_collection, MagicMock())
@@ -382,8 +340,8 @@ async def test_hierarchy_helper(monkeypatch):
             "user-1",
         )
 
+    assert set(hierarchical) == {"sections", "top_level_sections"}
     assert hierarchical["top_level_sections"] == ["Methods", "Results"]
-    assert hierarchical["abstract_section_title"] == "Abstract"
 
 
 @pytest.mark.asyncio
@@ -568,14 +526,6 @@ async def test_section_outline_counts_every_chunk_of_a_document_over_five_hundre
         "subsection": None, "isTopLevel": True, "pageNumber": 1 + index // 20, "chunkIndex": index,
     }) for index in range(720)]
     collection, calls = _paging_store(objects)
-    class _Session:
-        def query(self, *_args, **_kwargs):
-            return SimpleNamespace(filter=lambda *_a, **_k: SimpleNamespace(first=lambda: None))
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _Session())
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=_connection_with_client(MagicMock())), \
          patch("src.lib.weaviate_helpers.get_user_collections", return_value=(collection, MagicMock())):
         outline = await chunks.get_document_sections_hierarchical(
@@ -610,8 +560,6 @@ async def test_document_hierarchy_fetches_db_metadata(monkeypatch):
 _PREPARATION_QUERIES = [
     ("get_document_sections_hierarchical", {}),
     ("get_chunks_by_parent_section", {"parent_section": "Abstract"}),
-    ("search_chunks_by_keyword", {"keyword": "abstract"}),
-    ("get_chunks_from_index", {"start_index": 0}),
 ]
 
 
@@ -672,14 +620,6 @@ async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, na
     collection = MagicMock()
     collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
     monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *args: (collection, None))
-    # The hierarchy SQL session must also be created and closed on the worker.
-    sql_threads = []
-    sql = MagicMock()
-    sql.query.return_value.filter.return_value.first.return_value = None
-    def session_local():
-        sql_threads.append(get_ident())
-        return sql
-    monkeypatch.setattr("src.models.sql.database.SessionLocal", session_local)
     token = owner.set("run-a")
     task = asyncio.create_task(getattr(chunks, name)(document_id="11111111-1111-1111-1111-111111111111", user_id="user", **kwargs))
     try:
@@ -693,33 +633,11 @@ async def test_cold_connection_and_query_yield_and_worker_closes(monkeypatch, na
         release.set()
         await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
         await asyncio.wait_for(finished.wait(), 5)
-        # Hierarchy SQL processing follows the Weaviate session body.
         owner.reset(token)
     assert lifecycle == ["connect", "session", "closed"]
-    if name == "get_document_sections_hierarchical":
-        assert len(sql_threads) == 1 and sql_threads[0] != main_thread
-        sql.close.assert_called_once()
     assert wc.get_connection() is wc._connection
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("capture_fails", [False, True])
-async def test_hierarchy_sql_failure_is_optional_sanitized_and_closes(monkeypatch, caplog, capture_fails):
-    connection = _connection_with_client(MagicMock())
-    collection = MagicMock()
-    collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
-    sql = MagicMock()
-    sql.query.side_effect = RuntimeError("SECRET sql content")
-    report = MagicMock(side_effect=RuntimeError("SECRET report") if capture_fails else None)
-    monkeypatch.setattr(chunks, "get_connection", lambda: connection)
-    monkeypatch.setattr("src.lib.weaviate_helpers.get_user_collections", lambda *args: (collection, None))
-    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: sql)
-    monkeypatch.setattr("src.lib.observability.runtime.report_runtime_exception", report)
-    result = await chunks.get_document_sections_hierarchical("11111111-1111-1111-1111-111111111111", "user")
-    assert result == {"sections": [], "top_level_sections": [], "abstract_section_title": None}
-    sql.close.assert_called_once()
-    report.assert_called_once()
-    assert "SECRET" not in caplog.text + str(report.call_args)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("index", [True, False, "42", -1, 1.5, None])
 async def test_local_chunk_index_requires_actual_nonnegative_integer(index):

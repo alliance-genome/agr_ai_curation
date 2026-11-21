@@ -1,7 +1,7 @@
 """
 Document context provider for agent creation.
 
-Consolidates document metadata fetching (hierarchy, abstract, sections) with
+Consolidates document metadata fetching (hierarchy, sections) with
 TTL caching. Used by both chat flow (runner.py) and flow executor (executor.py)
 to provide consistent document context to agents.
 
@@ -34,7 +34,6 @@ class DocumentContext:
 
     Encapsulates all document metadata needed by PDF-aware agents:
     - hierarchy: Hierarchical document structure from Weaviate
-    - abstract: Paper abstract (extracted via multi-strategy search)
     - sections: Flat list of section names (derived from hierarchy)
     - document_name: Optional filename for context in prompts
 
@@ -45,7 +44,6 @@ class DocumentContext:
     user_id: str
     document_name: Optional[str] = None
     hierarchy: Optional[Dict[str, Any]] = None
-    abstract: Optional[str] = None
     sections: Optional[List[str]] = field(default=None)
 
     @classmethod
@@ -66,22 +64,19 @@ class DocumentContext:
             document_name: Optional filename for prompt context
 
         Returns:
-            DocumentContext with hierarchy, abstract, and sections populated
+            DocumentContext with hierarchy and sections populated
         """
         from .document_cache import get_cached_metadata, metadata_cache_fill
         from .weaviate_client.chunks import get_document_sections_hierarchical
-        from .openai_agents.prompt_utils import fetch_document_abstract
         from .openai_agents.config import get_document_context_stage_timeout_seconds
 
         hierarchy = None
-        abstract = None
         sections = None
 
         # Check cache first
         cached = get_cached_metadata(user_id, document_id)
         if cached:
             hierarchy = cached.hierarchy
-            abstract = cached.abstract
             logger.info(
                 f"[DocumentContext] Cache hit for document {document_id[:8]}... "
                 f"({len(hierarchy.get('sections', []) if hierarchy else [])} sections)"
@@ -93,18 +88,13 @@ class DocumentContext:
             # Independent fills keep each request's contextvars and LLM costs local.
             # The lease is revoked by invalidation and released on cancellation.
             with metadata_cache_fill(user_id, document_id) as publish:
-                for stage in ("hierarchy", "abstract"):
-                    try:
-                        async with asyncio.timeout(get_document_context_stage_timeout_seconds()):
-                            if stage == "hierarchy":
-                                hierarchy = await get_document_sections_hierarchical(document_id, user_id)
-                            else:
-                                abstract = await fetch_document_abstract(document_id, user_id, hierarchy)
-                    except Exception:
-                        # CancelledError is deliberately not caught. A hierarchy
-                        # failure permits abstract discovery without its metadata.
-                        _report_preparation_failure(stage)
-                publish(hierarchy, abstract)
+                try:
+                    async with asyncio.timeout(get_document_context_stage_timeout_seconds()):
+                        hierarchy = await get_document_sections_hierarchical(document_id, user_id)
+                except Exception:
+                    # CancelledError is deliberately not caught.
+                    _report_preparation_failure("hierarchy")
+                publish(hierarchy)
 
         # Extract flat section names from hierarchy
         if hierarchy and hierarchy.get("sections"):
@@ -120,7 +110,6 @@ class DocumentContext:
             user_id=user_id,
             document_name=document_name,
             hierarchy=hierarchy,
-            abstract=abstract,
             sections=sections,
         )
 
@@ -131,15 +120,14 @@ class DocumentContext:
         for document-aware agents.
 
         Returns:
-            Dict with document_id, user_id, document_name, hierarchy,
-            abstract, and sections keys.
+            Dict with document_id, user_id, document_name, hierarchy
+            and sections keys.
         """
         return {
             "document_id": self.document_id,
             "user_id": self.user_id,
             "document_name": self.document_name,
             "hierarchy": self.hierarchy,
-            "abstract": self.abstract,
             "sections": self.sections,
         }
 
