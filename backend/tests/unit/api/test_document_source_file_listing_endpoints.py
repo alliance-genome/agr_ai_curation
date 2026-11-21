@@ -23,7 +23,7 @@ def _request() -> Request:
 
 def _context(token: str | None = "curator-token") -> DocumentSourceRequestContext:
     return DocumentSourceRequestContext(
-        provider_groups=("WB",), authorized_group_ids=("WB",), bearer_kind=ProviderBearerKind.CURATOR,
+        provider_groups=("group-a",), authorized_group_ids=("group-a",), bearer_kind=ProviderBearerKind.CURATOR,
         curator_token=token,
     )
 
