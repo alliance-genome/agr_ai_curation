@@ -43,6 +43,7 @@ from src.lib.openai_agents.model_request_measurement import install_model_reques
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
+from src.lib.weaviate_client.engine_version import require_expected_engine_version
 from src.models.sql.database import SessionLocal
 
 configure_logging()
@@ -178,7 +179,7 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
     - If collections exist without multi-tenancy: Fail and require explicit migration
     - If collections exist with multi-tenancy: Skip (preserve tenant data)
     """
-    from weaviate.classes.config import Configure, Property, DataType
+    from src.lib.weaviate_client.collection_definitions import required_collection_definitions
 
     # Get the configured embedding model from settings (it's sync, not async)
     from src.lib.weaviate_client.settings import _current_config
@@ -191,51 +192,7 @@ async def initialize_weaviate_collections(connection: WeaviateConnection):
         # In Weaviate v4, list_all() returns collection names as strings directly
         existing_names = collections if isinstance(collections, list) else [c for c in collections]
 
-        # Define required collections with multi-tenancy enabled
-        required_collections = {
-            "DocumentChunk": {
-                # Use text2vec-openai for server-side embeddings
-                "vectorizer_config": Configure.Vectorizer.text2vec_openai(
-                    model=embedding_model,  # Use model from settings
-                    vectorize_collection_name=False
-                ),
-                "vector_index_config": Configure.VectorIndex.hnsw(),
-                "multi_tenancy_config": Configure.multi_tenancy(enabled=True),  # Enable multi-tenancy
-                "properties": [
-                    Property(name="documentId", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="chunkIndex", data_type=DataType.INT, skip_vectorization=True),
-                    Property(name="content", data_type=DataType.TEXT, vectorize_property_name=False),  # Vectorize content only
-                    Property(name="contentPreview", data_type=DataType.TEXT, vectorize_property_name=False, skip_vectorization=True),  # Keep preview out of vectorization
-                    Property(name="elementType", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="pageNumber", data_type=DataType.INT, skip_vectorization=True),
-                    Property(name="sectionTitle", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="sectionPath", data_type=DataType.TEXT_ARRAY, skip_vectorization=True),
-                    Property(name="parentSection", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="subsection", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="isTopLevel", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="contentType", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="metadata", data_type=DataType.TEXT, skip_vectorization=True),
-                    Property(name="embeddingTimestamp", data_type=DataType.DATE, skip_vectorization=True),
-                    Property(name="docItemProvenance", data_type=DataType.TEXT, skip_vectorization=True),  # For chunk highlighting
-                ]
-            },
-            "PDFDocument": {
-                "vectorizer_config": Configure.Vectorizer.none(),
-                "multi_tenancy_config": Configure.multi_tenancy(enabled=True),  # Enable multi-tenancy
-                "properties": [
-                    Property(name="filename", data_type=DataType.TEXT),
-                    Property(name="fileSize", data_type=DataType.INT),
-                    Property(name="uploadDate", data_type=DataType.DATE),
-                    Property(name="creationDate", data_type=DataType.DATE),
-                    Property(name="lastAccessedDate", data_type=DataType.DATE),
-                    Property(name="processingStatus", data_type=DataType.TEXT),
-                    Property(name="embeddingStatus", data_type=DataType.TEXT),
-                    Property(name="chunkCount", data_type=DataType.INT),
-                    Property(name="vectorCount", data_type=DataType.INT),
-                    Property(name="metadata", data_type=DataType.TEXT),
-                ]
-            }
-        }
+        required_collections = required_collection_definitions(embedding_model)
 
         # Check each collection and handle appropriately
         for collection_name, config in required_collections.items():
@@ -386,6 +343,11 @@ async def lifespan(app: FastAPI):
             logger.error("WEAVIATE HEALTH CHECK FAILED: %s", health_error)
             logger.error("Cannot start without Weaviate connection!")
             raise RuntimeError("Weaviate is not accessible - check if container is running") from health_error
+
+        # Refuse an engine version other than the pinned one (raises WeaviateEngineVersionMismatch).
+        with connection.session() as client:
+            engine_version = require_expected_engine_version(client)
+        logger.info("Weaviate engine version %s matches WEAVIATE_EXPECTED_VERSION", engine_version)
 
         # Set the global connection for other modules to use
         set_connection(connection)

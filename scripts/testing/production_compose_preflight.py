@@ -38,6 +38,11 @@ PINNED_APP_IMAGE_PATTERN = re.compile(
     r".+:(?:v\d+\.\d+\.\d+|sha-[0-9a-fA-F]{7,40})$"
 )
 FRONTEND_BUILD_METADATA_PATH = "/usr/share/nginx/html/build-metadata.json"
+# The search index image names its engine version and its digest, so the pinned
+# version is readable and the bytes are fixed.
+WEAVIATE_IMAGE_PATTERN = re.compile(r".+/weaviate:(?P<version>\d+\.\d+\.\d+)@sha256:[0-9a-f]{64}$")
+# Services that connect to the search index and check its engine version at startup.
+WEAVIATE_VERSION_CHECKED_SERVICES = ("backend", "benchmark_worker")
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -160,6 +165,24 @@ def validate_config(
             )
         if service_name in STATEFUL_SERVICES and "@sha256:" not in image:
             errors.append(f"{service_name}.image must be pinned by digest")
+
+    weaviate_match = WEAVIATE_IMAGE_PATTERN.fullmatch(str(services["weaviate"].get("image", "")))
+    if weaviate_match is None:
+        errors.append(
+            "weaviate.image must name an engine version and a digest "
+            "(semitechnologies/weaviate:<x.y.z>@sha256:<digest>)"
+        )
+    else:
+        pinned_version = weaviate_match.group("version")
+        for service_name in WEAVIATE_VERSION_CHECKED_SERVICES:
+            if service_name not in services:
+                continue
+            expected = str(_environment(services[service_name]).get("WEAVIATE_EXPECTED_VERSION", ""))
+            if expected != pinned_version:
+                errors.append(
+                    f"{service_name}.WEAVIATE_EXPECTED_VERSION must equal the weaviate image "
+                    f"version {pinned_version}"
+                )
 
     for service_name in INTERNAL_DATA_SERVICES:
         if services.get(service_name, {}).get("ports"):

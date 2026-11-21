@@ -293,6 +293,8 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_LOCAL_PUBLIC_KEY:-${LANGFUSE_PUBLIC_KEY:-pk-lf-local-public-key-default}}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_LOCAL_SECRET_KEY:-${LANGFUSE_SECRET_KEY:-sk-lf-local-secret-key-default}}
       - WEAVIATE_HOST=${WEAVIATE_HOST:-weaviate}
+      # Must equal the weaviate image tag above; startup refuses any other engine version.
+      - WEAVIATE_EXPECTED_VERSION=1.31.18
       - WEAVIATE_PORT=${WEAVIATE_PORT:-8080}
       - WEAVIATE_SCHEME=${WEAVIATE_SCHEME:-http}
       - WEAVIATE_GRPC_HOST=${WEAVIATE_GRPC_HOST:-weaviate}
@@ -493,6 +495,8 @@ services:
         condition: service_healthy
     environment:
       PYTHONUNBUFFERED: "1"
+      # Must equal the weaviate image tag; the worker refuses any other engine version.
+      WEAVIATE_EXPECTED_VERSION: "1.31.18"
       OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES: ${OPENAI_RESPONSES_INPUT_ITEM_ID_RETRIES:-1}
       VALIDATION_REVIEW_ATTEMPTS_PER_TARGET: ${VALIDATION_REVIEW_ATTEMPTS_PER_TARGET:-2}
       VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY: ${VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY:-2}
@@ -658,7 +662,7 @@ services:
 
   # Weaviate Vector Database
   weaviate:
-    image: semitechnologies/weaviate:latest
+    image: semitechnologies/weaviate:1.31.18@sha256:9b903ac1b4d030a4939535a12a36f07fe3968ff1d9a8622d527e07e644fa4e41
     restart: always
     labels:
       log_env: dev

@@ -14,6 +14,7 @@ from weaviate.auth import Auth
 from weaviate.classes.init import AdditionalConfig, Timeout
 
 from ..openai_agents.config import get_weaviate_query_timeout_seconds
+from .engine_version import require_expected_engine_version, server_engine_version
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ class WeaviateConnection:
                 return {
                     "status": "healthy",
                     "nodes": len(cluster_info) if cluster_info else 1,
-                    "version": "v4",  # Version info not directly available in v4
+                    "version": server_engine_version(client),
                     "collections": len(collections) if collections else 0
                 }
             except Exception as e:
@@ -230,8 +231,10 @@ def get_connection() -> WeaviateConnection:
             weaviate_url = f"{weaviate_scheme}://{weaviate_host}:{weaviate_port}"
 
             connection = WeaviateConnection(url=weaviate_url, api_key=weaviate_api_key)
-            # Actually connect to Weaviate
-            connection.connect()
+            # Actually connect to Weaviate, and refuse an engine other than the
+            # pinned one (processes without the API startup, such as the benchmark
+            # worker, connect here).
+            require_expected_engine_version(connection.connect())
             _connection = connection
         return _connection
 
@@ -302,7 +305,7 @@ def health_check() -> Dict[str, Any]:
             return {
                 "healthy": True,
                 "nodes": nodes if nodes else [],
-                "version": "v4",  # Version info not directly available in v4
+                "version": server_engine_version(client),
                 "modules": {}  # Module info would need separate queries in v4
             }
         except Exception as e:

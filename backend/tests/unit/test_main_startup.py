@@ -24,6 +24,7 @@ def set_pdf_extraction_timeout(monkeypatch):
     monkeypatch.delenv("BENCHMARK_ROOT", raising=False)
     monkeypatch.delenv("AGR_BOOTSTRAP_PACKAGE_ENVS_ON_START", raising=False)
     monkeypatch.delenv("AGR_PACKAGE_ENVS_PREPARED", raising=False)
+    monkeypatch.setenv("WEAVIATE_EXPECTED_VERSION", "1.31.18")
 
 
 
@@ -43,6 +44,7 @@ def make_connection(list_all_return=None):
 
     client = MagicMock()
     client.collections.list_all.return_value = list_all_return if list_all_return is not None else []
+    client.get_meta.return_value = {"version": "1.31.18"}
 
     @contextmanager
     def session():
@@ -384,6 +386,34 @@ class TestLifespan:
             pass
 
         mock_subsystems["check_required_health"].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_refuses_to_start_on_a_different_engine_version(self, mock_init, mock_conn_cls, mock_subsystems):
+        from src.lib.weaviate_client.engine_version import WeaviateEngineVersionMismatch
+
+        connection, client = make_connection()
+        client.get_meta.return_value = {"version": "1.40.7"}
+        mock_conn_cls.return_value = connection
+
+        with pytest.raises(WeaviateEngineVersionMismatch, match="the server reports 1.40.7"):
+            async with _main_module().lifespan(FastAPI()):
+                pass
+        mock_init.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_starts_on_the_pinned_engine_version(self, mock_init, mock_conn_cls, mock_subsystems):
+        connection, client = make_connection()
+        mock_conn_cls.return_value = connection
+
+        async with _main_module().lifespan(FastAPI()):
+            pass
+
+        client.get_meta.assert_called()
+        mock_init.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")
