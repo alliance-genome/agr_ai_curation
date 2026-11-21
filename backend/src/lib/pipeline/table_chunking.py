@@ -15,12 +15,12 @@ from dataclasses import dataclass
 import re
 from typing import List, Optional
 
+from src.lib.markdown_plain_text import split_table_row_cells
 from src.lib.openai_agents.config import (
     get_document_table_header_max_rows,
     get_document_table_header_min_filled_fraction,
 )
 
-_UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 _SEPARATOR_CELL = re.compile(r"^\s*:?-+:?\s*$")
 _LINE_BREAK_TAG = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _SPACE_RUN = re.compile(r"[ \t]{2,}")
@@ -164,14 +164,20 @@ class TableLayout:
 
 
 def split_table_cells(row: str) -> List[str]:
-    """Split one Markdown table row into cells on unescaped pipes."""
+    """Split one Markdown table row into its cells, without the outer pipes.
 
-    stripped = row.strip()
-    if stripped.startswith("|"):
-        stripped = stripped[1:]
-    if stripped.endswith("|") and not stripped.endswith("\\|"):
-        stripped = stripped[:-1]
-    return _UNESCAPED_PIPE.split(stripped)
+    Which pipes separate cells is decided by ``split_table_row_cells``, the one
+    splitter the stored-text clean-up also uses: a pipe after an odd number of
+    backslashes is part of its cell, and an escaped backslash before a pipe
+    (``\\\\|``) does not escape that pipe.
+    """
+
+    cells = split_table_row_cells(row.strip())
+    if len(cells) > 1 and cells[0] == "":
+        cells = cells[1:]
+    if len(cells) > 1 and cells[-1] == "":
+        cells = cells[:-1]
+    return cells
 
 
 def is_table_separator_row(row: str) -> bool:
