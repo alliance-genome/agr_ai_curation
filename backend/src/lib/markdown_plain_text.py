@@ -73,6 +73,17 @@ _PARSER = (
     .enable("strikethrough")
     .disable("autolink")
 )
+# Build every rule cache now, at import, while one thread runs. markdown-it
+# builds a ruler's cache lazily on first use, and that build is not safe when
+# two threads use the parser for the first time at once.
+for _ruler in (
+    _PARSER.core.ruler,
+    _PARSER.block.ruler,
+    _PARSER.inline.ruler,
+    _PARSER.inline.ruler2,
+):
+    _ruler.getRules("")
+del _ruler
 
 _ESCAPED_BACKSLASH = "\\\\"
 # Escapes that hold a row's cell structure: an escaped pipe, and an escaped
