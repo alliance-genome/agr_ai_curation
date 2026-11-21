@@ -63,6 +63,7 @@ from src.lib.document_sources.models import (
 from src.lib.document_sources.registry import get_configured_document_source_provider
 from src.lib.exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
 from src.lib.observability.runtime import report_runtime_exception
+from src.lib.pipeline.text_cleanup import run_text_cleanup
 from src.lib.openai_agents.config import (
     get_benchmark_document_conversion_stale_seconds,
     get_benchmark_max_input_bytes,
@@ -974,8 +975,10 @@ async def _convert_source_main_text(
             raise _invalid_document() from None
     await advance(STAGE_EXTRACTING_TEXT)
     try:
-        elements, _warnings = provider_markdown_to_pipeline_elements(
+        elements, _warnings = await run_text_cleanup(
+            provider_markdown_to_pipeline_elements,
             markdown_bytes.decode("utf-8"), tuple(figure_entries),
+            log_id=converted.artifact_id,
         )
     except UnicodeDecodeError:
         raise _invalid_document() from None

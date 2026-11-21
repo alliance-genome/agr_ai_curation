@@ -1,5 +1,6 @@
 """Main FastAPI application for AI Curation Platform Backend."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
@@ -553,6 +554,10 @@ async def lifespan(app: FastAPI):
         await app.state.connections_health_monitor.close()
         await stop_pdf_job_recovery()
         await stop_submission_attempt_cleanup()
+        from src.lib.pipeline.text_cleanup import shutdown_text_cleanup
+
+        # Waits for a running text clean-up without blocking the loop.
+        await asyncio.to_thread(shutdown_text_cleanup)
         logger.info("Shutting down Weaviate Control Panel API...")
         try:
             await connection.close()

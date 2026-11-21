@@ -107,6 +107,17 @@ def _ensure_required_model_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stop_text_cleanup_worker():
+    """Leave no text clean-up thread running after a test that imported text."""
+    yield
+    # Only a test that loaded the clean-up module can have started its worker;
+    # importing it here would import the whole pipeline package.
+    text_cleanup = sys.modules.get("src.lib.pipeline.text_cleanup")
+    if text_cleanup is not None:
+        text_cleanup.shutdown_text_cleanup()
+
+
+@pytest.fixture(autouse=True)
 def _reset_agent_loader_cache():
     """Reset the global agent-definition cache around each test.
 
