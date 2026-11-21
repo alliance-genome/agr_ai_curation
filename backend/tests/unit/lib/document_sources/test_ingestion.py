@@ -970,3 +970,45 @@ async def test_finalize_new_paper_writes_summed_ready_pieces_then_completes(monk
         ("metadata", "doc-1", 12, 0, "owner-1"),
         ("status", "doc-1", "completed", 42),
     ]
+
+
+@pytest.mark.asyncio
+async def test_slow_text_clean_up_does_not_block_the_event_loop(monkeypatch):
+    from tests.event_loop_responsiveness_support import (
+        MAX_LOOP_STALL_SECONDS,
+        busy_cpu,
+        run_and_measure_longest_loop_stall,
+    )
+
+    markdown = "# Results\n\nText.\n"
+    elements = [{"type": "NarrativeText", "text": "Text.", "metadata": {}}]
+
+    def slow_clean_up(text, figure_metadata):
+        assert text == markdown
+        busy_cpu()
+        return elements, []
+
+    monkeypatch.setattr(ingestion, "provider_markdown_to_pipeline_elements", slow_clean_up)
+    monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
+    _patch_file_steps(monkeypatch)
+    monkeypatch.setattr(ingestion, "_save_source_markdown", AsyncMock(return_value="source.md"))
+    monkeypatch.setattr(ingestion, "_save_processed_json", AsyncMock(return_value="processed.json"))
+    monkeypatch.setattr(ingestion, "_persist_ingestion_metadata", AsyncMock())
+    index = AsyncMock(return_value=1)
+    monkeypatch.setattr(ingestion, "index_owned_document_elements", index)
+    monkeypatch.setattr(ingestion, "finalize_new_paper", AsyncMock())
+
+    result, longest_stall = await run_and_measure_longest_loop_stall(
+        ingest_provider_markdown_document(
+            ProviderMarkdownIngestionRequest(
+                document_id="doc-1", user_id="user-1", document_owner_user_id=42,
+                markdown=markdown, source_provenance=_source_provenance(markdown=markdown),
+            ),
+            weaviate_client=object(),
+        )
+    )
+
+    assert longest_stall < MAX_LOOP_STALL_SECONDS
+    assert result.element_count == 1
+    assert index.await_args.args[0] == elements

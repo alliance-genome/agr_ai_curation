@@ -1167,3 +1167,34 @@ async def test_parse_timeout_receipt_records_expired_phase_budget(parser_env, mo
     assert raised.value.details[PDFX_FAILURE_DETAILS_KEY]['timeout_seconds'] == expected
     assert observations[0]['timeout_seconds'] == expected
     assert observations[0]['failure_boundary'] == f'poll_{phase}'
+
+
+@pytest.mark.asyncio
+async def test_slow_text_clean_up_does_not_block_the_event_loop(parser_env, monkeypatch, tmp_path):
+    from tests.event_loop_responsiveness_support import (
+        MAX_LOOP_STALL_SECONDS,
+        busy_cpu,
+        run_and_measure_longest_loop_stall,
+    )
+
+    monkeypatch.setenv("PDF_EXTRACTION_MERGE", "false")
+    parser = PDFXParser()
+    _stub_successful_extraction(monkeypatch, parser, "# Results\n\nBody\n")
+    elements = [{"type": "NarrativeText", "text": "Body", "metadata": {}}]
+
+    def slow_clean_up(markdown, *, page_provenance=None):
+        assert markdown == "# Results\n\nBody\n"
+        assert page_provenance is None
+        busy_cpu()
+        return elements
+
+    monkeypatch.setattr("src.lib.pipeline.pdfx_parser.markdown_to_pipeline_elements", slow_clean_up)
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%test")
+
+    result, longest_stall = await run_and_measure_longest_loop_stall(
+        parser.parse_pdf_document(pdf_path, "doc-slow", "user-slow", save_artifacts=False)
+    )
+
+    assert longest_stall < MAX_LOOP_STALL_SECONDS
+    assert result["elements"] == elements
