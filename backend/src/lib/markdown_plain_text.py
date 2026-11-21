@@ -13,15 +13,19 @@ What is removed or rewritten:
   that were inside such a pair are never read as markup, so
   ``val<sup>*</sup>sig<sup>*</sup>`` keeps both asterisks;
 - emphasis and strong emphasis with ``*`` or ``_``, and ``~~`` strikethrough
-  (single-tilde strikethrough is off). Underscores inside a word are never
-  emphasis (``snake_case``); a pair at word edges is (``_x_``, ``__init__``);
+  (single-tilde strikethrough is off). Underscores inside a name are never
+  touched (``snake_case``); a name with an underscore at both ends that
+  starts at a word edge or after punctuation loses those two underscores
+  (``__main__`` gives ``main``, ``${X}_R1_`` gives ``${X}R1``);
 - code span backticks (the code text is kept exactly);
 - links and images (the link text or image description is kept);
 - backslash escapes are undone (``\\*`` gives ``*``), except an escaped
   backslash, which stays as two backslashes everywhere because in a table
   cell undoing it would turn the next pipe into part of the cell;
-- character references are decoded (``&amp;`` gives ``&``, ``&nbsp;`` gives a
-  no-break space, ``&#0;`` and NUL give U+FFFD);
+- character references are decoded (``&amp;`` gives ``&``, ``&#0;`` and NUL
+  give U+FFFD), and the parser's output is normalized with NFKC, so a
+  character code ends the same as the literal character (``&nbsp;`` gives a
+  space, ``&micro;`` gives ``μ``, ``&#178;`` gives ``2``);
 - line endings: a carriage return becomes a line feed.
 
 Kept exactly as written: text in angle brackets (``<UAS:GFP>``,
@@ -38,6 +42,7 @@ it. Every step is linear in the length of the text.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -174,12 +179,43 @@ def _parse_inline(text: str) -> str:
     rendered: list[str] = []
     for block_token in _PARSER.parseInline(text):
         rendered.append(_render_inline_tokens(block_token.children or []))
-    return "".join(rendered)
+    # NFKC is idempotent, so normalizing the output too keeps the run-once
+    # rule while making a decoded character code match its literal form.
+    return unicodedata.normalize("NFKC", "".join(rendered))
 
 
-def _clean_inline(text: str, kept_escapes: frozenset[str]) -> str:
+def _keep_cell_boundaries(cleaned: str) -> str:
+    """Re-escape a parsed cell piece so it cannot move the row's cell boundaries.
+
+    Decoding can produce a pipe (``&#124;``) or a backslash (``&#92;``). The
+    row splitter treats a pipe after an odd number of backslashes as part of
+    the cell, so a pipe after an even run gets one more backslash, and a piece
+    that ends in an odd run gets one more so it cannot escape the next pipe.
+    """
+
+    parts: list[str] = []
+    run = 0
+    for character in cleaned:
+        if character == "|" and run % 2 == 0:
+            parts.append("\\")
+        parts.append(character)
+        run = run + 1 if character == "\\" else 0
+    if run % 2:
+        parts.append("\\")
+    return "".join(parts)
+
+
+def _clean_inline(text: str, kept_escapes: frozenset[str], *, in_cell: bool = False) -> str:
     pieces = _split_on_kept_escapes(_strip_inline_tags(text), kept_escapes)
-    return "".join(piece if piece in kept_escapes else _parse_inline(piece) for piece in pieces)
+    cleaned: list[str] = []
+    for piece in pieces:
+        if piece in kept_escapes:
+            cleaned.append(piece)
+        elif in_cell:
+            cleaned.append(_keep_cell_boundaries(_parse_inline(piece)))
+        else:
+            cleaned.append(_parse_inline(piece))
+    return "".join(cleaned)
 
 
 def markdown_inline_to_plain_text(text: str) -> str:
@@ -224,7 +260,7 @@ def _clean_table_cell(cell: str) -> str:
         return cell
     leading = cell[: len(cell) - len(cell.lstrip())]
     trailing = cell[len(cell.rstrip()) :]
-    return f"{leading}{_clean_inline(content, _STRUCTURAL_CELL_ESCAPES)}{trailing}"
+    return f"{leading}{_clean_inline(content, _STRUCTURAL_CELL_ESCAPES, in_cell=True)}{trailing}"
 
 
 def markdown_table_to_plain_text(table: str) -> str:
@@ -232,7 +268,8 @@ def markdown_table_to_plain_text(table: str) -> str:
 
     Each line that starts with ``|`` is a row: its pipes stay where they are
     and each cell's text is cleaned on its own, so markup never pairs across
-    cells. Any other line is cleaned as inline text.
+    cells. A pipe or backslash produced by decoding is re-escaped, so the row
+    keeps exactly its cells. Any other line is cleaned as inline text.
     """
 
     cleaned_lines: list[str] = []

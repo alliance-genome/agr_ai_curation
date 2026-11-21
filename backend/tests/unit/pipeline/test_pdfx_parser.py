@@ -169,6 +169,16 @@ A paragraph with \\*literal\\* stars and p.Tyr318*.
         assert element["metadata"]["section_path"] == ["*Escaped* heading"]
 
 
+def test_a_character_code_in_a_heading_gives_the_same_section_name_as_the_literal_form():
+    encoded = markdown_to_pipeline_elements("# Materials&nbsp;and Methods\nText.\n")
+    literal = markdown_to_pipeline_elements("# Materials\u00a0and Methods\nText.\n")
+
+    assert encoded[0]["text"] == literal[0]["text"] == "Materials and Methods"
+    assert encoded[1]["metadata"]["section_path"] == literal[1]["metadata"]["section_path"] == [
+        "Materials and Methods"
+    ]
+
+
 def test_markdown_to_pipeline_elements_keeps_code_block_text_as_written():
     markdown = """```
 x = a*b*c  # `kept`

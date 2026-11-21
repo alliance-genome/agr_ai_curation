@@ -150,8 +150,15 @@ reads it with a CommonMark parser (`markdown-it-py`):
 - Only markup the parser reads as formatting is removed: `*` and `_` emphasis,
   `~~` strikethrough, code span backticks, link brackets and image syntax (the
   description is kept). Literal characters stay, for example `p.Tyr318*`,
-  `****` and `~5 kb`. Underscores inside a word are never emphasis
-  (`snake_case`); a pair at the edges of a word is (`_x_`, `__init__`).
+  `****` and `~5 kb`. Underscores inside a name are never touched
+  (`snake_case`, `w_1118`). A name written with an underscore at both ends
+  loses those two underscores when it starts at a word edge or after
+  punctuation, because CommonMark reads the pair as italics: `__main__`
+  becomes `main`, a header cell `_gene_id_` becomes `gene_id`,
+  `${SAMPLE}_R1_` becomes `${SAMPLE}R1` and `df['_p_value_']` becomes
+  `df['p_value']`. No gene, allele or construct notation tested loses
+  characters (`y[1] w[*]; P{w[+mC]=UAS-GFP}attP2`, `unc-119(ed3)`,
+  `FBal_0001_`).
 - Text in angle brackets is kept exactly as written, for example `<UAS:GFP>`,
   `Tg(<lexAop:GFP>)`, `Pax6<Sey>`, web addresses and e-mail addresses:
   autolinks and raw HTML are both off.
@@ -162,14 +169,21 @@ reads it with a CommonMark parser (`markdown-it-py`):
 - Backslash escapes are undone (`\*` becomes `*`), except an escaped
   backslash, which stays as two backslashes: in a table cell undoing it would
   make the next pipe part of the cell, and prose follows the same rule.
-- Character references are decoded (`&amp;` becomes `&`, `&nbsp;` a no-break
-  space, `&#0;` and NUL the replacement character U+FFFD). A carriage return
-  becomes a line feed.
+- Character references are decoded (`&amp;` becomes `&`; `&#0;` and NUL
+  become the replacement character U+FFFD), and the parser's output is
+  normalized with NFKC, so a character code ends the same as the literal
+  character: `&nbsp;` and a literal no-break space both become a space,
+  `&micro;` and `µ` both become `μ`. A carriage return becomes a line feed.
 - Tables are cleaned cell by cell, so markup never pairs across cells, and an
-  escaped pipe (`\|`) stays escaped inside its cell.
+  escaped pipe (`\|`) stays escaped inside its cell. A pipe or backslash
+  produced by decoding (`&#124;`, `&vert;`, `&#92;`) is re-escaped, so
+  decoding never adds, removes or moves a cell boundary.
 - Fenced code blocks keep their text as written.
-- Every step is linear in the length of the text (1 MB of hostile input is
-  tested).
+- Every step is linear in the length of the text. Tests check that the cost
+  of each hostile input (runs of `[`, `![`, `*`, `_`, `&`, `<`, tags) grows
+  linearly from 16 KB to 128 KB, and that 1 MB of this module's own tag and
+  escape inputs finishes. A realistic 1 MB fly genotype table takes about
+  1.4 s; the earlier regex clean-up was quadratic on bracket runs.
 
 A second pass would turn an escaped `\*x\*` back into emphasis and delete
 the asterisks, so the clean-up is never applied to text it already returned.

@@ -78,7 +78,9 @@ def test_inline_clean_up_before_and_after(raw, before, after):
         ("\\_ \\# \\[x\\]", "\\_ \\# \\[x\\]", "_ # [x]"),
         # Character references are decoded.
         ("AT&amp;T &lt;5 &#42;", "AT&amp;T &lt;5 &#42;", "AT&T <5 *"),
-        ("&nbsp;x", "&nbsp;x", "\u00a0x"),
+        # Decoded characters are normalized with NFKC, like literal ones.
+        ("5&nbsp;mM", "5&nbsp;mM", "5 mM"),
+        ("&micro;M and x&#178;", "&micro;M and x&#178;", "\u03bcM and x2"),
         ("a&#0;b", "a&#0;b", "a\ufffdb"),
         ("a\x00b", "a\x00b", "a\ufffdb"),
         # An image keeps its description.
@@ -120,6 +122,39 @@ def test_known_limit_a_pair_of_unmarked_literal_asterisks_reads_as_emphasis():
 )
 def test_table_clean_up_is_cell_by_cell(raw, before, after):
     assert markdown_table_to_plain_text(raw) == after
+
+
+@pytest.mark.parametrize(
+    ("literal", "encoded"),
+    [
+        ("5\u00a0mM", "5&nbsp;mM"),
+        ("\u00b5M", "&micro;M"),
+        ("x\u00b2", "x&#178;"),
+        ("a\u2009b", "a&#8201;b"),
+    ],
+)
+def test_a_character_code_ends_the_same_as_its_literal_character(literal, encoded):
+    assert markdown_inline_to_plain_text(encoded) == markdown_inline_to_plain_text(literal)
+    assert markdown_table_to_plain_text(f"| {encoded} |") == markdown_table_to_plain_text(f"| {literal} |")
+
+
+@pytest.mark.parametrize(
+    ("raw", "after"),
+    [
+        # Decoding must never add, remove or move a cell boundary.
+        ("| a&#124;b | c |", "| a\\|b | c |"),
+        ("| x | &vert; |", "| x | \\| |"),
+        ("| a&#92;| b |", "| a\\\\| b |"),
+        ("| a&#92;&#92;| b |", "| a\\\\| b |"),
+        ("| &#65372; | b |", "| \\| | b |"),
+        ("| &#92; |", "| \\\\ |"),
+    ],
+)
+def test_decoded_characters_never_move_a_cell_boundary(raw, after):
+    cleaned = markdown_table_to_plain_text(raw)
+
+    assert cleaned == after
+    assert len(split_table_row_cells(cleaned)) == len(split_table_row_cells(raw))
 
 
 def test_escaped_pipe_inside_a_cell_stays_escaped_and_in_its_cell():
