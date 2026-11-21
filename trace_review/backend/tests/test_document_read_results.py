@@ -130,6 +130,22 @@ class NumberedViewSpanTests(unittest.TestCase):
              "| Title | |\n| Strain | Temp |"],
         )
 
+    def test_a_label_and_rows_with_an_escaped_backslash_before_a_pipe_decode_whole(self):
+        # Stored table text keeps an escaped backslash as written (``\\|``,
+        # a cell boundary). The reader works by lines, never by cells.
+        text = (
+            "Column names of the 1st table in this file's text (this passage holds row 1 of 1): "
+            "| Made-up path C:\\\\| | |\n"
+            "    | Line | Value | Notes |\n"
+            "[0] | XS0001 \\\\| 1.2 | ok |"
+        )
+        self.assertEqual(numbered_view_spans(text), ["| XS0001 \\\\| 1.2 | ok |"])
+        self.assertEqual(
+            numbered_view_table_labels(text),
+            ["Column names of the 1st table in this file's text (this passage holds row 1 of 1): "
+             "| Made-up path C:\\\\| | |\n| Line | Value | Notes |"],
+        )
+
     def test_a_passage_with_no_sentences_decodes_to_no_spans(self):
         # The application renders a passage whose text has no sentences (for
         # example whitespace only) as an empty string.
