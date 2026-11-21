@@ -240,3 +240,45 @@ def test_format_feedback_transcript_section_logs_malformed_entries_and_blank_rol
     assert "2. User: Visible user message" in section
     assert "Skipping malformed feedback transcript entry at position 1 with type int" in caplog.text
     assert "Feedback transcript contained a message without a role" in caplog.text
+
+
+def test_a_saved_feedback_transcript_never_contains_the_served_table_row_search_text():
+    """The feedback transcript is persisted, emailed and read by TraceReview; it keeps
+    evidence exactly as stored. The read-time search_text (PR #1096) is only served."""
+    row = "| XS1 | 3 | 5 | 4.0 |"
+    stored_payload = {
+        "evidence_records": [{
+            "entity": "zeta",
+            "verified_quote": row,
+            "page": 3,
+            "section": "Results",
+            "chunk_id": "chunk-3",
+            "source_fragments": [{"text": row, "span_type": "table_row"}],
+        }],
+    }
+    detail = SimpleNamespace(
+        session=SimpleNamespace(
+            session_id="session-1",
+            title=None,
+            generated_title=None,
+            effective_title=None,
+            active_document_id=None,
+            created_at=datetime(2026, 11, 21, 12, 0, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 11, 21, 12, 5, tzinfo=timezone.utc),
+            last_message_at=None,
+            chat_kind="assistant_chat",
+        ),
+        messages=[_message(session_id="session-1", role="assistant", content="Answer.", minute=1,
+                           payload_json=stored_payload)],
+        next_message_cursor=None,
+    )
+
+    transcript = transcript_module.capture_feedback_conversation_transcript(
+        repository=cast(ChatHistoryRepository, _Repository(detail, [])),
+        session_id="session-1",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert transcript is not None
+    assert "search_text" not in str(transcript)
+    assert transcript["messages"][0]["payload_json"] == stored_payload

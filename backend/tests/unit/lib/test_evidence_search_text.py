@@ -140,3 +140,46 @@ def test_review_grid_projections_carry_the_field_on_their_source_record():
     assert fragment["search_text"] == "XS1 3 5 4.0"
     assert projections[0].quote == "| XS1 | 3 | 5 | 4.0 |"
     assert "search_text" not in envelope.metadata["evidence_records"][0]["source_fragments"][0]
+
+
+def test_without_fragment_search_texts_removes_only_the_served_field():
+    served = with_fragment_search_texts({"projections": [{"metadata": {"source_record": {"source_fragments": [
+        {"text": "| XS1 | 3 |", "span_type": "table_row"},
+        {"text": "A sentence.", "span_type": "sentence"},
+    ]}}}]})
+    assert served["projections"][0]["metadata"]["source_record"]["source_fragments"][0]["search_text"] == "XS1 3"
+
+    from src.lib.evidence_search_text import without_fragment_search_texts
+
+    stripped = without_fragment_search_texts(served)
+    assert "search_text" not in str(stripped)
+    assert stripped["projections"][0]["metadata"]["source_record"]["source_fragments"] == [
+        {"text": "| XS1 | 3 |", "span_type": "table_row"},
+        {"text": "A sentence.", "span_type": "sentence"},
+    ]
+
+
+def test_the_submission_intent_fingerprint_material_holds_no_served_search_text(monkeypatch):
+    """Submission payloads are persisted and exported, and the intent is hashed: the
+    candidate payload they reuse serves search_text in its projections, which they drop."""
+    from src.lib.curation_workspace import session_submission_service as submission
+
+    served_payload = {
+        "candidate_id": "candidate-1",
+        "draft": {"fields": []},
+        "evidence_anchors": [],
+        "evidence_anchor_projections": [{"metadata": {"source_record": {"source_fragments": [
+            {"text": "| XS1 | 3 |", "span_type": "table_row", "search_text": "XS1 3"},
+        ]}}}],
+    }
+
+    class _Payload:
+        def model_dump(self, mode):
+            return deepcopy(served_payload)
+
+    monkeypatch.setattr(submission, "_candidate_payload", lambda candidate: _Payload())
+
+    material = submission._non_envelope_candidate_submission_intent(object())
+
+    assert "search_text" not in str(material)
+    assert material["evidence_anchor_projections"][0]["metadata"]["source_record"]["source_fragments"][0]["text"] == "| XS1 | 3 |"

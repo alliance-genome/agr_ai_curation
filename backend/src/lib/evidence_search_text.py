@@ -54,4 +54,34 @@ def with_fragment_search_texts(value: Any) -> Any:
     return served
 
 
-__all__ = ["SEARCH_TEXT_FIELD", "TABLE_ROW_SPAN_TYPE", "with_fragment_search_texts"]
+def without_fragment_search_texts(value: Any) -> Any:
+    """Return a copy with every served ``search_text`` removed from source fragments.
+
+    For anything persisted, emailed or exported from a serializer that serves
+    evidence: the derived field must never be stored.
+    """
+
+    if isinstance(value, list):
+        return [without_fragment_search_texts(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    served: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "source_fragments" and isinstance(item, list):
+            served[key] = [
+                {k: without_fragment_search_texts(v) for k, v in fragment.items() if k != SEARCH_TEXT_FIELD}
+                if isinstance(fragment, dict)
+                else fragment
+                for fragment in item
+            ]
+        else:
+            served[key] = without_fragment_search_texts(item)
+    return served
+
+
+__all__ = [
+    "SEARCH_TEXT_FIELD",
+    "TABLE_ROW_SPAN_TYPE",
+    "with_fragment_search_texts",
+    "without_fragment_search_texts",
+]
