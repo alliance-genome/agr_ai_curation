@@ -36,7 +36,7 @@ def _doc(*, display_mode="local_pdf", document_kind="library", **values):
     paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
     main_file = SimpleNamespace(id="main-file", role="main", **file_values)
     return SimpleNamespace(
-        document_kind=document_kind, main_file=main_file, files=[main_file],
+        document_kind=document_kind, main_file=main_file, main_file_or_none=main_file, files=[main_file],
         **paper_values, **values,
     )
 
@@ -772,3 +772,38 @@ def async_provisioning_boundary(monkeypatch):
     async def provision(principal):
         return documents.provision_user(None, principal)
     monkeypatch.setattr(documents, "provision_user_async", provision)
+
+
+def _supplements_only_doc():
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    return new_supplements_only_paper(
+        id=_DOC_ID, user_id=1, filename="supplements-only-paper", document_kind="library"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("file_type", ["pdf", "pdfx_json", "processed_json", "source_markdown"])
+async def test_a_paper_without_a_main_file_has_no_main_file_download(monkeypatch, tmp_path, file_type):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+    _mock_session(monkeypatch, doc=_supplements_only_doc(), user_id=1)
+
+    with pytest.raises(HTTPException, match="file not available") as exc:
+        await documents.download_document_file(
+            document_id=_DOC_ID, file_type=file_type, user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_download_info_of_a_paper_without_a_main_file_lists_nothing(monkeypatch, tmp_path):
+    _patch_runtime_pdf_storage_path(monkeypatch, tmp_path)
+    _mock_session(monkeypatch, doc=_supplements_only_doc(), user_id=1)
+
+    info = await documents.get_download_info(document_id=_DOC_ID, user={"sub": "user123"})
+
+    assert info["viewer_mode"] is None
+    assert info["filename"] == "supplements-only-paper"
+    assert not any(value for key, value in info.items() if key.endswith("_available"))
+    assert info["source_provenance"] is None

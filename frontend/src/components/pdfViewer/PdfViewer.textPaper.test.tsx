@@ -76,7 +76,7 @@ describe('PdfViewer when chat loads a text paper', () => {
     await showPreviousPdf()
     vi.stubGlobal('fetch', vi.fn(async (url: string) => (
       url.endsWith('/url')
-        ? jsonResponse({ viewer_url: null, viewer_mode: 'text' })
+        ? jsonResponse({ viewer_url: null, viewer_mode: 'text', has_main_file: true })
         : jsonResponse({ filename: 'provider-paper.md', page_count: null })
     )))
     act(() => { dispatchChatDocumentLoaded('doc-text') })

@@ -129,7 +129,7 @@ export interface DocumentDetailResponse {
   upload_timestamp: string;
   processing_started_at: string | null;
   processing_completed_at: string | null;
-  file_size_bytes: number;
+  file_size_bytes: number | null;
   weaviate_tenant: string;
   chunk_count: number | null;
   error_message: string | null;

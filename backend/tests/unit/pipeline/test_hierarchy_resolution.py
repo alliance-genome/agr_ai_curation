@@ -67,7 +67,6 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
                     is_top_level=False,
                 ),
             ],
-            "Intro",
             {"model": "stub"},
         )
 
@@ -92,7 +91,7 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
 
     assert metadata is not None
     assert metadata.top_level_sections == ["Introduction"]
-    assert metadata.abstract_section_title == "Intro"
+    assert "abstract_section_title" not in metadata.model_dump()
     assert metadata.llm_raw_response == {"model": "stub"}
     assert metadata.model_used == "gpt-6.1-sol"
 
@@ -100,7 +99,7 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
 @pytest.mark.asyncio
 async def test_resolve_document_hierarchy_falls_back_on_empty_llm_result(monkeypatch):
     async def _fake_llm(_section_info):
-        return ([], None, None)
+        return ([], None)
 
     monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
 
@@ -128,7 +127,6 @@ async def test_resolve_document_hierarchy_handles_provider_figure_metadata_deter
                     is_top_level=True,
                 ),
             ],
-            None,
             {"model": "stub"},
         )
 
@@ -177,7 +175,6 @@ async def test_resolve_document_hierarchy_can_skip_metadata_storage(monkeypatch)
                     is_top_level=True,
                 )
             ],
-            None,
             {"raw": True},
         )
 
@@ -193,12 +190,11 @@ async def test_call_llm_for_hierarchy_returns_empty_when_api_key_missing(monkeyp
     _install_fake_agent_modules(monkeypatch, final_output=None)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         [{"title": "Intro", "preview": "hello"}]
     )
 
     assert sections == []
-    assert abstract_title is None
     assert raw is None
 
 
@@ -278,7 +274,6 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
         sections=[
             hierarchy.SectionClassification(idx=0, is_top_level=True),
         ],
-        abstract_idx=0,
     )
     captured, fake_reasoning_cls = _install_fake_agent_modules(monkeypatch, final_output=output)
     sentry_calls = []
@@ -300,15 +295,14 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
     monkeypatch.setenv("HIERARCHY_RESOLUTION_MAX_TURNS", "6")
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         [{"title": "Intro", "preview": "overview"}]
     )
 
     assert len(sections) == 1
     assert sections[0].header == "Intro"
-    assert abstract_title == "Intro"
     assert raw["sections_count"] == 1
-    assert raw["abstract_section_title"] == "Intro"
+    assert "abstract_section_title" not in raw
     assert captured["temperature"] is None
     assert captured["max_turns"] == 6
     assert isinstance(captured["reasoning"], fake_reasoning_cls)
@@ -328,7 +322,6 @@ async def test_hierarchy_rejects_an_uncatalogued_model_before_any_request(monkey
     """Request shape comes from the catalog, never from a model-name prefix."""
     output = hierarchy.HierarchyOutput(
         sections=[hierarchy.SectionClassification(idx=0, is_top_level=True)],
-        abstract_idx=0,
     )
     captured, _ = _install_fake_agent_modules(monkeypatch, final_output=output)
     monkeypatch.setattr(
@@ -342,7 +335,7 @@ async def test_hierarchy_rejects_an_uncatalogued_model_before_any_request(monkey
         [{"title": "Intro", "preview": "overview"}]
     )
 
-    assert result == ([], None, None)
+    assert result == ([], None)
     assert "user_prompt" not in captured
     _assert_runtime_report(runtime_reports, "ValueError")
 
@@ -351,7 +344,6 @@ async def test_hierarchy_rejects_an_uncatalogued_model_before_any_request(monkey
 async def test_hierarchy_rejects_a_reasoning_effort_the_model_does_not_accept(monkeypatch, runtime_reports):
     output = hierarchy.HierarchyOutput(
         sections=[hierarchy.SectionClassification(idx=0, is_top_level=True)],
-        abstract_idx=0,
     )
     captured, _ = _install_fake_agent_modules(monkeypatch, final_output=output)
     monkeypatch.setattr(
@@ -366,7 +358,7 @@ async def test_hierarchy_rejects_a_reasoning_effort_the_model_does_not_accept(mo
         [{"title": "Intro", "preview": "overview"}]
     )
 
-    assert result == ([], None, None)
+    assert result == ([], None)
     assert "user_prompt" not in captured
     _assert_runtime_report(runtime_reports, "ValueError")
 
@@ -378,12 +370,11 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
     monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-6.1-sol")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "low")
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         [{"title": "Intro", "preview": "overview"}]
     )
 
     assert sections == []
-    assert abstract_title is None
     assert raw is not None
     assert raw["model"] == "gpt-6.1-sol"
     assert captured["temperature"] is None
@@ -408,12 +399,11 @@ async def test_call_llm_for_hierarchy_handles_runtime_exception(monkeypatch, run
     monkeypatch.setattr(hierarchy, "gen_ai_invoke_agent_span", _fake_sentry_span)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         [{"title": "Intro", "preview": "overview"}]
     )
 
     assert sections == []
-    assert abstract_title is None
     assert raw is None
     _assert_runtime_report(runtime_reports, "RuntimeError")
     assert ("data", "ai_curation.validation.status", "error") in sentry_calls
@@ -465,7 +455,7 @@ def _paper_output(**overrides):
         {"idx": 6, "is_top_level": False, "parent_idx": 5},
         {"idx": 7, "is_top_level": True, "parent_idx": None},
     ]
-    payload = {"sections": sections, "abstract_idx": 1}
+    payload = {"sections": sections}
     payload.update(overrides)
     return hierarchy.HierarchyOutput.model_validate(payload)
 
@@ -516,14 +506,14 @@ def test_hierarchy_output_schema_has_indexes_not_echoed_titles():
     schema = hierarchy.HierarchyOutput.model_json_schema()
     item_schema = schema["$defs"][next(iter(schema["$defs"]))]
 
-    assert set(schema["properties"]) == {"sections", "abstract_idx"}
+    assert set(schema["properties"]) == {"sections"}
     assert set(item_schema["properties"]) == {"idx", "is_top_level", "parent_idx"}
     property_names = set(schema["properties"]) | {
         name for definition in schema["$defs"].values()
         for name in definition.get("properties", {})
     }
     assert property_names.isdisjoint(
-        {"header", "parent_section", "subsection", "abstract_section_title"}
+        {"header", "parent_section", "subsection", "abstract_section_title", "abstract_idx"}
     )
 
 
@@ -534,7 +524,7 @@ async def test_call_llm_for_hierarchy_numbers_titles_and_maps_indexes_back(
     _captured, calls = _install_sequenced_runner(monkeypatch, [_paper_output()])
     _sentry_recorder(monkeypatch)
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         _PAPER_SECTIONS
     )
 
@@ -542,9 +532,8 @@ async def test_call_llm_for_hierarchy_numbers_titles_and_maps_indexes_back(
         (item.header, item.parent_section, item.subsection, item.is_top_level)
         for item in sections
     ] == _EXPECTED_PAPER_ITEMS
-    assert abstract_title == "Abstract"
     assert raw["sections_count"] == len(_PAPER_SECTIONS)
-    assert raw["abstract_section_title"] == "Abstract"
+    assert "abstract_section_title" not in raw
     assert len(calls) == 1
     assert '[0] "Loss of wg disrupts wing growth"' in calls[0]["prompt"]
     assert '[7] "Discussion"' in calls[0]["prompt"]
@@ -569,7 +558,7 @@ async def test_resolve_document_hierarchy_applies_index_output_to_elements(
     assert updated[6]["subsection"] == "wg is required for growth"
     assert updated[7]["section_path"] == ["Discussion"]
     assert metadata is not None
-    assert metadata.abstract_section_title == "Abstract"
+    assert "abstract_section_title" not in metadata.model_dump()
     assert metadata.top_level_sections == [
         "Loss of wg disrupts wing growth",
         "Abstract",
@@ -638,7 +627,6 @@ _INVALID_SECTION_INDEX_OUTPUTS = {
             for i in range(8)
         ]
     },
-    "abstract_out_of_range": {"abstract_idx": 8},
 }
 
 
@@ -664,11 +652,11 @@ async def test_invalid_section_indexes_fail_explicitly_after_contract_retries(
     reports = _contract_report_recorder(monkeypatch)
 
     with cost_scope({"document_id": "doc-1", "job_id": "job-1"}):
-        sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+        sections, raw = await hierarchy._call_llm_for_hierarchy(
             _PAPER_SECTIONS
         )
 
-    assert (sections, abstract_title, raw) == ([], None, None)
+    assert (sections, raw) == ([], None)
     assert len(calls) == 2
     assert "Correction required" not in calls[0]["instructions"]
     assert "Correction required" in calls[1]["instructions"]
@@ -711,12 +699,11 @@ async def test_section_index_contract_correction_recovers(monkeypatch, hierarchy
     sentry_calls = _sentry_recorder(monkeypatch)
     reports = _contract_report_recorder(monkeypatch)
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         _PAPER_SECTIONS
     )
 
     assert len(sections) == len(_PAPER_SECTIONS)
-    assert abstract_title == "Abstract"
     assert len(calls) == 2
     assert calls[0]["prompt"] == calls[1]["prompt"]
     statuses = [
@@ -742,7 +729,7 @@ async def test_first_try_success_records_zero_retries_and_reports_nothing(
     sentry_calls = _sentry_recorder(monkeypatch)
     reports = _contract_report_recorder(monkeypatch)
 
-    _sections, _abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    _sections, raw = await hierarchy._call_llm_for_hierarchy(
         _PAPER_SECTIONS
     )
 
@@ -785,13 +772,12 @@ async def test_nested_subsections_resolve_to_top_level_ancestor(
             {"idx": 8, "is_top_level": False, "parent_idx": 7},
             {"idx": 9, "is_top_level": False, "parent_idx": 8},
         ],
-        "abstract_idx": None,
     })
     _captured, calls = _install_sequenced_runner(monkeypatch, [output])
     _sentry_recorder(monkeypatch)
     reports = _contract_report_recorder(monkeypatch)
 
-    sections, _abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         _NESTED_SECTIONS
     )
 
@@ -856,7 +842,7 @@ def _capture_section_info(monkeypatch):
 
     async def _fake_llm(section_info):
         llm_inputs.append(section_info)
-        return ([], None, None)
+        return ([], None)
 
     monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
     return llm_inputs
@@ -949,7 +935,7 @@ async def test_hierarchy_prompt_uses_organization_neutral_context(
     assert "TOP-LEVEL SECTIONS (is_top_level=true)" in instructions
     assert "SUBSECTIONS (is_top_level=false)" in instructions
     assert "Following parent_idx from any subsection must reach a top-level section" in instructions
-    assert "ADDITIONAL TASK - IDENTIFY ABSTRACT" in instructions
+    assert "IDENTIFY ABSTRACT" not in instructions
 
 
 @pytest.mark.asyncio
@@ -1059,11 +1045,11 @@ async def test_contract_retry_without_output_reports_failure_once(
     _sentry_recorder(monkeypatch)
     reports = _contract_report_recorder(monkeypatch)
 
-    sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
+    sections, raw = await hierarchy._call_llm_for_hierarchy(
         _PAPER_SECTIONS
     )
 
-    assert (sections, abstract_title) == ([], None)
+    assert sections == []
     assert raw["contract_retries"] == 1
     assert len(calls) == 2
     assert len(reports) == 1
@@ -1139,7 +1125,7 @@ async def test_provider_failure_preserves_flat_document_and_redacts_report(
 async def test_hierarchy_classifier_receives_shared_retry_policy(monkeypatch, hierarchy_env, retry_limit):
     monkeypatch.setenv("OPENAI_MODEL_MAX_RETRIES", str(retry_limit))
     captured, _ = _install_sequenced_runner(monkeypatch, [_paper_output()])
-    sections, _, _ = await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
+    sections, _ = await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
     assert sections
     if retry_limit == 0:
         assert captured["retry"] is None
@@ -1147,3 +1133,43 @@ async def test_hierarchy_classifier_receives_shared_retry_policy(monkeypatch, hi
         assert captured["retry"].max_retries == retry_limit
     assert captured["reasoning"].effort == "low"
     assert captured["extra_args"]
+
+
+@pytest.mark.asyncio
+async def test_structure_model_is_no_longer_asked_to_identify_the_abstract(monkeypatch, hierarchy_env):
+    invalid = _paper_output(**_INVALID_SECTION_INDEX_OUTPUTS["missing"])
+    _captured, calls = _install_sequenced_runner(monkeypatch, [invalid, _paper_output()])
+    _sentry_recorder(monkeypatch)
+    _contract_report_recorder(monkeypatch)
+
+    await hierarchy._call_llm_for_hierarchy(_PAPER_SECTIONS)
+
+    first, correction = calls[0]["instructions"], calls[1]["instructions"]
+    for instructions in (first, correction):
+        assert "IDENTIFY ABSTRACT" not in instructions
+        assert "abstract_idx" not in instructions
+    # The approved deletion ends the prompt at the output rules.
+    assert first.endswith("Following parent_idx from any subsection must reach a top-level section\n")
+    assert "- Abstract / Summary" in first  # still a top-level section to classify
+
+
+def test_hierarchy_metadata_stored_before_the_change_still_loads():
+    """Papers processed earlier keep abstract_section_title; nothing reads it and it still validates."""
+    stored = {
+        "sections": [{"header": "Abstract", "parent_section": "Abstract", "subsection": None,
+                      "is_top_level": True}],
+        "top_level_sections": ["Abstract"],
+        "abstract_section_title": "Abstract",
+        "created_at": "2026-11-01T00:00:00+00:00",
+        "model_used": "gpt-6.1-sol",
+        "llm_raw_response": {"model": "gpt-6.1-sol", "abstract_section_title": "Abstract"},
+    }
+
+    loaded = hierarchy.HierarchyMetadata.model_validate(stored)
+
+    assert loaded.top_level_sections == ["Abstract"]
+    assert "abstract_section_title" not in loaded.model_dump()
+    # A classifier answer that still names an abstract section is accepted; the extra key is ignored.
+    output = hierarchy.HierarchyOutput.model_validate(
+        {"sections": [{"idx": 0, "is_top_level": True, "parent_idx": None}], "abstract_idx": 0})
+    assert hierarchy._resolve_section_indexes(output, [{"title": "Abstract"}])[0].header == "Abstract"

@@ -169,6 +169,7 @@ function mockChatFetch(options?: {
         json: async () => ({
           viewer_url: `/viewer/${activeDocument.id}`,
           viewer_mode: 'local_pdf',
+          has_main_file: true,
         }),
       } as Response
     }
@@ -826,6 +827,7 @@ describe('Chat persistence', () => {
           json: async () => ({
             viewer_url: '/viewer/doc-late',
             viewer_mode: 'local_pdf',
+            has_main_file: true,
           }),
         } as Response)
         await Promise.resolve()
@@ -902,7 +904,7 @@ describe('Chat persistence', () => {
         if (viewerDocumentId) {
           return {
             ok: true,
-            json: async () => ({ viewer_url: `/viewer/${viewerDocumentId}`, viewer_mode: 'local_pdf' }),
+            json: async () => ({ viewer_url: `/viewer/${viewerDocumentId}`, viewer_mode: 'local_pdf', has_main_file: true }),
           } as Response
         }
 

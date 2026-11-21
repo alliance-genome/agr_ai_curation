@@ -1138,9 +1138,12 @@ async def get_document_hierarchy(
                 PDFDocument.id == UUID(document_id)
             ).first()
 
-            if doc and doc.main_file.hierarchy_metadata:
+            # The structure model describes the main file only; a paper of
+            # supplements only has no main-file hierarchy.
+            main_file = doc.main_file_or_none if doc else None
+            if main_file is not None and main_file.hierarchy_metadata:
                 logger.info("Retrieved hierarchy metadata for document %s", document_id)
-                return doc.main_file.hierarchy_metadata
+                return main_file.hierarchy_metadata
             else:
                 logger.info("No hierarchy metadata found for document %s", document_id)
                 return None

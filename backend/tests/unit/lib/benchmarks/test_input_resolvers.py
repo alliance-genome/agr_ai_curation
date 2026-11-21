@@ -864,6 +864,23 @@ def test_local_document_loader_classifies_missing_document_as_expected_404(
     assert "Document not found" not in str(exc_info.value)
 
 
+def test_local_document_loader_refuses_a_paper_without_a_main_file(monkeypatch):
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    monkeypatch.setattr(document_source, "SessionLocal", _OwnedDocumentSession)
+    monkeypatch.setattr(
+        document_source,
+        "require_owned_document",
+        lambda *_args: new_supplements_only_paper(user_id=1, filename="supplements-only-paper"),
+    )
+
+    with pytest.raises(BenchmarkSourceError) as exc_info:
+        load_owned_local_document("4b6ea638-9755-4d95-b523-e98b2493d8b1", "owner-sub")
+
+    assert exc_info.value.code == "missing_source"
+    assert "no main file" in str(exc_info.value)
+
+
 def test_local_document_loader_classifies_unprocessed_document_as_expected_404(
     monkeypatch,
 ):
@@ -873,7 +890,7 @@ def test_local_document_loader_classifies_unprocessed_document_as_expected_404(
         "require_owned_document",
         lambda *_args: SimpleNamespace(
             processing_completed_at=None,
-            main_file=SimpleNamespace(processed_json_path=None),
+            main_file_or_none=SimpleNamespace(processed_json_path=None),
         ),
     )
 

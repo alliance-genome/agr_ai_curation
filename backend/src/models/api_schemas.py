@@ -251,7 +251,9 @@ class DocumentResponse(BaseModel):
     upload_timestamp: datetime = Field(..., description="When document was uploaded")
     processing_started_at: Optional[datetime] = Field(None, description="When processing began")
     processing_completed_at: Optional[datetime] = Field(None, description="When processing completed")
-    file_size_bytes: int = Field(..., description="File size in bytes")
+    file_size_bytes: Optional[int] = Field(
+        ..., description="Main file size in bytes; none for a paper without a main file"
+    )
     weaviate_tenant: str = Field(..., description="Weaviate tenant name (user_id with underscores)")
     chunk_count: Optional[int] = Field(None, description="Number of chunks created")
     error_message: Optional[str] = Field(None, description="Error message if processing failed")

@@ -254,10 +254,29 @@ def retire_document_history(db, document_id: UUID) -> int:
                 "document_id": str(document_id),
                 "actor": {"type": "curator", "id": owner.auth_sub},
                 "reason": "Source document removed from the active library",
-                "file_hash": document.main_file.file_hash,
+                # None for a paper without a main file.
+                "file_hash": (
+                    document.main_file_or_none.file_hash
+                    if document.main_file_or_none is not None
+                    else None
+                ),
             },
         )
     return len(artifacts)
+
+
+def _source_document_pin(document) -> dict[str, Any]:
+    """The paper and its main file as pinned on an observation.
+
+    A paper without a main file pins no file hash or display mode.
+    """
+
+    main_file = document.main_file_or_none
+    return {
+        "id": str(document.id),
+        "file_hash": main_file.file_hash if main_file is not None else None,
+        "viewer_mode": main_file.display_mode if main_file is not None else None,
+    }
 
 
 def read_archived_checkpoint(scope, artifact_id, *, envelope_id, revision):
@@ -396,11 +415,7 @@ def capture_baseline(
         _, pinned_provenance = canonical(
             {
                 **provenance,
-                "source_document": {
-                    "id": str(document.id),
-                    "file_hash": document.main_file.file_hash,
-                    "viewer_mode": document.main_file.display_mode,
-                }
+                "source_document": _source_document_pin(document)
                 if document is not None
                 else None,
             }

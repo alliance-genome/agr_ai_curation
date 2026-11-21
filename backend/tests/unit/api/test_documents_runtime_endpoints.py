@@ -6,7 +6,7 @@ from io import BytesIO
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
@@ -45,7 +45,7 @@ def _doc(*, display_mode="local_pdf", document_kind="library", **values):
     paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
     main_file = SimpleNamespace(id="main-file", role="main", **file_values)
     return SimpleNamespace(
-        document_kind=document_kind, main_file=main_file, files=[main_file],
+        document_kind=document_kind, main_file=main_file, main_file_or_none=main_file, files=[main_file],
         **paper_values, **values,
     )
 
@@ -1904,3 +1904,99 @@ async def test_progress_stream_default_includes_queue_allowance(monkeypatch):
     payload = await _collect_stream(response)
     assert elapsed[0] == 5
     assert '"stage": "timeout"' in payload
+
+
+def _supplements_only_document(document_id: str):
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    return new_supplements_only_paper(
+        id=UUID(document_id), user_id=7, filename="old-name.pdf", title="Title", status="completed",
+        document_kind="library",
+    )
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_paper_without_a_main_file_changes_its_name_and_index_only(monkeypatch, tmp_path):
+    document_id = str(uuid4())
+    document = _supplements_only_document(document_id)
+    session = _FakeSession()
+    index_updates = []
+
+    async def _update_index(user_sub, doc_id, filename):
+        index_updates.append((user_sub, doc_id, filename))
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents, "get_pdf_storage_path", lambda: tmp_path)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+    monkeypatch.setattr(documents, "update_document_filename", _update_index)
+    _patch_indexed_document_status(monkeypatch)
+
+    response = await documents.update_document_endpoint(
+        DocumentUpdateRequest(title="New title", filename="new-name.pdf"),
+        document_id,
+        {"sub": "user-1"},
+    )
+
+    assert (response.filename, response.title) == ("new-name.pdf", "New title")
+    assert document.filename == "new-name.pdf"
+    assert [file_row.display_name for file_row in document.files] == ["Table_S1.xlsx"]
+    assert index_updates == [("user-1", document_id, "new-name.pdf")]
+    assert session.commits == 1
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rename_of_a_paper_without_a_main_file_puts_the_index_name_back(monkeypatch, tmp_path):
+    document_id = str(uuid4())
+    document = _supplements_only_document(document_id)
+    session = _FakeSession()
+    index_updates = []
+
+    def _failing_commit():
+        raise RuntimeError("db exploded")
+
+    session.commit = _failing_commit
+
+    async def _update_index(user_sub, doc_id, filename):
+        index_updates.append(filename)
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: session)
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", lambda *_args: _async_value(None))
+    monkeypatch.setattr(documents, "update_document_filename", _update_index)
+    _patch_indexed_document_status(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.update_document_endpoint(
+            DocumentUpdateRequest(filename="new-name.pdf"), document_id, {"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 500
+    assert index_updates == ["new-name.pdf", "old-name.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_document_detail_of_a_paper_without_a_main_file_has_no_file_size(monkeypatch):
+    document_id = str(uuid4())
+    pg_doc = _supplements_only_document(document_id)
+    pg_doc.upload_timestamp = datetime.now(timezone.utc)
+
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: pg_doc)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        documents,
+        "get_document",
+        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "completed", "chunk_count": 3}}),
+    )
+    monkeypatch.setattr(documents, "get_tenant_name", lambda _sub: "tenant-user-1")
+
+    response = await documents.get_document_endpoint(document_id, {"sub": "user-1"})
+
+    assert response.filename == "old-name.pdf"
+    assert response.file_size_bytes is None

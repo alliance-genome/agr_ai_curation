@@ -218,7 +218,7 @@ def test_document_ref_uses_protected_document_id_url():
         source_provider_reference_curie=None,
         reference_link=None,
         source_external_ids=None,
-        main_file=SimpleNamespace(page_count=5, display_mode="local_pdf"),
+        main_file_or_none=SimpleNamespace(page_count=5, display_mode="local_pdf"),
     )
 
     reference = serializer_module._document_ref(document)
@@ -237,7 +237,7 @@ def test_document_ref_omits_pdf_url_for_text_document():
         source_provider_reference_curie=None,
         reference_link=None,
         source_external_ids=None,
-        main_file=SimpleNamespace(page_count=None, display_mode="text"),
+        main_file_or_none=SimpleNamespace(page_count=None, display_mode="text"),
     )
 
     reference = serializer_module._document_ref(document)
@@ -245,6 +245,19 @@ def test_document_ref_omits_pdf_url_for_text_document():
     assert reference.pdf_url is None
     assert reference.viewer_url is None
     assert reference.page_count is None
+
+
+def test_document_ref_of_a_paper_without_a_main_file_has_no_viewer_or_pages():
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    document = new_supplements_only_paper(
+        id=uuid4(), user_id=1, filename="supplements-only-paper", title="Imported article"
+    )
+
+    reference = serializer_module._document_ref(document)
+
+    assert (reference.pdf_url, reference.viewer_url, reference.page_count) == (None, None, None)
+    assert reference.filename == "supplements-only-paper"
 
 
 def _imported_document(source_external_ids):
@@ -256,7 +269,7 @@ def _imported_document(source_external_ids):
         source_provider_reference_curie=None,
         reference_link=None,
         source_external_ids=source_external_ids,
-        main_file=SimpleNamespace(page_count=3, display_mode="local_pdf"),
+        main_file_or_none=SimpleNamespace(page_count=3, display_mode="local_pdf"),
     )
 
 

@@ -123,10 +123,11 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
             detail="Session document metadata is missing",
         )
 
-    main_file = document.main_file
+    # No viewer URL or page count for a text main file or a paper of supplements only.
+    main_file = document.main_file_or_none
     viewer_url = (
         None
-        if main_file.display_mode == DISPLAY_MODE_TEXT
+        if main_file is None or main_file.display_mode == DISPLAY_MODE_TEXT
         else protected_pdf_url(document.id)
     )
     from src.lib.curation_workspace.document_reference import effective_document_reference
@@ -141,7 +142,7 @@ def _document_ref(document: PDFDocument | None) -> CurationDocumentRef:
         doi=_external_id(external_ids, "doi"),
         pdf_url=viewer_url,
         viewer_url=viewer_url,
-        page_count=main_file.page_count,
+        page_count=main_file.page_count if main_file is not None else None,
         reference_curie=reference.curie if reference is not None else None,
         reference_source=reference.source if reference is not None else None,
     )

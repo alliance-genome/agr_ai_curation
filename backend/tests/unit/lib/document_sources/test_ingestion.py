@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -162,10 +163,35 @@ async def test_persist_ingestion_metadata_stores_digest_with_downloaded_artifact
 async def test_original_source_file_preserves_utf8_and_crlf_bytes(monkeypatch, tmp_path):
     monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
     original = "\ufeff # Résults\r\n\r\nβ cells.  \r\n".encode("utf-8")
+    file_id = uuid.uuid4()
     relative = await ingestion._save_source_markdown(
-        markdown=original.decode("utf-8"), document_id="doc-1", user_id="user-1",
+        markdown=original.decode("utf-8"), file_id=file_id, user_id="user-1",
     )
+    assert relative == f"user-1/source_markdown/{file_id}.md"
     assert (tmp_path / relative).read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_each_file_of_a_paper_keeps_its_own_markdown_and_processed_elements(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: str(tmp_path))
+    main_id, supplement_id = uuid.uuid4(), uuid.uuid4()
+
+    paths = [
+        await ingestion._save_source_markdown(markdown=f"# {name}\n", file_id=file_id, user_id="user-1")
+        for name, file_id in (("Main", main_id), ("Table S1", supplement_id))
+    ] + [
+        await ingestion._save_processed_json(
+            elements=[{"type": "Title", "text": name}], file_id=file_id, user_id="user-1"
+        )
+        for name, file_id in (("Main", main_id), ("Table S1", supplement_id))
+    ]
+
+    assert len(set(paths)) == 4
+    assert (tmp_path / paths[0]).read_text(encoding="utf-8") == "# Main\n"
+    assert (tmp_path / paths[1]).read_text(encoding="utf-8") == "# Table S1\n"
+    assert json.loads((tmp_path / paths[3]).read_text(encoding="utf-8"))[0]["text"] == "Table S1"
 
 
 @pytest.mark.asyncio
@@ -1016,3 +1042,30 @@ async def test_finalize_new_paper_writes_summed_ready_pieces_then_completes(monk
         ("metadata", "doc-1", 12, 0, "owner-1"),
         ("status", "doc-1", "completed", 42),
     ]
+
+
+def test_hierarchy_stored_for_a_new_paper_has_no_abstract_section_key(monkeypatch):
+    """The structure model no longer names an abstract section, so none is stored."""
+    from uuid import uuid4
+    from src.lib.pipeline.hierarchy_resolution import HierarchyMetadata, SectionItem
+
+    file_id = uuid4()
+    document = SimpleNamespace(id=uuid4())
+    file_row = SimpleNamespace(document_id=document.id, hierarchy_metadata=None)
+    session = Mock()
+    session.get.return_value = file_row
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    monkeypatch.setattr(ingestion, "_query_owned_document", lambda *args, **kwargs: document)
+    metadata = HierarchyMetadata(
+        sections=[SectionItem(header="Abstract", parent_section="Abstract", subsection=None,
+                              is_top_level=True).model_dump()],
+        top_level_sections=["Abstract"], created_at="2026-11-21T00:00:00+00:00",
+        model_used="gpt-6.1-sol", llm_raw_response={"model": "gpt-6.1-sol", "sections_count": 1},
+    )
+
+    ingestion._store_hierarchy_metadata_sync(str(document.id), file_id, "user", 7, metadata)
+
+    assert file_row.hierarchy_metadata["top_level_sections"] == ["Abstract"]
+    assert "abstract_section_title" not in file_row.hierarchy_metadata
+    assert "abstract_section_title" not in file_row.hierarchy_metadata["llm_raw_response"]
+    session.commit.assert_called_once()

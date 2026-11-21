@@ -30,12 +30,15 @@ def capture_source_document(
         )
         if document is None:
             return None
-        main_file = document.main_file
-        artifact_id = main_file.source_provider_converted_artifact_id
+        # The main file's converted text; a paper of supplements only has none.
+        main_file = document.main_file_or_none
+        artifact_id = main_file.source_provider_converted_artifact_id if main_file is not None else None
         return SourceDocumentProvenance(
             document_id=document.id,
             provider=document.source_provider,
             reference_curie=document.source_provider_reference_curie,
             converted_artifact_id=str(artifact_id) if artifact_id is not None else None,
-            converted_artifact_sha256=main_file.source_converted_artifact_sha256,
+            converted_artifact_sha256=(
+                main_file.source_converted_artifact_sha256 if main_file is not None else None
+            ),
         )

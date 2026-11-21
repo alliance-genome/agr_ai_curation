@@ -25,7 +25,7 @@ describe('chatDocumentRehydration', () => {
     localStorage.clear()
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/url')) {
-        return new Response(JSON.stringify({ viewer_url: '/viewer/doc-1.pdf', viewer_mode: 'local_pdf' }), { status: 200 })
+        return new Response(JSON.stringify({ viewer_url: '/viewer/doc-1.pdf', viewer_mode: 'local_pdf', has_main_file: true }), { status: 200 })
       }
 
       return new Response(JSON.stringify({
@@ -78,6 +78,7 @@ describe('chatDocumentRehydration', () => {
         return new Response(JSON.stringify({
           viewer_url: null,
           viewer_mode: 'text',
+          has_main_file: true,
         }), { status: 200 })
       }
 
@@ -131,7 +132,7 @@ describe('chatDocumentRehydration', () => {
 
   it('still refuses a PDF paper without a page count', async () => {
     stubViewerApi(
-      { viewer_url: '/viewer/doc-pdf.pdf', viewer_mode: 'local_pdf' },
+      { viewer_url: '/viewer/doc-pdf.pdf', viewer_mode: 'local_pdf', has_main_file: true },
       { filename: 'paper.pdf', page_count: null },
     )
     const documentChanged = vi.fn()
@@ -150,7 +151,7 @@ describe('chatDocumentRehydration', () => {
     'refuses a viewer mode the backend does not report (%s)',
     async (viewerMode) => {
       stubViewerApi(
-        { viewer_url: '/viewer/doc-1.pdf', viewer_mode: viewerMode },
+        { viewer_url: '/viewer/doc-1.pdf', viewer_mode: viewerMode, has_main_file: true },
         { filename: 'paper.pdf', page_count: 3 },
       )
 
@@ -161,9 +162,81 @@ describe('chatDocumentRehydration', () => {
     },
   )
 
+  // What the backend returns for a paper that holds supplements only (no main file):
+  // /url and the detail both say has_main_file false, with every main-file field null.
+  const NO_MAIN_FILE_URL = { viewer_url: null, viewer_mode: null, has_main_file: false }
+  const NO_MAIN_FILE_DETAIL = {
+    filename: 'supplements-only-paper',
+    page_count: null,
+    file_size: null,
+    file_hash: null,
+    viewer_url: null,
+    viewer_mode: null,
+    has_main_file: false,
+  }
+
+  it('keeps a paper without a main file active for chat with the viewer cleared', async () => {
+    stubViewerApi(NO_MAIN_FILE_URL, NO_MAIN_FILE_DETAIL)
+    const storageKeys = getChatLocalStorageKeys('user-1')
+    localStorage.setItem(storageKeys.pdfViewerSession, JSON.stringify({
+      documentId: 'old-doc', viewerUrl: '/viewer/old-doc.pdf', filename: 'old-doc.pdf', pageCount: 4,
+    }))
+    const documentChanged = vi.fn()
+    const documentCleared = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', documentChanged)
+    window.addEventListener('pdf-viewer-document-cleared', documentCleared)
+
+    await expect(rehydrateChatDocument({
+      document: { id: 'doc-no-main', filename: 'supplements-only-paper' },
+      chatStorageKeys: storageKeys,
+    })).resolves.toMatchObject({
+      viewerUrl: null,
+      viewerMode: null,
+      filename: 'supplements-only-paper',
+      pageCount: null,
+    })
+
+    expect(documentChanged).not.toHaveBeenCalled()
+    expect(documentCleared).toHaveBeenCalledTimes(1)
+    expect(localStorage.getItem(storageKeys.activeDocument)).toContain('doc-no-main')
+    expect(localStorage.getItem(storageKeys.pdfViewerSession)).toBeNull()
+
+    window.removeEventListener('pdf-viewer-document-changed', documentChanged)
+    window.removeEventListener('pdf-viewer-document-cleared', documentCleared)
+  })
+
+  it('loads a paper without a main file for chat before restoring it', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/url')) return jsonResponse(NO_MAIN_FILE_URL)
+      if (url.includes('/api/pdf-viewer/documents/')) return jsonResponse(NO_MAIN_FILE_DETAIL)
+      return jsonResponse({ success: true, document: { id: 'doc-no-main', filename: 'supplements-only-paper' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(rehydrateChatDocument({
+      document: { id: 'doc-no-main', filename: 'supplements-only-paper' },
+      chatStorageKeys: getChatLocalStorageKeys('user-1'),
+      ensureLoadedForChat: true,
+    })).resolves.toMatchObject({ viewerMode: null, pageCount: null })
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/pdf-viewer/documents/doc-no-main/url'))).toBe(true)
+  })
+
+  it.each([
+    ['no has_main_file at all', { viewer_url: null, viewer_mode: null }],
+    ['has_main_file not a boolean', { viewer_url: null, viewer_mode: null, has_main_file: 'false' }],
+    ['no main file but a viewer mode', { viewer_url: null, viewer_mode: 'text', has_main_file: false }],
+  ])('refuses an ambiguous viewer answer (%s)', async (_label, urlPayload) => {
+    stubViewerApi(urlPayload, NO_MAIN_FILE_DETAIL)
+
+    await expect(rehydrateChatDocument({
+      document: { id: 'doc-no-main', filename: 'supplements-only-paper' },
+      chatStorageKeys: getChatLocalStorageKeys('user-1'),
+    })).rejects.toThrow('Document viewer mode unavailable')
+  })
+
   it('restores a provider PDF paper to the viewer with its page count', async () => {
     stubViewerApi(
-      { viewer_url: '/api/pdf-viewer/documents/doc-proxy/content', viewer_mode: 'provider_pdf_proxy' },
+      { viewer_url: '/api/pdf-viewer/documents/doc-proxy/content', viewer_mode: 'provider_pdf_proxy', has_main_file: true },
       { filename: 'imported.pdf', page_count: 12 },
     )
     const documentChanged = vi.fn()
@@ -224,11 +297,11 @@ describe('chatDocumentRehydration', () => {
     await vi.waitFor(() => expect(loadRequests).toHaveLength(2))
 
     secondDetail.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
-    secondUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf' }))
+    secondUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf', has_main_file: true }))
     await secondRestore
 
     firstDetail.resolve(jsonResponse({ filename: 'a.pdf', page_count: 1 }))
-    firstUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-a', viewer_mode: 'local_pdf' }))
+    firstUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-a', viewer_mode: 'local_pdf', has_main_file: true }))
     await expect(firstRestore).rejects.toMatchObject({ name: 'AbortError' })
 
     expect(firstOperation.signal.aborted).toBe(true)

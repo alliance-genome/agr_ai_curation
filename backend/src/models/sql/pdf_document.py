@@ -52,6 +52,14 @@ class MissingMainFileError(RuntimeError):
         self.document_id = document_id
 
 
+class MultipleMainFilesError(RuntimeError):
+    """A paper has more than one main file row, which its constraint forbids."""
+
+    def __init__(self, document_id: object) -> None:
+        super().__init__(f"Document {document_id} has more than one main file")
+        self.document_id = document_id
+
+
 class PDFDocument(Base):
     """One paper in the Library. Each of its files is a ``PDFDocumentFile`` row."""
 
@@ -145,13 +153,32 @@ class PDFDocument(Base):
     )
 
     @property
-    def main_file(self) -> "PDFDocumentFile":
-        """The paper's main file. A paper without one is a named error."""
+    def main_file_or_none(self) -> "PDFDocumentFile | None":
+        """The paper's main file, or None for a paper that holds only supplements.
+
+        A paper may be imported from its supplements alone, so having no main
+        file is a valid state that every reader must show as such. More than
+        one main file is impossible (partial unique index) and stays an error.
+        """
 
         main_files = [file_row for file_row in self.files if file_row.role == FILE_ROLE_MAIN]
-        if len(main_files) != 1:
+        if len(main_files) > 1:
+            raise MultipleMainFilesError(self.id)
+        return main_files[0] if main_files else None
+
+    @property
+    def main_file(self) -> "PDFDocumentFile":
+        """The main file, for paths that only ever act on a paper's main file.
+
+        Main-paper imports, uploads and benchmark papers always have one; a
+        paper without it reaching such a path is a named error. Readers that
+        show any paper use ``main_file_or_none``.
+        """
+
+        main_file = self.main_file_or_none
+        if main_file is None:
             raise MissingMainFileError(self.id)
-        return main_files[0]
+        return main_file
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<PDFDocument(id={self.id}, filename='{self.filename}')>"

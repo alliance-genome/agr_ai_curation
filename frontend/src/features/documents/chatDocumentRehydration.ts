@@ -23,6 +23,7 @@ interface PdfViewerDocumentMetadata {
 interface PdfViewerDocumentUrlPayload {
   viewer_url?: unknown
   viewer_mode?: unknown
+  has_main_file?: unknown
 }
 
 export interface RehydrateChatDocumentOptions {
@@ -41,7 +42,8 @@ const VIEWER_MODES: readonly ChatDocumentViewerMode[] = ['local_pdf', 'provider_
 
 export interface RehydratedChatDocumentResult {
   viewerUrl: string | null
-  viewerMode: ChatDocumentViewerMode
+  /** Null only for a paper without a main file (its supplements only). */
+  viewerMode: ChatDocumentViewerMode | null
   filename: string
   /** Pages of a PDF; null for a text paper, which has no pages. */
   pageCount: number | null
@@ -120,11 +122,24 @@ export async function rehydrateChatDocument(
   const detail = await detailResponse.json() as PdfViewerDocumentMetadata
   const urlData = await urlResponse.json() as PdfViewerDocumentUrlPayload
   const viewerUrl = typeof urlData.viewer_url === 'string' ? urlData.viewer_url : null
-  const viewerMode = VIEWER_MODES.find((mode) => mode === urlData.viewer_mode)
-  if (!viewerMode) {
+  // The API says explicitly whether the paper has a main file. Without one the
+  // viewer mode is null by design; with one, a missing or unknown mode is an error
+  // and is never taken for a PDF.
+  if (typeof urlData.has_main_file !== 'boolean') {
     throw new Error('Document viewer mode unavailable')
   }
-  const isTextOnlyDocument = viewerMode === 'text'
+  const hasMainFile = urlData.has_main_file
+  let viewerMode: ChatDocumentViewerMode | null = null
+  if (hasMainFile) {
+    viewerMode = VIEWER_MODES.find((mode) => mode === urlData.viewer_mode) ?? null
+    if (!viewerMode) {
+      throw new Error('Document viewer mode unavailable')
+    }
+  } else if (urlData.viewer_mode !== null) {
+    throw new Error('Document viewer mode unavailable')
+  }
+  // A text paper, or a paper without a main file, has no PDF to show.
+  const isTextOnlyDocument = !hasMainFile || viewerMode === 'text'
 
   if (!viewerUrl && !isTextOnlyDocument) {
     throw new Error('Document viewer URL unavailable')
@@ -137,7 +152,7 @@ export async function rehydrateChatDocument(
     throw new Error('Document filename unavailable')
   }
 
-  // A text paper has no pages (the API reports page_count null); a PDF must have them.
+  // A text paper or a paper without a main file has no pages (page_count null); a PDF must have them.
   const pageCount = isTextOnlyDocument ? null : readPageCount(detail)
   if (!isTextOnlyDocument && !pageCount) {
     throw new Error('Document page count unavailable')
@@ -184,7 +199,8 @@ export async function rehydrateChatDocument(
   }
 
   if (!pdfView) {
-    // A text paper has no PDF: clear the viewer so it neither waits nor keeps the previous PDF.
+    // No PDF to show (a text paper, or no main file): clear the viewer so it neither
+    // waits nor keeps the previous PDF.
     dispatchPDFViewerDocumentCleared(ownerToken)
   } else {
     dispatchPDFDocumentChanged(
