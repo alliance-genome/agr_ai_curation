@@ -15,7 +15,7 @@ from .specialist_context import create_history_reader
 # afresh by the adapter. These are context/model selections from the original
 # configured invocation, never arguments accepted by the supervisor's tool.
 _RECONSTRUCTION_KEYS = frozenset({
-    "document_name", "hierarchy", "sections", "abstract", "additional_runtime_context",
+    "document_name", "hierarchy", "sections", "additional_runtime_context",
     "model_id_override", "model_provider_override", "model_reasoning_override",
     "model_temperature_override", "cost_node_id",
 })

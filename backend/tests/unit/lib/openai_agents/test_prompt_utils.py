@@ -1,15 +1,8 @@
 """Unit tests for prompt utility helpers."""
 
-import asyncio
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from types import SimpleNamespace
-import sys
-from unittest.mock import AsyncMock, Mock
 
-import pytest
-
-from src.lib.openai_agents import config as model_config
 from src.lib.openai_agents.models import GeneExtractionResultEnvelope
 
 PROMPT_UTILS_PATH = Path(__file__).resolve().parents[4] / "src/lib/openai_agents/prompt_utils.py"
@@ -22,52 +15,6 @@ format_document_context_for_prompt = prompt_utils.format_document_context_for_pr
 format_hierarchy_for_prompt = prompt_utils.format_hierarchy_for_prompt
 format_sections_for_prompt = prompt_utils.format_sections_for_prompt
 inject_structured_output_instruction = prompt_utils.inject_structured_output_instruction
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("inherited", [False, True])
-async def test_abstract_fallback_reserves_owned_cost_across_async_preparation(monkeypatch, inherited):
-    from src.lib.cost_ledger.runtime_context import RuntimeCostContext, current_runtime_cost_context, runtime_cost_scope
-    from src.lib.observability.cost_context import cost_scope
-    captured = []
-
-    async def empty(**kwargs):
-        return []
-
-    async def keyword(**kwargs):
-        return [{"text": "Abstract body", "chunk_index": 0}]
-
-    async def chunks(**kwargs):
-        return [{"text": "An abstract of a synthetic experiment."}]
-
-    async def complete(**kwargs):
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="A" * 80))])
-
-    async def close():
-        pass
-
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)), close=close)
-    monkeypatch.setattr("openai.AsyncOpenAI", lambda: client)
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6.1-sol")
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
-    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_by_parent_section", empty)
-    monkeypatch.setattr("src.lib.weaviate_client.chunks.search_chunks_by_keyword", keyword)
-    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_from_index", chunks)
-    monkeypatch.setattr("src.lib.cost_ledger.runtime_writes.reserve_runtime_request",
-                        lambda measurement: captured.append(current_runtime_cost_context()))
-    parent = RuntimeCostContext("user-2", "session", "turn", "interactive_chat", invocation_id="parent") if inherited else None
-    with cost_scope({"run_id": "turn", "activity": "interactive_chat"} if inherited else {}), runtime_cost_scope(parent):
-        assert await prompt_utils.fetch_document_abstract("doc-2", "user-2") == "A" * 80
-        assert current_runtime_cost_context() == parent
-    assert len(captured) == 1
-    context = captured[0]
-    assert context is not None and context.owner_subject == "user-2" and context.invocation_id
-    if inherited:
-        assert context.session_id == "session" and context.run_id == "turn"
-        assert context.parent_invocation_id == "parent"
-    else:
-        assert context.session_id is None and context.document_id == "doc-2"
-        assert context.activity == "background"
 
 
 class DummyEnvelope:
@@ -197,7 +144,7 @@ def test_format_sections_for_prompt_formats_entries_with_defaults():
     assert "- **Unknown** (p.5-7, 0 chunks)" in result
 
 
-def test_format_document_context_for_prompt_prefers_hierarchy_and_adds_abstract():
+def test_format_document_context_for_prompt_prefers_hierarchy():
     hierarchy = {
         "sections": [
             {"name": "Results", "page_numbers": [8], "chunk_count": 2, "subsections": []}
@@ -209,21 +156,41 @@ def test_format_document_context_for_prompt_prefers_hierarchy_and_adds_abstract(
     context_text, structure_info = format_document_context_for_prompt(
         hierarchy=hierarchy,
         sections=sections,
-        abstract="  A short abstract.  ",
     )
 
     assert "## Document Structure" in context_text
     assert "## Document Sections" not in context_text
-    assert "## Paper Abstract" in context_text
-    assert "A short abstract." in context_text
-    assert structure_info == "hierarchy with 1 sections + abstract"
+    assert structure_info == "hierarchy with 1 sections"
+
+
+def test_document_context_is_exactly_the_section_list_for_a_paper_with_an_abstract():
+    """A paper's Abstract section appears in the section list only, never as injected text."""
+    hierarchy = {
+        "sections": [
+            {"name": "Abstract", "page_numbers": [1], "chunk_count": 2, "subsections": []},
+            {"name": "Results", "page_numbers": [3, 5], "chunk_count": 4, "subsections": [
+                {"name": "Expression", "page_numbers": [4], "chunk_count": 1},
+            ]},
+        ],
+        "top_level_sections": ["Abstract", "Results"],
+        "abstract_section_title": "Abstract",
+    }
+
+    context_text, structure_info = format_document_context_for_prompt(hierarchy=hierarchy)
+
+    assert context_text == format_hierarchy_for_prompt(hierarchy)
+    assert "**Abstract** (p.1, 2 chunks)" in context_text
+    assert "**Top-level sections (in order):** Abstract, Results" in context_text
+    assert "Paper Abstract" not in context_text
+    assert structure_info == "hierarchy with 2 sections"
+    assert not hasattr(prompt_utils, "fetch_document_abstract")
+    assert not hasattr(prompt_utils, "ABSTRACT_TEMPLATE")
 
 
 def test_format_document_context_for_prompt_uses_sections_when_no_hierarchy():
     context_text, structure_info = format_document_context_for_prompt(
         hierarchy={"sections": []},
         sections=[{"title": "Only Section", "page_numbers": [2], "chunk_count": 1}],
-        abstract=None,
     )
 
     assert "## Document Sections" in context_text
@@ -231,495 +198,11 @@ def test_format_document_context_for_prompt_uses_sections_when_no_hierarchy():
     assert structure_info == "1 flat sections"
 
 
-def test_format_document_context_for_prompt_handles_no_structure_or_abstract():
+def test_format_document_context_for_prompt_handles_no_structure():
     context_text, structure_info = format_document_context_for_prompt(
         hierarchy=None,
         sections=[],
-        abstract="   ",
     )
 
     assert context_text == ""
     assert structure_info == "no structure"
-
-
-def test_format_abstract_for_prompt_returns_empty_for_blank_values():
-    assert prompt_utils.format_abstract_for_prompt(None) == ""
-    assert prompt_utils.format_abstract_for_prompt("   ") == ""
-
-
-def test_format_abstract_for_prompt_trims_and_formats_text():
-    rendered = prompt_utils.format_abstract_for_prompt("  concise abstract  ")
-    assert "## Paper Abstract" in rendered
-    assert "concise abstract" in rendered
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("configured_limit", "input_length", "expected_length"),
-    [(None, 8000, 4000), (128, 8000, 128), (6000, 8000, 6000), (128, 32, 32)],
-    ids=["default", "smaller-limit", "larger-limit", "short-input"],
-)
-async def test_extract_abstract_with_llm_input_character_limit(
-    monkeypatch, configured_limit, input_length, expected_length
-):
-    raw_text = ("αβγ\n" * 2000)[:input_length]
-    create = AsyncMock(return_value=SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content="A" * 80))]
-    ))
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
-        close=AsyncMock(),
-    )
-    monkeypatch.setattr("openai.AsyncOpenAI", lambda: client)
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
-    if configured_limit is None:
-        monkeypatch.delenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", raising=False)
-    else:
-        monkeypatch.setenv("ABSTRACT_EXTRACTION_INPUT_MAX_CHARS", str(configured_limit))
-
-    assert await prompt_utils._extract_abstract_with_llm(raw_text) == "A" * 80
-
-    create.assert_awaited_once()
-    message = create.call_args.kwargs["messages"][1]
-    prefix = "Extract the abstract from this text:\n\n"
-    assert message["role"] == "user"
-    assert message["content"].startswith(prefix)
-    source_text = message["content"][len(prefix):]
-    assert len(source_text) == expected_length
-    assert source_text == raw_text[:expected_length]
-    client.close.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-6-astra", "gpt-6.1-sol"])
-async def test_extract_abstract_with_llm_uses_catalog_reasoning_without_temperature(monkeypatch, model):
-    captured = {}
-
-    class _FakeCompletions:
-        async def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="A" * 80))]
-            )
-
-    class _FakeAsyncOpenAI:
-        def __init__(self):
-            self.chat = SimpleNamespace(completions=_FakeCompletions())
-
-        async def close(self):
-            pass
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", model)
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
-
-    abstract = await prompt_utils._extract_abstract_with_llm("raw text for abstract extraction")
-
-    assert abstract == "A" * 80
-    assert captured["model"] == model
-    assert captured["reasoning_effort"] == "low"
-    assert "temperature" not in captured
-
-
-@pytest.mark.asyncio
-async def test_extract_abstract_with_llm_uses_catalog_temperature_support(monkeypatch):
-    captured = {}
-
-    class _FakeCompletions:
-        async def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="B" * 90))]
-            )
-
-    class _FakeAsyncOpenAI:
-        def __init__(self):
-            self.chat = SimpleNamespace(completions=_FakeCompletions())
-
-        async def close(self):
-            pass
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "custom-nonreasoning-model")
-    monkeypatch.setattr(model_config, "_get_model_definition", lambda _: SimpleNamespace(supports_reasoning=False, supports_temperature=True))
-
-    abstract = await prompt_utils._extract_abstract_with_llm("raw text for abstract extraction")
-
-    assert abstract == "B" * 90
-    assert captured["model"] == "custom-nonreasoning-model"
-    assert "reasoning_effort" not in captured
-    assert captured["temperature"] == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("content, expected", [(None, None), ("NO_ABSTRACT_FOUND", None), ("Brief abstract.", "Brief abstract.")])
-async def test_extract_abstract_with_llm_preserves_short_output_and_missing_sentinel(monkeypatch, content, expected):
-    class _FakeCompletionsNone:
-        async def create(self, **_kwargs):
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
-            )
-
-    class _FakeAsyncOpenAI:
-        def __init__(self):
-            self.chat = SimpleNamespace(completions=_FakeCompletionsNone())
-
-        async def close(self):
-            pass
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
-
-    assert await prompt_utils._extract_abstract_with_llm("raw text") == expected
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("captured", [True, False, "raises"])
-@pytest.mark.parametrize("outcome", ["success", "error", "cancelled", "configuration", "construction"])
-async def test_extract_abstract_with_llm_closes_client_for_all_outcomes(
-    monkeypatch, outcome, captured, caplog
-):
-    report = Mock(return_value=captured, side_effect=RuntimeError("SECRET reporting") if captured == "raises" else None)
-    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
-    lifecycle = {"created": 0, "closed": 0}
-
-    class _FakeCompletions:
-        async def create(self, **_kwargs):
-            if outcome == "error":
-                raise RuntimeError("SECRET source prompt response credential token")
-            if outcome == "cancelled":
-                raise asyncio.CancelledError
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="C" * 80))]
-            )
-
-    class _FakeAsyncOpenAI:
-        def __init__(self):
-            if outcome == "construction":
-                raise RuntimeError("SECRET source prompt response credential token")
-            lifecycle["created"] += 1
-            self.chat = SimpleNamespace(completions=_FakeCompletions())
-
-        async def close(self):
-            lifecycle["closed"] += 1
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
-
-    if outcome == "configuration":
-        monkeypatch.delenv("ABSTRACT_EXTRACTION_MODEL")
-
-    if outcome == "cancelled":
-        with pytest.raises(asyncio.CancelledError):
-            await prompt_utils._extract_abstract_with_llm("raw text")
-    else:
-        result = await prompt_utils._extract_abstract_with_llm("raw text")
-        assert result == ("C" * 80 if outcome == "success" else None)
-
-    count = 0 if outcome == "construction" else 1
-    assert lifecycle == {"created": count, "closed": count}
-    if outcome in {"error", "configuration", "construction"}:
-        report.assert_called_once()
-        exc = report.call_args.args[0]
-        assert str(exc) == "LLM abstract extraction failed"
-        assert exc.__traceback__ is not None
-        assert exc.__context__ is None and exc.__cause__ is None
-        assert report.call_args.kwargs == {
-            "component": "abstract_extraction", "operation": "extraction_failed", "level": "error",
-            "context": {"error_type": "ConfigError" if outcome == "configuration" else "RuntimeError"},
-        }
-        assert "SECRET" not in caplog.text
-        assert all(getattr(record, "sentry_skip_event", False) for record in caplog.records if record.name == prompt_utils.logger.name)
-    else:
-        report.assert_not_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("captured", [True, False, "raises"])
-@pytest.mark.parametrize("outcome", ["success", "error", "cancelled", "close_cancelled"])
-async def test_extract_abstract_with_llm_preserves_result_when_close_fails(
-    monkeypatch, caplog, captured, outcome
-):
-    report = Mock(return_value=captured, side_effect=RuntimeError("SECRET reporting") if captured == "raises" else None)
-    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
-    class _FakeCompletions:
-        async def create(self, **_kwargs):
-            if outcome == "error":
-                raise RuntimeError("SECRET source prompt response credential token")
-            if outcome == "cancelled":
-                raise asyncio.CancelledError
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content="D" * 80))]
-            )
-
-    class _FakeAsyncOpenAI:
-        def __init__(self):
-            self.chat = SimpleNamespace(completions=_FakeCompletions())
-
-        async def close(self):
-            if outcome == "close_cancelled":
-                raise asyncio.CancelledError
-            raise RuntimeError("SECRET source prompt response credential token")
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_FakeAsyncOpenAI))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
-
-    if outcome in {"cancelled", "close_cancelled"}:
-        with pytest.raises(asyncio.CancelledError):
-            await prompt_utils._extract_abstract_with_llm("SECRET source text")
-    else:
-        result = await prompt_utils._extract_abstract_with_llm("SECRET source text")
-        assert result == ("D" * 80 if outcome == "success" else None)
-
-    assert report.call_count == (0 if outcome == "close_cancelled" else 2 if outcome == "error" else 1)
-    if outcome != "close_cancelled":
-        call = report.call_args_list[0]
-        exc = call.args[0]
-        assert str(exc) == "Failed to close abstract extraction LLM client"
-        assert exc.__traceback__ is not None
-        assert exc.__context__ is None and exc.__cause__ is None
-        assert call.kwargs == {
-            "component": "abstract_extraction", "operation": "client_close_failed", "level": "warning",
-        }
-        assert "Failed to close abstract extraction LLM client" in caplog.text
-    assert "SECRET" not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_fetch_document_abstract_prefers_llm_identified_section(monkeypatch):
-    seen_sections = []
-
-    async def _get_chunks_by_parent_section(document_id, parent_section, user_id):
-        seen_sections.append(parent_section)
-        if parent_section == "Executive Summary":
-            return [{"text": "Alpha"}, {"text": "Beta"}]
-        return []
-
-    async def _unused_keyword_search(**_kwargs):
-        raise AssertionError("keyword search should not be called when section lookup succeeds")
-
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.get_chunks_by_parent_section",
-        _get_chunks_by_parent_section,
-    )
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.search_chunks_by_keyword",
-        _unused_keyword_search,
-    )
-
-    result = await prompt_utils.fetch_document_abstract(
-        document_id="doc-1",
-        user_id="user-1",
-        hierarchy={"abstract_section_title": "Executive Summary"},
-    )
-
-    assert result == "Alpha Beta"
-    assert seen_sections == ["Executive Summary"]
-
-
-@pytest.mark.asyncio
-async def test_fetch_document_abstract_keyword_path_returns_llm_extracted_value(monkeypatch):
-    async def _empty_section_fetch(**_kwargs):
-        return []
-
-    async def _keyword_search(**kwargs):
-        assert kwargs["keyword"] == "abstract"
-        return [{"text": "header abstract long body", "chunk_index": 12}]
-
-    async def _chunks_from_index(**kwargs):
-        assert kwargs["start_index"] == 12
-        return [{"text": "Chunk A"}, {"text": "Chunk B"}]
-
-    async def _extract(_text):
-        return "clean extracted abstract text"
-
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.get_chunks_by_parent_section",
-        _empty_section_fetch,
-    )
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.search_chunks_by_keyword",
-        _keyword_search,
-    )
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.get_chunks_from_index",
-        _chunks_from_index,
-    )
-    monkeypatch.setattr(prompt_utils, "_extract_abstract_with_llm", _extract)
-
-    result = await prompt_utils.fetch_document_abstract(
-        document_id="doc-2",
-        user_id="user-2",
-    )
-
-    assert result == "clean extracted abstract text"
-
-
-@pytest.mark.asyncio
-async def test_fetch_document_abstract_keyword_path_falls_back_to_combined_text(monkeypatch):
-    async def _empty_section_fetch(**_kwargs):
-        return []
-
-    async def _keyword_search(**_kwargs):
-        return [{"text": "intro ABSTRACT details", "chunk_index": 4}]
-
-    async def _chunks_from_index(**kwargs):
-        assert kwargs["start_index"] == 4
-        return [{"text": "Chunk One"}, {"text": "Chunk Two"}]
-
-    async def _no_extract(_text):
-        return None
-
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.get_chunks_by_parent_section",
-        _empty_section_fetch,
-    )
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.search_chunks_by_keyword",
-        _keyword_search,
-    )
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.get_chunks_from_index",
-        _chunks_from_index,
-    )
-    monkeypatch.setattr(prompt_utils, "_extract_abstract_with_llm", _no_extract)
-
-    result = await prompt_utils.fetch_document_abstract(
-        document_id="doc-3",
-        user_id="user-3",
-    )
-
-    assert result == "Chunk One Chunk Two"
-
-
-@pytest.mark.asyncio
-async def test_fetch_document_abstract_uses_last_resort_first_chunks(monkeypatch):
-    async def _empty_section_fetch(**_kwargs):
-        return []
-
-    async def _empty_keyword(**_kwargs):
-        return []
-
-    async def _chunks_from_index(**kwargs):
-        if kwargs["start_index"] == 0:
-            return [{"text": "First chunk"}, {"text": "Second chunk"}]
-        return []
-
-    async def _extract(_text):
-        return "last resort extracted abstract"
-
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.get_chunks_by_parent_section",
-        _empty_section_fetch,
-    )
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.search_chunks_by_keyword",
-        _empty_keyword,
-    )
-    monkeypatch.setattr(
-        "src.lib.weaviate_client.chunks.get_chunks_from_index",
-        _chunks_from_index,
-    )
-    monkeypatch.setattr(prompt_utils, "_extract_abstract_with_llm", _extract)
-
-    result = await prompt_utils.fetch_document_abstract(
-        document_id="doc-4",
-        user_id="user-4",
-    )
-
-    assert result == "last resort extracted abstract"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["section", "keyword", "consecutive", "first_chunks", "all", "empty", "cancelled"])
-@pytest.mark.parametrize("capture_fails", [False, True])
-async def test_abstract_retrieval_reporting(monkeypatch, caplog, failure, capture_fails):
-    from unittest.mock import AsyncMock
-
-    report = Mock(side_effect=RuntimeError("SECRET capture") if capture_fails else None)
-    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
-    error = RuntimeError("SECRET document query credentials")
-    section = AsyncMock(return_value=[])
-    keyword = AsyncMock(return_value=[])
-    chunks = AsyncMock(return_value=[])
-    if failure in {"section", "all"}:
-        section.side_effect = error
-    if failure in {"keyword", "all"}:
-        keyword.side_effect = error
-    if failure in {"consecutive", "first_chunks", "all"}:
-        chunks.side_effect = error
-    if failure == "consecutive":
-        keyword.return_value = [{"text": "abstract SECRET body", "chunk_index": 2}]
-    if failure == "cancelled":
-        section.side_effect = asyncio.CancelledError()
-    for name, mock in [
-        ("get_chunks_by_parent_section", section),
-        ("search_chunks_by_keyword", keyword),
-        ("get_chunks_from_index", chunks),
-    ]:
-        monkeypatch.setattr("src.lib.weaviate_client.chunks." + name, mock)
-
-    if failure == "cancelled":
-        with pytest.raises(asyncio.CancelledError):
-            await prompt_utils.fetch_document_abstract("SECRET doc", "SECRET user")
-    else:
-        assert await prompt_utils.fetch_document_abstract(
-            "SECRET doc", "SECRET user", {"abstract_section_title": "SECRET title"}
-        ) is None
-    if failure in {"empty", "cancelled"}:
-        report.assert_not_called()
-        assert not [r for r in caplog.records if r.name == prompt_utils.__name__]
-    else:
-        report.assert_called_once()
-        exc = report.call_args.args[0]
-        assert str(exc) == "Document abstract retrieval failed"
-        assert exc.__traceback__ is not None
-        assert exc.__cause__ is None and exc.__context__ is None
-        assert report.call_args.kwargs == {
-            "component": "abstract_context",
-            "operation": "retrieval_failed",
-            "context": {"strategy": {
-                "section": "section", "all": "section", "keyword": "keyword",
-                "consecutive": "keyword", "first_chunks": "first_chunks",
-            }[failure]},
-            "level": "error",
-        }
-        warnings = [r for r in caplog.records if r.name == prompt_utils.__name__]
-        assert len(warnings) == 1
-        assert warnings[0].sentry_skip_event is True
-    assert "SECRET" not in caplog.text
-    assert "SECRET" not in str(report.call_args)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("capture_fails", [False, True])
-async def test_abstract_retrieval_reports_failure_before_success(monkeypatch, capture_fails):
-    from unittest.mock import AsyncMock
-
-    report = Mock(side_effect=RuntimeError("capture failed") if capture_fails else None)
-    monkeypatch.setattr(prompt_utils, "report_runtime_exception", report)
-    section = AsyncMock(side_effect=[RuntimeError("private content"), [{"text": "abstract result"}]])
-    monkeypatch.setattr("src.lib.weaviate_client.chunks.get_chunks_by_parent_section", section)
-    assert await prompt_utils.fetch_document_abstract("doc", "user") == "abstract result"
-    report.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_abstract_client_close_and_reporting_failure_preserve_llm_result(monkeypatch):
-    async def close():
-        raise RuntimeError("SECRET close")
-
-    client = SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(
-            return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Brief abstract."))])
-        ))), close=close,
-    )
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=lambda: client))
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_MODEL", "gpt-6-astra")
-    monkeypatch.setenv("ABSTRACT_EXTRACTION_REASONING", "low")
-    monkeypatch.setattr(prompt_utils, "report_runtime_exception", Mock(side_effect=RuntimeError("SECRET report")))
-    assert await prompt_utils._extract_abstract_with_llm("raw") == "Brief abstract."

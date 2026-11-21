@@ -404,7 +404,6 @@ def test_compose_model_defaults_match_supported_runtime_roles():
         "FIGURE_LOCATOR_LLM_REASONING": "${FIGURE_LOCATOR_LLM_REASONING:-low}",
         "FIGURE_LOCATOR_RESOLUTION_MAX_TURNS": "${FIGURE_LOCATOR_RESOLUTION_MAX_TURNS:-10}",
         "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS": "${FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS:-60000}",
-        "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-6.1-sol}",
     }
     assert {key: dev_env[key] for key in expected_backend_defaults} == (
         expected_backend_defaults
@@ -417,16 +416,17 @@ def test_compose_model_defaults_match_supported_runtime_roles():
     )
 
 
-def test_production_compose_forwards_abstract_extraction_input_limit():
-    production_env = _load_compose()["services"]["backend"]["environment"]
-    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[
-        "ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"
+def test_removed_abstract_lookup_settings_are_declared_nowhere():
+    """The abstract lookup and its three settings were removed; none may return."""
+    declaration_files = [
+        *sorted(WORKSPACE_ROOT.glob("docker-compose*.yml")),
+        ENV_EXAMPLE_PATH,
+        ENV_TEMPLATE_PATH,
     ]
 
-    assert documented_default == "4000"
-    assert production_env["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"] == (
-        f"${{ABSTRACT_EXTRACTION_INPUT_MAX_CHARS:-{documented_default}}}"
-    )
+    assert COMPOSE_PATH in declaration_files and DEV_COMPOSE_PATH in declaration_files
+    for path in declaration_files:
+        assert "ABSTRACT_EXTRACTION_" not in path.read_text(encoding="utf-8"), path
 
 
 def test_compose_propagates_optional_openrouter_key_name_only():

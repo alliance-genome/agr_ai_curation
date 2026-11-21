@@ -283,7 +283,7 @@ async def test_direct_chat_real_builder_persists_before_completion(monkeypatch, 
         document_name="Synthetic paper", session_id=session_id, turn_id=turn_id,
         chat_route_mode=route_mode, chat_route_target_id="gene_extractor",
         inline_chat_persistence=True,
-        doc_context=SimpleNamespace(hierarchy={}, abstract="", section_count=lambda: 0),
+        doc_context=SimpleNamespace(hierarchy={}, section_count=lambda: 0),
     ):
         if event["type"] in {"INTERNAL_EXTRACTION_RESULT", "STRUCTURED_RESULT", "RUN_FINISHED"}:
             # Independent session sees the commit before success/transcript handling.
