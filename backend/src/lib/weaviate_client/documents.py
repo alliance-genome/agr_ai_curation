@@ -17,7 +17,7 @@ from ..document_sources.provenance import (
     sanitize_document_source_provenance,
 )
 from src.models.sql.database import get_db
-from src.models.sql.pdf_document import PDFDocument as PdfDocumentModel
+from src.models.sql.pdf_document import DOCUMENT_KIND_LIBRARY, PDFDocument as PdfDocumentModel
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ def _list_documents_sync(
             str(identifier) for identifier in db.scalars(
                 select(PdfDocumentModel.id).where(
                     PdfDocumentModel.user_id == db_user_id,
-                    PdfDocumentModel.viewer_mode == "benchmark_frozen",
+                    PdfDocumentModel.document_kind != DOCUMENT_KIND_LIBRARY,
                 )
             )
         ]
@@ -248,7 +248,7 @@ def _list_documents_sync(
                     select(PGDocument).where(
                         PGDocument.id.in_([UUID(doc_id) for doc_id in weaviate_doc_ids]),
                         PGDocument.user_id == db_user_id,  # T030: PostgreSQL ownership filter (integer)
-                        PGDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
+                        PGDocument.document_kind == DOCUMENT_KIND_LIBRARY,
                     )
                 ).scalars().all()
 
@@ -284,7 +284,7 @@ def _list_documents_sync(
                         "upload_timestamp": pg_doc.upload_timestamp.isoformat() if pg_doc.upload_timestamp else doc_props.get("creationDate"),
                         "processing_started_at": pg_doc.processing_started_at.isoformat() if pg_doc.processing_started_at else None,
                         "processing_completed_at": pg_doc.processing_completed_at.isoformat() if pg_doc.processing_completed_at else None,
-                        "file_size_bytes": pg_doc.file_size,  # Contract field name from PostgreSQL
+                        "file_size_bytes": pg_doc.main_file.file_size,  # Contract field name from PostgreSQL
                         "weaviate_tenant": tenant_name,  # Required by contract
                         "chunk_count": doc_props.get("chunkCount"),
                         "vector_count": doc_props.get("vectorCount"),
@@ -438,10 +438,10 @@ async def get_document(user_id: str, document_id: str) -> Dict[str, Any]:
         db_user = db.execute(select(User).where(User.auth_sub == user_id)).scalar_one_or_none()
         if not db_user:
             raise ValueError(f"User with auth_sub {user_id} not found")
-        if db.scalar(select(PdfDocumentModel.viewer_mode).where(
+        if db.scalar(select(PdfDocumentModel.document_kind).where(
             PdfDocumentModel.id == UUID(document_id),
             PdfDocumentModel.user_id == db_user.id,
-        )) == "benchmark_frozen":
+        )) not in (None, DOCUMENT_KIND_LIBRARY):
             # Chat selection/resume and detailed library reads must not expose
             # runtime benchmark copies. Normal benchmark tools use the direct
             # owned chunk/context helpers, not this library detail operation.

@@ -986,10 +986,11 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
 
     added_records = [row for session in sessions for row in session.added]
     assert added_records
-    assert added_records[0].viewer_mode == "local_pdf"
-    assert added_records[0].file_path.endswith("/provider-paper.pdf")
-    assert added_records[0].source_import_status == "pending"
-    assert (tmp_path / added_records[0].file_path).exists()
+    assert added_records[0].main_file.display_mode == "local_pdf"
+    assert added_records[0].document_kind == "library" and added_records[0].next_chunk_index == 0
+    assert added_records[0].main_file.file_path.endswith("/provider-paper.pdf")
+    assert added_records[0].main_file.source_import_status == "pending"
+    assert (tmp_path / added_records[0].main_file.file_path).exists()
 
     assert len(dispatch_recorder.provider_markdown_calls) == 1
     provider_request = dispatch_recorder.provider_markdown_calls[0]["request"]
@@ -998,7 +999,7 @@ async def test_identifier_import_service_returns_partial_success_and_dispatches_
     assert provider_request.curator_token == "curator-token"
     assert provider_request.figure_metadata_artifact_ids == (metadata.artifact_id,)
     assert provider_request.source_provenance["viewer_mode"] == "local_pdf"
-    assert provider_request.file_path == tmp_path / added_records[0].file_path
+    assert provider_request.file_path == tmp_path / added_records[0].main_file.file_path
     assert provider.download_calls == [
         {"artifact_id": "pdf-1", "request_bearer_token": "curator-token"}
     ]
@@ -1323,10 +1324,10 @@ async def test_identifier_import_service_imports_pdf_when_markdown_is_missing(tm
     assert created_documents[0][1].source_provenance["viewer_mode"] == "local_pdf"
 
     added_records = [row for session in sessions for row in session.added]
-    assert added_records[0].viewer_mode == "local_pdf"
-    assert added_records[0].source_provider_pdf_artifact_id == "pdf-1"
-    assert added_records[0].source_provider_converted_artifact_id is None
-    assert added_records[0].source_import_status is None
+    assert added_records[0].main_file.display_mode == "local_pdf"
+    assert added_records[0].main_file.source_provider_pdf_artifact_id == "pdf-1"
+    assert added_records[0].main_file.source_provider_converted_artifact_id is None
+    assert added_records[0].main_file.source_import_status is None
 
     assert dispatch_recorder.provider_markdown_calls == []
     assert len(dispatch_recorder.upload_calls) == 1
@@ -1420,8 +1421,8 @@ async def test_identifier_import_service_queues_abc_conversion_when_markdown_is_
     assert "converted_artifact_id" not in result.results[0].source_provenance
     added_records = [row for session in sessions for row in session.added]
     assert added_records[0].source_provider == "abc_literature"
-    assert added_records[0].source_provider_converted_artifact_id is None
-    assert added_records[0].source_import_status == "pending"
+    assert added_records[0].main_file.source_provider_converted_artifact_id is None
+    assert added_records[0].main_file.source_import_status == "pending"
     assert dispatch_recorder.upload_calls == []
     assert dispatch_recorder.provider_markdown_calls == []
     assert len(dispatch_recorder.provider_conversion_calls) == 1

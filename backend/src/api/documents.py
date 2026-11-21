@@ -82,7 +82,11 @@ from ..models.api_schemas import (
 )
 from ..models.document import EmbeddingStatus, ProcessingStatus
 from ..models.sql.database import SessionLocal
-from ..models.sql.pdf_document import PDFDocument as ViewerPDFDocument
+from ..models.sql.pdf_document import (
+    DISPLAY_MODE_TEXT,
+    PDFDocument as ViewerPDFDocument,
+    PDFDocumentFile,
+)
 from ..models.sql.pdf_processing_job import PdfJobStatus
 from ..schemas.documents import DocumentUpdateRequest, DocumentUpdateResponse
 from ..services.document_access import require_owned_document
@@ -263,7 +267,7 @@ def _canonical_processing_status(
         ProcessingStatus.EMBEDDING.value,
         ProcessingStatus.STORING.value,
     }
-    # A reprocess can update the indexed state before the SQL worker reaches
+    # A re-embed can update the indexed state before the SQL worker reaches
     # its first stage. Do not let an older completed job mask that current work.
     if indexed_status in active_statuses:
         return indexed_status
@@ -467,7 +471,7 @@ def _rename_source_pdf(
     """Hardlink an owned source PDF while retaining the recoverable old path."""
     storage_root = FilePath(get_pdf_storage_path())
     source_path = validate_user_file_path(
-        storage_root / document.file_path,
+        storage_root / document.main_file.file_path,
         storage_root,
         user_sub,
     )
@@ -525,9 +529,11 @@ async def _recover_renamed_document(
                 context={"document_id": document_id},
             )
 
+    main_file = document.main_file
     if restored_old_index:
         document.filename = old_filename
-        document.file_path = old_file_path
+        main_file.display_name = old_filename
+        main_file.file_path = old_file_path
         try:
             destination_path.unlink(missing_ok=True)
         except Exception as exc:
@@ -542,7 +548,8 @@ async def _recover_renamed_document(
         return
 
     document.filename = new_filename
-    document.file_path = new_file_path
+    main_file.display_name = new_filename
+    main_file.file_path = new_file_path
     forward_recovery_failure: _DocumentMetadataUpdateError | None = None
     try:
         session.commit()
@@ -613,13 +620,14 @@ async def _update_owned_document_metadata(
                     detail="Document filename cannot be changed while processing is active",
                 )
 
-            target_relative_path = FilePath(document.file_path).with_name(
+            main_file = document.main_file
+            target_relative_path = FilePath(main_file.file_path).with_name(
                 request.filename
             ).as_posix()
             path_owner = session.execute(
-                select(ViewerPDFDocument.id).where(
-                    ViewerPDFDocument.file_path == target_relative_path,
-                    ViewerPDFDocument.id != _parse_document_uuid(document_id),
+                select(PDFDocumentFile.id).where(
+                    PDFDocumentFile.file_path == target_relative_path,
+                    PDFDocumentFile.id != main_file.id,
                 )
             ).scalar_one_or_none()
             if path_owner is not None:
@@ -629,7 +637,7 @@ async def _update_owned_document_metadata(
                 )
 
             old_filename = document.filename
-            old_file_path = document.file_path
+            old_file_path = main_file.file_path
             source_path, destination_path, relative_destination = _rename_source_pdf(
                 document=document,
                 filename=request.filename,
@@ -640,7 +648,8 @@ async def _update_owned_document_metadata(
             await update_document_filename(user_sub, document_id, request.filename)
             index_updated = True
             document.filename = request.filename
-            document.file_path = relative_destination
+            main_file.display_name = request.filename
+            main_file.file_path = relative_destination
             metadata_changed = True
 
         if request.title is not None:
@@ -700,6 +709,23 @@ async def _update_owned_document_metadata(
     if sanitized_failure is None:  # pragma: no cover - defensive invariant
         raise _DocumentMetadataUpdateError("Document metadata update failed")
     raise sanitized_failure
+
+
+def _document_cleanup_snapshot(document: ViewerPDFDocument) -> dict[str, Any]:
+    """Stored artifact paths of every file of a paper, taken before its rows are deleted."""
+    return {
+        "id": document.id,
+        "files": [
+            {
+                "display_mode": file_row.display_mode,
+                "file_path": file_row.file_path,
+                "pdfx_json_path": file_row.pdfx_json_path,
+                "processed_json_path": file_row.processed_json_path,
+                "source_markdown_path": file_row.source_markdown_path,
+            }
+            for file_row in document.files
+        ],
+    }
 
 
 def _unlink_user_storage_file_if_present(
@@ -1330,7 +1356,7 @@ async def get_document_endpoint(
             upload_timestamp=pg_doc.upload_timestamp,
             processing_started_at=pg_doc.processing_started_at,
             processing_completed_at=pg_doc.processing_completed_at,
-            file_size_bytes=pg_doc.file_size,
+            file_size_bytes=pg_doc.main_file.file_size,
             weaviate_tenant=tenant_name,
             chunk_count=doc_data.get("chunk_count"),
             error_message=(
@@ -1515,14 +1541,7 @@ async def delete_document_endpoint(
                 select(ViewerPDFDocument).where(ViewerPDFDocument.id == uuid.UUID(document_id))
             ).scalars().first()
             if doc_to_cleanup:
-                cleanup_snapshot = {
-                    "id": doc_to_cleanup.id,
-                    "file_path": getattr(doc_to_cleanup, "file_path", None),
-                    "pdfx_json_path": getattr(doc_to_cleanup, "pdfx_json_path", None),
-                    "processed_json_path": getattr(doc_to_cleanup, "processed_json_path", None),
-                    "source_markdown_path": getattr(doc_to_cleanup, "source_markdown_path", None),
-                    "viewer_mode": getattr(doc_to_cleanup, "viewer_mode", None),
-                }
+                cleanup_snapshot = _document_cleanup_snapshot(doc_to_cleanup)
         finally:
             cleanup_session.close()
 
@@ -1547,59 +1566,52 @@ async def delete_document_endpoint(
             ).scalars().first()
             cleanup_values = cleanup_snapshot
             if doc_to_delete:
-                cleanup_values = {
-                    "id": doc_to_delete.id,
-                    "file_path": getattr(doc_to_delete, "file_path", None),
-                    "pdfx_json_path": getattr(doc_to_delete, "pdfx_json_path", None),
-                    "processed_json_path": getattr(doc_to_delete, "processed_json_path", None),
-                    "source_markdown_path": getattr(doc_to_delete, "source_markdown_path", None),
-                    "viewer_mode": getattr(doc_to_delete, "viewer_mode", None),
-                }
+                cleanup_values = _document_cleanup_snapshot(doc_to_delete)
 
             if cleanup_values:
                 cleanup_document_curation_dependencies(cleanup_session, cleanup_values["id"])
                 # Delete physical files
                 base_storage = FilePath(get_pdf_storage_path())
                 user_sub = str(user["sub"])
-                viewer_mode = str(cleanup_values.get("viewer_mode") or "").strip().lower()
 
-                # 1. Delete original PDF directory/file for normal uploads.
-                # Text-only provider imports use file_path as a provider
-                # placeholder and store the downloaded artifact separately.
-                if viewer_mode != "text_only":
-                    _delete_user_document_directory_or_file_if_present(
+                for file_values in cleanup_values["files"]:
+                    # 1. Delete original PDF directory/file for normal uploads.
+                    # Text files use file_path as a provider placeholder and
+                    # store the downloaded artifact separately.
+                    if file_values["display_mode"] != DISPLAY_MODE_TEXT:
+                        _delete_user_document_directory_or_file_if_present(
+                            base_storage=base_storage,
+                            relative_path=file_values["file_path"],
+                            user_sub=user_sub,
+                            document_id=document_id,
+                        )
+
+                    # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
+                    _unlink_user_storage_file_if_present(
                         base_storage=base_storage,
-                        relative_path=cleanup_values.get("file_path"),
+                        relative_path=file_values["pdfx_json_path"],
                         user_sub=user_sub,
                         document_id=document_id,
+                        label="PDFX JSON",
                     )
 
-                # 2. Delete PDFX JSON: {user_id}/pdfx_json/{doc_id}.json
-                _unlink_user_storage_file_if_present(
-                    base_storage=base_storage,
-                    relative_path=cleanup_values.get("pdfx_json_path"),
-                    user_sub=user_sub,
-                    document_id=document_id,
-                    label="PDFX JSON",
-                )
+                    # 3. Delete Processed JSON: {user_id}/processed_json/{doc_id}.json
+                    _unlink_user_storage_file_if_present(
+                        base_storage=base_storage,
+                        relative_path=file_values["processed_json_path"],
+                        user_sub=user_sub,
+                        document_id=document_id,
+                        label="Processed JSON",
+                    )
 
-                # 3. Delete Processed JSON: {user_id}/processed_json/{doc_id}.json
-                _unlink_user_storage_file_if_present(
-                    base_storage=base_storage,
-                    relative_path=cleanup_values.get("processed_json_path"),
-                    user_sub=user_sub,
-                    document_id=document_id,
-                    label="Processed JSON",
-                )
-
-                # 4. Delete provider/source Markdown: {user_id}/source_markdown/{doc_id}.md
-                _unlink_user_storage_file_if_present(
-                    base_storage=base_storage,
-                    relative_path=cleanup_values.get("source_markdown_path"),
-                    user_sub=user_sub,
-                    document_id=document_id,
-                    label="Source Markdown",
-                )
+                    # 4. Delete provider/source Markdown: {user_id}/source_markdown/{doc_id}.md
+                    _unlink_user_storage_file_if_present(
+                        base_storage=base_storage,
+                        relative_path=file_values["source_markdown_path"],
+                        user_sub=user_sub,
+                        document_id=document_id,
+                        label="Source Markdown",
+                    )
 
                 # Delete DB record
                 if doc_to_delete:
@@ -2104,16 +2116,17 @@ async def get_download_info(
 
             doc = require_owned_document(session, document_uuid, db_user.id)
 
-            viewer_mode = str(getattr(doc, "viewer_mode", "") or "").strip().lower()
-            is_text_only = viewer_mode == "text_only"
+            main_file = doc.main_file
+            viewer_mode = main_file.display_mode
+            is_text_only = viewer_mode == DISPLAY_MODE_TEXT
 
             # Check PDF file with path validation (T032)
             pdf_storage = get_pdf_storage_path()
             pdf_path = None
             pdf_available = False
             pdf_size = None
-            if doc.file_path and not is_text_only:
-                pdf_path = FilePath(pdf_storage) / doc.file_path
+            if main_file.file_path and not is_text_only:
+                pdf_path = FilePath(pdf_storage) / main_file.file_path
                 # Validate path stays within user's storage directory
                 pdf_path = validate_user_file_path(pdf_path, FilePath(pdf_storage), user["sub"])
                 pdf_available = pdf_path.exists()
@@ -2123,9 +2136,9 @@ async def get_download_info(
             # Note: pdfx_json_path is stored relative to pdf_storage: {user_id}/pdfx_json/{doc_id}.json
             pdfx_json_available = False
             pdfx_json_size = None
-            if doc.pdfx_json_path:
+            if main_file.pdfx_json_path:
                 # Construct full path from pdf_storage (paths are relative to pdf_storage root)
-                pdfx_path = FilePath(pdf_storage) / doc.pdfx_json_path
+                pdfx_path = FilePath(pdf_storage) / main_file.pdfx_json_path
                 # Validate path stays within user's storage directory (pdf_storage/{user_id})
                 pdfx_path = validate_user_file_path(pdfx_path, FilePath(pdf_storage), user["sub"])
                 pdfx_json_available = pdfx_path.exists()
@@ -2135,9 +2148,9 @@ async def get_download_info(
             # Note: processed_json_path is stored relative to pdf_storage: {user_id}/processed_json/{doc_id}.json
             processed_json_available = False
             processed_json_size = None
-            if doc.processed_json_path:
+            if main_file.processed_json_path:
                 # Construct full path from pdf_storage (paths are relative to pdf_storage root)
-                processed_path = FilePath(pdf_storage) / doc.processed_json_path
+                processed_path = FilePath(pdf_storage) / main_file.processed_json_path
                 # Validate path stays within user's storage directory (pdf_storage/{user_id})
                 processed_path = validate_user_file_path(processed_path, FilePath(pdf_storage), user["sub"])
                 processed_json_available = processed_path.exists()
@@ -2146,7 +2159,7 @@ async def get_download_info(
             # Check provider/source Markdown artifact with path validation.
             source_markdown_available = False
             source_markdown_size = None
-            source_markdown_relative_path = getattr(doc, "source_markdown_path", None)
+            source_markdown_relative_path = main_file.source_markdown_path
             if source_markdown_relative_path:
                 source_markdown_path = FilePath(pdf_storage) / source_markdown_relative_path
                 source_markdown_path = validate_user_file_path(
@@ -2170,7 +2183,7 @@ async def get_download_info(
                 "processed_json_size": processed_json_size,
                 "source_markdown_available": source_markdown_available,
                 "source_markdown_size": source_markdown_size,
-                "viewer_mode": viewer_mode or None,
+                "viewer_mode": viewer_mode,
                 "source_provenance": build_document_source_provenance(doc),
                 "filename": doc.filename
             }
@@ -2229,13 +2242,14 @@ async def download_document_file(
             file_path = None
             filename = None
             media_type = "application/octet-stream"
-            viewer_mode = str(getattr(doc, "viewer_mode", "") or "").strip().lower()
-            is_text_only = viewer_mode == "text_only"
+            main_file = doc.main_file
+            viewer_mode = main_file.display_mode
+            is_text_only = viewer_mode == DISPLAY_MODE_TEXT
 
             if file_type == 'pdf':
-                if doc.file_path and not is_text_only:
+                if main_file.file_path and not is_text_only:
                     pdf_storage = get_pdf_storage_path()
-                    file_path = FilePath(pdf_storage) / doc.file_path
+                    file_path = FilePath(pdf_storage) / main_file.file_path
                     # Validate path stays within user's storage directory
                     file_path = validate_user_file_path(file_path, FilePath(pdf_storage), user["sub"])
                     filename = doc.filename
@@ -2243,10 +2257,10 @@ async def download_document_file(
 
             elif file_type == 'pdfx_json':
                 # Note: pdfx_json_path is stored relative to pdf_storage: {user_id}/pdfx_json/{doc_id}.json
-                if doc.pdfx_json_path:
+                if main_file.pdfx_json_path:
                     pdf_storage = get_pdf_storage_path()
                     # Construct full path from pdf_storage (paths are relative to pdf_storage root)
-                    file_path = FilePath(pdf_storage) / doc.pdfx_json_path
+                    file_path = FilePath(pdf_storage) / main_file.pdfx_json_path
                     # Validate path stays within user's storage directory (pdf_storage/{user_id})
                     file_path = validate_user_file_path(file_path, FilePath(pdf_storage), user["sub"])
                     filename = f"{doc.filename.rsplit('.', 1)[0]}_pdfx.json"
@@ -2254,17 +2268,17 @@ async def download_document_file(
 
             elif file_type == 'processed_json':
                 # Note: processed_json_path is stored relative to pdf_storage: {user_id}/processed_json/{doc_id}.json
-                if doc.processed_json_path:
+                if main_file.processed_json_path:
                     pdf_storage = get_pdf_storage_path()
                     # Construct full path from pdf_storage (paths are relative to pdf_storage root)
-                    file_path = FilePath(pdf_storage) / doc.processed_json_path
+                    file_path = FilePath(pdf_storage) / main_file.processed_json_path
                     # Validate path stays within user's storage directory (pdf_storage/{user_id})
                     file_path = validate_user_file_path(file_path, FilePath(pdf_storage), user["sub"])
                     filename = f"{doc.filename.rsplit('.', 1)[0]}_processed.json"
                     media_type = "application/json"
 
             elif file_type == 'source_markdown':
-                source_markdown_relative_path = getattr(doc, "source_markdown_path", None)
+                source_markdown_relative_path = main_file.source_markdown_path
                 if source_markdown_relative_path:
                     pdf_storage = get_pdf_storage_path()
                     file_path = FilePath(pdf_storage) / source_markdown_relative_path

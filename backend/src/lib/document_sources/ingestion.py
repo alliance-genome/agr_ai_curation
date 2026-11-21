@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
+from src.lib.document_files.service import main_file_id, mark_file_failed, mark_file_pending
 from src.lib.document_sources.models import DocumentSourceError
 from src.lib.document_sources.figure_metadata import (
     apply_provider_figure_page_provenance,
@@ -91,7 +92,6 @@ class ProviderMarkdownIngestionRequest:
     source_provenance: Mapping[str, Any]
     filename: str | None = None
     strategy: ChunkingStrategy | None = None
-    viewer_mode: str = "local_pdf"
     provider_figure_metadata: tuple[Mapping[str, Any], ...] = ()
 
 
@@ -167,14 +167,17 @@ async def ingest_provider_markdown_document(
     ):
         raise DocumentSourceIngestionError("Converted artifact identity does not match supplied Markdown")
 
+    file_id = None
     try:
         await _require_owned_document(document_id, user_id, owner_user_id)
+        file_id = await asyncio.to_thread(main_file_id, document_id)
         await _sync_sql_document_status(
             document_id,
             user_id=user_id,
             owner_user_id=owner_user_id,
             status="processing",
         )
+        await asyncio.to_thread(mark_file_pending, file_id)
         elements, warnings = provider_markdown_to_pipeline_elements(
             markdown,
             request.provider_figure_metadata,
@@ -193,18 +196,19 @@ async def ingest_provider_markdown_document(
         )
         await _persist_ingestion_metadata(
             document_id=document_id,
+            file_id=file_id,
             user_id=user_id,
             owner_user_id=owner_user_id,
             source_provenance=source_provenance,
             source_markdown_path=source_markdown_path,
             processed_json_path=processed_json_path,
-            viewer_mode=request.viewer_mode,
             filename=request.filename,
         )
 
         chunk_count = await index_owned_document_elements(
             elements,
             document_id=document_id,
+            file_id=file_id,
             user_id=user_id,
             owner_user_id=owner_user_id,
             weaviate_client=weaviate_client,
@@ -213,11 +217,11 @@ async def ingest_provider_markdown_document(
         )
         stages_completed.extend((ProcessingStage.CHUNKING, ProcessingStage.STORING))
 
-        await _sync_sql_document_status(
+        await finalize_new_paper(
             document_id,
             user_id=user_id,
             owner_user_id=owner_user_id,
-            status="completed",
+            weaviate_client=weaviate_client,
         )
         duration_seconds = (datetime.now(timezone.utc) - started_at).total_seconds()
         processing_result = ProcessingResult(
@@ -238,6 +242,8 @@ async def ingest_provider_markdown_document(
         )
 
     except Exception as exc:
+        if file_id is not None:
+            await asyncio.to_thread(mark_file_failed, file_id, error_message=_safe_error_message(exc))
         await _sync_sql_document_status(
             document_id,
             user_id=user_id,
@@ -254,6 +260,7 @@ async def index_owned_document_elements(
     elements: list[dict[str, Any]],
     *,
     document_id: str,
+    file_id: UUID,
     user_id: str,
     owner_user_id: int,
     weaviate_client: Any,
@@ -261,13 +268,19 @@ async def index_owned_document_elements(
     provider_figure_metadata: tuple[Mapping[str, Any], ...] = (),
     stage_checkpoint: Callable[[str], Awaitable[None]] | None = None,
 ) -> int:
-    """Use normal hierarchy, chunking, figure, and vector storage for frozen or imported text.
+    """Index one file of a paper: hierarchy, chunking, figures and vector storage.
 
-    The caller owns document creation, source-artifact persistence, and terminal
-    lifecycle. This shared post-parsing path does not fetch original sources.
+    This is the per-file part. It reserves the file's piece range, stores and
+    verifies that range, and marks the file ready with its text size. The
+    caller owns document creation, source-artifact persistence, the paper's
+    status and ``finalize_new_paper``. It does not fetch original sources.
     """
 
     await _require_owned_document(document_id, user_id, owner_user_id)
+    from src.lib.document_files.service import element_text_bytes, mark_file_ready, reserve_file_chunk_range
+
+    # The elements as saved in the file's processed JSON, before hierarchy.
+    text_bytes = element_text_bytes(elements)
     # Keep lease/cancellation failures outside the normal hierarchy fallback.
     if stage_checkpoint is not None:
         await stage_checkpoint("hierarchy")
@@ -277,19 +290,20 @@ async def index_owned_document_elements(
         elements, hierarchy_metadata = await resolve_document_hierarchy(elements)
         if hierarchy_metadata:
             await _store_hierarchy_metadata(
-                document_id, user_id, owner_user_id, hierarchy_metadata
+                document_id, file_id, user_id, owner_user_id, hierarchy_metadata
             )
     except Exception as exc:
         _report_hierarchy_failure(exc, document_id)
 
-    await _sync_sql_document_status(
-        document_id, user_id=user_id, owner_user_id=owner_user_id, status="processing"
-    )
-    from src.lib.pipeline.chunk import chunk_parsed_document
+    from src.lib.pipeline.chunk import chunk_parsed_document, offset_chunk_indices
 
     if stage_checkpoint is not None:
         await stage_checkpoint("chunking")
     chunks = await chunk_parsed_document(elements, strategy, document_id)
+    range_start = await asyncio.to_thread(
+        reserve_file_chunk_range, document_id, file_id, len(chunks)
+    )
+    chunks = offset_chunk_indices(chunks, range_start)
 
     from src.lib.pipeline.figure_locator_resolution import resolve_figure_locators
 
@@ -298,15 +312,55 @@ async def index_owned_document_elements(
     chunks = await resolve_figure_locators(
         chunks, provider_figure_metadata=provider_figure_metadata
     )
-    await _sync_sql_document_status(
-        document_id, user_id=user_id, owner_user_id=owner_user_id, status="processing"
-    )
     from src.lib.pipeline.store import store_to_weaviate
 
     if stage_checkpoint is not None:
         await stage_checkpoint("vector_storage")
-    await store_to_weaviate(chunks, document_id, weaviate_client, user_id)
+    await store_to_weaviate(
+        chunks,
+        document_id,
+        weaviate_client,
+        user_id,
+        chunk_range=(range_start, range_start + len(chunks) - 1),
+    )
+    await asyncio.to_thread(mark_file_ready, file_id, text_bytes=text_bytes)
     return len(chunks)
+
+
+async def finalize_new_paper(
+    document_id: str,
+    *,
+    user_id: str,
+    owner_user_id: int,
+    weaviate_client: Any,
+) -> None:
+    """The paper part, run once after all of a new paper's files are stored.
+
+    Writes the search-index document's status and summed piece count, then
+    marks the paper completed (which sets its completion time).
+    """
+
+    from src.lib.document_files.service import ready_piece_total
+    from src.lib.pipeline.store import update_document_metadata
+    from src.models.sql.database import SessionLocal
+
+    def _total() -> int:
+        with SessionLocal() as session:
+            return ready_piece_total(session, document_id)
+
+    stored_chunks = await asyncio.to_thread(_total)
+    await update_document_metadata(
+        document_id,
+        {"stored_chunks": stored_chunks, "failed_chunks": 0},
+        weaviate_client,
+        user_id,
+    )
+    await _sync_sql_document_status(
+        document_id,
+        user_id=user_id,
+        owner_user_id=owner_user_id,
+        status="completed",
+    )
 
 
 def _validate_provider_markdown(markdown: str) -> list[str]:
@@ -431,14 +485,16 @@ async def _save_processed_json(
 async def _persist_ingestion_metadata(
     *,
     document_id: str,
+    file_id: UUID,
     user_id: str,
     owner_user_id: int,
     source_provenance: Mapping[str, Any],
     source_markdown_path: str,
     processed_json_path: str,
-    viewer_mode: str,
     filename: str | None,
 ) -> None:
+    from src.models.sql.pdf_document import PDFDocumentFile
+
     from src.models.sql.database import SessionLocal
     from src.models.sql.pdf_document import PDFDocument
     from src.models.sql.user import User
@@ -458,29 +514,36 @@ async def _persist_ingestion_metadata(
                 "Document row not found or user mismatch for provider ingestion"
             )
 
+        file_row = session.get(PDFDocumentFile, file_id)
+        if file_row is None or file_row.document_id != document.id:
+            raise DocumentSourceIngestionError(
+                "File row not found for provider ingestion"
+            )
+
         if filename:
             document.filename = filename
-        document.processed_json_path = processed_json_path
-        document.source_markdown_path = source_markdown_path
-        document.viewer_mode = viewer_mode
+            if file_row.role == "main":
+                file_row.display_name = filename
         document.source_provider = source_provenance.get("provider")
         document.source_provider_reference_id = source_provenance.get("reference_id")
         document.source_provider_reference_curie = source_provenance.get("reference_curie")
-        document.source_provider_source_file_id = source_provenance.get("source_file_id")
-        document.source_provider_pdf_artifact_id = source_provenance.get("pdf_artifact_id")
-        document.source_provider_converted_artifact_id = source_provenance.get(
+        document.source_external_ids = source_provenance.get("external_ids")
+        file_row.processed_json_path = processed_json_path
+        file_row.source_markdown_path = source_markdown_path
+        file_row.source_provider_source_file_id = source_provenance.get("source_file_id")
+        file_row.source_provider_pdf_artifact_id = source_provenance.get("pdf_artifact_id")
+        file_row.source_provider_converted_artifact_id = source_provenance.get(
             "converted_artifact_id"
         )
-        document.source_converted_artifact_sha256 = source_provenance["converted_artifact_sha256"]
-        document.source_external_ids = source_provenance.get("external_ids")
-        document.source_md5 = source_provenance.get("source_md5")
-        document.source_file_class = source_provenance.get("file_class")
-        document.source_file_extension = source_provenance.get("file_extension")
-        document.source_artifact_status = source_provenance.get("artifact_status")
-        document.source_import_status = "processing"
-        document.source_imported_at = datetime.now(timezone.utc)
-        document.source_access_scope = source_provenance.get("access_scope")
-        document.source_access_group_ids = source_provenance.get("access_group_ids")
+        file_row.source_converted_artifact_sha256 = source_provenance["converted_artifact_sha256"]
+        file_row.source_md5 = source_provenance.get("source_md5")
+        file_row.source_file_class = source_provenance.get("file_class")
+        file_row.source_file_extension = source_provenance.get("file_extension")
+        file_row.source_artifact_status = source_provenance.get("artifact_status")
+        file_row.source_import_status = "processing"
+        file_row.source_imported_at = datetime.now(timezone.utc)
+        file_row.source_access_scope = source_provenance.get("access_scope")
+        file_row.source_access_group_ids = source_provenance.get("access_group_ids")
         session.commit()
     except Exception:
         session.rollback()
@@ -491,23 +554,26 @@ async def _persist_ingestion_metadata(
 
 async def _store_hierarchy_metadata(
     document_id: str,
+    file_id: UUID,
     user_id: str,
     owner_user_id: int,
     hierarchy_metadata: Any,
 ) -> None:
     await asyncio.to_thread(
-        _store_hierarchy_metadata_sync, document_id, user_id, owner_user_id, hierarchy_metadata,
+        _store_hierarchy_metadata_sync, document_id, file_id, user_id, owner_user_id,
+        hierarchy_metadata,
     )
 
 
 def _store_hierarchy_metadata_sync(
     document_id: str,
+    file_id: UUID,
     user_id: str,
     owner_user_id: int,
     hierarchy_metadata: Any,
 ) -> None:
     from src.models.sql.database import SessionLocal
-    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.pdf_document import PDFDocument, PDFDocumentFile
     from src.models.sql.user import User
 
     session = SessionLocal()
@@ -521,7 +587,10 @@ def _store_hierarchy_metadata_sync(
             owner_user_id=owner_user_id,
         )
         if document:
-            document.hierarchy_metadata = hierarchy_metadata.model_dump()
+            file_row = session.get(PDFDocumentFile, file_id)
+            if file_row is None or file_row.document_id != document.id:
+                raise DocumentSourceIngestionError("File row not found for hierarchy metadata")
+            file_row.hierarchy_metadata = hierarchy_metadata.model_dump()
             session.commit()
     except Exception:
         session.rollback()
@@ -571,7 +640,6 @@ def _update_sql_document_status(
             return
 
         document.status = status
-        document.source_import_status = status
         if status == "processing":
             if document.processing_started_at is None:
                 document.processing_started_at = now

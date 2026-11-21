@@ -111,8 +111,25 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
     def fetch(*, filters, **kwargs):
         return SimpleNamespace(objects=[obj for obj in vector_objects.values() if matches(obj.properties, filters)])
 
+    def satisfies(properties, condition):
+        if hasattr(condition, "filters"):
+            return all(satisfies(properties, item) for item in condition.filters)
+        value = properties.get(condition.target)
+        return {
+            "Equal": value == condition.value,
+            "GreaterThanEqual": value >= condition.value,
+            "LessThanEqual": value <= condition.value,
+        }[condition.operator.value]
+
+    def count(*, filters, total_count):
+        assert total_count is True
+        return SimpleNamespace(total_count=sum(
+            1 for obj in vector_objects.values() if satisfies(obj.properties, filters)
+        ))
+
     batch.add_object.side_effect = insert
     collection.query.fetch_objects.side_effect = fetch
+    collection.aggregate.over_all.side_effect = count
     collection.query.fetch_object_by_id.side_effect = lambda identifier: vector_objects.get(identifier)
     raw_client = SimpleNamespace()  # A raw SDK client has no connection.session().
 
@@ -305,8 +322,20 @@ async def test_frozen_copy_uses_normal_owned_ingestion_and_preserves_source(
             assert document is not None
             assert document.user_id == user_id
             assert document.status == "completed"
-            assert document.file_size == len(content)
-            assert document.file_path == receipt.source_path
+            assert document.document_kind == "benchmark_frozen"
+            assert document.next_chunk_index == receipt.chunk_count
+            main_file = document.main_file
+            assert [file_row.role for file_row in document.files] == ["main"]
+            assert main_file.status == "ready"
+            assert main_file.display_mode == "text" and main_file.page_count is None
+            assert main_file.file_size == len(content)
+            assert main_file.file_path == receipt.source_path
+            assert (main_file.chunk_index_start, main_file.chunk_index_end) == (0, receipt.chunk_count - 1)
+            assert main_file.chunk_count == receipt.chunk_count
+            assert main_file.text_bytes == sum(
+                len(element["text"].encode("utf-8")) for element in parsed
+                if element.get("metadata", {}).get("doc_item_label") != "page_footer"
+            )
         with pytest.raises(ValueError, match="already exists"):
             await preparation.prepare_frozen_document(**kwargs)
         reused, _ = await preparation_service.prepare_job_document(

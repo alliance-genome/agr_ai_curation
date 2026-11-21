@@ -1,6 +1,7 @@
 import {
   HOME_PDF_VIEWER_OWNER,
   dispatchPDFDocumentChanged,
+  dispatchPDFViewerDocumentCleared,
   type PDFViewerDocumentChangedDetail,
 } from '@/components/pdfViewer/pdfEvents'
 import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
@@ -33,11 +34,17 @@ export interface RehydrateChatDocumentOptions {
   viewerState?: PDFViewerDocumentChangedDetail['viewerState']
 }
 
+/** The paper's main-file display modes the viewer API reports. */
+export type ChatDocumentViewerMode = 'local_pdf' | 'provider_pdf_proxy' | 'text'
+
+const VIEWER_MODES: readonly ChatDocumentViewerMode[] = ['local_pdf', 'provider_pdf_proxy', 'text']
+
 export interface RehydratedChatDocumentResult {
   viewerUrl: string | null
-  viewerMode: string
+  viewerMode: ChatDocumentViewerMode
   filename: string
-  pageCount: number
+  /** Pages of a PDF; null for a text paper, which has no pages. */
+  pageCount: number | null
   loadedAt: string
 }
 
@@ -113,10 +120,11 @@ export async function rehydrateChatDocument(
   const detail = await detailResponse.json() as PdfViewerDocumentMetadata
   const urlData = await urlResponse.json() as PdfViewerDocumentUrlPayload
   const viewerUrl = typeof urlData.viewer_url === 'string' ? urlData.viewer_url : null
-  const viewerMode = typeof urlData.viewer_mode === 'string' && urlData.viewer_mode.trim()
-    ? urlData.viewer_mode.trim().toLowerCase()
-    : 'local_pdf'
-  const isTextOnlyDocument = viewerMode === 'text_only'
+  const viewerMode = VIEWER_MODES.find((mode) => mode === urlData.viewer_mode)
+  if (!viewerMode) {
+    throw new Error('Document viewer mode unavailable')
+  }
+  const isTextOnlyDocument = viewerMode === 'text'
 
   if (!viewerUrl && !isTextOnlyDocument) {
     throw new Error('Document viewer URL unavailable')
@@ -129,8 +137,9 @@ export async function rehydrateChatDocument(
     throw new Error('Document filename unavailable')
   }
 
-  const pageCount = readPageCount(detail)
-  if (!pageCount) {
+  // A text paper has no pages (the API reports page_count null); a PDF must have them.
+  const pageCount = isTextOnlyDocument ? null : readPageCount(detail)
+  if (!isTextOnlyDocument && !pageCount) {
     throw new Error('Document page count unavailable')
   }
 
@@ -147,13 +156,16 @@ export async function rehydrateChatDocument(
     throw new DOMException('Document restore superseded', 'AbortError')
   }
 
+  // Only a PDF reaches the PDF viewer; a text paper stays active for chat without it.
+  const pdfView = !isTextOnlyDocument && viewerUrl && pageCount ? { viewerUrl, pageCount } : null
+
   if (chatStorageKeys) {
-    if (viewerUrl) {
+    if (pdfView) {
       safeSetJson(() => window.localStorage, chatStorageKeys.pdfViewerSession, {
         documentId: document.id,
-        viewerUrl,
+        viewerUrl: pdfView.viewerUrl,
         filename,
-        pageCount,
+        pageCount: pdfView.pageCount,
         loadedAt,
         currentPage: viewerState?.currentPage ?? 1,
         zoomLevel: 1,
@@ -171,12 +183,15 @@ export async function rehydrateChatDocument(
     }
   }
 
-  if (viewerUrl) {
+  if (!pdfView) {
+    // A text paper has no PDF: clear the viewer so it neither waits nor keeps the previous PDF.
+    dispatchPDFViewerDocumentCleared(ownerToken)
+  } else {
     dispatchPDFDocumentChanged(
       document.id,
-      viewerUrl,
+      pdfView.viewerUrl,
       filename,
-      pageCount,
+      pdfView.pageCount,
       {
         ownerToken,
         viewerState,

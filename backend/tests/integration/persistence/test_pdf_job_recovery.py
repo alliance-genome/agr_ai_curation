@@ -16,6 +16,7 @@ from src.models.sql.database import SessionLocal, engine
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfProcessingJob
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 NOW = datetime(2026, 10, 17, 12, tzinfo=timezone.utc)
 
@@ -35,7 +36,7 @@ def dataset(monkeypatch):
             if document_id is None:
                 document_id = uuid4()
                 ids.append(document_id)
-                db.add(PDFDocument(
+                db.add(new_paper(
                     id=document_id, user_id=owner, filename="synthetic.pdf",
                     file_path=f"synthetic/{document_id}", file_hash=document_id.hex * 2,
                     file_size=100, page_count=1,

@@ -25,7 +25,7 @@ describe('chatDocumentRehydration', () => {
     localStorage.clear()
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/url')) {
-        return new Response(JSON.stringify({ viewer_url: '/viewer/doc-1.pdf' }), { status: 200 })
+        return new Response(JSON.stringify({ viewer_url: '/viewer/doc-1.pdf', viewer_mode: 'local_pdf' }), { status: 200 })
       }
 
       return new Response(JSON.stringify({
@@ -77,13 +77,14 @@ describe('chatDocumentRehydration', () => {
       if (url.endsWith('/url')) {
         return new Response(JSON.stringify({
           viewer_url: null,
-          viewer_mode: 'text_only',
+          viewer_mode: 'text',
         }), { status: 200 })
       }
 
+      // What the backend returns for a text paper since P5: no pages.
       return new Response(JSON.stringify({
         filename: 'provider-paper.md',
-        page_count: 1,
+        page_count: null,
       }), { status: 200 })
     }))
 
@@ -95,7 +96,9 @@ describe('chatDocumentRehydration', () => {
       pageCount: 4,
     }))
     const documentChanged = vi.fn()
+    const documentCleared = vi.fn()
     window.addEventListener('pdf-viewer-document-changed', documentChanged)
+    window.addEventListener('pdf-viewer-document-cleared', documentCleared)
 
     await expect(rehydrateChatDocument({
       document: {
@@ -105,14 +108,75 @@ describe('chatDocumentRehydration', () => {
       chatStorageKeys: storageKeys,
     })).resolves.toMatchObject({
       viewerUrl: null,
-      viewerMode: 'text_only',
+      viewerMode: 'text',
       filename: 'provider-paper.md',
-      pageCount: 1,
+      pageCount: null,
     })
 
     expect(documentChanged).not.toHaveBeenCalled()
+    expect(documentCleared).toHaveBeenCalledTimes(1)
+    expect((documentCleared.mock.calls[0][0] as CustomEvent).detail).toEqual({ ownerToken: 'home' })
     expect(localStorage.getItem(storageKeys.activeDocument)).toContain('doc-text-only')
     expect(localStorage.getItem(storageKeys.pdfViewerSession)).toBeNull()
+
+    window.removeEventListener('pdf-viewer-document-changed', documentChanged)
+    window.removeEventListener('pdf-viewer-document-cleared', documentCleared)
+  })
+
+  function stubViewerApi(urlPayload: unknown, detailPayload: unknown) {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.endsWith('/url') ? jsonResponse(urlPayload) : jsonResponse(detailPayload)
+    )))
+  }
+
+  it('still refuses a PDF paper without a page count', async () => {
+    stubViewerApi(
+      { viewer_url: '/viewer/doc-pdf.pdf', viewer_mode: 'local_pdf' },
+      { filename: 'paper.pdf', page_count: null },
+    )
+    const documentChanged = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', documentChanged)
+
+    await expect(rehydrateChatDocument({
+      document: { id: 'doc-pdf', filename: 'paper.pdf' },
+      chatStorageKeys: getChatLocalStorageKeys('user-1'),
+    })).rejects.toThrow('Document page count unavailable')
+    expect(documentChanged).not.toHaveBeenCalled()
+
+    window.removeEventListener('pdf-viewer-document-changed', documentChanged)
+  })
+
+  it.each([undefined, null, 'text_only', 'TEXT'])(
+    'refuses a viewer mode the backend does not report (%s)',
+    async (viewerMode) => {
+      stubViewerApi(
+        { viewer_url: '/viewer/doc-1.pdf', viewer_mode: viewerMode },
+        { filename: 'paper.pdf', page_count: 3 },
+      )
+
+      await expect(rehydrateChatDocument({
+        document: { id: 'doc-1', filename: 'paper.pdf' },
+        chatStorageKeys: getChatLocalStorageKeys('user-1'),
+      })).rejects.toThrow('Document viewer mode unavailable')
+    },
+  )
+
+  it('restores a provider PDF paper to the viewer with its page count', async () => {
+    stubViewerApi(
+      { viewer_url: '/api/pdf-viewer/documents/doc-proxy/content', viewer_mode: 'provider_pdf_proxy' },
+      { filename: 'imported.pdf', page_count: 12 },
+    )
+    const documentChanged = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', documentChanged)
+
+    await expect(rehydrateChatDocument({
+      document: { id: 'doc-proxy', filename: 'imported.pdf' },
+      chatStorageKeys: getChatLocalStorageKeys('user-1'),
+    })).resolves.toMatchObject({ viewerMode: 'provider_pdf_proxy', pageCount: 12 })
+    expect((documentChanged.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      documentId: 'doc-proxy',
+      pageCount: 12,
+    })
 
     window.removeEventListener('pdf-viewer-document-changed', documentChanged)
   })
@@ -160,11 +224,11 @@ describe('chatDocumentRehydration', () => {
     await vi.waitFor(() => expect(loadRequests).toHaveLength(2))
 
     secondDetail.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
-    secondUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-b' }))
+    secondUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf' }))
     await secondRestore
 
     firstDetail.resolve(jsonResponse({ filename: 'a.pdf', page_count: 1 }))
-    firstUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-a' }))
+    firstUrl.resolve(jsonResponse({ viewer_url: '/viewer/doc-a', viewer_mode: 'local_pdf' }))
     await expect(firstRestore).rejects.toMatchObject({ name: 'AbortError' })
 
     expect(firstOperation.signal.aborted).toBe(true)

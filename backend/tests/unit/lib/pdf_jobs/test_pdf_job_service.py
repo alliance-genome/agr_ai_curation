@@ -12,6 +12,7 @@ from src.lib.pdf_jobs import service as service_module
 from src.lib.pipeline.processing_receipt import PDF_PROCESSING_RECEIPT_KEY
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.pdf_processing_job import PdfJobStatus, PdfProcessingJob
+from tests.pdf_document_test_support import new_paper
 
 
 class _ScalarResult:
@@ -101,7 +102,7 @@ def _build_job(*, status: str) -> PdfProcessingJob:
 
 
 def _build_document(job: PdfProcessingJob, *, status: str = "processing") -> PDFDocument:
-    return PDFDocument(
+    return new_paper(
         id=job.document_id,
         filename=job.filename or "paper.pdf",
         file_path=f"/tmp/{job.document_id}.pdf",
@@ -179,6 +180,8 @@ def test_single_job_readers_reconcile_stale_nonterminal_job(
     assert document.processing_started_at == job.started_at
     assert document.processing_completed_at == job.completed_at
     assert document.error_message == response.error_message
+    assert document.main_file.status == "failed"
+    assert document.main_file.error_message == response.error_message
     assert session.closed is True
 
 
@@ -199,6 +202,7 @@ def test_list_jobs_reconciles_stale_cancel_requested_job(monkeypatch):
     assert document.status == "failed"
     assert document.processing_completed_at == job.completed_at
     assert document.error_message == "Cancellation finalized automatically after stale inactivity"
+    assert document.main_file.status == "failed"
     assert session.commit_calls == 1
 
 
@@ -406,7 +410,7 @@ def test_repeated_finalizer_reconciles_from_durable_first_terminal_winner(monkey
 
 def test_no_job_orphan_dry_run_reports_without_writes():
     now = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         filename="private-paper.pdf",
         file_path="private-paper.pdf",
@@ -443,7 +447,7 @@ def test_no_job_orphan_dry_run_reports_without_writes():
 
 def test_no_job_orphan_apply_creates_canonical_failed_job_and_reconciles_document():
     now = datetime(2026, 8, 27, 12, tzinfo=timezone.utc)
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         filename="paper.pdf",
         file_path="paper.pdf",

@@ -1,26 +1,62 @@
 group_id: WB
 content: |
   <wormbase_scope>
-  This tag is for WormBase, so count only results in wild-type C. elegans.
+  This tag is for WormBase. It marks papers a curator should look at for
+  low-throughput expression curation: papers that report, from the authors' own
+  work, where or when a C. elegans gene or its protein is found in wild-type
+  C. elegans. "Where" includes tissues, cells and the location inside a cell.
+
+  Judge from this paper only. You cannot check what was known outside it.
+
+  Curators would rather dismiss a wrong yes than miss a paper. When the evidence
+  is borderline, propose `negated: false` and say in the rationale what made it
+  borderline.
+
+  These count:
+  - A description of where or when a gene is expressed, given as a result in the
+    text, a figure legend or a table. It counts when the paper's main subject is
+    something else, and when the authors report their own observation without
+    showing it ("data not shown").
+  - Wild-type expression shown beside mutant, RNAi or treatment results, when the
+    paper describes the wild-type pattern itself. If the paper presents the
+    pattern as already known and shows it only as the control, it does not count.
+    If you cannot tell from the paper whether the pattern is new, count it.
+  - A confirmation of a published pattern that adds something: a tissue, a stage,
+    a location inside the cell, or a different method, such as antibody staining
+    where earlier work used a reporter.
+  - A tagged protein expressed from another gene's promoter, when the paper
+    reports where in the cell the wild-type tagged protein is found. The promoter
+    decides which cells make the protein, so this says nothing about which
+    tissues express the gene, but the location inside the cell is expression
+    data. Say in the rationale that the evidence is localization only.
+  - A reporter, when the paper describes that reporter's own pattern as a result.
+    This includes a marker whose pattern the paper adds to, with more cells,
+    stages or localization.
+
+  Animals that carry a mutation for a technical reason are wild type for this
+  tag: mutations used to obtain males, such as him-5 or him-8, balancers, and
+  selection or co-injection markers. Treat a mutation as a perturbation only when
+  it is what the experiment varies, or when the paper compares expression with
+  and without it.
 
   These do not count on their own. If a paper has only these, it has no data for
   the topic and gets `negated: true`:
-  - Expression data from any organism other than C. elegans, such as mouse, human,
-    fly, yeast or cultured cells.
-  - C. elegans used only as a host to express a gene from another organism.
-  - Expression measured by microarray, RNA-seq or SAGE.
-  - Expression seen only in mutant, RNAi or otherwise perturbed animals, with no
-    wild-type result in the paper.
-  - Studies of how a gene's expression is regulated, such as changes in its level
-    after a mutation or treatment, without reporting where or when the gene is
-    expressed in wild type.
-  - Wild-type animals used only as the control or baseline for a mutant, RNAi,
-    drug or stress comparison.
-  - A reporter or tagged protein used only as a tool, such as a cell marker, an
-    RNAi sensor or a readout of a pathway or stress response.
-
-  A paper has data for the topic when it presents where or when a C. elegans gene
-  is expressed in wild type as a finding of its own, for example in a figure or
-  Results passage that describes the expression pattern. This holds even when the
-  paper's main focus is something else.
+  - Expression data from an organism other than C. elegans, or C. elegans used
+    only as a host for another organism's gene. When the paper's own expression
+    data come from another nematode, name the species and genes in the rationale,
+    so the curator can see the paper has expression data outside this tag.
+  - Expression measured only by RNA-seq of any kind (whole-animal,
+    tissue-specific or single-cell), microarray or SAGE.
+  - Whole-animal measurements of how much of a gene's product there is, such as
+    RT-PCR, qPCR or western blots, that show a level rising or falling between
+    ages, conditions or genotypes. These are changes in level, not a pattern.
+    They count only when the paper uses them to show that a gene is present or
+    absent at a developmental stage.
+  - Expression seen only in animals where the mutation, RNAi or treatment is the
+    thing being studied, with no wild-type result in the paper.
+  - A reporter or tagged protein used only as a tool: a cell or tissue marker, a
+    co-injection marker, an RNAi sensor, or a readout of a pathway or stress
+    response, when the paper does not describe its pattern, or only restates a
+    known pattern to justify using it.
+  - A known pattern repeated with the same method as a control, adding nothing.
   </wormbase_scope>

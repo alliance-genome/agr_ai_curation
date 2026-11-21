@@ -34,21 +34,24 @@ class _FakeDb:
         self.refreshed.append(record)
 
 
-def _record(**overrides):
-    payload = {
-        "id": _DOC_ID,
-        "filename": "paper.pdf",
+def _record(**file_overrides):
+    main_file = {
         "page_count": 1,
         "file_size": 512,
-        "upload_timestamp": datetime(2026, 6, 25, tzinfo=timezone.utc),
-        "last_accessed": datetime(2026, 6, 25, tzinfo=timezone.utc),
         "file_hash": "a" * 64,
         "file_path": "user123/paper.pdf",
-        "viewer_mode": "local_pdf",
-        "user_id": 7,
+        "display_mode": "local_pdf",
     }
-    payload.update(overrides)
-    return SimpleNamespace(**payload)
+    main_file.update(file_overrides)
+    return SimpleNamespace(
+        id=_DOC_ID,
+        filename="paper.pdf",
+        upload_timestamp=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        last_accessed=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        user_id=7,
+        document_kind="library",
+        main_file=SimpleNamespace(**main_file),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -61,11 +64,12 @@ def _authenticated_owner(monkeypatch):
     monkeypatch.setattr(pdf_viewer, "principal_from_claims", lambda claims: claims)
 
 
-def test_get_document_viewer_url_returns_null_for_text_only_document():
+def test_get_document_viewer_url_returns_null_for_text_document():
     db = _FakeDb(
         _record(
             file_path="document_sources/fake_provider/doc.md",
-            viewer_mode="text_only",
+            display_mode="text",
+            page_count=None,
         )
     )
 
@@ -76,15 +80,16 @@ def test_get_document_viewer_url_returns_null_for_text_only_document():
     )
 
     assert response.viewer_url is None
-    assert response.viewer_mode == "text_only"
+    assert response.viewer_mode == "text"
     assert db.commits == 1
 
 
-def test_get_document_detail_includes_text_only_viewer_mode_without_viewer_url():
+def test_get_document_detail_includes_text_viewer_mode_without_viewer_url():
     db = _FakeDb(
         _record(
             file_path="document_sources/fake_provider/doc.md",
-            viewer_mode="text_only",
+            display_mode="text",
+            page_count=None,
         )
     )
 
@@ -95,8 +100,9 @@ def test_get_document_detail_includes_text_only_viewer_mode_without_viewer_url()
     )
 
     assert response.viewer_url is None
-    assert response.viewer_mode == "text_only"
+    assert response.viewer_mode == "text"
     assert response.filename == "paper.pdf"
+    assert response.page_count is None
     assert db.commits == 1
     assert db.refreshed == [db.record]
 
@@ -149,3 +155,59 @@ def test_viewer_response_schema_serializes_size_above_current_admission_limit():
     )
 
     assert response.file_size == stored_size
+
+
+# --- What the viewer API returns since P5, from real paper and file models ----------
+# Frontend fixtures should copy these shapes: a text paper has no pages and no viewer
+# URL, and a plain upload reports ``local_pdf`` (never a missing viewer mode).
+
+
+def _paper(*, display_mode: str, page_count, file_path: str):
+    from src.models.sql.pdf_document import PDFDocument, PDFDocumentFile
+
+    paper = PDFDocument(
+        id=_DOC_ID,
+        user_id=7,
+        filename="paper-name.pdf",
+        upload_timestamp=datetime(2026, 11, 21, tzinfo=timezone.utc),
+        last_accessed=datetime(2026, 11, 21, tzinfo=timezone.utc),
+        status="completed",
+        document_kind="library",
+    )
+    paper.files.append(PDFDocumentFile(
+        role="main",
+        display_name="paper-name.pdf",
+        status="ready",
+        tab_order=0,
+        display_mode=display_mode,
+        file_path=file_path,
+        file_hash="b" * 64,
+        file_size=2048,
+        page_count=page_count,
+    ))
+    return paper
+
+
+@pytest.mark.parametrize(
+    "display_mode,page_count,file_path,expected_url",
+    [
+        ("text", None, "document_sources/fake_provider/doc.md", None),
+        ("local_pdf", 3, "user123/paper.pdf", f"/api/pdf-viewer/documents/{_DOC_ID}/content"),
+    ],
+    ids=["text_paper", "plain_upload"],
+)
+def test_viewer_api_shapes_for_a_text_paper_and_a_plain_upload(
+    display_mode, page_count, file_path, expected_url
+):
+    db = _FakeDb(_paper(display_mode=display_mode, page_count=page_count, file_path=file_path))
+    user = {"sub": "user123"}
+
+    detail = pdf_viewer.get_document_detail(document_id=_DOC_ID, db=db, user=user).model_dump(mode="json")
+    url = pdf_viewer.get_document_viewer_url(document_id=_DOC_ID, db=db, user=user).model_dump(mode="json")
+
+    assert {key: detail[key] for key in ("page_count", "viewer_url", "viewer_mode")} == {
+        "page_count": page_count,
+        "viewer_url": expected_url,
+        "viewer_mode": display_mode,
+    }
+    assert url == {"viewer_url": expected_url, "viewer_mode": display_mode}

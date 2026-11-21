@@ -82,6 +82,28 @@ def _source_provenance(*, markdown="# Results\n\nText.\n", **overrides):
     return payload
 
 
+FILE_ID = "file-1"
+
+
+def _patch_file_steps(monkeypatch, *, range_start=0, offset=False):
+    """Stub the per-file steps; chunk dicts keep their indices unless ``offset`` is set."""
+    steps = SimpleNamespace(
+        main_file_id=Mock(return_value=FILE_ID),
+        pending=Mock(),
+        failed=Mock(),
+        reserve=Mock(return_value=range_start),
+        ready=Mock(),
+    )
+    monkeypatch.setattr(ingestion, "main_file_id", steps.main_file_id)
+    monkeypatch.setattr(ingestion, "mark_file_pending", steps.pending)
+    monkeypatch.setattr(ingestion, "mark_file_failed", steps.failed)
+    monkeypatch.setattr("src.lib.document_files.service.reserve_file_chunk_range", steps.reserve)
+    monkeypatch.setattr("src.lib.document_files.service.mark_file_ready", steps.ready)
+    if not offset:
+        monkeypatch.setattr("src.lib.pipeline.chunk.offset_chunk_indices", lambda chunks, _start: chunks)
+    return steps
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("overrides", [
     {"converted_artifact_sha256": None},
@@ -105,21 +127,34 @@ async def test_ingestion_rejects_missing_or_inconsistent_artifact_identity(monke
 
 
 @pytest.mark.asyncio
-async def test_persist_ingestion_metadata_stores_digest_with_downloaded_artifact(monkeypatch):
-    document = SimpleNamespace()
+@pytest.mark.parametrize("filename", [None, "renamed-paper.pdf"])
+async def test_persist_ingestion_metadata_stores_digest_with_downloaded_artifact(monkeypatch, filename):
+    document = SimpleNamespace(id="doc-1", filename="original.pdf")
+    file_row = SimpleNamespace(document_id="doc-1", role="main", display_name="original.pdf")
     session = Mock()
+    session.get.return_value = file_row
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
     monkeypatch.setattr(ingestion, "_query_owned_document", lambda *args, **kwargs: document)
     provenance = _source_provenance()
     await ingestion._persist_ingestion_metadata(
-        document_id="doc-1", user_id="user-1", owner_user_id=42,
+        document_id="doc-1", file_id=FILE_ID, user_id="user-1", owner_user_id=42,
         source_provenance=provenance,
         source_markdown_path="user-1/source_markdown/doc-1.md",
         processed_json_path="user-1/processed_json/doc-1.json",
-        viewer_mode="local_pdf", filename=None,
+        filename=filename,
     )
-    assert document.source_provider_converted_artifact_id == provenance["converted_artifact_id"]
-    assert document.source_converted_artifact_sha256 == provenance["converted_artifact_sha256"]
+    # Paper-level provenance stays on the paper; per-file values land on the file row.
+    assert document.source_provider == "abc_literature"
+    assert document.source_provider_reference_curie == "AGRKB:101"
+    assert not hasattr(document, "source_provider_converted_artifact_id")
+    assert file_row.source_provider_converted_artifact_id == provenance["converted_artifact_id"]
+    assert file_row.source_converted_artifact_sha256 == provenance["converted_artifact_sha256"]
+    assert file_row.processed_json_path == "user-1/processed_json/doc-1.json"
+    assert file_row.source_markdown_path == "user-1/source_markdown/doc-1.md"
+    assert file_row.source_import_status == "processing"
+    expected_name = filename or "original.pdf"
+    assert document.filename == expected_name
+    assert file_row.display_name == expected_name
     session.commit.assert_called_once()
 
 
@@ -147,6 +182,7 @@ async def test_shared_indexing_checks_owner_before_any_model_or_storage_work(mon
         await ingestion.index_owned_document_elements(
             [{"text": "Synthetic paper", "metadata": {}}],
             document_id="isolated-document",
+            file_id=FILE_ID,
             user_id="owner-1",
             owner_user_id=42,
             weaviate_client=object(),
@@ -163,10 +199,11 @@ async def test_shared_indexing_checkpoint_failure_stops_next_stage(monkeypatch, 
     monkeypatch.setattr(ingestion, "report_runtime_exception", reporter, raising=False)
     monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
     monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
+    steps = _patch_file_steps(monkeypatch)
     elements = [{"text": "Synthetic evidence", "metadata": {}}]
     operations = {
         "hierarchy": AsyncMock(return_value=(elements, {})),
-        "chunking": AsyncMock(return_value=[]),
+        "chunking": AsyncMock(return_value=[{"chunk_index": 0, "content": "Synthetic evidence"}]),
         "figure_locators": AsyncMock(return_value=[]),
         "vector_storage": AsyncMock(),
     }
@@ -181,12 +218,13 @@ async def test_shared_indexing_checkpoint_failure_stops_next_stage(monkeypatch, 
 
     with pytest.raises(RuntimeError, match="lease lost"):
         await ingestion.index_owned_document_elements(
-            elements, document_id="isolated-document", user_id="owner-1", owner_user_id=42,
-            weaviate_client=object(), strategy=ChunkingStrategy.get_research_strategy(),
-            stage_checkpoint=checkpoint,
+            elements, document_id="isolated-document", file_id=FILE_ID, user_id="owner-1",
+            owner_user_id=42, weaviate_client=object(),
+            strategy=ChunkingStrategy.get_research_strategy(), stage_checkpoint=checkpoint,
         )
     operations[stop_stage].assert_not_awaited()
     operations["vector_storage"].assert_not_awaited()
+    steps.ready.assert_not_called()
     reporter.assert_not_called()
 
 
@@ -210,7 +248,9 @@ async def test_shared_indexing_reports_hierarchy_failure_and_continues(
     reporter = Mock(side_effect=RuntimeError(sensitive) if reporter_fails else None)
     monkeypatch.setattr(ingestion, "report_runtime_exception", reporter, raising=False)
     monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
-    monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
+    paper_status = AsyncMock()
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", paper_status)
+    steps = _patch_file_steps(monkeypatch)
     monkeypatch.setattr(ingestion, "_store_hierarchy_metadata", metadata)
     monkeypatch.setattr("src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy", hierarchy)
     chunk = AsyncMock(return_value=chunks)
@@ -223,16 +263,22 @@ async def test_shared_indexing_reports_hierarchy_failure_and_continues(
     strategy = ChunkingStrategy.get_research_strategy()
 
     result = await ingestion.index_owned_document_elements(
-        elements, document_id="doc-1", user_id="owner-1", owner_user_id=42,
+        elements, document_id="doc-1", file_id=FILE_ID, user_id="owner-1", owner_user_id=42,
         weaviate_client=client, strategy=strategy,
     )
 
     assert result == 2
+    # The per-file part never touches the paper's status.
+    paper_status.assert_not_awaited()
+    steps.reserve.assert_called_once_with("doc-1", FILE_ID, 2)
+    steps.ready.assert_called_once_with(FILE_ID, text_bytes=len(sensitive.encode("utf-8")))
+    if failure_stage == "metadata":
+        assert metadata.await_args.args[:2] == ("doc-1", FILE_ID)
     chunk.assert_awaited_once_with(
         elements if failure_stage == "resolution" else resolved, strategy, "doc-1",
     )
     figures.assert_awaited_once_with(chunks, provider_figure_metadata=())
-    store.assert_awaited_once_with(chunks, "doc-1", client, "owner-1")
+    store.assert_awaited_once_with(chunks, "doc-1", client, "owner-1", chunk_range=(0, 1))
     reporter.assert_called_once()
     reported = reporter.call_args.args[0]
     assert reported is not error
@@ -272,6 +318,9 @@ async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
     status_mock = AsyncMock()
     monkeypatch.setattr(ingestion, "_sync_sql_document_status", status_mock)
     monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    steps = _patch_file_steps(monkeypatch)
+    finalize = AsyncMock()
+    monkeypatch.setattr(ingestion, "finalize_new_paper", finalize)
 
     async def fake_resolve(elements):
         return elements, SimpleNamespace(model_dump=lambda: {"sections": []})
@@ -328,9 +377,16 @@ async def test_ingest_provider_markdown_document_runs_pipeline(monkeypatch):
     assert persisted_kwargs["source_provenance"]["access_scope"] == "restricted"
     assert persisted_kwargs["owner_user_id"] == 42
     assert persisted_kwargs["source_markdown_path"] == "user-1/source_markdown/doc-1.md"
-    assert status_mock.await_args_list[-1].kwargs["status"] == "completed"
-    assert status_mock.await_args_list[-1].kwargs["user_id"] == "user-1"
-    assert status_mock.await_args_list[-1].kwargs["owner_user_id"] == 42
+    assert persisted_kwargs["file_id"] == FILE_ID
+    assert [call.kwargs["status"] for call in status_mock.await_args_list] == ["processing"]
+    steps.main_file_id.assert_called_once_with("doc-1")
+    steps.pending.assert_called_once_with(FILE_ID)
+    steps.ready.assert_called_once()
+    steps.failed.assert_not_called()
+    finalize.assert_awaited_once()
+    assert finalize.await_args.args == ("doc-1",)
+    assert finalize.await_args.kwargs["user_id"] == "user-1"
+    assert finalize.await_args.kwargs["owner_user_id"] == 42
 
 
 @pytest.mark.asyncio
@@ -593,6 +649,8 @@ async def test_ingest_provider_markdown_document_indexes_provider_figure_metadat
     monkeypatch.setattr(ingestion, "_store_hierarchy_metadata", AsyncMock())
     monkeypatch.setattr(ingestion, "_sync_sql_document_status", AsyncMock())
     monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    _patch_file_steps(monkeypatch, offset=True)
+    monkeypatch.setattr(ingestion, "finalize_new_paper", AsyncMock())
 
     captured_elements = {}
 
@@ -806,6 +864,7 @@ async def test_ingest_provider_markdown_document_marks_validation_failure(monkey
     status_mock = AsyncMock()
     monkeypatch.setattr(ingestion, "_sync_sql_document_status", status_mock)
     monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    steps = _patch_file_steps(monkeypatch)
     monkeypatch.setattr(
         ingestion,
         "_validate_provider_markdown",
@@ -832,6 +891,7 @@ async def test_ingest_provider_markdown_document_marks_validation_failure(monkey
         "status": "failed",
         "error_message": "bad markdown",
     }
+    steps.failed.assert_called_once_with(FILE_ID, error_message="bad markdown")
 
 
 @pytest.mark.asyncio
@@ -882,3 +942,77 @@ def test_strip_markdown_image_assets_preserves_alt_text() -> None:
     assert ingestion._strip_markdown_image_assets(markdown) == (
         "# Results\n\nText before Figure 1 phenotype after.\n"
     )
+
+
+@pytest.mark.asyncio
+async def test_shared_indexing_offsets_chunks_into_the_reserved_range(monkeypatch):
+    monkeypatch.setattr(ingestion, "_require_owned_document", AsyncMock())
+    steps = _patch_file_steps(monkeypatch, range_start=7, offset=True)
+    monkeypatch.setattr(
+        "src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy",
+        AsyncMock(side_effect=lambda elements: (elements, None)),
+    )
+    monkeypatch.setattr(
+        "src.lib.pipeline.figure_locator_resolution.resolve_figure_locators",
+        AsyncMock(side_effect=lambda chunks, **_kwargs: chunks),
+    )
+    store = AsyncMock()
+    monkeypatch.setattr("src.lib.pipeline.store.store_to_weaviate", store)
+    strategy = ChunkingStrategy.get_research_strategy()
+    elements = [
+        {"text": "Made-up results heading", "type": "Title", "metadata": {"section_title": "Results"}},
+        {"text": ("Made-up result sentence. " * 120).strip(), "type": "NarrativeText", "metadata": {}},
+        {"text": "Page 1 of 3", "type": "NarrativeText", "metadata": {"doc_item_label": "page_footer"}},
+    ]
+    expected = await chunk_parsed_document(
+        [element for element in elements if element["metadata"].get("doc_item_label") != "page_footer"],
+        strategy, "doc-1",
+    )
+    assert len(expected) >= 2
+
+    count = await ingestion.index_owned_document_elements(
+        elements, document_id="doc-1", file_id=FILE_ID, user_id="owner-1", owner_user_id=42,
+        weaviate_client=object(), strategy=strategy,
+    )
+
+    stored = store.await_args.args[0]
+    assert count == len(expected)
+    steps.reserve.assert_called_once_with("doc-1", FILE_ID, len(expected))
+    assert [chunk.chunk_index for chunk in stored] == list(range(7, 7 + len(expected)))
+    assert [chunk.content for chunk in stored] == [chunk.content for chunk in expected]
+    assert stored[0].id == "doc-1_chunk_0007"
+    assert store.await_args.kwargs["chunk_range"] == (7, 6 + len(expected))
+    # Page footers are not cut into pieces, so they do not count toward the text size.
+    steps.ready.assert_called_once_with(
+        FILE_ID, text_bytes=len(elements[0]["text"].encode()) + len(elements[1]["text"].encode()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalize_new_paper_writes_summed_ready_pieces_then_completes(monkeypatch):
+    from contextlib import contextmanager
+
+    order = []
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", fake_session)
+    monkeypatch.setattr("src.lib.document_files.service.ready_piece_total", lambda _session, _doc: 12)
+
+    async def metadata(document_id, stats, client, user_id):
+        order.append(("metadata", document_id, stats["stored_chunks"], stats["failed_chunks"], user_id))
+
+    async def paper_status(document_id, **kwargs):
+        order.append(("status", document_id, kwargs["status"], kwargs["owner_user_id"]))
+
+    monkeypatch.setattr("src.lib.pipeline.store.update_document_metadata", metadata)
+    monkeypatch.setattr(ingestion, "_sync_sql_document_status", paper_status)
+
+    await ingestion.finalize_new_paper("doc-1", user_id="owner-1", owner_user_id=42, weaviate_client=object())
+
+    assert order == [
+        ("metadata", "doc-1", 12, 0, "owner-1"),
+        ("status", "doc-1", "completed", 42),
+    ]
