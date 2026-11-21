@@ -12,9 +12,9 @@ from fastapi import HTTPException
 from src.services.document_access import exclude_benchmark_document
 
 
-@pytest.mark.parametrize("mode", [None, "pdf", "benchmark_frozen"])
+@pytest.mark.parametrize("mode", [None, "library", "benchmark_frozen"])
 @pytest.mark.parametrize("as_string", [False, True])
-def test_exclusion_checks_persisted_document_mode(mode, as_string):
+def test_exclusion_checks_persisted_document_kind(mode, as_string):
     document_id = uuid4()
     db = MagicMock()
     db.scalar.return_value = mode

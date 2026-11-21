@@ -13,7 +13,7 @@ describe('DocumentDownloadDialog', () => {
       processed_json_size: 128,
       source_markdown_available: true,
       source_markdown_size: 256,
-      viewer_mode: 'text_only',
+      viewer_mode: 'text',
       filename: 'provider-paper.pdf',
     }), { status: 200 })))
   })

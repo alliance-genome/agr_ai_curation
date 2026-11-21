@@ -13,8 +13,31 @@ from src.lib.document_sources.provenance import (
 )
 
 
+_PAPER_FIELDS = (
+    "source_provider", "source_provider_reference_id", "source_provider_reference_curie",
+    "source_external_ids",
+)
+_FILE_FIELDS = (
+    "source_provider_source_file_id", "source_provider_converted_artifact_id",
+    "source_provider_pdf_artifact_id", "source_converted_artifact_sha256", "source_md5",
+    "source_file_class", "source_file_extension", "source_artifact_status",
+    "source_import_status", "source_imported_at", "source_payload_path",
+    "source_markdown_path", "source_access_scope", "source_access_group_ids", "display_mode",
+)
+
+
+def _document(**values):
+    """A paper with its main file; paper and file provenance live on different rows."""
+    unknown = set(values) - set(_PAPER_FIELDS) - set(_FILE_FIELDS)
+    assert not unknown, unknown
+    main_file = SimpleNamespace(**{field: values.get(field) for field in _FILE_FIELDS})
+    return SimpleNamespace(
+        main_file=main_file, **{field: values.get(field) for field in _PAPER_FIELDS}
+    )
+
+
 def test_build_document_source_provenance_returns_none_for_local_document() -> None:
-    document = SimpleNamespace(
+    document = _document(
         source_provider=None,
         source_provider_reference_id=None,
         source_provider_reference_curie=None,
@@ -23,14 +46,13 @@ def test_build_document_source_provenance_returns_none_for_local_document() -> N
         source_provider_pdf_artifact_id=None,
         source_md5=None,
         source_access_scope=None,
-        viewer_mode=None,
-    )
+            )
 
     assert build_document_source_provenance(document) is None
 
 
 def test_build_document_source_provenance_requires_provider() -> None:
-    document = SimpleNamespace(
+    document = _document(
         source_provider=None,
         source_provider_reference_id=None,
         source_provider_reference_curie=None,
@@ -39,14 +61,14 @@ def test_build_document_source_provenance_requires_provider() -> None:
         source_provider_pdf_artifact_id=None,
         source_md5=None,
         source_access_scope="restricted",
-        viewer_mode="local_pdf",
+        display_mode="local_pdf",
     )
 
     assert build_document_source_provenance(document) is None
 
 
 def test_build_document_source_provenance_uses_neutral_non_secret_fields() -> None:
-    document = SimpleNamespace(
+    document = _document(
         source_provider="abc_literature",
         source_provider_reference_id="101",
         source_provider_reference_curie="AGRKB:101",
@@ -65,7 +87,7 @@ def test_build_document_source_provenance_uses_neutral_non_secret_fields() -> No
         source_markdown_path="/internal/paper.md",
         source_access_scope="restricted",
         source_access_group_ids=["FB", {"secret": "drop"}],
-        viewer_mode="local_pdf",
+        display_mode="local_pdf",
     )
 
     provenance = build_document_source_provenance(document)

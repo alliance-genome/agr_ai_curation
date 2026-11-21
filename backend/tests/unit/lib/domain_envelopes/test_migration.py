@@ -40,6 +40,7 @@ from src.lib.domain_envelopes.migration import (
 from src.models.sql.database import Base
 from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.schemas.curation_workspace import (
     CurationActionType,
     CurationActorType,
@@ -57,6 +58,7 @@ from src.schemas.curation_workspace import (
     FieldValidationStatus,
     SubmissionMode,
 )
+from tests.pdf_document_test_support import new_paper
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -73,6 +75,7 @@ TEST_TABLES = [
     ValidationBody.__table__,
     ValidationCheckpoint.__table__,
     PDFDocument.__table__,
+    PDFDocumentFile.__table__,
     DocumentReferenceLink.__table__,
     CurationReviewSession.__table__,
     CurationSessionAgentRevision.__table__,
@@ -141,7 +144,7 @@ def _now() -> datetime:
 
 def _create_document(db_session: Session) -> PDFDocument:
     now = _now()
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         user_id=1,
         filename=f"paper-{uuid4()}.pdf",

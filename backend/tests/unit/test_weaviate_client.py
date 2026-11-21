@@ -11,6 +11,33 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+_FILE_FIELDS = (
+    "file_path", "file_hash", "file_size", "page_count", "pdfx_json_path", "processed_json_path",
+    "hierarchy_metadata", "source_provider_source_file_id", "source_provider_converted_artifact_id",
+    "source_provider_pdf_artifact_id", "source_md5", "source_converted_artifact_sha256",
+    "source_file_class", "source_file_extension", "source_artifact_status", "source_import_status",
+    "source_imported_at", "source_payload_path", "source_markdown_path", "source_access_scope",
+    "source_access_group_ids",
+)
+_PAPER_PROVENANCE_FIELDS = (
+    "source_provider", "source_provider_reference_id", "source_provider_reference_curie",
+    "source_external_ids",
+)
+
+
+def _doc(*, display_mode="local_pdf", document_kind="library", **values):
+    """A paper record whose per-file values live on its main file."""
+    file_values = {field: values.pop(field, None) for field in _FILE_FIELDS}
+    file_values["display_mode"] = display_mode
+    if display_mode == "text":
+        file_values["page_count"] = None
+    paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
+    main_file = SimpleNamespace(id="main-file", role="main", **file_values)
+    return SimpleNamespace(
+        document_kind=document_kind, main_file=main_file, files=[main_file],
+        **paper_values, **values,
+    )
+
 
 def _documents_module():
     """Resolve current documents module to avoid stale references across reloads."""
@@ -66,7 +93,8 @@ async def test_library_excludes_benchmark_ids_in_both_page_and_count_queries(sea
     assert count["total_count"] is True
     assert result["total"] == 5
     query_parameters = db.scalars.call_args.args[0].compile().params.values()
-    assert 42 in query_parameters and "benchmark_frozen" in query_parameters
+    assert 42 in query_parameters and "library" in query_parameters
+    assert "!=" in str(db.scalars.call_args.args[0])
 
 
 @pytest.mark.asyncio
@@ -150,7 +178,7 @@ async def test_async_list_documents_normalises_results(sql_status, indexed_statu
     mock_db_user.id = 123  # User's DB id
     mock_db_user.user_id = "test_user_user_id"  # User's string identifier
 
-    mock_db_doc = SimpleNamespace(
+    mock_db_doc = _doc(
         id=mock_uuid,
         filename="paper.pdf",
         title=None,
@@ -175,7 +203,7 @@ async def test_async_list_documents_normalises_results(sql_status, indexed_statu
         source_imported_at=datetime(2024, 1, 2),
         source_access_scope="restricted",
         source_access_group_ids=["FB"],
-        viewer_mode="text_only",
+        display_mode="text",
     )
 
     mock_db_session = MagicMock()
@@ -246,7 +274,7 @@ async def test_async_list_documents_normalises_results(sql_status, indexed_statu
         "imported_at": "2024-01-02T00:00:00",
         "access_scope": "restricted",
         "access_group_ids": ["FB"],
-        "viewer_mode": "text_only",
+        "viewer_mode": "text",
     }
 
 
@@ -394,7 +422,7 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
     mock_db_user = MagicMock()
     mock_db_user.id = 42
 
-    mock_pg_doc = SimpleNamespace(
+    mock_pg_doc = _doc(
         id=owned_uuid,
         filename="owned-paper.pdf",
         title=None,
@@ -412,7 +440,7 @@ async def test_async_list_documents_filters_to_owned_docs_and_applies_defaults()
         source_provider_pdf_artifact_id=None,
         source_md5=None,
         source_access_scope=None,
-        viewer_mode=None,
+        
     )
 
     user_lookup_result = MagicMock()
@@ -484,7 +512,7 @@ async def test_async_list_documents_applies_date_filters():
     mock_connection = MagicMock()
     mock_connection.session.side_effect = fake_session
     mock_db_user = SimpleNamespace(id=42)
-    mock_pg_doc = SimpleNamespace(
+    mock_pg_doc = _doc(
         id=mock_uuid,
         filename="dated-paper.pdf",
         title=None,
@@ -502,7 +530,7 @@ async def test_async_list_documents_applies_date_filters():
         source_provider_pdf_artifact_id=None,
         source_md5=None,
         source_access_scope=None,
-        viewer_mode=None,
+        
     )
     user_lookup_result = MagicMock()
     user_lookup_result.scalar_one_or_none.return_value = mock_db_user

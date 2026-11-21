@@ -1875,7 +1875,7 @@ describe('flow document selection', () => {
       if (url === '/api/chat/document') return jsonResponse({ active: Boolean(selectedDocument), document: selectedDocument })
       if (url === '/api/chat/conversation/reset') return resetResponse ?? jsonResponse({ session_id: 'session-new' })
       if (url.startsWith('/api/pdf-viewer/documents/')) return jsonResponse(url.endsWith('/url')
-        ? { viewer_url: textOnly ? null : '/paper.pdf', viewer_mode: textOnly ? 'text_only' : 'local_pdf' }
+        ? { viewer_url: textOnly ? null : '/paper.pdf', viewer_mode: textOnly ? 'text' : 'local_pdf' }
         : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: 1 })
       const support = realChatSupportResponse(url, init)
       if (support) return support

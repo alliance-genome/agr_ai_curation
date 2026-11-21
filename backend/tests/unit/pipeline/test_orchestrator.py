@@ -23,6 +23,36 @@ def orchestrator(mock_weaviate_client):
     return DocumentPipelineOrchestrator(mock_weaviate_client)
 
 
+MAIN_FILE_ID = "main-file-1"
+
+
+@pytest.fixture(autouse=True)
+def file_steps(monkeypatch):
+    """Stub the main-file steps; chunk dicts keep their indices (start 0)."""
+    from types import SimpleNamespace
+
+    steps = SimpleNamespace(
+        main_file_id=MagicMock(return_value=MAIN_FILE_ID),
+        reserve=MagicMock(return_value=0),
+        ready=MagicMock(),
+        failed=MagicMock(),
+        metadata=AsyncMock(),
+        offsets=[],
+    )
+    monkeypatch.setattr("src.lib.document_files.service.main_file_id", steps.main_file_id)
+    monkeypatch.setattr("src.lib.document_files.service.reserve_file_chunk_range", steps.reserve)
+    monkeypatch.setattr("src.lib.document_files.service.mark_file_ready", steps.ready)
+    monkeypatch.setattr("src.lib.document_files.service.mark_file_failed", steps.failed)
+    monkeypatch.setattr("src.lib.pipeline.store.update_document_metadata", steps.metadata)
+
+    def offset(chunks, start):
+        steps.offsets.append(start)
+        return chunks
+
+    monkeypatch.setattr("src.lib.pipeline.chunk.offset_chunk_indices", offset)
+    return steps
+
+
 @pytest.fixture
 def sample_pdf(tmp_path: Path) -> Path:
     pdf = tmp_path / "sample.pdf"
@@ -31,9 +61,10 @@ def sample_pdf(tmp_path: Path) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_process_pdf_document_success(orchestrator, sample_pdf):
+async def test_process_pdf_document_success(orchestrator, sample_pdf, file_steps):
     document_id = "doc-123"
     orchestrator._sync_sql_document_status = AsyncMock()
+    orchestrator._update_file_paths = AsyncMock()
 
     with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
         "elements": [{"text": "Foo"}],
@@ -77,6 +108,71 @@ async def test_process_pdf_document_success(orchestrator, sample_pdf):
     args, kwargs = mock_store.await_args
     assert args[0] == [{"chunk_index": 0, "content": "Foo"}]
     assert args[1] == document_id
+    assert kwargs == {"chunk_range": (0, 0)}
+    # The PDF pipeline processes the paper's main file.
+    file_steps.main_file_id.assert_called_once_with(document_id)
+    orchestrator._update_file_paths.assert_awaited_once_with(
+        MAIN_FILE_ID, "pdfx/doc.json", "processed/doc.json"
+    )
+    file_steps.reserve.assert_called_once_with(document_id, MAIN_FILE_ID, 1)
+    assert file_steps.offsets == [0]
+    file_steps.ready.assert_called_once_with(MAIN_FILE_ID, text_bytes=3)
+    file_steps.metadata.assert_awaited_once()
+    assert file_steps.metadata.await_args.args[:2] == (
+        document_id, {"stored_chunks": 1, "failed_chunks": 0}
+    )
+    file_steps.failed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_process_pdf_document_stores_hierarchy_on_the_main_file(orchestrator, sample_pdf):
+    orchestrator._sync_sql_document_status = AsyncMock()
+    orchestrator._update_file_paths = AsyncMock()
+    orchestrator._store_hierarchy_metadata = AsyncMock()
+    hierarchy = MagicMock(top_level_sections=["Results"])
+
+    with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
+        "elements": [{"text": "Foo"}],
+        "pdfx_json_path": None,
+        "processed_json_path": None,
+    })), patch(
+        "src.lib.pipeline.hierarchy_resolution.resolve_document_hierarchy",
+        new=AsyncMock(side_effect=lambda elements: (elements, hierarchy)),
+    ), patch(
+        "src.lib.pipeline.chunk.chunk_parsed_document",
+        new=AsyncMock(return_value=[{"chunk_index": 0, "content": "Foo"}]),
+    ), patch(
+        "src.lib.pipeline.figure_locator_resolution.resolve_figure_locators",
+        new=AsyncMock(side_effect=lambda chunks: chunks),
+    ), patch("src.lib.pipeline.store.store_to_weaviate", new=AsyncMock()):
+        result = await orchestrator.process_pdf_document(sample_pdf, "doc-h", "test_user", validate_first=False)
+
+    assert result.success is True
+    orchestrator._store_hierarchy_metadata.assert_awaited_once_with(MAIN_FILE_ID, hierarchy)
+
+
+@pytest.mark.asyncio
+async def test_process_pdf_document_storage_failure_fails_the_main_file(orchestrator, sample_pdf, file_steps):
+    orchestrator._sync_sql_document_status = AsyncMock()
+    orchestrator._update_file_paths = AsyncMock()
+
+    with patch("src.lib.pipeline.pdfx_parser.parse_pdf_document", new=AsyncMock(return_value={
+        "elements": [{"text": "Foo"}],
+        "pdfx_json_path": None,
+        "processed_json_path": None,
+    })), patch(
+        "src.lib.pipeline.chunk.chunk_parsed_document",
+        new=AsyncMock(return_value=[{"chunk_index": 0, "content": "Foo"}]),
+    ), patch(
+        "src.lib.pipeline.figure_locator_resolution.resolve_figure_locators",
+        new=AsyncMock(side_effect=lambda chunks: chunks),
+    ), patch("src.lib.pipeline.store.store_to_weaviate", new=AsyncMock(side_effect=RuntimeError("store boom"))):
+        result = await orchestrator.process_pdf_document(sample_pdf, "doc-s", "test_user", validate_first=False)
+
+    assert result.success is False
+    file_steps.failed.assert_called_once_with(MAIN_FILE_ID, error_message="store boom")
+    file_steps.ready.assert_not_called()
+    file_steps.metadata.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -92,7 +188,7 @@ async def test_process_pdf_document_validation_failure(orchestrator, sample_pdf)
 
 
 @pytest.mark.asyncio
-async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf, monkeypatch, caplog):
+async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf, monkeypatch, caplog, file_steps):
     orchestrator._sync_sql_document_status = AsyncMock()
     runtime_reports = []
     monkeypatch.setattr(
@@ -112,6 +208,7 @@ async def test_process_pdf_document_parsing_error(orchestrator, sample_pdf, monk
         status="failed",
         error_message="boom",
     )
+    file_steps.failed.assert_called_once_with(MAIN_FILE_ID, error_message="boom")
     assert len(runtime_reports) == 1
     reported_exc, report_kwargs = runtime_reports[0]
     assert isinstance(reported_exc, RuntimeError)
@@ -215,6 +312,7 @@ async def test_process_pdf_document_cancellation_does_not_report_runtime_excepti
     orchestrator,
     sample_pdf,
     monkeypatch,
+    file_steps,
 ):
     orchestrator._sync_sql_document_status = AsyncMock()
     runtime_reports = []
@@ -239,6 +337,7 @@ async def test_process_pdf_document_cancellation_does_not_report_runtime_excepti
     assert result.observability_receipt["outcome"] == "cancelled"
     assert result.observability_receipt["stages"]["total"]["status"] == "cancelled"
     assert runtime_reports == []
+    file_steps.failed.assert_called_once_with(MAIN_FILE_ID, error_message="cancelled")
 
 
 @pytest.mark.asyncio
@@ -374,6 +473,12 @@ def test_pipeline_failure_has_one_sentry_owner_with_real_logging(capture_succeed
             document_id = "doc-" + shape
             pipeline = DocumentPipelineOrchestrator(MagicMock(), tracker=tracker if shape == "pending" else job_tracker)
             pipeline._sync_sql_document_status = AsyncMock()
+            file_steps = (
+                patch("src.lib.document_files.service.main_file_id", return_value="main-file-1"),
+                patch("src.lib.document_files.service.mark_file_failed"),
+            )
+            for step in file_steps:
+                step.start()
             failure = PDFParsingError("private pipeline detail", details={
                 "public_message": "PDF reader timed out",
                 "pdfx_failure": {

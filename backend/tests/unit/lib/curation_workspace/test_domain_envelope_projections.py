@@ -39,6 +39,7 @@ from src.lib.domain_packs.materialization import (
 from src.models.sql.database import Base
 from src.models.sql.user import User
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
@@ -56,6 +57,7 @@ from src.schemas.curation_workspace import (
     DomainEnvelopeValidationStatus,
     FieldValidationStatus,
 )
+from tests.pdf_document_test_support import new_paper
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -71,6 +73,7 @@ def _compile_jsonb_for_sqlite(_type, _compiler, **_kwargs):
 TEST_TABLES = [
     User.__table__,
     PDFDocument.__table__,
+    PDFDocumentFile.__table__,
     DocumentReferenceLink.__table__,
     ReviewSessionModel.__table__,
     CurationSessionAgentRevision.__table__,
@@ -626,7 +629,7 @@ def test_workspace_response_includes_domain_envelope_projections():
                 ],
             }
         )
-        document = PDFDocument(
+        document = new_paper(
             id=uuid4(),
             user_id=1,
             filename="paper.pdf",

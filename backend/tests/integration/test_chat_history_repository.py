@@ -23,8 +23,10 @@ from src.lib.chat_history_repository import (
 )
 from src.models.sql.chat_message import ChatMessage
 from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.models.sql.chat_session import ChatSession
 from src.models.sql.user import User
+from tests.pdf_document_test_support import new_paper
 
 
 USER_A = "chat-repo-user-a"
@@ -40,6 +42,7 @@ def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
 def _ensure_chat_history_tables_exist(db_session) -> None:
     User.__table__.create(bind=db_session.get_bind(), checkfirst=True)
     PDFDocument.__table__.create(bind=db_session.get_bind(), checkfirst=True)
+    PDFDocumentFile.__table__.create(bind=db_session.get_bind(), checkfirst=True)
     ChatSession.__table__.create(bind=db_session.get_bind(), checkfirst=True)
     ChatMessage.__table__.create(bind=db_session.get_bind(), checkfirst=True)
 
@@ -302,7 +305,7 @@ def test_append_message_persists_sanitized_nested_payload_in_postgres(db_session
 
 def _create_document(db_session, *, document_id, suffix: str, user_id: int) -> None:
     db_session.add(
-        PDFDocument(
+        new_paper(
             id=document_id,
             filename=f"{DOCUMENT_PREFIX}{suffix}.pdf",
             file_path=f"/tmp/{DOCUMENT_PREFIX}{suffix}.pdf",

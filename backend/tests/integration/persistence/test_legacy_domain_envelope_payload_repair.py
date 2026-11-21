@@ -53,6 +53,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
 )
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 DOCUMENT_ID = UUID("00000000-0000-0000-0000-000000000915")
@@ -73,7 +74,7 @@ def db_session(monkeypatch):
     db = SessionLocal()
     _cleanup(db)
     owner_id = ensure_test_pdf_owner(db, auth_sub="legacy_payload_repair_owner")
-    document = PDFDocument(
+    document = new_paper(
         id=DOCUMENT_ID,
         user_id=owner_id,
         filename="legacy_payload_repair_915.pdf",

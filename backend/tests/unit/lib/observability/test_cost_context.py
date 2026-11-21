@@ -136,7 +136,8 @@ def test_verified_paper_uses_subject_ownership_and_preserves_artifact(monkeypatc
     query = db.query.return_value.join.return_value
     query.filter.return_value.one_or_none.return_value = SimpleNamespace(
         source_provider="example", source_provider_reference_curie="EX:paper-A",
-        source_provider_reference_id="123", source_md5=None, file_hash="checksum",
+        source_provider_reference_id="123",
+        main_file=SimpleNamespace(source_md5=None, file_hash="checksum"),
     )
     monkeypatch.setattr(database, "SessionLocal", lambda: db)
     first = execution_context(activity="interactive_chat", document_id="artifact-A", user_id="auth-sub")

@@ -17,21 +17,32 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
+
 from pydantic import Field
 
 from src.config import get_pdf_storage_path
 from src.lib.benchmarks.document_inputs import decode_frozen_document
 from src.lib.benchmarks.execution_context import BenchmarkCuratorContext
 from src.lib.benchmarks.models import FrozenStrictModel
+from src.lib.document_files.service import mark_file_failed
 from src.lib.document_sources.ingestion import (
     _sync_sql_document_status,
+    finalize_new_paper,
     index_owned_document_elements,
 )
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.documents import create_document
 from src.models.document import DocumentMetadata, PDFDocument as VectorDocument
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import (
+    DISPLAY_MODE_TEXT,
+    DOCUMENT_KIND_BENCHMARK_FROZEN,
+    FILE_ROLE_MAIN,
+    FILE_STATUS_PENDING,
+    PDFDocument,
+    PDFDocumentFile,
+)
 from src.models.sql.user import User
 from src.models.strategy import ChunkingStrategy
 
@@ -81,15 +92,26 @@ def verify_prepared_document(
     with SessionLocal() as session:
         user = session.get(User, curator.db_user_id)
         document = session.get(PDFDocument, receipt.document_id)
+        main_file = (
+            session.execute(
+                select(PDFDocumentFile).where(
+                    PDFDocumentFile.document_id == receipt.document_id,
+                    PDFDocumentFile.role == FILE_ROLE_MAIN,
+                )
+            ).scalar_one_or_none()
+            if document is not None else None
+        )
         if (
             user is None or user.is_active is not True or user.auth_sub != curator.subject
             or document is None or document.user_id != curator.db_user_id
-            or document.status != "completed" or document.viewer_mode != "benchmark_frozen"
-            or document.file_path != receipt.source_path
-            or document.processed_json_path != receipt.processed_json_path
+            or document.status != "completed"
+            or document.document_kind != DOCUMENT_KIND_BENCHMARK_FROZEN
+            or main_file is None
+            or main_file.file_path != receipt.source_path
+            or main_file.processed_json_path != receipt.processed_json_path
         ):
             raise PermissionError("Prepared document is unavailable for its curator")
-        source_size = document.file_size
+        source_size = main_file.file_size
     root = Path(get_pdf_storage_path()).resolve(strict=True)
     for relative_path, digest in (
         (receipt.source_path, receipt.snapshot_digest),
@@ -134,9 +156,9 @@ async def prepare_frozen_document(
     scoped_file_hash = hashlib.sha256(
         f"benchmark:{curator.db_user_id}:{document_id}:{checksum}".encode()
     ).hexdigest()
-    await asyncio.to_thread(
+    file_id = await asyncio.to_thread(
         _insert_document, document_id, curator, filename, source_path,
-        scoped_file_hash, len(content), page_count, processed_path,
+        scoped_file_hash, len(content), processed_path,
     )
 
     now = datetime.now(timezone.utc)
@@ -154,8 +176,12 @@ async def prepare_frozen_document(
         ))
         if not created.get("success"):
             raise RuntimeError("Frozen runtime document creation failed")
+        await _sync_sql_document_status(
+            str(document_id), user_id=curator.subject, owner_user_id=curator.db_user_id,
+            status="processing",
+        )
         chunk_count = await index_owned_document_elements(
-            elements, document_id=str(document_id), user_id=curator.subject,
+            elements, document_id=str(document_id), file_id=file_id, user_id=curator.subject,
             owner_user_id=curator.db_user_id, weaviate_client=weaviate_client,
             strategy=ChunkingStrategy.get_research_strategy(),
             stage_checkpoint=stage_checkpoint,
@@ -167,14 +193,17 @@ async def prepare_frozen_document(
             chunk_count=chunk_count,
         )
         await stage_checkpoint("ready")
-        await _sync_sql_document_status(
+        await finalize_new_paper(
             str(document_id), user_id=curator.subject, owner_user_id=curator.db_user_id,
-            status="completed",
+            weaviate_client=weaviate_client,
         )
         return receipt
     except Exception:
         # Keep partial state at the already-recorded document identity for
         # explicit cleanup; never silently repeat paid preparation calls.
+        await asyncio.to_thread(
+            mark_file_failed, file_id, error_message="Frozen benchmark preparation failed",
+        )
         await _sync_sql_document_status(
             str(document_id), user_id=curator.subject, owner_user_id=curator.db_user_id,
             status="failed", error_message="Frozen benchmark preparation failed",
@@ -204,14 +233,21 @@ def _validate_frozen_input(
 
 def _insert_document(
     document_id: UUID, curator: BenchmarkCuratorContext, filename: str,
-    source_path: str, scoped_file_hash: str, content_size: int, page_count: int,
-    processed_path: str,
-) -> None:
+    source_path: str, scoped_file_hash: str, content_size: int, processed_path: str,
+) -> UUID:
+    """Create the frozen paper and its one main file, which is always text."""
     with SessionLocal() as session:
         session.add(PDFDocument(
             id=document_id, user_id=curator.db_user_id, filename=filename,
-            file_path=source_path, file_hash=scoped_file_hash, file_size=content_size,
-            page_count=page_count, processed_json_path=processed_path, source_payload_path=source_path,
-            viewer_mode="benchmark_frozen", status="pending",
+            document_kind=DOCUMENT_KIND_BENCHMARK_FROZEN, next_chunk_index=0, status="pending",
         ))
+        session.flush()
+        main_file = PDFDocumentFile(
+            document_id=document_id, role=FILE_ROLE_MAIN, display_name=filename,
+            status=FILE_STATUS_PENDING, tab_order=0, display_mode=DISPLAY_MODE_TEXT,
+            file_path=source_path, file_hash=scoped_file_hash, file_size=content_size,
+            page_count=None, processed_json_path=processed_path, source_payload_path=source_path,
+        )
+        session.add(main_file)
         session.commit()
+        return main_file.id

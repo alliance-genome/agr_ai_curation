@@ -116,7 +116,7 @@ export async function rehydrateChatDocument(
   const viewerMode = typeof urlData.viewer_mode === 'string' && urlData.viewer_mode.trim()
     ? urlData.viewer_mode.trim().toLowerCase()
     : 'local_pdf'
-  const isTextOnlyDocument = viewerMode === 'text_only'
+  const isTextOnlyDocument = viewerMode === 'text'
 
   if (!viewerUrl && !isTextOnlyDocument) {
     throw new Error('Document viewer URL unavailable')

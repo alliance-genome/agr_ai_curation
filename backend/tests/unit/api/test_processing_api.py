@@ -1,270 +1,15 @@
 """Unit tests for document processing API endpoints."""
 
 import logging
-from unittest.mock import AsyncMock
 
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 import pytest
 from types import SimpleNamespace
 
 from src.api import processing
-from src.models.api_schemas import EmbeddingConfiguration, ReembedRequest, ReprocessRequest
+from src.models.api_schemas import EmbeddingConfiguration, ReembedRequest
 from src.models.document import ProcessingStatus
 from src.models.pipeline import ProcessingStage
-
-
-class _ClaimSession:
-    def __init__(self):
-        self.commits = 0
-        self.rollbacks = 0
-        self.closed = False
-
-    def commit(self):
-        self.commits += 1
-
-    def rollback(self):
-        self.rollbacks += 1
-
-    def close(self):
-        self.closed = True
-
-
-def _patch_reprocess_claim(monkeypatch, file_path):
-    monkeypatch.setattr(processing, "provision_user_async", AsyncMock(return_value=SimpleNamespace(id=17)))
-    claim_session = _ClaimSession()
-    claim_calls = []
-
-    def _source_path(*_args, **kwargs):
-        claim_calls.append(kwargs)
-        return file_path
-
-    monkeypatch.setattr(processing, "SessionLocal", lambda: claim_session)
-    monkeypatch.setattr(processing, "_owned_source_file_path", _source_path)
-    return claim_session, claim_calls
-
-
-@pytest.mark.asyncio
-async def test_reprocess_document_not_found(monkeypatch):
-    async def _get_document(_user_id, _doc_id):
-        return None
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-
-    with pytest.raises(HTTPException) as exc:
-        await processing.reprocess_document_endpoint(
-            BackgroundTasks(),
-            document_id="doc-1",
-            request=ReprocessRequest(strategy_name="default", force_reparse=False),
-            user={"sub": "user-1"},
-        )
-    assert exc.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_reprocess_document_rejects_when_processing(monkeypatch):
-    async def _get_document(_user_id, _doc_id):
-        return {"document": {"processing_status": ProcessingStatus.PROCESSING.value, "filename": "paper.pdf"}}
-
-    async def _pipeline_status(_doc_id):
-        return type("Status", (), {"current_stage": ProcessingStage.CHUNKING})()
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing.pipeline_tracker, "get_pipeline_status", _pipeline_status)
-
-    with pytest.raises(HTTPException) as exc:
-        await processing.reprocess_document_endpoint(
-            BackgroundTasks(),
-            document_id="doc-1",
-            request=ReprocessRequest(strategy_name="default", force_reparse=False),
-            user={"sub": "user-1"},
-        )
-    assert exc.value.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_reprocess_document_rejects_stale_processing_status_without_terminal_job(monkeypatch):
-    async def _get_document(_user_id, _doc_id):
-        return {"document": {"processing_status": ProcessingStatus.PROCESSING.value, "filename": "paper.pdf"}}
-
-    async def _pipeline_status(_doc_id):
-        return None
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(processing.pipeline_tracker, "get_pipeline_status", _pipeline_status)
-
-    with pytest.raises(HTTPException) as exc:
-        await processing.reprocess_document_endpoint(
-            BackgroundTasks(),
-            document_id="doc-1",
-            request=ReprocessRequest(strategy_name="default", force_reparse=False),
-            user={"sub": "user-1"},
-        )
-    assert exc.value.status_code == 409
-    assert "stage: processing" in str(exc.value.detail).lower()
-
-
-@pytest.mark.asyncio
-async def test_reprocess_document_treats_unknown_status_as_pending(monkeypatch, tmp_path):
-    user_id = "user-1"
-    document_id = "doc-1"
-    filename = "paper.pdf"
-    file_dir = tmp_path / user_id / document_id
-    file_dir.mkdir(parents=True)
-    (file_dir / filename).write_text("pdf", encoding="utf-8")
-
-    async def _get_document(_user_id, _doc_id):
-        return {"document": {"processing_status": "custom-status", "filename": filename}}
-
-    async def _update_status(_doc_id, _uid, _status):
-        return None
-
-    async def _track(_doc_id, _stage):
-        return None
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    _patch_reprocess_claim(monkeypatch, file_dir / filename)
-    monkeypatch.setattr(processing, "update_document_status", _update_status)
-    monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
-    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
-
-    result = await processing.reprocess_document_endpoint(
-        BackgroundTasks(),
-        document_id=document_id,
-        request=ReprocessRequest(strategy_name="default", force_reparse=False),
-        user={"sub": user_id},
-    )
-
-    assert result.success is True
-
-
-@pytest.mark.asyncio
-async def test_reprocess_document_success_schedules_background_task(monkeypatch, tmp_path):
-    user_id = "user-1"
-    document_id = "doc-1"
-    filename = "paper.pdf"
-    file_dir = tmp_path / user_id / document_id
-    file_dir.mkdir(parents=True)
-    (file_dir / filename).write_text("pdf", encoding="utf-8")
-
-    async def _get_document(_user_id, _doc_id):
-        return {"document": {"processing_status": "completed", "filename": filename}}
-
-    status_calls = []
-    track_calls = []
-
-    async def _update_status(doc_id, uid, status):
-        status_calls.append((doc_id, uid, status))
-
-    async def _track(doc_id, stage):
-        track_calls.append((doc_id, stage))
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    claim_session, claim_calls = _patch_reprocess_claim(monkeypatch, file_dir / filename)
-    monkeypatch.setattr(processing, "update_document_status", _update_status)
-    monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
-    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
-
-    background = BackgroundTasks()
-    result = await processing.reprocess_document_endpoint(
-        background,
-        document_id=document_id,
-        request=ReprocessRequest(strategy_name="default", force_reparse=True),
-        user={"sub": user_id},
-    )
-
-    assert result.success is True
-    assert result.document_id == document_id
-    assert "reprocessing initiated" in result.message.lower()
-    assert len(background.tasks) == 1
-    assert status_calls == [(document_id, user_id, ProcessingStatus.PROCESSING)]
-    assert track_calls == [(document_id, ProcessingStage.PARSING)]
-    assert claim_session.commits == 1
-    assert claim_session.closed is True
-    assert claim_calls == [{"session": claim_session, "for_update": True, "provisioned_user_id": 17}]
-
-
-@pytest.mark.asyncio
-async def test_reprocess_background_failure_reports_observability(
-    monkeypatch,
-    tmp_path,
-):
-    user_id = "user-1"
-    document_id = "doc-1"
-    filename = "paper.pdf"
-    file_dir = tmp_path / user_id / document_id
-    file_dir.mkdir(parents=True)
-    (file_dir / filename).write_text("pdf", encoding="utf-8")
-
-    async def _get_document(_user_id, _doc_id):
-        return {"document": {"processing_status": "completed", "filename": filename}}
-
-    status_calls = []
-    report_calls = []
-
-    async def _update_status(doc_id, uid, status):
-        status_calls.append((doc_id, uid, status))
-
-    async def _track(_doc_id, _stage):
-        return None
-
-    class _FailingOrchestrator:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        async def process_pdf_document(self, **_kwargs):
-            raise RuntimeError("raw document processing failure")
-
-    def _report(exc, *, task_name, tags=None, context=None):
-        report_calls.append(
-            {
-                "exc_type": type(exc).__name__,
-                "task_name": task_name,
-                "tags": dict(tags or {}),
-                "context": dict(context or {}),
-            }
-        )
-        return True
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: None)
-    _patch_reprocess_claim(monkeypatch, file_dir / filename)
-    monkeypatch.setattr(processing, "update_document_status", _update_status)
-    monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
-    monkeypatch.setattr(processing, "get_connection", lambda: object())
-    monkeypatch.setattr(processing, "DocumentPipelineOrchestrator", _FailingOrchestrator)
-    monkeypatch.setattr(processing, "report_background_task_exception", _report)
-    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
-
-    background = BackgroundTasks()
-    await processing.reprocess_document_endpoint(
-        background,
-        document_id=document_id,
-        request=ReprocessRequest(strategy_name="default", force_reparse=False),
-        user={"sub": user_id},
-    )
-
-    task = background.tasks[0]
-    await task.func(*task.args, **task.kwargs)
-
-    assert status_calls == [
-        (document_id, user_id, ProcessingStatus.PROCESSING),
-        (document_id, user_id, ProcessingStatus.FAILED),
-    ]
-    assert report_calls == [
-        {
-            "exc_type": "RuntimeError",
-            "task_name": "documents.reprocess",
-            "tags": {
-                "component": "documents",
-                "document_id": document_id,
-            },
-            "context": {},
-        }
-    ]
 
 
 @pytest.mark.asyncio
@@ -390,29 +135,6 @@ async def test_reembed_document_success_with_custom_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reprocess_document_rejects_when_latest_pdf_job_is_active(monkeypatch):
-    async def _get_document(_user_id, _doc_id):
-        return {"document": {"processing_status": "completed", "filename": "paper.pdf"}}
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-    monkeypatch.setattr(
-        processing,
-        "_latest_job_for_user_document",
-        lambda *_args, **_kwargs: SimpleNamespace(status="running", current_stage="parsing"),
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        await processing.reprocess_document_endpoint(
-            BackgroundTasks(),
-            document_id="doc-1",
-            request=ReprocessRequest(strategy_name="default", force_reparse=False),
-            user={"sub": "user-1"},
-        )
-    assert exc.value.status_code == 409
-    assert "job status: running" in str(exc.value.detail).lower()
-
-
-@pytest.mark.asyncio
 async def test_reembed_document_rejects_when_latest_pdf_job_is_active(monkeypatch):
     async def _get_document(_user_id, _doc_id):
         return {"document": {"processing_status": "completed"}, "total_chunks": 8}
@@ -432,45 +154,6 @@ async def test_reembed_document_rejects_when_latest_pdf_job_is_active(monkeypatc
         )
     assert exc.value.status_code == 409
     assert "job status: cancel_requested" in str(exc.value.detail).lower()
-
-
-@pytest.mark.asyncio
-async def test_reprocess_document_allows_stale_processing_status_when_job_terminal(monkeypatch, tmp_path):
-    user_id = "user-1"
-    document_id = "doc-1"
-    filename = "paper.pdf"
-    file_dir = tmp_path / user_id / document_id
-    file_dir.mkdir(parents=True)
-    (file_dir / filename).write_text("pdf", encoding="utf-8")
-
-    async def _get_document(_user_id, _doc_id):
-        return {"document": {"processing_status": "processing", "filename": filename}}
-
-    async def _pipeline_status(_doc_id):
-        return None
-
-    async def _update_status(_doc_id, _uid, _status):
-        return None
-
-    async def _track(_doc_id, _stage):
-        return None
-
-    monkeypatch.setattr(processing, "get_document", _get_document)
-    monkeypatch.setattr(processing, "_latest_job_for_user_document", lambda *_args, **_kwargs: SimpleNamespace(status="failed"))
-    monkeypatch.setattr(processing.pipeline_tracker, "get_pipeline_status", _pipeline_status)
-    _patch_reprocess_claim(monkeypatch, file_dir / filename)
-    monkeypatch.setattr(processing, "update_document_status", _update_status)
-    monkeypatch.setattr(processing.pipeline_tracker, "track_pipeline_progress", _track)
-    monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda *_args, **_kwargs: None)
-
-    result = await processing.reprocess_document_endpoint(
-        BackgroundTasks(),
-        document_id=document_id,
-        request=ReprocessRequest(strategy_name="default", force_reparse=False),
-        user={"sub": user_id},
-    )
-
-    assert result.success is True
 
 
 @pytest.mark.asyncio
@@ -507,33 +190,6 @@ async def test_reembed_document_allows_stale_processing_status_when_job_terminal
 
 
 @pytest.mark.asyncio
-async def test_reprocess_document_maps_internal_error_to_sanitized_500(monkeypatch, caplog):
-    caplog.set_level(logging.ERROR, logger=processing.logger.name)
-
-    async def _boom(_user_id, _doc_id):
-        raise RuntimeError("reprocess backend unavailable")
-
-    async def _update_status(_doc_id, _uid, _status):
-        return None
-
-    monkeypatch.setattr(processing, "get_document", _boom)
-    monkeypatch.setattr(processing, "update_document_status", _update_status)
-
-    with pytest.raises(HTTPException) as exc:
-        await processing.reprocess_document_endpoint(
-            BackgroundTasks(),
-            document_id="doc-1",
-            request=ReprocessRequest(strategy_name="default", force_reparse=False),
-            user={"sub": "user-1"},
-        )
-
-    assert exc.value.status_code == 500
-    assert exc.value.detail == "Failed to initiate reprocessing"
-    assert "reprocess backend unavailable" not in str(exc.value.detail)
-    assert "reprocess backend unavailable" in caplog.text
-
-
-@pytest.mark.asyncio
 async def test_reembed_document_maps_internal_error_to_sanitized_500(monkeypatch, caplog):
     caplog.set_level(logging.ERROR, logger=processing.logger.name)
 
@@ -557,3 +213,9 @@ async def test_reembed_document_maps_internal_error_to_sanitized_500(monkeypatch
     assert exc.value.detail == "Failed to initiate re-embedding"
     assert "embedding backend unavailable" not in str(exc.value.detail)
     assert "embedding backend unavailable" in caplog.text
+
+
+def test_reprocess_route_is_removed():
+    paths = {route.path for route in processing.router.routes}
+    assert "/weaviate/documents/{document_id}/reprocess" not in paths
+    assert "/weaviate/documents/{document_id}/reembed" in paths

@@ -53,6 +53,7 @@ from src.lib.domain_packs.validation_findings import append_validation_findings_
 from src.models.sql.validation_history import ValidationBody, ValidationCheckpoint
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import DocumentReferenceLink, PDFDocument
+from src.models.sql.pdf_document import PDFDocumentFile
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
     CurationActionType,
@@ -100,6 +101,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingStatus,
 )
 from src.schemas.domain_pack_metadata import DomainPackObjectDefinition
+from tests.pdf_document_test_support import new_paper
 
 pytestmark = pytest.mark.usefixtures("isolated_validation_history")
 
@@ -126,6 +128,7 @@ TEST_TABLES = [
     ValidationCheckpoint.__table__,
     User.__table__,
     PDFDocument.__table__,
+    PDFDocumentFile.__table__,
     DocumentReferenceLink.__table__,
     ReviewSessionModel.__table__,
     CurationSessionAgentRevision.__table__,
@@ -211,12 +214,11 @@ def test_document_ref_uses_protected_document_id_url():
         id=document_id,
         title=None,
         filename="paper.pdf",
-        page_count=5,
         source_provider_reference_id=None,
         source_provider_reference_curie=None,
         reference_link=None,
-        viewer_mode="local_pdf",
         source_external_ids=None,
+        main_file=SimpleNamespace(page_count=5, display_mode="local_pdf"),
     )
 
     reference = serializer_module._document_ref(document)
@@ -226,23 +228,23 @@ def test_document_ref_uses_protected_document_id_url():
     assert reference.viewer_url == protected_url
 
 
-def test_document_ref_omits_pdf_url_for_text_only_document():
+def test_document_ref_omits_pdf_url_for_text_document():
     document = SimpleNamespace(
         id=uuid4(),
         title="Imported article",
         filename="article.md",
-        page_count=1,
         source_provider_reference_id=None,
         source_provider_reference_curie=None,
         reference_link=None,
-        viewer_mode="text_only",
         source_external_ids=None,
+        main_file=SimpleNamespace(page_count=None, display_mode="text"),
     )
 
     reference = serializer_module._document_ref(document)
 
     assert reference.pdf_url is None
     assert reference.viewer_url is None
+    assert reference.page_count is None
 
 
 def _imported_document(source_external_ids):
@@ -250,12 +252,11 @@ def _imported_document(source_external_ids):
         id=UUID("6f0c1f4e-3a0f-4c39-9a51-6f0b2d1c0a11"),
         title="Imported article",
         filename="article.pdf",
-        page_count=3,
         source_provider_reference_id=None,
         source_provider_reference_curie=None,
         reference_link=None,
-        viewer_mode="local_pdf",
         source_external_ids=source_external_ids,
+        main_file=SimpleNamespace(page_count=3, display_mode="local_pdf"),
     )
 
 
@@ -307,7 +308,7 @@ def test_document_intent_payload_ignores_display_only_pmid_and_doi():
 
 def _create_document(db_session):
     now = _now()
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         user_id=1,
         filename="paper.pdf",

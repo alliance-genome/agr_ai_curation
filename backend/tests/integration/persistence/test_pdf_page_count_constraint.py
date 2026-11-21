@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
@@ -44,7 +45,7 @@ def db_session():
 
 def _document(page_count: int, *, user_id: int) -> PDFDocument:
     document_id = uuid4()
-    return PDFDocument(
+    return new_paper(
         id=document_id,
         user_id=user_id,
         filename=f"page_count_constraint_{document_id}.pdf",
@@ -69,7 +70,7 @@ def test_database_accepts_positive_page_counts_above_legacy_ceiling(
     db_session.add(document)
     db_session.commit()
 
-    assert db_session.get(PDFDocument, document.id).page_count == page_count
+    assert db_session.get(PDFDocument, document.id).main_file.page_count == page_count
 
 
 def test_database_rejects_non_positive_page_count(db_session):

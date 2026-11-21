@@ -22,6 +22,33 @@ from src.models.document import ProcessingStatus
 from src.models.pipeline import PipelineStatus, ProcessingStage
 from src.schemas.documents import DocumentUpdateRequest
 
+_FILE_FIELDS = (
+    "file_path", "file_hash", "file_size", "page_count", "pdfx_json_path", "processed_json_path",
+    "hierarchy_metadata", "source_provider_source_file_id", "source_provider_converted_artifact_id",
+    "source_provider_pdf_artifact_id", "source_md5", "source_converted_artifact_sha256",
+    "source_file_class", "source_file_extension", "source_artifact_status", "source_import_status",
+    "source_imported_at", "source_payload_path", "source_markdown_path", "source_access_scope",
+    "source_access_group_ids",
+)
+_PAPER_PROVENANCE_FIELDS = (
+    "source_provider", "source_provider_reference_id", "source_provider_reference_curie",
+    "source_external_ids",
+)
+
+
+def _doc(*, display_mode="local_pdf", document_kind="library", **values):
+    """A paper record whose per-file values live on its main file."""
+    file_values = {field: values.pop(field, None) for field in _FILE_FIELDS}
+    file_values["display_mode"] = display_mode
+    if display_mode == "text":
+        file_values["page_count"] = None
+    paper_values = {field: values.pop(field, None) for field in _PAPER_PROVENANCE_FIELDS}
+    main_file = SimpleNamespace(id="main-file", role="main", **file_values)
+    return SimpleNamespace(
+        document_kind=document_kind, main_file=main_file, files=[main_file],
+        **paper_values, **values,
+    )
+
 
 class _FakeQuery:
     def __init__(self, doc):
@@ -118,7 +145,7 @@ def _patch_indexed_document_status(monkeypatch, status="completed"):
 @pytest.mark.asyncio
 async def test_verify_document_ownership_returns_document(monkeypatch):
     doc_id = str(uuid4())
-    owned_doc = SimpleNamespace(id=doc_id, user_id=10, viewer_mode=None)
+    owned_doc = _doc(id=doc_id, user_id=10, )
     session = _FakeSession(execute_doc=owned_doc)
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=10))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
@@ -130,7 +157,7 @@ async def test_verify_document_ownership_returns_document(monkeypatch):
 @pytest.mark.asyncio
 async def test_verify_document_ownership_can_lock_document_row(monkeypatch):
     doc_id = str(uuid4())
-    owned_doc = SimpleNamespace(id=doc_id, user_id=10, viewer_mode=None)
+    owned_doc = _doc(id=doc_id, user_id=10, )
     session = _FakeSession(execute_doc=owned_doc)
     monkeypatch.setattr(
         documents,
@@ -157,7 +184,7 @@ async def test_verify_document_ownership_can_lock_document_row(monkeypatch):
 @pytest.mark.asyncio
 async def test_verify_document_ownership_rejects_cross_user(monkeypatch):
     doc_id = str(uuid4())
-    foreign_doc = SimpleNamespace(id=doc_id, user_id=999, viewer_mode=None)
+    foreign_doc = _doc(id=doc_id, user_id=999, )
     session = _FakeSession(execute_doc=foreign_doc)
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=10))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
@@ -230,7 +257,7 @@ async def test_get_document_endpoint_returns_document_response(monkeypatch):
     upload_time = datetime.now(timezone.utc)
     processing_started_at = datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc)
     processing_completed_at = datetime(2026, 8, 25, 12, 5, tzinfo=timezone.utc)
-    pg_doc = SimpleNamespace(
+    pg_doc = _doc(
         filename="paper.pdf",
         upload_timestamp=upload_time,
         processing_started_at=processing_started_at,
@@ -262,7 +289,7 @@ async def test_get_document_endpoint_returns_document_response(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_document_endpoint_raises_500_on_backend_error(monkeypatch, caplog):
     monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
-    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(filename="a", upload_timestamp=datetime.now(timezone.utc), file_size=1))
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: _doc(filename="a", upload_timestamp=datetime.now(timezone.utc), file_size=1))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
     monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=5))
 
@@ -328,7 +355,7 @@ async def test_update_document_endpoint_renames_source_and_index(monkeypatch, tm
     source_path = tmp_path / relative_path
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"%PDF-1.7")
-    document = SimpleNamespace(
+    document = _doc(
         title="Title",
         filename="old.pdf",
         file_path=relative_path,
@@ -358,7 +385,7 @@ async def test_update_document_endpoint_renames_source_and_index(monkeypatch, tm
     assert response.document_id == document_id
     assert response.title == "New title"
     assert response.filename == "renamed.pdf"
-    assert document.file_path == f"user-1/{document_id}/renamed.pdf"
+    assert document.main_file.file_path == f"user-1/{document_id}/renamed.pdf"
     assert not source_path.exists()
     assert source_path.with_name("renamed.pdf").read_bytes() == b"%PDF-1.7"
     assert index_updates == [("user-1", document_id, "renamed.pdf")]
@@ -368,7 +395,7 @@ async def test_update_document_endpoint_renames_source_and_index(monkeypatch, tm
 @pytest.mark.asyncio
 async def test_update_document_endpoint_rejects_active_processing_rename(monkeypatch):
     document_id = str(uuid4())
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=f"user-1/{document_id}/old.pdf",
@@ -395,11 +422,11 @@ async def test_update_document_endpoint_rejects_active_processing_rename(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_update_document_endpoint_rejects_current_indexed_reprocess_with_terminal_prior_job(
+async def test_update_document_endpoint_rejects_current_indexed_reembed_with_terminal_prior_job(
     monkeypatch,
 ):
     document_id = str(uuid4())
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=f"user-1/{document_id}/old.pdf",
@@ -447,7 +474,7 @@ async def test_update_document_endpoint_rejects_filename_collision(monkeypatch, 
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"old")
     source_path.with_name("taken.pdf").write_bytes(b"taken")
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=str(source_path.relative_to(tmp_path)),
@@ -480,7 +507,7 @@ async def test_update_document_endpoint_rejects_database_path_collision(monkeypa
     source_path = tmp_path / "user-1" / document_id / "old.pdf"
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"old")
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=str(source_path.relative_to(tmp_path)),
@@ -512,7 +539,7 @@ async def test_update_document_endpoint_restores_source_when_index_update_fails(
     source_path = tmp_path / "user-1" / document_id / "old.pdf"
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"old")
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=str(source_path.relative_to(tmp_path)),
@@ -556,7 +583,7 @@ async def test_update_document_endpoint_restores_index_and_source_when_commit_fa
     source_path = tmp_path / "user-1" / document_id / "old.pdf"
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"old")
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=str(source_path.relative_to(tmp_path)),
@@ -605,7 +632,7 @@ async def test_update_document_endpoint_completes_forward_when_index_rollback_fa
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"old")
     new_path = source_path.with_name("renamed.pdf")
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=str(source_path.relative_to(tmp_path)),
@@ -665,7 +692,7 @@ async def test_update_document_endpoint_completes_forward_when_index_rollback_fa
     assert exc.value.status_code == 500
     assert index_updates == ["renamed.pdf", "old.pdf"]
     assert document.filename == "renamed.pdf"
-    assert document.file_path == str(new_path.relative_to(tmp_path))
+    assert document.main_file.file_path == str(new_path.relative_to(tmp_path))
     assert new_path.read_bytes() == b"old"
     assert not source_path.exists()
     assert commit_attempts == 2
@@ -689,7 +716,7 @@ async def test_update_document_endpoint_sanitizes_failed_forward_recovery(
     source_path.parent.mkdir(parents=True)
     source_path.write_bytes(b"old")
     new_path = source_path.with_name("renamed.pdf")
-    document = SimpleNamespace(
+    document = _doc(
         title=None,
         filename="old.pdf",
         file_path=str(source_path.relative_to(tmp_path)),
@@ -752,7 +779,7 @@ async def test_update_document_endpoint_sanitizes_failed_forward_recovery(
     assert exc.value.detail == "Failed to update document"
     assert index_updates == ["renamed.pdf", "old.pdf"]
     assert document.filename == "renamed.pdf"
-    assert document.file_path == str(new_path.relative_to(tmp_path))
+    assert document.main_file.file_path == str(new_path.relative_to(tmp_path))
     assert source_path.read_bytes() == b"old"
     assert new_path.read_bytes() == b"old"
     assert commit_attempts == 2
@@ -1005,7 +1032,7 @@ async def test_delete_document_endpoint_blocks_newer_upload_tracker_after_termin
 async def test_delete_document_endpoint_allows_stale_postgres_only_document_cleanup(monkeypatch):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
-    cleanup_doc = SimpleNamespace(
+    cleanup_doc = _doc(
         id=doc_id,
         user_id=42,
         file_path=None,
@@ -1044,7 +1071,7 @@ async def test_delete_document_endpoint_allows_stale_postgres_only_document_clea
 
 
 @pytest.mark.asyncio
-async def test_delete_document_endpoint_removes_text_only_source_markdown(monkeypatch, tmp_path):
+async def test_delete_document_endpoint_removes_text_source_markdown(monkeypatch, tmp_path):
     doc_id = str(uuid4())
     source_dir = tmp_path / "user-1" / "source_markdown"
     source_dir.mkdir(parents=True)
@@ -1056,14 +1083,14 @@ async def test_delete_document_endpoint_removes_text_only_source_markdown(monkey
     provider_placeholder.write_text("placeholder", encoding="utf-8")
 
     verify_session = _FakeSession()
-    cleanup_doc = SimpleNamespace(
+    cleanup_doc = _doc(
         id=doc_id,
         user_id=42,
         file_path=f"document_sources/abc_literature/{doc_id}-4672234.md",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
-        viewer_mode="text_only",
+        display_mode="text",
     )
     snapshot_session = _FakeSession(execute_doc=cleanup_doc)
     cleanup_session = _FakeSession(execute_doc=cleanup_doc)
@@ -1098,14 +1125,14 @@ async def test_delete_document_endpoint_uses_snapshot_when_helper_removes_sql_ro
     source_markdown.write_text("# Provider Markdown\n", encoding="utf-8")
 
     verify_session = _FakeSession()
-    snapshot_doc = SimpleNamespace(
+    snapshot_doc = _doc(
         id=doc_id,
         user_id=42,
         file_path=f"user-1/{doc_id}/paper.pdf",
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
-        viewer_mode="local_pdf",
+        
     )
     snapshot_session = _FakeSession(execute_doc=snapshot_doc)
     cleanup_session = _FakeSession(execute_doc=None)
@@ -1132,14 +1159,14 @@ async def test_delete_document_endpoint_uses_snapshot_when_helper_removes_sql_ro
 async def test_delete_document_endpoint_raises_when_cleanup_fails(monkeypatch, tmp_path, caplog):
     doc_id = str(uuid4())
     verify_session = _FakeSession()
-    cleanup_doc = SimpleNamespace(
+    cleanup_doc = _doc(
         id=doc_id,
         user_id=42,
         file_path=None,
         pdfx_json_path=None,
         processed_json_path=None,
         source_markdown_path=f"user-1/source_markdown/{doc_id}.md",
-        viewer_mode="text_only",
+        display_mode="text",
     )
     snapshot_session = _FakeSession(execute_doc=cleanup_doc)
     cleanup_session = _FakeSession(execute_doc=cleanup_doc)
@@ -1764,10 +1791,10 @@ async def test_listing_never_reconciles_incomplete_inventory(monkeypatch, scenar
     from src.lib.weaviate_client import documents as library
 
     durable = [
-        SimpleNamespace(id=uuid4(), viewer_mode=None, file_path="paper/source.pdf")
+        _doc(id=uuid4(),  file_path="paper/source.pdf")
         for _ in range(1001)
     ]
-    durable.append(SimpleNamespace(id=uuid4(), viewer_mode="benchmark_frozen"))
+    durable.append(_doc(id=uuid4(), document_kind="benchmark_frozen", display_mode="text"))
     session = MagicMock()
     session.query.return_value.filter.return_value.first.return_value = SimpleNamespace(id=42)
     session.query.return_value.filter.return_value.all.return_value = durable
