@@ -20,6 +20,7 @@ import {
 import {
   buildCurationPDFViewerOwner,
   dispatchPDFDocumentChanged,
+  dispatchPDFViewerDocumentCleared,
 } from '@/components/pdfViewer/pdfEvents'
 import { usePersistentPdfWorkspaceLayout } from '@/components/pdfViewer/PersistentPdfWorkspaceLayout'
 import { buildManualCandidateDraft } from '@/features/curation/entityTags/workspaceEntityTags'
@@ -355,7 +356,13 @@ function CurationWorkspacePageContent({
 
   useEffect(() => {
     const pdfUrl = workspaceDocumentPdfUrl ?? workspaceDocumentViewerUrl
-    if (!hydration.isHydrated || !workspaceDocumentId || !pdfUrl) {
+    if (!hydration.isHydrated || !workspaceDocumentId) {
+      return
+    }
+    if (!pdfUrl) {
+      // A text paper has no PDF. Clear the shared viewer so it cannot keep
+      // showing (and searching) the paper chat had open before.
+      dispatchPDFViewerDocumentCleared(viewerOwnerToken)
       return
     }
 
