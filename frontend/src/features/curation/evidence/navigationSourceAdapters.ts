@@ -2,6 +2,7 @@ import type {
   CurationEvidenceRecord,
   DomainEnvelopeEvidenceAnchorProjection,
   EvidenceRecord,
+  EvidenceSourceFragment,
 } from '../types'
 import type { EvidenceAnchor } from '../contracts'
 import type { EvidenceNavigationCommand } from './types'
@@ -10,6 +11,7 @@ import {
   normalizeEvidenceNavigationText,
 } from './navigationCommandBuilder'
 import { normalizeEvidenceSectionHierarchy } from './navigationPresentation'
+import { evidenceViewerSearchText } from './tableRowSearchText'
 
 function buildAnchorToken(value: string, fallback: string): string {
   const normalized = value
@@ -99,6 +101,7 @@ export function buildNavigationCommandFromChatEvidenceRecord(
       chunk_ids: [evidenceRecord.chunk_id],
     },
     quote,
+    searchText: evidenceViewerSearchText(evidenceRecord.source_fragments),
     pageNumber: evidenceRecord.page,
     sectionTitle: evidenceRecord.section,
     mode,
@@ -126,6 +129,18 @@ export function buildNavigationCommandFromCurationEvidenceRecord(
     sectionTitle: evidenceRecord.anchor.section_title ?? null,
     mode,
   })
+}
+
+/** The envelope evidence record's source fragments, when the projection carries it. */
+function sourceRecordFragments(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+): EvidenceSourceFragment[] | null {
+  const sourceRecord = projection.metadata?.source_record
+  if (!sourceRecord || typeof sourceRecord !== 'object') {
+    return null
+  }
+  const fragments = (sourceRecord as { source_fragments?: unknown }).source_fragments
+  return Array.isArray(fragments) ? fragments as EvidenceSourceFragment[] : null
 }
 
 export function deriveNavigationQuoteFromEnvelopeEvidenceProjection(
@@ -165,6 +180,7 @@ export function buildNavigationCommandFromEnvelopeEvidenceProjection(
     anchorId: projection.anchor_id,
     anchor,
     quote,
+    searchText: evidenceViewerSearchText(sourceRecordFragments(projection)),
     pageNumber: anchor.page_number,
     sectionTitle: anchor.section_title,
     mode,

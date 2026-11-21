@@ -1297,6 +1297,35 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findbarCloseCount).toBe(1)
   })
 
+  it('asks the quote matcher for a table row\'s cell text, not its Markdown pipes', async () => {
+    vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
+    render(<PdfViewer />)
+    dispatchPDFDocumentChanged('doc-table', '/fixtures/sample.pdf', 'table-evidence.pdf', 8)
+    await waitFor(() => {
+      expect(screen.getByText('table-evidence.pdf')).toBeInTheDocument()
+    })
+    const { iframe } = installMockPdfViewer({
+      onFind: () => ({ state: 1, total: 0, current: 0, pageIdx: null }),
+      pages: buildDefaultPages(),
+    })
+    fireEvent.load(iframe)
+
+    const row = '| XS1 | 3 | 5 | 4.0 |'
+    dispatchPDFViewerNavigateEvidence(buildNavigationCommandFromChatEvidenceRecord({
+      entity: 'zeta',
+      verified_quote: row,
+      page: 3,
+      section: 'Results',
+      chunk_id: 'chunk-3',
+      source_fragments: [{ text: row, span_type: 'table_row' }],
+    }))
+
+    await waitFor(() => {
+      expect(vi.mocked(fuzzyMatchPdfEvidenceQuote)).toHaveBeenCalled()
+    })
+    expect(vi.mocked(fuzzyMatchPdfEvidenceQuote).mock.calls.map(([request]) => request.quote)).toEqual(['XS1 3 5 4.0'])
+  })
+
   it('drops an evidence navigation queued while the viewer was cleared for a text paper', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
     const onNavigationComplete = vi.fn()
