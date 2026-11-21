@@ -206,9 +206,12 @@ def _reconcile_terminal_document(session, job: PdfProcessingJob) -> bool:
     }:
         return False
 
-    # Lock the document before checking the latest job. Inserting another job
-    # takes a foreign-key key-share lock on this row, so the latest-job decision
-    # remains valid through the document mutation.
+    # Lock the document before checking the latest job. A job insert's
+    # foreign-key key-share lock would wait on this row, but a second job for a
+    # paper that still has an active job waits on the one-active-job unique index
+    # instead, which is released only when this transaction ends. So this lock
+    # alone does not order such an insert after the decision below: a caller
+    # adding a job to an existing paper must lock the paper row first.
     document = session.execute(
         select(PDFDocument).where(PDFDocument.id == job.document_id).with_for_update()
     ).scalar_one_or_none()

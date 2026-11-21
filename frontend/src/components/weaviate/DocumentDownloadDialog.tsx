@@ -69,14 +69,18 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
       const data = await response.json();
       const viewerMode = typeof data.viewer_mode === 'string' ? data.viewer_mode : null;
       const isTextOnly = viewerMode === 'text';
+      // A paper of supplements only has no main file, so none of these downloads exists.
+      const hasNoMainFile = data.has_main_file === false;
 
       const files: DownloadableFile[] = [
         {
           type: 'pdf',
           label: 'Original PDF',
-          description: isTextOnly
-            ? 'No local PDF is stored for this provider text import'
-            : 'The original uploaded PDF document',
+          description: hasNoMainFile
+            ? 'This paper has no main file; it holds supplements only'
+            : isTextOnly
+              ? 'No local PDF is stored for this provider text import'
+              : 'The original uploaded PDF document',
           icon: <PictureAsPdf color="error" />,
           available: data.pdf_available || false,
           size: data.pdf_size,

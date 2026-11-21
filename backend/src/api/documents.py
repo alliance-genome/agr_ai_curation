@@ -2158,6 +2158,7 @@ async def get_download_info(
                     "source_markdown_available": False,
                     "source_markdown_size": None,
                     "viewer_mode": None,
+                    "has_main_file": False,
                     "source_provenance": build_document_source_provenance(doc),
                     "filename": doc.filename,
                 }
@@ -2228,6 +2229,7 @@ async def get_download_info(
                 "source_markdown_available": source_markdown_available,
                 "source_markdown_size": source_markdown_size,
                 "viewer_mode": viewer_mode,
+                "has_main_file": True,
                 "source_provenance": build_document_source_provenance(doc),
                 "filename": doc.filename
             }

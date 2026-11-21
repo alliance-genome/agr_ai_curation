@@ -47,6 +47,13 @@ class PDFDocumentSummary(BaseModel):
         pattern=r"^/api/pdf-viewer/documents/[0-9a-f-]+/content$",
     )
     viewer_mode: str | None = None
+    has_main_file: bool = Field(
+        ...,
+        description=(
+            "False for a paper that holds supplements only; its viewer_mode, "
+            "viewer_url, page_count and file_size are then null"
+        ),
+    )
 
 
 class PDFDocumentDetail(PDFDocumentSummary):
@@ -63,6 +70,10 @@ class ViewerURLResponse(BaseModel):
         pattern=r"^/api/pdf-viewer/documents/[0-9a-f-]+/content$",
     )
     viewer_mode: str | None = None
+    has_main_file: bool = Field(
+        ...,
+        description="False for a paper that holds supplements only; viewer_mode is then null",
+    )
 
 
 class DocumentListResponse(BaseModel):
@@ -147,6 +158,7 @@ def _document_summary(record: PdfDocumentModel) -> PDFDocumentSummary:
         upload_timestamp=record.upload_timestamp,
         viewer_url=_document_viewer_url(record),
         viewer_mode=_viewer_mode(record),
+        has_main_file=main_file is not None,
     )
 
 
@@ -231,6 +243,7 @@ def get_document_viewer_url(
     return ViewerURLResponse(
         viewer_url=_document_viewer_url(record),
         viewer_mode=_viewer_mode(record),
+        has_main_file=record.main_file_or_none is not None,
     )
 
 

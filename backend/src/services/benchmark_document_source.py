@@ -84,7 +84,7 @@ def load_owned_local_document(
         if main_file is None:
             raise BenchmarkSourceError(
                 "missing_source",
-                "Local benchmark document has no main paper",
+                "Local benchmark document has no main file",
             )
         processed_json_path = main_file.processed_json_path
         if document.processing_completed_at is None or not processed_json_path:

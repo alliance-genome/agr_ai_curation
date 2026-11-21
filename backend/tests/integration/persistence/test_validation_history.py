@@ -2049,3 +2049,27 @@ def test_null_character_content_is_stored_once_under_one_identity(scope):
             "items": [{"value": 1}, {"text": _NUL_STRIPPED}],
         }
         assert "\\u0000" not in json.dumps(db.get(ValidationBody, second_sha).content)
+
+
+def test_retiring_the_history_of_a_paper_without_a_main_file():
+    from tests.pdf_document_test_support import new_supplements_only_paper
+
+    doc = uuid4()
+    owner = "validation-history-" + uuid4().hex
+    with SessionLocal.begin() as db:
+        uid = ensure_test_pdf_owner(db, auth_sub=owner)
+        db.add(new_supplements_only_paper(id=doc, user_id=uid, filename="supplements-only", status="processed"))
+    scope = h.HistoryScope(owner, str(doc), uuid4().hex)
+    aid = artifact(scope)
+
+    with SessionLocal.begin() as db:
+        assert h.retire_document_history(db, doc) == 1
+    with SessionLocal() as db:
+        retirement_id = db.scalar(
+            select(ValidationFact.id).where(
+                ValidationFact.artifact_id == aid, ValidationFact.kind == "document_retirement"
+            )
+        )
+    body = h.read_fact(scope, aid, retirement_id)["content"]
+    assert body["document_id"] == str(doc)
+    assert body["file_hash"] is None

@@ -878,7 +878,7 @@ def test_local_document_loader_refuses_a_paper_without_a_main_file(monkeypatch):
         load_owned_local_document("4b6ea638-9755-4d95-b523-e98b2493d8b1", "owner-sub")
 
     assert exc_info.value.code == "missing_source"
-    assert "no main paper" in str(exc_info.value)
+    assert "no main file" in str(exc_info.value)
 
 
 def test_local_document_loader_classifies_unprocessed_document_as_expected_404(

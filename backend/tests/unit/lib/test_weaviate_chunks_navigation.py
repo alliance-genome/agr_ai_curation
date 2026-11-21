@@ -572,8 +572,12 @@ async def test_a_paper_without_a_main_file_has_no_document_hierarchy(monkeypatch
             pass
 
     monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: _Session())
+    errors = []
+    monkeypatch.setattr(chunks.logger, "error", lambda *args, **_kwargs: errors.append(args))
 
     assert await chunks.get_document_hierarchy("11111111-1111-1111-1111-111111111111", "user-1") is None
+    # No hierarchy is the answer, not a swallowed failure.
+    assert errors == []
 
 
 _PREPARATION_QUERIES = [

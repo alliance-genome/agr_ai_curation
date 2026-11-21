@@ -238,6 +238,7 @@ describe('HomePage durable session bootstrap', () => {
         return jsonResponse({
           viewer_url: '/viewer/doc-42',
           viewer_mode: 'local_pdf',
+          has_main_file: true,
         })
       }
 
@@ -335,7 +336,7 @@ describe('HomePage durable session bootstrap', () => {
         return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
       }
       if (url === '/api/pdf-viewer/documents/doc-b/url') {
-        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf' }))
+        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf', has_main_file: true }))
       }
       throw new Error(`Unexpected fetch: ${url}`)
     })
@@ -419,7 +420,7 @@ describe('HomePage durable session bootstrap', () => {
         return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
       }
       if (url === '/api/pdf-viewer/documents/doc-b/url') {
-        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf' }))
+        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf', has_main_file: true }))
       }
       throw new Error(`Unexpected fetch: ${url}`)
     })
@@ -603,7 +604,7 @@ describe('HomePage durable session bootstrap', () => {
       }
 
       if (url === '/api/pdf-viewer/documents/doc-upload/url') {
-        return jsonResponse({ viewer_url: '/viewer/doc-upload', viewer_mode: 'local_pdf' })
+        return jsonResponse({ viewer_url: '/viewer/doc-upload', viewer_mode: 'local_pdf', has_main_file: true })
       }
 
       throw new Error(`Unexpected fetch: ${url}`)
@@ -775,6 +776,7 @@ describe('HomePage durable session bootstrap', () => {
         return jsonResponse({
           viewer_url: '/viewer/doc-route',
           viewer_mode: 'local_pdf',
+          has_main_file: true,
         })
       }
 
@@ -1117,6 +1119,7 @@ describe('HomePage durable session bootstrap', () => {
           return jsonResponse({
             viewer_url: '/viewer/doc-42',
             viewer_mode: 'local_pdf',
+            has_main_file: true,
           })
         }
 
@@ -1853,6 +1856,7 @@ describe('flow document selection', () => {
   let selectedDocument: { id: string; filename: string } | null
   let resetResponse: Promise<Response> | null
   let textOnly: boolean
+  let noMainFile = false
   const runFlow = () => rightPanelRenderSpy.mock.calls.at(-1)![0].onExecuteFlow('flow-1') as Promise<void>
 
   beforeEach(() => {
@@ -1860,6 +1864,7 @@ describe('flow document selection', () => {
     selectedDocument = { id: 'selected-paper', filename: 'paper.pdf' }
     resetResponse = null
     textOnly = false
+    noMainFile = false
     localStorage.clear()
     sessionStorage.clear()
     chatRenderSpy.mockReset()
@@ -1877,8 +1882,12 @@ describe('flow document selection', () => {
       if (url === '/api/chat/document/load') return jsonResponse({ active: true, document: selectedDocument })
       if (url === '/api/chat/document') return jsonResponse({ active: Boolean(selectedDocument), document: selectedDocument })
       if (url === '/api/chat/conversation/reset') return resetResponse ?? jsonResponse({ session_id: 'session-new' })
+      // A paper without a main file: has_main_file false and every main-file field null.
+      if (url.startsWith('/api/pdf-viewer/documents/') && noMainFile) return jsonResponse(url.endsWith('/url')
+        ? { viewer_url: null, viewer_mode: null, has_main_file: false }
+        : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: null, file_size: null, has_main_file: false })
       if (url.startsWith('/api/pdf-viewer/documents/')) return jsonResponse(url.endsWith('/url')
-        ? { viewer_url: textOnly ? null : '/paper.pdf', viewer_mode: textOnly ? 'text' : 'local_pdf' }
+        ? { viewer_url: textOnly ? null : '/paper.pdf', viewer_mode: textOnly ? 'text' : 'local_pdf', has_main_file: true }
         : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: textOnly ? null : 1 })
       const support = realChatSupportResponse(url, init)
       if (support) return support
@@ -1897,8 +1906,9 @@ describe('flow document selection', () => {
     await waitFor(() => expect(localStorage.getItem(keys.activeDocument)).toContain('selected-paper'))
   }
 
-  it.each(['missing', 'stale', 'inaccessible', 'text-only'])('uses the selected chat document with a %s viewer cache', async (cache) => {
+  it.each(['missing', 'stale', 'inaccessible', 'text-only', 'no-main-file'])('uses the selected chat document with a %s viewer cache', async (cache) => {
     textOnly = cache === 'text-only'
+    noMainFile = cache === 'no-main-file'
     await openChat()
     if (cache === 'stale') localStorage.setItem(keys.pdfViewerSession, JSON.stringify({ documentId: 'wrong-paper' }))
     else localStorage.removeItem(keys.pdfViewerSession)

@@ -333,6 +333,7 @@ def test_missing_attribution_does_not_report(monkeypatch, document_id, user_id):
 
 
 def test_a_paper_without_a_main_file_has_no_artifact_revision(monkeypatch):
+    from src.lib.observability import cost_context
     from src.models.sql import database
     from tests.pdf_document_test_support import new_supplements_only_paper
 
@@ -344,8 +345,12 @@ def test_a_paper_without_a_main_file_has_no_artifact_revision(monkeypatch):
         source_provider_reference_curie="EX:paper-B",
     )
     monkeypatch.setattr(database, "SessionLocal", lambda: db)
+    report = MagicMock()
+    monkeypatch.setattr(cost_context, "report_runtime_exception", report)
 
     context = execution_context(activity="interactive_chat", document_id="artifact-C", user_id="auth-sub")
 
     assert context["paper"] == {"namespace": "example", "id": "EX:paper-B"}
     assert "artifact_revision" not in context
+    # A paper without a main file is a normal state, not a lookup failure.
+    report.assert_not_called()

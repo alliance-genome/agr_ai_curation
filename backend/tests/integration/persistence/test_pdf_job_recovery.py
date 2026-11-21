@@ -72,8 +72,10 @@ def test_recovery_without_viewers_preserves_latest_terminal_and_recent(dataset):
              for status in ("pending", "running", "cancel_requested")]
     terminal = dataset(terminal_document=True)
     recent = dataset(recent=True)
-    # A paper's newer job decides its status once the older one has finished.
-    # (Two active jobs on one paper cannot exist: one active job per paper.)
+    # Recovery leaves an older finished job alone beside a newer running one.
+    # The case this once covered (a stale active job that is not the paper's
+    # latest) is unreachable: one active job per paper is enforced by an index,
+    # and a finished job never becomes active again.
     old = dataset("failed", created=NOW - timedelta(days=40))
     new = dataset(recent=True, owner=old[2], document_id=old[1], created=NOW)
     assert recovery.reconcile_stale_jobs_once(now=NOW) is None

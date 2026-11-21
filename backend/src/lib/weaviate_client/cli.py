@@ -91,7 +91,9 @@ def list_documents_cmd(ctx, user_id: str, page: int, page_size: int, search: Opt
             for doc in docs:
                 click.echo(f"ID: {doc.get('document_id', 'N/A')}")
                 click.echo(f"  Filename: {doc.get('filename', 'N/A')}")
-                click.echo(f"  Size: {doc.get('file_size_bytes', 0):,} bytes")
+                size = doc.get("file_size_bytes")
+                # A paper of supplements only has no main file and so no size.
+                click.echo(f"  Size: {size:,} bytes" if size is not None else "  Size: no main file")
                 click.echo(f"  Status: {doc.get('embedding_status', 'N/A')}")
                 click.echo(f"  Chunks: {doc.get('chunk_count', 0)}")
                 click.echo(f"  Vectors: {doc.get('vector_count', 0)}")

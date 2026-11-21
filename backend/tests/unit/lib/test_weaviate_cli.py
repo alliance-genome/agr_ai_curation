@@ -117,3 +117,26 @@ def test_get_document_text_uses_lean_document_result(monkeypatch):
     assert "Embeddings:" not in result.output
     assert "Embedded Chunks:" not in result.output
     get_document.assert_awaited_once_with("user-1", "document-1")
+
+
+def test_list_documents_table_shows_a_paper_without_a_main_file(monkeypatch):
+    response = {
+        "documents": [
+            {
+                "document_id": "doc-2",
+                "filename": "supplements-only-paper",
+                "file_size_bytes": None,
+                "embedding_status": "completed",
+                "chunk_count": 3,
+                "vector_count": 3,
+            }
+        ],
+        "total": 1,
+        "limit": 20,
+        "offset": 0,
+    }
+
+    result = _invoke_list_documents(monkeypatch, response)
+
+    assert result.exit_code == 0, result.output
+    assert "Size: no main file" in result.output

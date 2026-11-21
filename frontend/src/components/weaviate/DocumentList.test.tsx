@@ -1,7 +1,7 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, userEvent, waitFor, within } from '../../test/test-utils';
 import DocumentList from './DocumentList';
-import type { DocumentSummary } from '../../services/weaviate';
+import { normalizeDocumentListResponse, type DocumentSummary } from '../../services/weaviate';
 import {
   DOCUMENT_LOADING_STORAGE_KEY,
   DOCUMENT_LOAD_START_EVENT,
@@ -354,6 +354,45 @@ describe('DocumentList', () => {
     expect(screen.getByText('1 KB')).toBeInTheDocument();
     expect(screen.getByText('1 MB')).toBeInTheDocument();
     expect(screen.getByText('1 GB')).toBeInTheDocument();
+  });
+
+  it('lists a paper without a main file, with no size, beside the others', () => {
+    // The Library list row the backend returns for a paper that holds supplements only.
+    const { documents: [supplementsOnly] } = normalizeDocumentListResponse({
+      documents: [{
+        document_id: 'no-main',
+        user_id: 'user-1',
+        filename: 'supplements-only-paper',
+        title: null,
+        status: 'COMPLETED',
+        upload_timestamp: '2026-11-21T00:00:00Z',
+        processing_started_at: null,
+        processing_completed_at: null,
+        file_size_bytes: null,
+        weaviate_tenant: 'tenant',
+        chunk_count: 3,
+        vector_count: 3,
+        embedding_status: 'completed',
+        error_message: null,
+        source_provenance: null,
+      }],
+      total: 1,
+      limit: 20,
+      offset: 0,
+    } as unknown as Parameters<typeof normalizeDocumentListResponse>[0]);
+
+    render(
+      <DocumentList
+        {...defaultProps}
+        documents={[createTestDocument({ id: '21', fileSize: 1024 }), supplementsOnly]}
+      />,
+    );
+
+    expect(screen.getByText('supplements-only-paper')).toBeInTheDocument();
+    expect(screen.getByText('1 KB')).toBeInTheDocument();
+    const row = screen.getByText('supplements-only-paper').closest('tr');
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getAllByText('—').length).toBeGreaterThan(0);
   });
 
   it('displays embedding status with correct colors', () => {
