@@ -1297,7 +1297,7 @@ describe('PdfViewer evidence navigation', () => {
     expect(eventBus.findbarCloseCount).toBe(1)
   })
 
-  it('asks the quote matcher for a table row\'s cell text, not its Markdown pipes', async () => {
+  it('asks the quote matcher for a table row\'s served cell text, not its Markdown pipes', async () => {
     vi.mocked(global.fetch).mockResolvedValue(new Response(null, { status: 200 }))
     render(<PdfViewer />)
     dispatchPDFDocumentChanged('doc-table', '/fixtures/sample.pdf', 'table-evidence.pdf', 8)
@@ -1317,7 +1317,7 @@ describe('PdfViewer evidence navigation', () => {
       page: 3,
       section: 'Results',
       chunk_id: 'chunk-3',
-      source_fragments: [{ text: row, span_type: 'table_row' }],
+      source_fragments: [{ text: row, span_type: 'table_row', search_text: 'XS1 3 5 4.0' }],
     }))
 
     await waitFor(() => {

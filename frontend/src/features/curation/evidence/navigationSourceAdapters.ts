@@ -11,7 +11,7 @@ import {
   normalizeEvidenceNavigationText,
 } from './navigationCommandBuilder'
 import { normalizeEvidenceSectionHierarchy } from './navigationPresentation'
-import { evidenceViewerSearchText } from './tableRowSearchText'
+import { evidenceViewerSearchText } from './evidenceViewerSearchText'
 
 function buildAnchorToken(value: string, fallback: string): string {
   const normalized = value
