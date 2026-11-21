@@ -82,16 +82,18 @@ def _quote(record_id, document_id, field_path):
 
 
 @pytest.fixture
-def paper(scope, tmp_path, monkeypatch):
+def paper(scope, tmp_path, monkeypatch, request):
+    """``request.param`` names the field each original quote is labelled with, by part."""
     from unittest.mock import AsyncMock
     from src.lib.config.agent_loader import AgentDefinition
 
+    labels = getattr(request, "param", {"a": "statement", "b": "statement"})
     install_cancel_reader(monkeypatch, AsyncMock(return_value=False))
     pack = _pack(tmp_path)
     records, objects = [], []
     for index in range(RECORDS):
         ids = [f"original-{index}-{part}" for part in "ab"]
-        records.extend(_quote(identity, scope.document_id, "statement") for identity in ids)
+        records.extend(_quote(f"original-{index}-{part}", scope.document_id, labels[part]) for part in "ab")
         objects.append(CuratableObjectEnvelope(
             object_type="Annotation", pending_ref_id=f"record-{index}", evidence_record_ids=ids,
             payload={"statement": f"Statement {index}", **{name: f"{name}-{index}" for name in FIELDS}}))
@@ -238,3 +240,94 @@ async def test_four_corrected_records_revalidate_only_changed_bindings_within_bu
         assert obj.evidence_record_ids == [f"original-{index}-a", f"original-{index}-b",
                                            *(f"new-{index}-{name}" for name in CORRECTED)]
         assert [obj.payload[name] for name in CORRECTED] == [f"corrected-{name}-{index}" for name in CORRECTED]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paper", [{"a": "f01", "b": "f02"}], indirect=True)
+async def test_restoring_a_set_aside_record_in_a_closed_round_of_an_older_review(paper, monkeypatch):
+    """A review saved before ALL-1584; a curator restores a set-aside record after the round closed.
+
+    Before the release every check received the record's whole quote list. In
+    that review record-1 was corrected and re-checked, and record-0 was set
+    aside. The restore is the first save after the release.
+    """
+    from copy import deepcopy
+
+    from src.lib.domain_packs import input_selectors
+    from src.models.sql.validation_review import ValidationReviewEpisode
+    from tests.integration.persistence.test_record_retirement import proposal
+
+    item = paper
+    routed = input_selectors.binding_evidence
+    release = {"applied": False}
+    monkeypatch.setattr(input_selectors, "binding_evidence",
+                        lambda records, **kwargs: routed(records, **kwargs) if release["applied"] else tuple(records))
+
+    def run(request, binding, **kwargs):
+        return {**_result_payload(request, resolved_values={"curie": request.selected_inputs["value"]}),
+                "resolved_objects": []}
+
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_runner",
+                        lambda: run)
+    monkeypatch.setattr("src.lib.validation_review.validator_adapter._default_package_scoped_validator_batch_runner",
+                        lambda: lambda *args, **kwargs: pytest.fail("Unexpected batch"))
+    # Before the release: first dispatch, a correction of record-1, record-0 set aside.
+    await item.adapter.initial()
+    checkpoint = checkpoint_provider(item)
+    context, contribution, evidence_ids = _correction(item, checkpoint, 1)
+    with store.SessionLocal() as db:
+        digest = selections.source_state_digest(db, item.aid)
+    selected = await item.adapter.select_source(
+        context, checkpoint, operation_id="old-correction", contribution_ref=contribution,
+        field_paths=list(CORRECTED), evidence_ids=evidence_ids, expected_source_sha=digest, reason="Methods")
+    old_affected = sorted(change["target_id"] for change in selected["affected_bindings"])
+    assert len(old_affected) == len(FIELDS)  # the old fan-out: every check on the record
+    assessed = await item.adapter.assess_source(context, operation_id="old-assess",
+        selection_id=selected["selection_id"], target_ids=old_affected, instructions="Assess")
+    assert assessed["state"] == "completed"
+    context, ref, target = proposal(item)
+    with store.SessionLocal() as db:
+        digest = selections.source_state_digest(db, item.aid)
+    await item.adapter.select_source(context, checkpoint, operation_id="set-aside", contribution_ref=ref,
+                                     retirement_decision="approve", expected_source_sha=digest,
+                                     reason="Outside the task")
+    with store.SessionLocal.begin() as db:
+        episode = db.get(ValidationReviewEpisode, item.ep)
+        episode.state = "complete"
+        charged, allowances = deepcopy(episode.charged), deepcopy(episode.allowances)
+        version = store._current(db, item.aid, target)["version"]
+    before = _latest_inputs(item)
+
+    # After the release: the curator restores record-0 in the closed round.
+    release["applied"] = True
+    resumed = ValidatorAdapter(item.scope, item.aid, item.ep, item.adapter.plan_ref, authenticated_groups=())
+    curator = ReviewContext(item.scope, item.ep, item.scope.owner_id, actor_type="curator")
+    restored = await resumed.select_source(curator, checkpoint, operation_id="restore", restore_target_id=target,
+                                           expected_version=version, reason="Review again")
+    after = _latest_inputs(item)
+    changed = {key for key in item.targets if before[key] != after[key]}
+    # Checks that were never re-checked keep no saved follow-up input and stay current.
+    assert not {key for key in changed if key[0] in {"record-2", "record-3"}}
+    # Record-1's checks were re-checked under the old routing; their saved inputs
+    # hold every quote, so the narrower rebuild makes each of them stale.
+    assert {key for key in changed if key[0] == "record-1"} == {("record-1", name) for name in FIELDS}
+    # Restoring runs no check and charges nothing.
+    with store.SessionLocal() as db:
+        episode = db.get(ValidationReviewEpisode, item.ep)
+        assert (episode.charged, episode.allowances, episode.state) == (charged, allowances, "complete")
+    assert restored["publication"]["ready"] is False
+    with store.SessionLocal() as db:
+        manifest = selections.manifest_in_transaction(db, item.scope, item.aid, episode_id=item.ep)
+    blocked = {blocker["target_id"] for blocker in manifest["blockers"]}
+    record_1 = {item.targets[("record-1", name)] for name in FIELDS}
+    assert record_1 <= blocked
+    # Record-1's checks already used their re-check, and the round is closed:
+    # they stay stale in this round. The paper shows as awaiting review until
+    # the curator presses Revalidate, which starts a new round.
+    with pytest.raises(admission.ReviewStopped) as stopped:
+        await resumed.assess_source(curator, operation_id="recheck-closed",
+                                    selection_id=restored["restoration_id"],
+                                    target_ids=sorted(record_1), instructions="Re-check")
+    assert stopped.value.reason == "scientific_attempts_exhausted"
+    status = admission.status(item.scope, item.ep)
+    assert (status["state"], status["ready"]) == ("pending", False)
