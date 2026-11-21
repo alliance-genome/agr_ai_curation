@@ -72,7 +72,9 @@ def test_recovery_without_viewers_preserves_latest_terminal_and_recent(dataset):
              for status in ("pending", "running", "cancel_requested")]
     terminal = dataset(terminal_document=True)
     recent = dataset(recent=True)
-    old = dataset(created=NOW - timedelta(days=40))
+    # A paper's newer job decides its status once the older one has finished.
+    # (Two active jobs on one paper cannot exist: one active job per paper.)
+    old = dataset("failed", created=NOW - timedelta(days=40))
     new = dataset(recent=True, owner=old[2], document_id=old[1], created=NOW)
     assert recovery.reconcile_stale_jobs_once(now=NOW) is None
     for (job_id, doc_id, _), expected in cases:
@@ -201,29 +203,25 @@ def test_snapshot_boundaries_rest_totals_and_synthetic_query_counts(dataset, mon
         event.remove(engine, "before_cursor_execute", capture)
 
 
-def test_latest_job_insert_committing_while_document_lock_waits_is_preserved(dataset, monkeypatch):
+def test_a_second_active_job_waits_for_recovery_of_the_stale_one(dataset):
+    """One active job per paper: a new job for a paper whose job is stale is refused
+    until recovery has finished the stale one, and then it is accepted."""
+    from sqlalchemy.exc import IntegrityError
+
     old_id, doc_id, owner = dataset()
-    reached_document = threading.Event()
-    def capture(_conn, _cursor, statement, *_args):
-        if "FROM pdf_documents" in statement and "FOR UPDATE" in statement:
-            reached_document.set()
-    event.listen(engine, "before_cursor_execute", capture)
-    try:
-        with SessionLocal() as writer, ThreadPoolExecutor() as pool:
-            # The insert is uncommitted when recovery starts. Its FK lock holds
-            # recovery at the document read until the new latest job is visible.
-            new_job = PdfProcessingJob(
-                document_id=doc_id, user_id=owner, status="running",
-                created_at=NOW, updated_at=NOW, progress_percentage=0,
-            )
-            writer.add(new_job)
-            writer.flush()
-            pending = pool.submit(recovery.reconcile_stale_jobs_once, now=NOW)
-            try:
-                assert reached_document.wait(5)
-            finally:
-                writer.commit()
-            pending.result(timeout=5)
-        assert states(old_id, doc_id)[:2] == ("failed", "processing")
-    finally:
-        event.remove(engine, "before_cursor_execute", capture)
+    with SessionLocal() as writer:
+        writer.add(PdfProcessingJob(
+            document_id=doc_id, user_id=owner, status="running",
+            created_at=NOW, updated_at=NOW, progress_percentage=0,
+        ))
+        with pytest.raises(IntegrityError, match="uq_pdf_processing_jobs_one_active_per_document"):
+            writer.commit()
+
+    assert recovery.reconcile_stale_jobs_once(now=NOW) is None
+    assert states(old_id, doc_id)[:2] == ("failed", "failed")
+    with SessionLocal() as writer:
+        writer.add(PdfProcessingJob(
+            document_id=doc_id, user_id=owner, status="running",
+            created_at=NOW, updated_at=NOW, progress_percentage=0,
+        ))
+        writer.commit()
