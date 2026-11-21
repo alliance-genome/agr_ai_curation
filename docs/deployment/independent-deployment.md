@@ -43,6 +43,37 @@ The standalone stack now expects `backend`, `frontend`, and `trace_review_backen
   literature health checks, authenticated Weaviate, and no host-published data
   service ports. Unsafe env overrides stop the preflight.
 
+## Search index (Weaviate) engine version
+
+The repository pins the search index engine that the Alliance production
+service runs: `semitechnologies/weaviate:1.31.18` by tag and digest, in every
+compose file. The backend and the benchmark worker read
+`WEAVIATE_EXPECTED_VERSION` (set next to the image in each compose file) and
+refuse to start when the server reports a different version.
+
+- An install may run a different engine through its own override. The override
+  must set both the `weaviate` image and `WEAVIATE_EXPECTED_VERSION` on
+  `backend` and `benchmark_worker`, to the same version. The production
+  preflight fails when they differ.
+- Moving an existing data directory to an OLDER engine is a downgrade, and its
+  safety is not established. The check above does not catch it: after a
+  downgrade the server reports the pinned version, so startup passes. Two cases
+  in particular:
+  - Installs from `docker-compose.production.yml`: that file moved from 1.32.10
+    to 1.31.18 in 0.12.0. If your data was written by 1.32.10 or newer, keep
+    your engine with an override (image and `WEAVIATE_EXPECTED_VERSION`
+    together), or restore your data into a fresh 1.31.18 server. Do not open it
+    with 1.31.18.
+  - Developer machines: `docker-compose.yml` used `latest` before 0.12.0. If
+    your local `weaviate_data` was written by a newer `latest`, recreate it (and
+    re-upload test papers) rather than reopening it on 1.31.18.
+
+Release note for outside installs (0.12.0): the search index image is now
+pinned to Weaviate 1.31.18 in every compose file, and the backend refuses to
+start on any other engine version. If your install runs a newer engine, set the
+image and `WEAVIATE_EXPECTED_VERSION` together in your own override before you
+deploy; do not open data written by a newer engine with 1.31.18.
+
 ## Installed runtime layout
 
 The standalone installer seeds the modular runtime under

@@ -42,7 +42,7 @@ exact project name printed by Compose, not a global Docker prune.
 | Real path | Synthetic boundary |
 |---|---|
 | RS256 key selection/signature, issuer/audience/expiry, capability and initiating-human checks | OIDC discovery/JWKS delivery and Cognito administrative membership responses |
-| Active SQL curator, frozen input upload/read/resolver and owned document preparation journal/files/Weaviate | Hierarchy, abstract and figure model outputs; vectorization disabled in the existing persistence fixture |
+| Active SQL curator, frozen input upload/read/resolver and owned document preparation journal/files/Weaviate | Hierarchy and figure model outputs; vectorization disabled in the existing persistence fixture |
 | Public CLI HTTP commands, authoritative preview/admission, idempotency and durable worker leases | Reviewed test catalog and deterministic external agent/flow execution |
 | Agent/flow runtime adapters, independent role routes, durable invocation attempts and exact result bytes | Model response content and usage events; unknown cost stays unknown |
 | Durable events/410 recovery, explicit failed-cell rerun, cancellation, owner-bound deletion, uncertain-running recovery | Controlled failure and expired lease fixture |

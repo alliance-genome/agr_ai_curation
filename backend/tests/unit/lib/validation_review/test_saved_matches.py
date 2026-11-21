@@ -35,10 +35,12 @@ def envelope_with(records):
     return DomainEnvelope.model_validate(raw)
 
 
+REGISTRY = package_registry("gene_expression")
+
+
 def plan_matches(records):
-    registry = package_registry("gene_expression")
     envelope = envelope_with(records)
-    matches = registry.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
+    matches = REGISTRY.match_bindings(envelope, states=[ValidationBindingState.ACTIVE])
     return envelope, {f"target-{index}": match for index, match in enumerate(matches)}
 
 
@@ -49,9 +51,9 @@ def previous_reader(match):
     return saved_matches.MATCH.validate_python(store.canonical(value)[1])
 
 
-def assert_reads_as_before(matches, plan_envelope):
+def assert_reads_as_before(matches, plan_envelope, registry=REGISTRY):
     saved = store.canonical(saved_matches.encode(matches, plan_envelope=plan_envelope))[1]
-    restored = saved_matches.decode({**saved, "envelope": plan_envelope})
+    restored = saved_matches.decode({**saved, "envelope": plan_envelope}, registry=registry)
     assert restored.keys() == matches.keys()
     for target, match in matches.items():
         before = previous_reader(match)
@@ -80,7 +82,7 @@ def test_saved_matches_read_back_equal_to_the_originals():
     # A database round trip returns canonical JSON.
     saved = store.canonical(saved)[1]
 
-    restored = saved_matches.decode({**saved, "envelope": plan_envelope})
+    restored = saved_matches.decode({**saved, "envelope": plan_envelope}, registry=REGISTRY)
 
     assert restored == matches
     for target, match in matches.items():
@@ -116,7 +118,8 @@ def test_element_indexed_matches_read_back_as_the_previous_reader_did(tmp_path):
     matches = {f"target-{index}": match for index, match in enumerate(found)}
     assert sum(match.element_index is not None for match in matches.values()) == 6
 
-    restored = assert_reads_as_before(matches, envelope.model_dump(mode="json"))
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    restored = assert_reads_as_before(matches, envelope.model_dump(mode="json"), registry)
     assert {match.field_path for match in restored.values()} == {
         "evidence_code_curies[0]", "evidence_code_curies[1]"}
 
@@ -130,7 +133,7 @@ def test_a_match_envelope_that_differs_from_the_plan_envelope_is_stored_once():
     saved = saved_matches.encode(matches, plan_envelope=plan_envelope)
 
     assert len(saved["match_parts"]["envelopes"]) == 1
-    restored = saved_matches.decode({**saved, "envelope": plan_envelope})
+    restored = saved_matches.decode({**saved, "envelope": plan_envelope}, registry=REGISTRY)
     assert restored == matches
     assert all(match.envelope.metadata.get("review_episode_id") is None for match in restored.values())
 
@@ -178,3 +181,42 @@ def test_a_match_object_outside_its_envelope_is_refused():
 
     with pytest.raises(store.HistoryConflict, match="not one object of its envelope"):
         saved_matches.encode({target: copied}, plan_envelope=envelope.model_dump(mode="json"))
+
+
+MAIN_MATCH_KEYS = {"envelope", "object_index", "binding", "object_definition", "field_definition",
+                   "policy", "element_index", "resolved_field_path", "element_index_path"}
+MAIN_PART_KINDS = {"envelopes", "bindings", "object_definitions", "field_definitions", "policies"}
+
+
+def test_a_plan_saves_nothing_beyond_mains_format_and_reads_each_records_owners_back():
+    # Which of a record's quotes each check receives depends on the field paths
+    # every active check on that record reads (ALL-1584). They are derived from
+    # the plan's registry on reading, so a plan saved before this change reads
+    # the same way as one saved after it.
+    envelope, matches = plan_matches(6)
+    assert any(match.record_binding_paths for match in matches.values())
+    plan_envelope = envelope.model_dump(mode="json")
+    saved = store.canonical(saved_matches.encode(matches, plan_envelope=plan_envelope))[1]
+    assert set(saved["match_parts"]) == MAIN_PART_KINDS
+    assert all(set(item) == MAIN_MATCH_KEYS for item in saved["matches"].values())
+
+    restored = saved_matches.decode({**saved, "envelope": plan_envelope}, registry=REGISTRY)
+    for target, match in matches.items():
+        assert restored[target].record_binding_paths == match.record_binding_paths
+
+
+
+def test_owners_derived_from_a_saved_flow_registry_equal_the_dispatch_owners():
+    """No spurious input change: a rebuild from the saved plan assigns evidence as the dispatch did."""
+    from dataclasses import replace
+
+    from src.lib.validation_review.validator_adapter import REGISTRY as SAVED, saved_registry
+
+    envelope, _ = plan_matches(6)
+    # A flow that runs only some checks saves a narrowed registry.
+    flow = replace(REGISTRY, bindings=REGISTRY.bindings[::2])
+    restored = SAVED.validate_python(store.canonical(saved_registry(flow))[1])
+    dispatch = REGISTRY.record_binding_paths(envelope)
+    assert any(dispatch.values())
+    assert restored.record_binding_paths(envelope) == dispatch
+    assert flow.record_binding_paths(envelope) == dispatch

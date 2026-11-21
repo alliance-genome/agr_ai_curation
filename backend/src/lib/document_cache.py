@@ -1,7 +1,7 @@
 """
 Document metadata cache for reducing redundant Weaviate queries.
 
-This module provides an in-memory TTL cache for document hierarchy and abstract data.
+This module provides an in-memory TTL cache for document hierarchy data.
 Every chat message would otherwise re-fetch this data from Weaviate, even though
 the document hasn't changed.
 
@@ -13,7 +13,7 @@ Thread Safety:
 Cold preparations run independently. Active fill leases are revoked on
 invalidation, preventing obsolete work from repopulating the cache. Leases
 are removed on completion/cancellation; no per-document tombstones accumulate.
-All-None results retain the same TTL as successful metadata.
+A missing (None) hierarchy is cached with the same TTL as a found one.
 """
 
 from contextlib import contextmanager
@@ -28,9 +28,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CachedDocumentMetadata:
-    """Cached document hierarchy and abstract."""
+    """Cached document hierarchy."""
     hierarchy: Optional[Dict[str, Any]]
-    abstract: Optional[str]
     fetched_at: float
 
 
@@ -77,7 +76,6 @@ def set_cached_metadata(
     user_id: str,
     document_id: str,
     hierarchy: Optional[Dict[str, Any]],
-    abstract: Optional[str]
 ) -> None:
     """
     Cache document metadata for subsequent requests.
@@ -86,14 +84,12 @@ def set_cached_metadata(
         user_id: The user's ID for tenant isolation
         document_id: The document UUID
         hierarchy: The document hierarchy (sections, subsections)
-        abstract: The document abstract text
     """
     key = (user_id, document_id)
 
     with _lock:
         _cache[key] = CachedDocumentMetadata(
             hierarchy=hierarchy,
-            abstract=abstract,
             fetched_at=time.time()
         )
 
@@ -127,10 +123,10 @@ def metadata_cache_fill(user_id: str, document_id: str):
     with _lock:
         _pending_fills.setdefault(key, set()).add(token)
 
-    def publish(hierarchy, abstract):
+    def publish(hierarchy):
         with _lock:
             if token in _pending_fills.get(key, ()):
-                set_cached_metadata(user_id, document_id, hierarchy, abstract)
+                set_cached_metadata(user_id, document_id, hierarchy)
 
     try:
         yield publish

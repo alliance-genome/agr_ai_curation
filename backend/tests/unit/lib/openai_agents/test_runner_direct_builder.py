@@ -374,7 +374,7 @@ async def test_actual_builder_tools_reach_benchmark_adapter(runtime, monkeypatch
     for name in ("commit_pending_prompts", "_log_used_prompts_to_db", "provider_context_preflight",
                  "start_extraction_trace_run", "clear_extraction_trace_run"):
         monkeypatch.setattr(runner, name, lambda *a, **k: None)
-    doc_context = SimpleNamespace(hierarchy={}, abstract="", section_count=lambda: 0, to_agent_kwargs=lambda: {})
+    doc_context = SimpleNamespace(hierarchy={}, section_count=lambda: 0, to_agent_kwargs=lambda: {})
     monkeypatch.setattr(adapter.DocumentContext, "fetch", AsyncMock(return_value=doc_context))
 
     monkeypatch.setattr(runner.Runner, "run_streamed", lambda active, **k: Result(active))

@@ -37,7 +37,7 @@ async def health_check_endpoint() -> Dict[str, Any]:
     """
     Check health status of Weaviate connection and service.
 
-    Returns connection status, version information, and basic metrics.
+    Returns connection status and basic metrics (not the search index engine version).
     """
     health_status = {
         "status": "healthy",
@@ -59,8 +59,9 @@ async def health_check_endpoint() -> Dict[str, Any]:
 
         if weaviate_health and weaviate_health.get("status") == "healthy":
             health_status["checks"]["weaviate"] = "healthy"
+            # The engine version is not published on this unauthenticated route;
+            # it is in the backend start-up log and the read-only settings report.
             health_status["details"]["weaviate"] = {
-                "version": weaviate_health.get("version", "unknown"),
                 "nodes": weaviate_health.get("nodes", 1),
                 "collections": weaviate_health.get("collections", 0)
             }

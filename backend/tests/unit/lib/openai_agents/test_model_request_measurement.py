@@ -953,7 +953,7 @@ def test_direct_chat_completion_measured_with_usage(published):
 
     asyncio.run(
         call_measured_direct_request(
-            surface="abstract_extraction",
+            surface="direct_chat_test",
             provider="openai",
             api="chat_completions",
             kwargs={"model": "gpt-test", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u" * 4000}]},
@@ -1415,7 +1415,7 @@ def test_direct_request_without_key_records_not_set(published):
 
     asyncio.run(
         call_measured_direct_request(
-            surface="abstract_extraction",
+            surface="direct_chat_test",
             provider="openai",
             api="chat_completions",
             kwargs={"model": "gpt-test", "messages": [{"role": "user", "content": "hi"}]},

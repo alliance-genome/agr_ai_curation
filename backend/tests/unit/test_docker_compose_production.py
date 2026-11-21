@@ -43,9 +43,11 @@ MAKEFILE_PATH = WORKSPACE_ROOT / "Makefile"
 PREFLIGHT_PATH = WORKSPACE_ROOT / "scripts/testing/production_compose_preflight.py"
 if not PREFLIGHT_PATH.exists():
     PREFLIGHT_PATH = Path("/app/scripts/testing/production_compose_preflight.py")
+# One search index engine for every compose file: the version production runs.
+WEAVIATE_VERSION = "1.31.18"
 WEAVIATE_IMAGE = (
-    "semitechnologies/weaviate@sha256:"
-    "5f0dc1fe066685558e22f324fbe9fadbc18730ce155ff47c27f891e62c652d2a"
+    f"semitechnologies/weaviate:{WEAVIATE_VERSION}@sha256:"
+    "9b903ac1b4d030a4939535a12a36f07fe3968ff1d9a8622d527e07e644fa4e41"
 )
 MINIO_IMAGE = (
     "minio/minio@sha256:"
@@ -434,7 +436,6 @@ def test_compose_model_defaults_match_supported_runtime_roles():
         "FIGURE_LOCATOR_LLM_REASONING": "${FIGURE_LOCATOR_LLM_REASONING:-low}",
         "FIGURE_LOCATOR_RESOLUTION_MAX_TURNS": "${FIGURE_LOCATOR_RESOLUTION_MAX_TURNS:-10}",
         "FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS": "${FIGURE_LOCATOR_RESOLUTION_BATCH_MAX_CHARS:-60000}",
-        "ABSTRACT_EXTRACTION_MODEL": "${ABSTRACT_EXTRACTION_MODEL:-gpt-6.1-sol}",
     }
     assert {key: dev_env[key] for key in expected_backend_defaults} == (
         expected_backend_defaults
@@ -447,16 +448,32 @@ def test_compose_model_defaults_match_supported_runtime_roles():
     )
 
 
-def test_production_compose_forwards_abstract_extraction_input_limit():
-    production_env = _load_compose()["services"]["backend"]["environment"]
-    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[
-        "ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"
+def test_removed_abstract_lookup_settings_are_declared_nowhere():
+    """The abstract lookup and its three settings were removed; none may return."""
+    declaration_files = [
+        *sorted(WORKSPACE_ROOT.glob("docker-compose*.yml")),
+        ENV_EXAMPLE_PATH,
+        ENV_TEMPLATE_PATH,
     ]
 
-    assert documented_default == "4000"
-    assert production_env["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"] == (
-        f"${{ABSTRACT_EXTRACTION_INPUT_MAX_CHARS:-{documented_default}}}"
+    assert COMPOSE_PATH in declaration_files and DEV_COMPOSE_PATH in declaration_files
+    for path in declaration_files:
+        assert "ABSTRACT_EXTRACTION_" not in path.read_text(encoding="utf-8"), path
+
+
+def test_compose_forwards_document_file_converted_text_cap():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
     )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[
+        "DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"
+    ]
+
+    assert documented_default == "1000000"
+    expected = f"${{DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES:-{documented_default}}}"
+    assert dev_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
+    assert production_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
 
 
 def test_compose_propagates_optional_openrouter_key_name_only():
@@ -687,6 +704,8 @@ def _safe_rendered_config() -> dict:
             },
         }
     )
+    services["weaviate"]["image"] = "example.invalid/weaviate:1.31.18@sha256:" + "a" * 64
+    services["backend"]["environment"]["WEAVIATE_EXPECTED_VERSION"] = "1.31.18"
     services["weaviate"]["environment"] = {
         "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "false",
         "AUTHENTICATION_APIKEY_ENABLED": "true",
@@ -849,6 +868,80 @@ def test_effective_production_contract_rejects_unsafe_environment_values(
             config, enforce_operational_defaults=True
         )
     )
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "semitechnologies/weaviate:latest",
+        "semitechnologies/weaviate:1.31.18",
+        "semitechnologies/weaviate@sha256:" + "a" * 64,
+    ],
+)
+def test_effective_production_contract_rejects_weaviate_image_without_version_and_digest(image):
+    config = _safe_rendered_config()
+    config["services"]["weaviate"]["image"] = image
+
+    errors = production_preflight.validate_config(config)
+
+    assert any("weaviate.image must name an engine version and a digest" in e for e in errors)
+
+
+def test_effective_production_contract_rejects_expected_version_other_than_the_image():
+    config = _safe_rendered_config()
+    config["services"]["backend"]["environment"]["WEAVIATE_EXPECTED_VERSION"] = "1.40.7"
+    config["services"]["benchmark_worker"] = {
+        "image": "example.invalid/backend:v0.9.0",
+        "environment": {},
+    }
+
+    errors = production_preflight.validate_config(config)
+
+    assert "backend.WEAVIATE_EXPECTED_VERSION must equal the weaviate image version 1.31.18" in errors
+    assert (
+        "benchmark_worker.WEAVIATE_EXPECTED_VERSION must equal the weaviate image version 1.31.18"
+        in errors
+    )
+
+
+def _weaviate_clients(services: dict) -> dict:
+    """Services that connect to the search index: Weaviate host settings or a dependency on it."""
+    clients = {}
+    for name, service in services.items():
+        env = service.get("environment") or {}
+        if isinstance(env, list):
+            env = dict(entry.split("=", 1) for entry in env)
+        depends = service.get("depends_on") or {}
+        connects = any(key.startswith("WEAVIATE_") and "HOST" in key for key in env) or any(
+            dep.startswith("weaviate") for dep in depends
+        )
+        if connects or name in {"benchmark_worker", "benchmark-worker-test"}:
+            clients[name] = env
+    return clients
+
+
+@pytest.mark.parametrize(
+    "compose_path,weaviate_service",
+    [(COMPOSE_PATH, "weaviate"), (DEV_COMPOSE_PATH, "weaviate"), (TEST_COMPOSE_PATH, "weaviate-test")],
+)
+def test_every_compose_file_pins_the_same_weaviate_engine(compose_path, weaviate_service):
+    services = yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"]
+
+    assert services[weaviate_service]["image"] == WEAVIATE_IMAGE
+    clients = _weaviate_clients(services)
+    assert clients, "expected at least one service that connects to the search index"
+    for name, env in clients.items():
+        # The value is literal (no ${...}) so it cannot drift from the image tag.
+        assert str(env.get("WEAVIATE_EXPECTED_VERSION", "")).split("#")[0].strip() == WEAVIATE_VERSION, name
+
+
+def test_no_compose_file_names_a_floating_weaviate_image():
+    for path in sorted(WORKSPACE_ROOT.glob("docker-compose*.yml")):
+        services = yaml.safe_load(path.read_text(encoding="utf-8")).get("services") or {}
+        for name, service in services.items():
+            image = str(service.get("image", ""))
+            if "semitechnologies/weaviate:" in image or "semitechnologies/weaviate@" in image:
+                assert image == WEAVIATE_IMAGE, f"{path.name}:{name}"
 
 
 def test_effective_production_contract_rejects_mutable_stateful_image_and_data_port():

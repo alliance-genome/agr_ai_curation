@@ -35,6 +35,13 @@ services:
       - ./config:/runtime/config:ro
       - ./packages:/runtime/packages:ro
     environment:
+      WEAVIATE_EXPECTED_VERSION: "1.31.18"  # must equal the weaviate-test image tag
+      WEAVIATE_HOST: weaviate-test
+      WEAVIATE_PORT: "8080"
+      WEAVIATE_SCHEME: http
+      WEAVIATE_GRPC_HOST: weaviate-test
+      WEAVIATE_GRPC_PORT: "50051"
+      WEAVIATE_GRPC_SECURE: "false"
       VALIDATION_HISTORY_PAGE_SIZE: ${VALIDATION_HISTORY_PAGE_SIZE:-5}
       VALIDATION_REVIEW_ATTEMPTS_PER_TARGET: ${VALIDATION_REVIEW_ATTEMPTS_PER_TARGET:-2}
       VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY: ${VALIDATION_REVIEW_EXTRACTION_ATTEMPTS_PER_ENTRY:-2}
@@ -73,6 +80,8 @@ services:
       BENCHMARK_SNAPSHOT_STORE_PATH: /tmp/benchmark-snapshots
     depends_on:
       postgres-test:
+        condition: service_healthy
+      weaviate-test:
         condition: service_healthy
     networks:
       - test-network
@@ -126,7 +135,7 @@ services:
 
   # Test-specific Weaviate instance
   weaviate-test:
-    image: semitechnologies/weaviate:latest
+    image: semitechnologies/weaviate:1.31.18@sha256:9b903ac1b4d030a4939535a12a36f07fe3968ff1d9a8622d527e07e644fa4e41
     environment:
       QUERY_DEFAULTS_LIMIT: ${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
@@ -221,6 +230,7 @@ services:
       - EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS=8
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_EXPECTED_VERSION=1.31.18  # must equal the weaviate-test image tag
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
       - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
@@ -318,6 +328,7 @@ services:
       - CONTENT_PREVIEW_CHARS=1600
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=5000
       - WEAVIATE_GRPC_HOST=weaviate-test
+      - WEAVIATE_EXPECTED_VERSION=1.31.18  # must equal the weaviate-test image tag
       - WEAVIATE_GRPC_PORT=50051
       - WEAVIATE_GRPC_SECURE=false
       - WEAVIATE_QUERY_TIMEOUT_SECONDS=${WEAVIATE_QUERY_TIMEOUT_SECONDS:-30}
@@ -374,6 +385,7 @@ services:
       - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_EXPECTED_VERSION=1.31.18  # must equal the weaviate-test image tag
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
       - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
@@ -523,6 +535,7 @@ services:
       - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_EXPECTED_VERSION=1.31.18  # must equal the weaviate-test image tag
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
       - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
@@ -586,6 +599,7 @@ services:
       - DEV_MODE=false
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-CHANGE_ME_TEST_DB_PASSWORD}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
+      - WEAVIATE_EXPECTED_VERSION=1.31.18  # must equal the weaviate-test image tag
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
       - OPENAI_API_KEY=test-key

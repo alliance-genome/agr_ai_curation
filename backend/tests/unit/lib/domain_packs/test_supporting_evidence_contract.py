@@ -53,7 +53,8 @@ def test_shipped_supporting_evidence_contract(pack_id, binding, name, selector, 
                               extracted_objects=[obj],
                               metadata={"evidence_records": records + [unrelated, wrong_field]})
     result = build_domain_validation_request(ValidatorBindingMatch(
-        binding=isolated, envelope=envelope, object_envelope=obj))
+        binding=isolated, envelope=envelope, object_envelope=obj,
+        record_binding_paths=()))
     if count == 0 and selector.required:
         assert result.request is None
         assert result.findings

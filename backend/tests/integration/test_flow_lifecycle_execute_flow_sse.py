@@ -552,7 +552,7 @@ def test_execute_flow_saves_and_replays_finalized_empty_extraction(
                            file_path=f"/fixture/{document_id}.pdf", file_hash=document_id.hex * 2, file_size=1, page_count=1))
     test_db.commit()
     monkeypatch.setattr(executor.DocumentContext, "fetch", AsyncMock(return_value=SimpleNamespace(
-        section_count=lambda: 0, hierarchy=None, abstract=None,
+        section_count=lambda: 0, hierarchy=None,
         to_agent_kwargs=lambda: {"document_id": str(document_id)},
     )))
     # Domain semantics are not under test; retain the real checkpoint and SQL paths.
@@ -677,7 +677,6 @@ def test_execute_flow_persists_and_replays_terminal_specialist_text_with_file(
     async def _fake_document_context(document_id_arg, user_id_arg, *_args, **_kwargs):
         return SimpleNamespace(
             section_count=lambda: 1,
-            abstract=None,
             to_agent_kwargs=lambda: {
                 "document_id": document_id_arg,
                 "user_id": user_id_arg,
@@ -878,7 +877,6 @@ def test_execute_flow_projects_sample_pdf_artifact_to_runtime_json_file(
     async def _fake_document_context(document_id_arg, user_id_arg, *_args, **_kwargs):
         return SimpleNamespace(
             section_count=lambda: 1,
-            abstract=None,
             to_agent_kwargs=lambda: {
                 "document_id": document_id_arg,
                 "user_id": user_id_arg,

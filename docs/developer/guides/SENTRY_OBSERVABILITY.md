@@ -568,22 +568,6 @@ or document content. Already captured section-index contract failures are not
 reported again. The companion error log skips event promotion, and flat-document
 results remain unchanged if reporting is unavailable.
 
-Abstract extraction reports request and configuration failures at error level;
-abstract-client and owned runner provider/client cleanup failures report at warning
-level. These paths use `sanitized_runtime_error()` with fixed messages and severed
-exception chains, omit provider payloads, and mark companion logs to avoid duplicate
-promotion. Optional extraction results and cancellation behavior are unchanged when
-reporting is unavailable. Langfuse remains the source for model-call detail.
-
-Abstract-context retrieval reports the first unexpected strategy failure per
-fetch with component `abstract_context`, operation `retrieval_failed`, and a
-fixed strategy label, even when a later strategy succeeds. Synchronous worker
-and timeout failures use `sync_fetch_failed`. Both paths use chain-free,
-fixed-message exceptions and companion warnings that skip log promotion;
-document text, section titles, identifiers, and provider errors are omitted.
-Empty results and cancellation stay quiet, and capture failures preserve the
-optional-context result.
-
 Benchmark document conversion reports extraction configuration errors and PDFX
 errors carrying provider-boundary failure metadata with component
 `benchmark_document_conversion` and operations `document_conversion_configuration`
@@ -735,6 +719,16 @@ and operation `checksum_lookup_failed`. The report carries a fixed, chain-free
 error and the exception class. Intake removes the staged upload and returns the
 usual 503 even if reporting fails. An ordinary license denial returns 403 and
 produces no event.
+
+When an ABC file listing has a converted supplement whose `source` names a file
+missing from the same listing, the ABC adapter leaves that file out and reports
+one warning under component `document_source` and operation
+`converted_source_not_listed`, with tag `provider`, a fixed fingerprint of
+those two codes and context holding only the hashed `artifact_id_hash` and
+`source_artifact_id_hash`. The exception is fixed and chain-free; file names,
+the reference and raw ids are omitted. The companion WARNING log names the raw
+ids and the reference and skips event promotion. The paper's other files are
+still listed.
 
 ## Sensitive Database Wrappers
 
