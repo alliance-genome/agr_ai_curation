@@ -1058,3 +1058,30 @@ async def test_slow_text_clean_up_does_not_block_the_event_loop(monkeypatch):
     assert longest_stall < MAX_LOOP_STALL_SECONDS
     assert result.element_count == 1
     assert index.await_args.args[0] == elements
+
+
+def test_hierarchy_stored_for_a_new_paper_has_no_abstract_section_key(monkeypatch):
+    """The structure model no longer names an abstract section, so none is stored."""
+    from uuid import uuid4
+    from src.lib.pipeline.hierarchy_resolution import HierarchyMetadata, SectionItem
+
+    file_id = uuid4()
+    document = SimpleNamespace(id=uuid4())
+    file_row = SimpleNamespace(document_id=document.id, hierarchy_metadata=None)
+    session = Mock()
+    session.get.return_value = file_row
+    monkeypatch.setattr("src.models.sql.database.SessionLocal", lambda: session)
+    monkeypatch.setattr(ingestion, "_query_owned_document", lambda *args, **kwargs: document)
+    metadata = HierarchyMetadata(
+        sections=[SectionItem(header="Abstract", parent_section="Abstract", subsection=None,
+                              is_top_level=True).model_dump()],
+        top_level_sections=["Abstract"], created_at="2026-11-21T00:00:00+00:00",
+        model_used="gpt-6.1-sol", llm_raw_response={"model": "gpt-6.1-sol", "sections_count": 1},
+    )
+
+    ingestion._store_hierarchy_metadata_sync(str(document.id), file_id, "user", 7, metadata)
+
+    assert file_row.hierarchy_metadata["top_level_sections"] == ["Abstract"]
+    assert "abstract_section_title" not in file_row.hierarchy_metadata
+    assert "abstract_section_title" not in file_row.hierarchy_metadata["llm_raw_response"]
+    session.commit.assert_called_once()

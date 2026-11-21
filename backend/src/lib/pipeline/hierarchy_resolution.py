@@ -83,11 +83,6 @@ class HierarchyOutput(BaseModel):
     sections: List[SectionClassification] = Field(
         description="One classification for every numbered input section title"
     )
-    abstract_idx: Optional[int] = Field(
-        default=None,
-        description="The [n] number of the section that contains the paper's abstract. "
-                    "Null if no abstract is found in the document."
-    )
 
 
 # =============================================================================
@@ -98,7 +93,6 @@ class HierarchyMetadata(BaseModel):
     """Metadata about the hierarchy resolution process."""
     sections: List[Dict[str, Any]]  # Structured hierarchy
     top_level_sections: List[str]  # List of top-level section names
-    abstract_section_title: Optional[str] = None  # LLM-identified abstract section
     created_at: str
     model_used: str
     llm_raw_response: Optional[Dict[str, Any]] = None  # Raw LLM response for debugging
@@ -187,12 +181,11 @@ async def resolve_document_hierarchy(
 
     # 2. Call LLM to resolve hierarchy (pass section info with previews)
     if llm_section_info_list:
-        hierarchy_result, abstract_section_title, raw_response = await _call_llm_for_hierarchy(llm_section_info_list)
+        hierarchy_result, raw_response = await _call_llm_for_hierarchy(llm_section_info_list)
     else:
-        hierarchy_result, abstract_section_title, raw_response = [], None, {
+        hierarchy_result, raw_response = [], {
             "model": "deterministic_provider_metadata_only",
             "sections_count": 0,
-            "abstract_section_title": None,
         }
 
     hierarchy_result = _merge_deterministic_sections_in_document_order(
@@ -280,15 +273,12 @@ async def resolve_document_hierarchy(
         hierarchy_metadata = HierarchyMetadata(
             sections=[item.model_dump() for item in hierarchy_result],
             top_level_sections=top_level_sections,
-            abstract_section_title=abstract_section_title,
             created_at=datetime.now(timezone.utc).isoformat(),
             model_used=require_env("HIERARCHY_LLM_MODEL"),
             llm_raw_response=raw_response
         )
 
         logger.info('[HIERARCHY] Top-level sections: %s', top_level_sections)
-        if abstract_section_title:
-            logger.info("[HIERARCHY] Abstract section: '%s'", abstract_section_title)
 
     return elements, hierarchy_metadata
 
@@ -317,7 +307,7 @@ def _section_body_preview(text: str, section_title: str, max_chars: int) -> str:
 
 async def _call_llm_for_hierarchy(
     section_info_list: List[Dict[str, str]]
-) -> tuple[List[SectionItem], Optional[str], Optional[Dict[str, Any]]]:
+) -> tuple[List[SectionItem], Optional[Dict[str, Any]]]:
     """
     Call LLM to classify section titles into top-level sections and subsections.
 
@@ -327,7 +317,7 @@ async def _call_llm_for_hierarchy(
         section_info_list: List of dicts with "title" and "preview" keys
 
     Returns:
-        Tuple of (list of SectionItem, abstract_section_title, raw LLM response for debugging)
+        Tuple of (list of SectionItem, raw LLM response for debugging)
     """
     from agents import Agent, ModelSettings
     from openai.types.shared import Reasoning
@@ -343,7 +333,7 @@ async def _call_llm_for_hierarchy(
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         logger.warning("[HIERARCHY] No OpenAI API key. Skipping hierarchy resolution.")
-        return [], None, None
+        return [], None
 
     system_prompt = """You are an expert biocurator with deep experience in scientific literature analysis. You specialize in understanding the structure and organization of research papers across the life sciences and related research disciplines.
 
@@ -389,22 +379,6 @@ OUTPUT: Refer to sections only by their [n] numbers; never repeat title text. Re
 - idx: the section's number
 - is_top_level: true for major sections, false for subsections
 - parent_idx: for a subsection, the number of the section it is nested under (its top-level section or its direct parent subsection); null for a top-level section. Following parent_idx from any subsection must reach a top-level section
-
-ADDITIONAL TASK - IDENTIFY ABSTRACT:
-Almost every scientific paper has an abstract. You must ALSO identify which section contains the abstract:
-
-1. Look for sections explicitly titled "Abstract", "Summary", or similar
-2. If no explicit abstract section, check the content previews - abstract content typically:
-   - Summarizes the paper's purpose, methods, key findings, and conclusions
-   - Appears early in the document (often right after the paper title or before Introduction)
-   - Is a single cohesive paragraph or short section
-3. Set abstract_idx to the number of the section that contains abstract content
-4. Set abstract_idx to null ONLY if no abstract exists (rare for published papers)
-
-Common abstract locations when not explicitly labeled:
-- Embedded in the paper title section (abstract follows the title)
-- In a section called "Background" that functions as abstract
-- In "Significance Statement" (sometimes serves as abstract in certain journals)
 """
 
     # Format numbered section info with previews for the LLM
@@ -526,8 +500,7 @@ Common abstract locations when not explicitly labeled:
                             "numbers. Top-level sections have parent_idx null; every "
                             "subsection has the parent_idx of an input section, and "
                             "following parent_idx must reach a top-level section "
-                            "without looping. abstract_idx must be an input number "
-                            "or null."
+                            "without looping."
                         )
                         attempt += 1
                         continue
@@ -585,11 +558,10 @@ Common abstract locations when not explicitly labeled:
                     sentry_span,
                     "ai_curation.agent.output",
                     {
-                        "sections_count": len(resolved[0]),
-                        "abstract_section_title": resolved[1],
+                        "sections_count": len(resolved),
                         "sections": [
                             section.model_dump()
-                            for section in resolved[0]
+                            for section in resolved
                         ],
                     },
                 )
@@ -604,19 +576,14 @@ Common abstract locations when not explicitly labeled:
         # Extract the structured output
         if resolved is None:
             logger.warning("[HIERARCHY] LLM returned empty output.")
-            return [], None, raw_response
+            return [], raw_response
 
-        sections, abstract_section_title = resolved
+        sections = resolved
         raw_response["sections_count"] = len(sections)
-        raw_response["abstract_section_title"] = abstract_section_title
 
         logger.info('[HIERARCHY] Successfully parsed %s section items', len(sections))
-        if abstract_section_title:
-            logger.info("[HIERARCHY] LLM identified abstract in section: '%s'", abstract_section_title)
-        else:
-            logger.info("[HIERARCHY] LLM did not identify an abstract section")
 
-        return sections, abstract_section_title, raw_response
+        return sections, raw_response
 
     except Exception as e:
         if not getattr(e, "_ai_curation_sentry_captured", False):
@@ -635,13 +602,13 @@ Common abstract locations when not explicitly labeled:
             type(e).__name__,
             extra={"sentry_skip_event": True},
         )
-        return [], None, None
+        return [], None
 
 
 def _resolve_section_indexes(
     output: HierarchyOutput,
     section_info_list: List[Dict[str, str]],
-) -> tuple[List[SectionItem], Optional[str]]:
+) -> List[SectionItem]:
     """Map index-only classifier output back to titles in input order.
 
     A subsection's parent chain is followed to its top-level ancestor, so a
@@ -665,12 +632,6 @@ def _resolve_section_indexes(
             "hierarchy classifier violated the section index contract: "
             f"missing idx {missing}"
         )
-    if output.abstract_idx is not None and not 0 <= output.abstract_idx < count:
-        raise ValueError(
-            "hierarchy classifier violated the section index contract: "
-            f"invalid abstract_idx {output.abstract_idx}"
-        )
-
     resolved: List[SectionItem] = []
     for idx, title in enumerate(titles):
         item = by_idx[idx]
@@ -694,10 +655,7 @@ def _resolve_section_indexes(
             is_top_level=False,
         ))
 
-    abstract_title = (
-        titles[output.abstract_idx] if output.abstract_idx is not None else None
-    )
-    return resolved, abstract_title
+    return resolved
 
 
 def _top_level_ancestor(
