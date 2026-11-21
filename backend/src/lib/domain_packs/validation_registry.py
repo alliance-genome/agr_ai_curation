@@ -28,6 +28,7 @@ from src.schemas.domain_pack_metadata import (
     DomainPackValidatorRouteSelector,
 )
 
+from .evidence_scope import selector_field_path
 from .registry import LoadedDomainPack
 
 
@@ -234,6 +235,21 @@ class ValidatorBinding:
         if isinstance(route_value, str) and route_value in self.routes:
             return self.for_route(route_value)
         return self
+
+    def declared_input_field_paths(self) -> tuple[str, ...]:
+        """Target-object field paths this binding's selectors read, across its routes."""
+
+        selector_sets = [self.input_fields]
+        if self.routes is not None:
+            selector_sets.extend(route.input_fields for route in self.routes.values())
+        paths = [self.route_by_path] if self.route_by_path else []
+        paths.extend(
+            path
+            for selectors in selector_sets
+            for selector in selectors.values()
+            if (path := selector_field_path(selector)) is not None
+        )
+        return tuple(dict.fromkeys(paths))
 
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
@@ -477,6 +493,10 @@ class ValidatorBindingMatch:
     element_index: int | None = None
     resolved_field_path: str | None = None
     element_index_path: tuple[int, ...] | None = None
+    # Declared field paths of every active validator binding on the matched
+    # object (empty for envelope-level matches). Evidence tagged only outside
+    # these paths belongs to no binding and goes to every binding on the record.
+    record_binding_paths: tuple[str, ...] = field(kw_only=True)
 
     @property
     def object_type(self) -> str | None:
@@ -636,6 +656,37 @@ class ValidatorBindingMatch:
         return details
 
 
+# Generated custom-profile packs list, by object type, the field paths owned by
+# mappings the caller cannot run, so their fields stay owned (ALL-1584).
+PROFILE_OWNED_FIELD_PATHS = "profile_owned_field_paths"
+
+
+def _pack_bindings(domain_pack: LoadedDomainPack) -> tuple[ValidatorBinding, ...]:
+    """Every validator binding a pack declares, in registry order."""
+
+    metadata = domain_pack.metadata
+    bindings = _collect_validator_bindings(metadata.metadata)
+    for object_definition in metadata.object_definitions:
+        bindings.extend(
+            _collect_validator_bindings(
+                object_definition.metadata,
+                source_scope="object",
+                source_object_type=object_definition.object_type,
+            )
+        )
+        for field_definition in object_definition.fields:
+            bindings.extend(
+                _collect_validator_bindings(
+                    field_definition.metadata,
+                    source_scope="field",
+                    source_object_type=object_definition.object_type,
+                    source_field_path=field_definition.field_path,
+                    source_field_type=field_definition.field_type,
+                )
+            )
+    return tuple(sorted(bindings, key=lambda binding: (binding.state.value, binding.binding_id)))
+
+
 @dataclass(frozen=True)
 class DomainPackValidationRegistry:
     """Validation metadata normalized for one loaded domain pack."""
@@ -653,32 +704,7 @@ class DomainPackValidationRegistry:
 
         metadata = domain_pack.metadata
         validator_metadata = _collect_validator_metadata(metadata.metadata)
-        bindings = _collect_validator_bindings(metadata.metadata)
-
-        for object_definition in metadata.object_definitions:
-            bindings.extend(
-                _collect_validator_bindings(
-                    object_definition.metadata,
-                    source_scope="object",
-                    source_object_type=object_definition.object_type,
-                )
-            )
-            for field_definition in object_definition.fields:
-                bindings.extend(
-                    _collect_validator_bindings(
-                        field_definition.metadata,
-                        source_scope="field",
-                        source_object_type=object_definition.object_type,
-                        source_field_path=field_definition.field_path,
-                        source_field_type=field_definition.field_type,
-                    )
-                )
-
-        normalized_bindings = tuple(
-            sorted(
-                bindings, key=lambda binding: (binding.state.value, binding.binding_id)
-            )
-        )
+        normalized_bindings = _pack_bindings(domain_pack)
         _validate_active_binding_selectors(domain_pack, normalized_bindings)
         _validate_runs_after(domain_pack, normalized_bindings)
         return cls(
@@ -775,6 +801,7 @@ class DomainPackValidationRegistry:
         )
         object_definitions = self.object_definitions_by_type
         policies_by_key = self.field_policies_by_key
+        record_binding_paths = self.record_binding_paths(envelope)
 
         matches: list[ValidatorBindingMatch] = []
         for binding in self.bindings:
@@ -795,11 +822,14 @@ class DomainPackValidationRegistry:
                 if _binding_has_target_constraints(binding):
                     continue
                 matches.append(
-                    ValidatorBindingMatch(binding=binding, envelope=envelope)
+                    ValidatorBindingMatch(
+                        binding=binding, envelope=envelope, record_binding_paths=()
+                    )
                 )
                 continue
 
             for object_envelope, object_definition in matched_objects:
+                owner_paths = record_binding_paths[id(object_envelope)]
                 matched_fields = _matching_fields(binding, object_definition)
                 if matched_fields:
                     for field_definition in matched_fields:
@@ -820,6 +850,7 @@ class DomainPackValidationRegistry:
                                     object_definition=object_definition,
                                     field_definition=field_definition,
                                     policy=policy,
+                                    record_binding_paths=owner_paths,
                                 )
                             )
                             continue
@@ -831,6 +862,7 @@ class DomainPackValidationRegistry:
                                 object_definition=object_definition,
                                 field_definition=field_definition,
                                 policy=policy,
+                                record_binding_paths=owner_paths,
                             )
                         )
                     continue
@@ -844,10 +876,66 @@ class DomainPackValidationRegistry:
                         envelope=envelope,
                         object_envelope=object_envelope,
                         object_definition=object_definition,
+                        record_binding_paths=owner_paths,
                     )
                 )
 
         return tuple(_routed_match(match) for match in matches)
+
+    def record_binding_paths(self, envelope: DomainEnvelope) -> dict[int, tuple[str, ...]]:
+        """Declared field paths of every active validator on each object, by ``id``.
+
+        Ownership comes from the registry's own pack snapshot: every binding the
+        pack declares, the registry's bindings (a custom profile's compiled
+        mappings) and the field paths a generated profile pack lists as owned by
+        mappings the caller cannot run. A saved plan's registry therefore gives
+        the same answer as the dispatch that saved it. It does not depend on the
+        states a caller matches, on payload contents, on the checks a flow runs
+        or on the caller's groups.
+        """
+
+        object_definitions = self.object_definitions_by_type
+        owned_by_type = self.domain_pack.metadata.metadata.get(PROFILE_OWNED_FIELD_PATHS, {})
+        paths: dict[int, list[str]] = {
+            id(obj): list(owned_by_type.get(obj.object_type, ()))
+            for obj in envelope.extracted_objects
+        }
+        for binding in self._ownership_bindings():
+            if binding.state is not ValidationBindingState.ACTIVE or not binding.validator_agents():
+                continue
+            if (
+                binding.applies_to_domain_pack_id is not None
+                and binding.applies_to_domain_pack_id != envelope.domain_pack_id
+            ):
+                continue
+            for object_envelope, object_definition in _matching_objects(
+                binding=binding, envelope=envelope, object_definitions=object_definitions,
+            ):
+                matched_fields = _matching_fields(binding, object_definition)
+                if _binding_has_field_constraints(binding) and not matched_fields:
+                    continue
+                paths[id(object_envelope)].extend(
+                    [field_definition.field_path for field_definition in matched_fields]
+                    + list(binding.declared_input_field_paths())
+                )
+        # Sorted: a saved registry's selector order follows its canonical JSON.
+        return {key: tuple(sorted(set(value))) for key, value in paths.items()}
+
+    def _ownership_bindings(self) -> tuple[ValidatorBinding, ...]:
+        """Every binding the pack declares, then the registry's other bindings.
+
+        A flow narrows ``bindings``; the pack snapshot still names the rest, in
+        the same order, so a narrowed registry gives the same answer.
+        """
+
+        cached = self.__dict__.get("_ownership_cache")
+        if cached is None:
+            declared = _pack_bindings(self.domain_pack)
+            seen = {binding.binding_id for binding in declared}
+            cached = (*declared, *(binding for binding in self.bindings if binding.binding_id not in seen))
+            # Frozen dataclass: cache the derived value outside its fields.
+            object.__setattr__(self, "_ownership_cache", cached)
+        return cached
 
     def has_active_validators_for_object(self, object_type: str) -> bool:
         """Report whether any active validator applies to this object type."""
@@ -2369,6 +2457,7 @@ def _multivalued_element_matches(
     object_definition: DomainPackObjectDefinition,
     field_definition: DomainPackFieldDefinition,
     policy: FieldValidationPolicy | None,
+    record_binding_paths: tuple[str, ...],
 ) -> list[ValidatorBindingMatch]:
     """Fan one multivalued-field match out into one match per leaf list element.
 
@@ -2417,6 +2506,7 @@ def _multivalued_element_matches(
                     None if legacy_single_level else resolved_field_path
                 ),
                 element_index_path=index_path,
+                record_binding_paths=record_binding_paths,
             )
         )
 

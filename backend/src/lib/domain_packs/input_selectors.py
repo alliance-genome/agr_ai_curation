@@ -10,6 +10,12 @@ from typing import Any, Mapping, Sequence
 
 from pydantic import ValidationError
 
+from src.lib.domain_packs.evidence_scope import (
+    binding_evidence,
+    evidence_record_field_paths,
+    reads_record_evidence,
+    selector_field_path,
+)
 from src.lib.domain_packs.resolvable_values import OVERRULED_KEY_PREFIX, without_overruled
 from src.lib.domain_packs.validation_registry import ValidatorBindingMatch
 from src.schemas.domain_envelope import (
@@ -471,7 +477,7 @@ def _quote_bundle_for_evidence_record(
 
 
 def _first_evidence_record_field_path(record: Mapping[str, Any]) -> str | None:
-    for field_path in _evidence_record_field_paths(record):
+    for field_path in evidence_record_field_paths(record):
         return field_path
     return None
 
@@ -480,41 +486,7 @@ def _evidence_record_matches_field_path(
     record: Mapping[str, Any],
     field_path: str,
 ) -> bool:
-    return field_path in _evidence_record_field_paths(record)
-
-
-def _evidence_record_field_paths(record: Mapping[str, Any]) -> tuple[str, ...]:
-    paths: list[str] = []
-    seen: set[str] = set()
-
-    def add(value: Any) -> None:
-        if isinstance(value, str) and value and value not in seen:
-            seen.add(value)
-            paths.append(value)
-
-    add(record.get("field_path"))
-    raw_field_paths = record.get("field_paths")
-    if isinstance(raw_field_paths, Sequence) and not isinstance(
-        raw_field_paths, (str, bytes, bytearray)
-    ):
-        for field_path in raw_field_paths:
-            add(field_path)
-    for target in _evidence_record_targets(record):
-        add(target.get("field_path"))
-    return tuple(paths)
-
-
-def _evidence_record_targets(record: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
-    targets: list[Mapping[str, Any]] = []
-    raw_targets = record.get("envelope_targets")
-    if isinstance(raw_targets, Sequence) and not isinstance(
-        raw_targets, (str, bytes, bytearray)
-    ):
-        targets.extend(target for target in raw_targets if isinstance(target, Mapping))
-    raw_target = record.get("envelope_target")
-    if isinstance(raw_target, Mapping):
-        targets.append(raw_target)
-    return tuple(targets)
+    return field_path in evidence_record_field_paths(record)
 
 
 def _records_from_extraction_metadata(
@@ -878,12 +850,36 @@ def _validation_target(
 
 
 def _evidence_records_for_target(match: ValidatorBindingMatch) -> list[dict[str, Any]]:
+    """The record's evidence this binding receives (see ``evidence_scope``)."""
+
     if match.object_envelope is None:
         return []
-    return [
-        copy.deepcopy(record)
-        for record in _candidate_evidence_records(match.envelope, match.object_envelope)
-    ]
+    records = _candidate_evidence_records(match.envelope, match.object_envelope)
+    if not reads_record_evidence(match.binding.input_fields):
+        records = binding_evidence(
+            records,
+            own_paths=_binding_own_field_paths(match),
+            record_binding_paths=match.record_binding_paths,
+            payload=match.object_envelope.payload,
+        )
+    return [copy.deepcopy(record) for record in records]
+
+
+def _binding_own_field_paths(match: ValidatorBindingMatch) -> tuple[str, ...]:
+    """The fields this binding validates and reads, resolved to its element."""
+
+    binding = match.binding
+    declared = [*binding.field_paths]
+    if binding.route_by_path:
+        declared.append(binding.route_by_path)
+    declared.extend(
+        path
+        for selector in binding.input_fields.values()
+        if (path := selector_field_path(selector)) is not None
+    )
+    paths = [match.field_path] if match.field_path is not None else []
+    paths.extend(_element_indexed_path(match, path) for path in declared)
+    return tuple(dict.fromkeys(paths))
 
 
 def _candidate_evidence_records(
