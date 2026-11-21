@@ -303,3 +303,42 @@ def test_resolver_moves_table_literal_into_table_reference():
     assert result[0].field_keys == ["anatomy_label"]
     assert anchor.figure_reference is None
     assert anchor.table_reference == "Table 3"
+
+
+def test_resolver_finds_a_table_row_quote_in_its_stored_piece_exactly():
+    """P4: a table-row quote is an exact line of a whole-row table piece, pipes and all,
+    so record-time resolution matches it exactly. (Only the PDF viewer, which searches
+    the PDF's own text layer, needs the row's cell text.)"""
+
+    row = "| XS1 | 3 | 5 | 4.0 |"
+    candidate = _make_candidate(
+        _make_anchor_payload(
+            snippet_text=row,
+            sentence_text=row,
+            viewer_search_text=row,
+            page_number=None,
+            section_title=None,
+            subsection_title=None,
+            figure_reference=None,
+            chunk_ids=[],
+        )
+    )
+
+    anchor, warnings, _field_keys = _resolve_anchor(
+        candidate,
+        chunks=[
+            {
+                "id": "chunk-7",
+                "chunk_index": 7,
+                "content": "| Line | Rep 1 | Rep 2 | Mean |\n| --- | --- | --- | --- |\n| N2 | 12 | 14 | 13.0 |\n" + row,
+                "page_number": 4,
+                "section_title": "Sheet1",
+                "metadata": {},
+            }
+        ],
+    )
+
+    assert anchor.locator_quality is EvidenceLocatorQuality.EXACT_QUOTE
+    assert anchor.chunk_ids == ["chunk-7"]
+    assert anchor.page_number == 4
+    assert warnings == []

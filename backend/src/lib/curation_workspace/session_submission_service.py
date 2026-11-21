@@ -39,6 +39,7 @@ from src.lib.curation_workspace.session_common import (
     active_groups_from_actor_claims,
     actor_user_id,
 )
+from src.lib.evidence_search_text import without_fragment_search_texts
 from src.lib.curation_workspace.session_queries import get_session_detail
 from src.lib.curation_workspace.session_ownership import owned_by, submission_not_found
 from src.lib.curation_workspace.session_serializers import (
@@ -1846,8 +1847,9 @@ def _export_submission_payload_context(
         ready_candidates,
         domain_context,
     )
+    # Submission payloads are persisted and exported: never the served search text.
     export_candidates = [
-        _candidate_payload(candidate).model_dump(mode="json")
+        without_fragment_search_texts(_candidate_payload(candidate).model_dump(mode="json"))
         for candidate in non_envelope_candidates
     ]
     domain_candidates = _domain_envelope_candidate_bundles(
@@ -2072,7 +2074,8 @@ def _non_envelope_candidate_submission_intent(
 ) -> dict[str, Any]:
     """Return core-owned curator content without derived validation/lifecycle state."""
 
-    material = _candidate_payload(candidate).model_dump(mode="json")
+    # The fingerprint hashes stored content only, never the served search text.
+    material = without_fragment_search_texts(_candidate_payload(candidate).model_dump(mode="json"))
     for key in ("created_at", "updated_at", "last_reviewed_at"):
         material.pop(key, None)
     material.pop("validation", None)

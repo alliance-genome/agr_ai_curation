@@ -22,11 +22,14 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
   anchorId: string
   anchor: QuoteCentricAnchorInput
   quote: string
+  /** What the viewer searches the PDF for; the quote itself unless it differs (table rows). */
+  searchText?: string | null
   pageNumber?: number | null
   sectionTitle?: string | null
   mode: EvidenceNavigationCommand['mode']
 }): EvidenceNavigationCommand {
   const quote = args.quote.trim()
+  const searchText = args.searchText?.trim() || quote
   const normalizedHierarchy = normalizeEvidenceSectionHierarchy(
     args.anchor.section_title ?? null,
     args.anchor.subsection_title ?? null,
@@ -39,7 +42,7 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
     snippet_text: quote,
     sentence_text: quote,
     normalized_text: quote,
-    viewer_search_text: quote,
+    viewer_search_text: searchText,
     viewer_highlightable: args.anchor.viewer_highlightable ?? true,
     section_title: normalizedHierarchy.sectionTitle,
     subsection_title: normalizedHierarchy.subsectionTitle,
@@ -47,7 +50,7 @@ export function buildQuoteCentricEvidenceNavigationCommand(args: {
   return {
     anchorId: args.anchorId,
     anchor,
-    searchText: quote,
+    searchText,
     pageNumber: args.pageNumber ?? anchor.page_number ?? null,
     sectionTitle: normalizeText(anchor.section_title),
     mode: args.mode,

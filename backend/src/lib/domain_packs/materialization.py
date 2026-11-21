@@ -56,6 +56,7 @@ from src.schemas.domain_validator import (
     ValidatorFieldResolution,
 )
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.evidence_search_text import with_fragment_search_texts
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
@@ -4581,7 +4582,8 @@ def _evidence_anchor_projection(
         anchor=anchor,
         metadata={
             "object_evidence_record_ids": list(domain_object.evidence_record_ids),
-            "source_record": dict(evidence_record),
+            # Read-time copy: table-row fragments carry their PDF search text.
+            "source_record": with_fragment_search_texts(dict(evidence_record)),
         },
     )
 

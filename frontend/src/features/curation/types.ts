@@ -385,6 +385,8 @@ export interface EvidenceSourceFragment {
   span_index?: number | null
   span_type?: string | null
   spanizer_version?: string | null
+  /** Served for table-row fragments only: the row's cell text, for searching a PDF. Never stored. */
+  search_text?: string | null
   anchor?: Record<string, unknown> | null
   bbox?: Record<string, unknown> | null
   bounding_boxes?: Record<string, unknown>[] | null
