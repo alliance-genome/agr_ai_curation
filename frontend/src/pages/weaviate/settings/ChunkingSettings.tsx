@@ -98,7 +98,6 @@ const ChunkingSettings: React.FC = () => {
             color: "text.secondary"
           }}>
             <strong>Note:</strong> Changes to chunking settings will only affect new documents.
-            Existing documents will need to be reprocessed to apply new chunking settings.
           </Typography>
         </Box>
       </Paper>

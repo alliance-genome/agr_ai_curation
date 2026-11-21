@@ -79,7 +79,8 @@ def load_owned_local_document(
                 else "Local benchmark document was not found"
             )
             raise BenchmarkSourceError(code, message) from exc
-        if document.processing_completed_at is None or not document.processed_json_path:
+        processed_json_path = document.main_file.processed_json_path
+        if document.processing_completed_at is None or not processed_json_path:
             raise BenchmarkSourceError(
                 "missing_source",
                 "Local benchmark document has no versioned extracted content",
@@ -88,7 +89,7 @@ def load_owned_local_document(
             reference=str(document.id),
             version=document.processing_completed_at.isoformat(),
             title=document.title or document.filename,
-            content_path=document.processed_json_path,
+            content_path=processed_json_path,
         )
 
 

@@ -14,9 +14,9 @@ from src.lib.benchmarks.models import ResolvedBenchmarkCell
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.models import CurationExtractionResultRecord
 from src.models.sql.database import SessionLocal
-from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
 from src.schemas.curation_workspace import CurationExtractionSourceKind
+from tests.pdf_document_test_support import new_paper
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -36,7 +36,7 @@ async def test_result_resolution_enforces_all_execution_scope_filters(monkeypatc
         documents = []
         for _ in range(2):
             document_id = uuid4()
-            document = PDFDocument(
+            document = new_paper(
                 id=document_id,
                 filename=f"{document_id}.pdf",
                 file_path=f"/synthetic-benchmark-test/{document_id}.pdf",

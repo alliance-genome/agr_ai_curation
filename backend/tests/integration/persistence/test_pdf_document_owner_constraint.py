@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from alembic import command
 from alembic.config import Config
 import pytest
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from src.models.sql.database import SessionLocal, engine
@@ -41,16 +41,19 @@ def _insert_document(
     file_path: str,
     user_id: int | None,
 ) -> None:
+    # Earlier revisions keep the file columns on the paper, so write raw SQL.
     session.execute(
-        PDFDocument.__table__.insert().values(
-            id=document_id,
-            user_id=user_id,
-            filename=f"owner_constraint_{document_id}.pdf",
-            file_path=file_path,
-            file_hash=document_id.hex * 2,
-            file_size=1024,
-            page_count=1,
-        )
+        text(
+            "INSERT INTO pdf_documents (id, user_id, filename, file_path, file_hash, file_size, page_count) "
+            "VALUES (:id, :user_id, :filename, :file_path, :file_hash, 1024, 1)"
+        ),
+        {
+            "id": document_id,
+            "user_id": user_id,
+            "filename": f"owner_constraint_{document_id}.pdf",
+            "file_path": file_path,
+            "file_hash": document_id.hex * 2,
+        },
     )
 
 
@@ -145,6 +148,19 @@ def test_upgrade_reports_all_bad_rows_without_partial_data_or_schema_changes(his
         command.upgrade(config, "head")
 
 
+def _insert_paper(session, *, document_id: UUID, user_id: int | None) -> None:
+    """Insert a paper row at head, where the paper no longer holds file columns."""
+    session.execute(
+        PDFDocument.__table__.insert().values(
+            id=document_id,
+            user_id=user_id,
+            filename=f"owner_constraint_{document_id}.pdf",
+            document_kind="library",
+            next_chunk_index=0,
+        )
+    )
+
+
 def test_required_owner_constraint_rejects_null_and_accepts_owned_row():
     command.upgrade(_config(), "head")
     document_id = uuid4()
@@ -156,21 +172,11 @@ def test_required_owner_constraint_rejects_null_and_accepts_owned_row():
             session.commit()
             owner_id = int(owner.id)
             with pytest.raises(IntegrityError):
-                _insert_document(
-                    session,
-                    document_id=document_id,
-                    file_path=f"{auth_sub}/{document_id}/paper.pdf",
-                    user_id=None,
-                )
+                _insert_paper(session, document_id=document_id, user_id=None)
                 session.commit()
             session.rollback()
 
-            _insert_document(
-                session,
-                document_id=document_id,
-                file_path=f"{auth_sub}/{document_id}/paper.pdf",
-                user_id=owner_id,
-            )
+            _insert_paper(session, document_id=document_id, user_id=owner_id)
             session.commit()
 
         assert _column_is_nullable() is False

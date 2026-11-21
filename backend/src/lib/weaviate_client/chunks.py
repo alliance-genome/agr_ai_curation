@@ -1326,9 +1326,9 @@ async def get_document_hierarchy(
                 PDFDocument.id == UUID(document_id)
             ).first()
 
-            if doc and doc.hierarchy_metadata:
+            if doc and doc.main_file.hierarchy_metadata:
                 logger.info("Retrieved hierarchy metadata for document %s", document_id)
-                return doc.hierarchy_metadata
+                return doc.main_file.hierarchy_metadata
             else:
                 logger.info("No hierarchy metadata found for document %s", document_id)
                 return None
@@ -1639,8 +1639,8 @@ async def get_document_sections_hierarchical(
                     doc = session.query(PDFDocument).filter(
                         PDFDocument.id == UUID(document_id)
                     ).first()
-                    if doc and doc.hierarchy_metadata:
-                        abstract_section_title = doc.hierarchy_metadata.get("abstract_section_title")
+                    if doc and doc.main_file.hierarchy_metadata:
+                        abstract_section_title = doc.main_file.hierarchy_metadata.get("abstract_section_title")
                 finally:
                     session.close()
             except Exception:

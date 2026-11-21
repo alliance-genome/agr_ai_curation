@@ -62,6 +62,14 @@ _NON_PENDING_JOB_STATUSES = {
 }
 
 
+
+async def _fail_main_file(document_id: str, *, error_message: str) -> None:
+    """Record that the paper's main file failed to import."""
+    from src.lib.document_files.service import main_file_id, mark_file_failed
+
+    file_id = await asyncio.to_thread(main_file_id, document_id)
+    await asyncio.to_thread(mark_file_failed, file_id, error_message=error_message)
+
 class _ProviderMainMarkdownAccessDenied(DocumentSourceAccessDenied):
     """Internal signal that only the selected main Markdown was forbidden."""
 
@@ -963,8 +971,9 @@ class UploadExecutionService:
                 raise RuntimeError(
                     "Cannot persist provider source-import failure for missing document"
                 )
-            document.source_import_status = "failed"
-            document.source_converted_artifact_sha256 = None
+            main_file = document.main_file
+            main_file.source_import_status = "failed"
+            main_file.source_converted_artifact_sha256 = None
             session.commit()
         except Exception:
             session.rollback()
@@ -1105,6 +1114,7 @@ class UploadExecutionService:
         try:
             from src.lib.document_sources.ingestion import _sync_sql_document_status
 
+            await _fail_main_file(request.document_id, error_message=str(exc))
             await _sync_sql_document_status(
                 request.document_id,
                 user_id=request.user_id,
@@ -1146,6 +1156,7 @@ class UploadExecutionService:
         try:
             from src.lib.document_sources.ingestion import _sync_sql_document_status
 
+            await _fail_main_file(request.document_id, error_message=str(exc))
             await _sync_sql_document_status(
                 request.document_id,
                 user_id=request.user_id,
@@ -1186,15 +1197,16 @@ class UploadExecutionService:
                 ).scalar_one_or_none()
                 if document is None:
                     return
-                document.source_provider_converted_artifact_id = source_provenance.get(
+                main_file = document.main_file
+                main_file.source_provider_converted_artifact_id = source_provenance.get(
                     "converted_artifact_id"
                 )
                 # A selected replacement has no captured byte identity until ingested.
-                document.source_converted_artifact_sha256 = None
-                document.source_file_class = source_provenance.get("file_class")
-                document.source_file_extension = source_provenance.get("file_extension")
-                document.source_artifact_status = source_provenance.get("artifact_status")
-                document.source_import_status = "pending"
+                main_file.source_converted_artifact_sha256 = None
+                main_file.source_file_class = source_provenance.get("file_class")
+                main_file.source_file_extension = source_provenance.get("file_extension")
+                main_file.source_artifact_status = source_provenance.get("artifact_status")
+                main_file.source_import_status = "pending"
                 session.commit()
             except Exception:
                 session.rollback()

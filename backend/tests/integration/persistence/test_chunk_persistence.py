@@ -50,7 +50,8 @@ class TestChunkPersistence:
         chunks = _make_test_chunks(chunk_count, document_id)
 
         result = await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
 
         persisted_count = count_persisted_chunks(weaviate_connection, document_id)
@@ -72,7 +73,8 @@ class TestChunkPersistence:
         chunks = _make_test_chunks(chunk_count, document_id)
 
         result = await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
 
         persisted_count = count_persisted_chunks(weaviate_connection, document_id)
@@ -94,7 +96,8 @@ class TestChunkPersistence:
         chunks = _make_test_chunks(chunk_count, document_id)
 
         await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
 
         objects = fetch_persisted_chunks(weaviate_connection, document_id)
@@ -114,7 +117,8 @@ class TestChunkPersistence:
         chunks = _make_test_chunks(chunk_count, document_id)
 
         await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
 
         objects = fetch_persisted_chunks(weaviate_connection, document_id)
@@ -150,7 +154,8 @@ class TestChunkPersistence:
         chunks = _make_test_chunks(chunk_count, document_id)
 
         await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
 
         objects = fetch_persisted_chunks(weaviate_connection, document_id)
@@ -179,7 +184,8 @@ class TestChunkPersistence:
         chunks = _make_test_chunks(chunk_count, document_id)
 
         result = await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
 
         persisted_count = count_persisted_chunks(weaviate_connection, document_id)
@@ -200,12 +206,14 @@ class TestChunkPersistence:
         chunks = _make_test_chunks(chunk_count, document_id)
 
         await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
         count_after_first = count_persisted_chunks(weaviate_connection, document_id)
 
         await store_chunks_to_weaviate(
-            chunks, document_id, weaviate_connection, TEST_USER_ID
+            chunks, document_id, weaviate_connection, TEST_USER_ID,
+            chunk_range=(0, len(chunks) - 1),
         )
         count_after_second = count_persisted_chunks(weaviate_connection, document_id)
 

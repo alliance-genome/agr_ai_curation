@@ -19,6 +19,7 @@ from src.models.sql.validation_history import (
     ValidationFact,
 )
 from tests.pdf_document_test_support import ensure_test_pdf_owner
+from tests.pdf_document_test_support import new_paper
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -35,7 +36,7 @@ def scope():
     with SessionLocal.begin() as db:
         uid = ensure_test_pdf_owner(db, auth_sub=owner)
         db.add(
-            PDFDocument(
+            new_paper(
                 id=doc,
                 user_id=uid,
                 filename="history.pdf",

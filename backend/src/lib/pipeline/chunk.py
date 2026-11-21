@@ -110,6 +110,12 @@ class ChunkingError(Exception):
     pass
 
 
+def is_chunked_element(element: Dict[str, Any]) -> bool:
+    """True for every parsed element whose text is cut into pieces (page footers are not)."""
+
+    return element.get("metadata", {}).get("doc_item_label") != "page_footer"
+
+
 async def chunk_parsed_document(
     elements: List[Dict[str, Any]],
     strategy: ChunkingStrategy,
@@ -128,11 +134,7 @@ async def chunk_parsed_document(
     Raises:
         ChunkingError: If chunking fails
     """
-    filtered_elements = [
-        element
-        for element in elements
-        if element.get("metadata", {}).get("doc_item_label") != "page_footer"
-    ]
+    filtered_elements = [element for element in elements if is_chunked_element(element)]
 
     if not filtered_elements:
         raise ChunkingError("No elements to chunk")
@@ -722,6 +724,23 @@ def _create_document_chunk(
         metadata=metadata,
     )
     return chunk_obj
+
+
+def offset_chunk_indices(chunks: List[DocumentChunk], start: int) -> List[DocumentChunk]:
+    """Move a file's chunks to its reserved range, which begins at ``start``.
+
+    A paper's first file starts at 0, so its chunks keep the indices and IDs
+    chunking gave them.
+    """
+    if start < 0:
+        raise ChunkingError("A file's chunk range cannot start below 0")
+    for position, chunk in enumerate(chunks):
+        if chunk.chunk_index != position:
+            raise ChunkingError("Chunks must be numbered from 0 before they are offset")
+        index = start + position
+        chunk.chunk_index = index
+        chunk.id = f"{chunk.document_id}_chunk_{index:04d}"
+    return chunks
 
 
 def assign_chunk_indices(chunks: List[DocumentChunk]) -> List[DocumentChunk]:

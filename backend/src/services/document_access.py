@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import DOCUMENT_KIND_LIBRARY, PDFDocument
 
 
 def owned_documents_select(owner_user_id: int) -> Select[tuple[PDFDocument]]:
@@ -17,7 +17,7 @@ def owned_documents_select(owner_user_id: int) -> Select[tuple[PDFDocument]]:
     """
     return select(PDFDocument).where(
         PDFDocument.user_id == owner_user_id,
-        PDFDocument.viewer_mode.is_distinct_from("benchmark_frozen"),
+        PDFDocument.document_kind == DOCUMENT_KIND_LIBRARY,
     )
 
 
@@ -38,9 +38,9 @@ def require_owned_document(
         statement = statement.with_for_update()
     document = db.execute(statement).scalar_one_or_none()
     # Benchmark runtime copies belong to a curator for normal internal tool
-    # scoping, but are not editable/reprocessable curator-library documents.
+    # scoping, but are not editable curator-library documents.
     # Internal ingestion and document tools have separate owned read paths.
-    if document is None or document.viewer_mode == "benchmark_frozen":
+    if document is None or document.document_kind != DOCUMENT_KIND_LIBRARY:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document with ID {document_id} not found",
@@ -66,8 +66,8 @@ def exclude_benchmark_document(db: Session, document_id: str | UUID | None) -> N
         parsed_id = document_id if isinstance(document_id, UUID) else UUID(document_id)
     except ValueError:
         return
-    mode = db.scalar(select(PDFDocument.viewer_mode).where(PDFDocument.id == parsed_id))
-    if mode == "benchmark_frozen":
+    kind = db.scalar(select(PDFDocument.document_kind).where(PDFDocument.id == parsed_id))
+    if kind is not None and kind != DOCUMENT_KIND_LIBRARY:
         raise HTTPException(status_code=404, detail="Document not found")
 
 

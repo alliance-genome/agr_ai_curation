@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from src.models.sql.pdf_document import PDFDocument
+from src.models.sql.pdf_document import FILE_ROLE_MAIN, PDFDocument, PDFDocumentFile
 
 from .registry import get_document_source_provider_metadata
 
@@ -31,15 +31,21 @@ _SCALAR_PROVENANCE_FIELDS = (
     "viewer_mode",
 )
 
-_SQL_TO_PUBLIC_FIELD = {
+# Provenance of the paper itself.
+_PAPER_SQL_TO_PUBLIC_FIELD = {
     "source_provider": "provider",
     "source_provider_reference_id": "reference_id",
     "source_provider_reference_curie": "reference_curie",
+    "source_external_ids": "external_ids",
+}
+
+# Provenance of the paper's main file. ``display_mode`` keeps its public name
+# ``viewer_mode`` while the viewer shows the main file only.
+_FILE_SQL_TO_PUBLIC_FIELD = {
     "source_provider_source_file_id": "source_file_id",
     "source_provider_pdf_artifact_id": "pdf_artifact_id",
     "source_provider_converted_artifact_id": "converted_artifact_id",
     "source_converted_artifact_sha256": "converted_artifact_sha256",
-    "source_external_ids": "external_ids",
     "source_md5": "source_md5",
     "source_file_class": "file_class",
     "source_file_extension": "file_extension",
@@ -48,7 +54,7 @@ _SQL_TO_PUBLIC_FIELD = {
     "source_imported_at": "imported_at",
     "source_access_scope": "access_scope",
     "source_access_group_ids": "access_group_ids",
-    "viewer_mode": "viewer_mode",
+    "display_mode": "viewer_mode",
 }
 
 _SENSITIVE_KEY_PARTS = (
@@ -65,7 +71,7 @@ _SENSITIVE_KEY_PARTS = (
 )
 
 
-def build_document_source_provenance(document: Any) -> dict[str, Any] | None:
+def build_document_source_provenance(document: PDFDocument) -> dict[str, Any] | None:
     """Return compact, non-secret source provenance for API/Weaviate metadata."""
 
     provenance = sanitize_document_source_provenance(_raw_provenance_from_document(document))
@@ -122,7 +128,10 @@ def find_existing_document_by_source(
     converted_artifact_id: str | None = None,
     source_md5: str | None = None,
 ) -> PDFDocument | None:
-    """Find a user-owned document with matching provider provenance."""
+    """Find a user-owned document with matching provider provenance.
+
+    Reference ids are the paper's; the converted artifact and MD5 are its main file's.
+    """
 
     match_clauses = []
     if reference_id:
@@ -131,16 +140,21 @@ def find_existing_document_by_source(
         match_clauses.append(PDFDocument.source_provider_reference_curie == reference_curie)
     if converted_artifact_id:
         match_clauses.append(
-            PDFDocument.source_provider_converted_artifact_id == converted_artifact_id
+            PDFDocumentFile.source_provider_converted_artifact_id == converted_artifact_id
         )
     if source_md5:
-        match_clauses.append(PDFDocument.source_md5 == source_md5)
+        match_clauses.append(PDFDocumentFile.source_md5 == source_md5)
 
     if not match_clauses:
         return None
 
     return db.execute(
         select(PDFDocument)
+        .join(
+            PDFDocumentFile,
+            (PDFDocumentFile.document_id == PDFDocument.id)
+            & (PDFDocumentFile.role == FILE_ROLE_MAIN),
+        )
         .where(
             PDFDocument.user_id == user_id,
             PDFDocument.source_provider == source_provider,
@@ -158,12 +172,17 @@ def _serialize_datetime(value: object) -> str | None:
     return None
 
 
-def _raw_provenance_from_document(document: Any) -> dict[str, Any]:
+def _raw_provenance_from_document(document: PDFDocument) -> dict[str, Any]:
     raw: dict[str, Any] = {}
-    for sql_field, public_field in _SQL_TO_PUBLIC_FIELD.items():
-        value = getattr(document, sql_field, None)
-        if value is not None:
-            raw[public_field] = value
+    main_file = document.main_file
+    for source, fields in (
+        (document, _PAPER_SQL_TO_PUBLIC_FIELD),
+        (main_file, _FILE_SQL_TO_PUBLIC_FIELD),
+    ):
+        for sql_field, public_field in fields.items():
+            value = getattr(source, sql_field)
+            if value is not None:
+                raw[public_field] = value
     return raw
 
 

@@ -14,6 +14,7 @@ from tests.fixtures.evidence.harness import (
     build_domain_envelope_extraction_payload,
     load_evidence_fixture,
 )
+from tests.pdf_document_test_support import new_paper
 
 
 TEST_PREFIX = "handoff_it"
@@ -228,20 +229,20 @@ def _create_user(db, suffix: str):
     return user
 
 
-def _create_document(db, user, suffix: str, *, viewer_mode: str | None = None):
-    from src.models.sql.pdf_document import PDFDocument
+def _create_document(db, user, suffix: str, *, document_kind: str = "library"):
 
-    document = PDFDocument(
+    document = new_paper(
         id=uuid4(),
         filename=f"{TEST_PREFIX}_{suffix}.pdf",
         title=f"Handoff fixture {suffix}",
         file_path=f"/tmp/{TEST_PREFIX}_{suffix}.pdf",
         file_hash=uuid4().hex + uuid4().hex,
         file_size=4096,
-        page_count=3,
+        page_count=None if document_kind == "benchmark_frozen" else 3,
         status="processed",
         user_id=user.id,
-        viewer_mode=viewer_mode,
+        display_mode="text" if document_kind == "benchmark_frozen" else "local_pdf",
+        document_kind=document_kind,
     )
     db.add(document)
     db.flush()
@@ -932,7 +933,7 @@ async def test_benchmark_frozen_copy_handoff_creates_the_runners_session(handoff
     suffix = uuid4().hex[:10]
     runner = _create_user(handoff_db, suffix)
     other = _create_user(handoff_db, f"{suffix}_other")
-    document = _create_document(handoff_db, runner, suffix, viewer_mode="benchmark_frozen")
+    document = _create_document(handoff_db, runner, suffix, document_kind="benchmark_frozen")
     handoff_db.commit()
 
     flow_run_id = f"{TEST_PREFIX}_frozen_{suffix}"

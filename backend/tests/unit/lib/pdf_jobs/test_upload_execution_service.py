@@ -2147,7 +2147,8 @@ async def test_provider_access_denial_marks_failed_when_saved_pdf_is_missing(
 
 @pytest.mark.asyncio
 async def test_sync_provider_source_import_failure_updates_owned_document(monkeypatch):
-    document = SimpleNamespace(source_import_status="pending", source_converted_artifact_sha256="a" * 64)
+    main_file = SimpleNamespace(source_import_status="pending", source_converted_artifact_sha256="a" * 64)
+    document = SimpleNamespace(main_file=main_file)
     session = SimpleNamespace(
         statement=None,
         commit_calls=0,
@@ -2188,8 +2189,8 @@ async def test_sync_provider_source_import_failure_updates_owned_document(monkey
         request.owner_user_id,
         UUID(request.document_id),
     }
-    assert document.source_import_status == "failed"
-    assert document.source_converted_artifact_sha256 is None
+    assert main_file.source_import_status == "failed"
+    assert main_file.source_converted_artifact_sha256 is None
     assert session.commit_calls == 1
     assert session.rollback_calls == 0
     assert session.close_calls == 1
@@ -2917,7 +2918,8 @@ async def test_provider_timeout_waits_for_storage_before_terminal_job(monkeypatc
             raise RuntimeError("storage unavailable")
         return {"stored_count": 1, "failed_count": 0}
 
-    async def chunks(*_args):
+    async def chunks(*_args, chunk_range):
+        assert chunk_range == (0, 0)
         return await loop.run_in_executor(None, write)
 
     async def metadata(_document, stats, *_args):
@@ -2930,7 +2932,7 @@ async def test_provider_timeout_waits_for_storage_before_terminal_job(monkeypatc
     async def ingest(request, *, weaviate_client):
         await store.store_to_weaviate(
             [{"chunk_index": 0, "content": "paper"}], request.document_id,
-            weaviate_client, request.user_id,
+            weaviate_client, request.user_id, chunk_range=(0, 0),
         )
 
     service = UploadExecutionService(
@@ -2969,9 +2971,10 @@ async def test_provider_timeout_waits_for_storage_before_terminal_job(monkeypatc
         await task
     assert events.index("writer_finished") < events.index("job_failed")
     assert properties["embedding_status"] == properties["processing_status"] == "failed"
-    if not storage_fails:
-        assert properties["chunkCount"] == 1
-        assert events.index("metadata_finished") < events.index("job_failed")
+    # Storage writes one file's pieces only; the paper's summed count is
+    # written by finalize_new_paper, which a timed-out import never reaches.
+    assert "metadata_finished" not in events
+    assert "chunkCount" not in properties
     sql_failure.assert_awaited_once()
     assert "exceeded 0.01 seconds" in str(sql_failure.await_args.args[1])
     assert provider.closed

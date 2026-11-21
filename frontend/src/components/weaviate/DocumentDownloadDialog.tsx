@@ -68,7 +68,7 @@ const DocumentDownloadDialog: React.FC<DocumentDownloadDialogProps> = ({
 
       const data = await response.json();
       const viewerMode = typeof data.viewer_mode === 'string' ? data.viewer_mode : null;
-      const isTextOnly = viewerMode === 'text_only';
+      const isTextOnly = viewerMode === 'text';
 
       const files: DownloadableFile[] = [
         {

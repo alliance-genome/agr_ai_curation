@@ -39,7 +39,6 @@ from .api_schemas import (
     AvailableModel,
     AvailableModelsResponse,
     SettingsResponse,
-    ReprocessRequest,
     ReembedRequest,
     SortOrder,
     SortBy
@@ -84,7 +83,6 @@ __all__ = [
     'AvailableModel',
     'AvailableModelsResponse',
     'SettingsResponse',
-    'ReprocessRequest',
     'ReembedRequest',
     'SortOrder',
     'SortBy'

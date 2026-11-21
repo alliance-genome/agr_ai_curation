@@ -11,6 +11,8 @@ from src.lib.pipeline.chunk import (
     _create_document_chunk,
     assign_chunk_indices,
     chunk_parsed_document,
+    is_chunked_element,
+    offset_chunk_indices,
     store_chunks_batch,
     ChunkingError,
 )
@@ -309,6 +311,51 @@ def test_assign_chunk_indices_rewrites_ids_sequentially():
     assert [chunk.chunk_index for chunk in updated] == [0, 1]
     assert updated[0].id == "doc-1_chunk_0000"
     assert updated[1].id == "doc-1_chunk_0001"
+
+
+def _numbered_chunks(count: int) -> list[DocumentChunk]:
+    metadata = ChunkMetadata(character_count=1, word_count=1)
+    return assign_chunk_indices([
+        DocumentChunk(
+            id="unset",
+            document_id="doc-1",
+            chunk_index=0,
+            content=f"text {position}",
+            element_type=ElementType.NARRATIVE_TEXT,
+            page_number=1,
+            metadata=metadata,
+        )
+        for position in range(count)
+    ])
+
+
+def test_a_first_file_keeps_its_chunk_indices_and_ids():
+    chunks = _numbered_chunks(3)
+    before = [(chunk.chunk_index, chunk.id) for chunk in chunks]
+
+    offset_chunk_indices(chunks, 0)
+
+    assert [(chunk.chunk_index, chunk.id) for chunk in chunks] == before
+
+
+def test_a_later_file_moves_its_chunks_to_its_reserved_range():
+    chunks = offset_chunk_indices(_numbered_chunks(2), 40)
+
+    assert [chunk.chunk_index for chunk in chunks] == [40, 41]
+    assert [chunk.id for chunk in chunks] == ["doc-1_chunk_0040", "doc-1_chunk_0041"]
+
+
+def test_offsetting_requires_chunks_numbered_from_zero_and_a_non_negative_start():
+    chunks = offset_chunk_indices(_numbered_chunks(2), 5)
+    with pytest.raises(ChunkingError, match="numbered from 0"):
+        offset_chunk_indices(chunks, 5)
+    with pytest.raises(ChunkingError, match="below 0"):
+        offset_chunk_indices(_numbered_chunks(1), -1)
+
+
+def test_page_footers_are_not_cut_into_pieces():
+    assert is_chunked_element({"text": "a", "metadata": {}}) is True
+    assert is_chunked_element({"text": "Page 2", "metadata": {"doc_item_label": "page_footer"}}) is False
 
 
 @pytest.mark.asyncio
