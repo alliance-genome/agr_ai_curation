@@ -17,6 +17,7 @@ from src.analyzers.document_read_results import (
     JOINED_CONTENT_SHAPE,
     NUMBERED_PASSAGES_SHAPE,
     numbered_view_spans,
+    numbered_view_table_labels,
     section_read_shape,
 )
 from src.analyzers.pdf_citations import PDFCitationsAnalyzer
@@ -112,6 +113,21 @@ class NumberedViewSpanTests(unittest.TestCase):
         self.assertEqual(
             numbered_view_spans("[0] Primers\n    [1] GAL4-F\n    [2] GAL4-R\n[1] Flies were kept."),
             ["Primers\n[1] GAL4-F\n[2] GAL4-R", "Flies were kept."],
+        )
+
+    def test_a_table_label_is_context_and_its_rows_are_spans(self):
+        text = (
+            "[0] Strains\n"
+            "Column names of the 2nd table in this file's text (this passage holds rows 401 to 402 of 2,033): | Title | |\n"
+            "    | Strain | Temp |\n"
+            "[1] | XS0401 | 25 C |\n"
+            "[2] | XS0402 | 18 C |"
+        )
+        self.assertEqual(numbered_view_spans(text), ["Strains", "| XS0401 | 25 C |", "| XS0402 | 18 C |"])
+        self.assertEqual(
+            numbered_view_table_labels(text),
+            ["Column names of the 2nd table in this file's text (this passage holds rows 401 to 402 of 2,033): "
+             "| Title | |\n| Strain | Temp |"],
         )
 
     def test_a_passage_with_no_sentences_decodes_to_no_spans(self):
@@ -347,8 +363,14 @@ class ApplicationViewRoundTripTests(unittest.TestCase):
         call = ToolCallAnalyzer.extract_tool_calls(observations)["tool_calls"][0]
         section = call["tool_result"]["parsed"]["json_data"]["section"]
         decoded = [numbered_view_spans(passage["text"]) for passage in section["passages"]]
+        labels = [numbered_view_table_labels(passage["text"]) for passage in section["passages"]]
 
         self.assertEqual(decoded, fixture["sentences"])
+        # A table passage's label is decoded as context, never as a sentence.
+        self.assertEqual(labels, fixture["table_labels"])
+        self.assertTrue(any(labels))
+        self.assertEqual(call["tool_result"]["parsed"]["section"]["table_labels"],
+                         [label for passage_labels in fixture["table_labels"] for label in passage_labels])
 
 
 class AnalysisCacheVersionTests(unittest.TestCase):

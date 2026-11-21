@@ -1,0 +1,177 @@
+{
+ "elements": [
+  {
+   "type": "Title",
+   "text": "A synthetic study of made-up genes",
+   "metadata": {
+    "section_title": "A synthetic study of made-up genes",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes"
+    ]
+   }
+  },
+  {
+   "type": "Title",
+   "text": "Abstract",
+   "metadata": {
+    "section_title": "Abstract",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Abstract"
+    ]
+   }
+  },
+  {
+   "type": "NarrativeText",
+   "text": "Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic g.",
+   "metadata": {
+    "section_title": "Abstract",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Abstract"
+    ]
+   }
+  },
+  {
+   "type": "Title",
+   "text": "Results",
+   "metadata": {
+    "section_title": "Results",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Results"
+    ]
+   }
+  },
+  {
+   "type": "Title",
+   "text": "Expression of zeta1",
+   "metadata": {
+    "section_title": "Expression of zeta1",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Results",
+     "Expression of zeta1"
+    ]
+   }
+  },
+  {
+   "type": "NarrativeText",
+   "text": "Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2.",
+   "metadata": {
+    "section_title": "Expression of zeta1",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Results",
+     "Expression of zeta1"
+    ]
+   }
+  },
+  {
+   "type": "Table",
+   "text": "| Strain | Genotype | Source |\n| --- | --- | --- |\n| XS1 | zeta1 mutant. | Lab A |\n| XS2 | zeta2 null. | Lab B |",
+   "metadata": {
+    "section_title": "Expression of zeta1",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Results",
+     "Expression of zeta1"
+    ]
+   }
+  },
+  {
+   "type": "NarrativeText",
+   "text": "Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sent.",
+   "metadata": {
+    "section_title": "Expression of zeta1",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Results",
+     "Expression of zeta1"
+    ]
+   }
+  },
+  {
+   "type": "Title",
+   "text": "Strains",
+   "metadata": {
+    "section_title": "Strains",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Results",
+     "Strains"
+    ]
+   }
+  },
+  {
+   "type": "Table",
+   "text": "| Strain | Description | Notes | Source |\n| --- | --- | --- | --- |\n| XS001 | zeta1(made-up allele 1) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS002 | zeta2(made-up allele 2) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS003 | zeta3(made-up allele 3) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS004 | zeta4(made-up allele 4) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS005 | zeta5(made-up allele 5) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS006 | zeta6(made-up allele 6) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS007 | zeta7(made-up allele 7) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS008 | zeta8(made-up allele 8) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS009 | zeta9(made-up allele 9) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS010 | zeta10(made-up allele 10) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS011 | zeta11(made-up allele 11) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS012 | zeta12(made-up allele 12) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS013 | zeta13(made-up allele 13) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS014 | zeta14(made-up allele 14) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS015 | zeta15(made-up allele 15) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS016 | zeta16(made-up allele 16) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS017 | zeta17(made-up allele 17) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS018 | zeta18(made-up allele 18) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS019 | zeta19(made-up allele 19) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS020 | zeta20(made-up allele 20) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS021 | zeta21(made-up allele 21) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS022 | zeta22(made-up allele 22) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS023 | zeta23(made-up allele 23) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS024 | zeta24(made-up allele 24) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS025 | zeta25(made-up allele 25) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS026 | zeta26(made-up allele 26) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS027 | zeta27(made-up allele 27) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS028 | zeta28(made-up allele 28) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS029 | zeta29(made-up allele 29) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS030 | zeta30(made-up allele 30) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS031 | zeta31(made-up allele 31) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS032 | zeta32(made-up allele 32) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS033 | zeta33(made-up allele 33) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS034 | zeta34(made-up allele 34) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS035 | zeta35(made-up allele 35) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS036 | zeta36(made-up allele 36) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS037 | zeta37(made-up allele 37) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS038 | zeta38(made-up allele 38) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS039 | zeta39(made-up allele 39) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS040 | zeta40(made-up allele 40) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS041 | zeta41(made-up allele 41) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS042 | zeta42(made-up allele 42) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS043 | zeta43(made-up allele 43) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS044 | zeta44(made-up allele 44) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS045 | zeta45(made-up allele 45) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS046 | zeta46(made-up allele 46) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS047 | zeta47(made-up allele 47) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS048 | zeta48(made-up allele 48) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS049 | zeta49(made-up allele 49) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS050 | zeta50(made-up allele 50) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS051 | zeta51(made-up allele 51) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS052 | zeta52(made-up allele 52) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS053 | zeta53(made-up allele 53) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS054 | zeta54(made-up allele 54) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS055 | zeta55(made-up allele 55) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS056 | zeta56(made-up allele 56) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS057 | zeta57(made-up allele 57) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS058 | zeta58(made-up allele 58) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS059 | zeta59(made-up allele 59) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS060 | zeta60(made-up allele 60) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+   "metadata": {
+    "section_title": "Strains",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Results",
+     "Strains"
+    ]
+   }
+  },
+  {
+   "type": "Title",
+   "text": "Discussion",
+   "metadata": {
+    "section_title": "Discussion",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Discussion"
+    ]
+   }
+  },
+  {
+   "type": "NarrativeText",
+   "text": "Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about.",
+   "metadata": {
+    "section_title": "Discussion",
+    "page_number": 1,
+    "section_path": [
+     "A synthetic study of made-up genes",
+     "Discussion"
+    ]
+   }
+  }
+ ],
+ "pieces_before": [
+  "A synthetic study of made-up genes",
+  "Abstract\n\nMade-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic g.",
+  "Results",
+  "Expression of zeta1",
+  "Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2.",
+  "| Strain | Genotype | Source |\n| --- | --- | --- |\n| XS1 | zeta1 mutant. | Lab A |\n| XS2 | zeta2 null. | Lab B |\n\nMade-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sent.",
+  "Strains",
+  "| Strain | Description | Notes | Source |\n| --- | --- | --- | --- |\n| XS001 | zeta1(made-up allele 1) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS002 | zeta2(made-up allele 2) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS003 | zeta3(made-up allele 3) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS004 | zeta4(made-up allele 4) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS005 | zeta5(made-up allele 5) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS006 | zeta6(made-up allele 6) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS007 | zeta7(made-up allele 7) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS008 | zeta8(made-up allele 8) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS009 | zeta9(made-up allele 9) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS010 | zeta10(made-up allele 10) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS011 | zeta11(made-up allele 11) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS012 | zeta12(made-up allele 12) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS013 | zeta13(made-up allele 13) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS014 | zeta14(made-up allele 14) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS015 | zeta15(made-up allele 15) is a synthetic line. | Kept at 20 C. Fed daily.",
+  "| Lab A |\n| XS016 | zeta16(made-up allele 16) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS017 | zeta17(made-up allele 17) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS018 | zeta18(made-up allele 18) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS019 | zeta19(made-up allele 19) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS020 | zeta20(made-up allele 20) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS021 | zeta21(made-up allele 21) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS022 | zeta22(made-up allele 22) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS023 | zeta23(made-up allele 23) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS024 | zeta24(made-up allele 24) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS025 | zeta25(made-up allele 25) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS026 | zeta26(made-up allele 26) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS027 | zeta27(made-up allele 27) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS028 | zeta28(made-up allele 28) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS029 | zeta29(made-up allele 29) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS030 | zeta30(made-up allele 30) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS031 | zeta31(made-up allele 31) is a synthetic line. | Kept at 20 C.",
+  "Fed daily. | Lab B |\n| XS032 | zeta32(made-up allele 32) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS033 | zeta33(made-up allele 33) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS034 | zeta34(made-up allele 34) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS035 | zeta35(made-up allele 35) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS036 | zeta36(made-up allele 36) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS037 | zeta37(made-up allele 37) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS038 | zeta38(made-up allele 38) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS039 | zeta39(made-up allele 39) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS040 | zeta40(made-up allele 40) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS041 | zeta41(made-up allele 41) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS042 | zeta42(made-up allele 42) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS043 | zeta43(made-up allele 43) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS044 | zeta44(made-up allele 44) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS045 | zeta45(made-up allele 45) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS046 | zeta46(made-up allele 46) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS047 | zeta47(made-up allele 47) is a synthetic line.",
+  "| Kept at 20 C. Fed daily. | Lab C |\n| XS048 | zeta48(made-up allele 48) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS049 | zeta49(made-up allele 49) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS050 | zeta50(made-up allele 50) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS051 | zeta51(made-up allele 51) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS052 | zeta52(made-up allele 52) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS053 | zeta53(made-up allele 53) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS054 | zeta54(made-up allele 54) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS055 | zeta55(made-up allele 55) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS056 | zeta56(made-up allele 56) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS057 | zeta57(made-up allele 57) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS058 | zeta58(made-up allele 58) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS059 | zeta59(made-up allele 59) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS060 | zeta60(made-up allele 60) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+  "Discussion\n\nMade-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about."
+ ],
+ "pieces_after": [
+  "A synthetic study of made-up genes\n\nAbstract\n\nMade-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic gene zeta1 and its partner. text Made-up sentence 1 about the synthetic g.",
+  "Results\n\nExpression of zeta1\n\nMade-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2 and its partner. text Made-up sentence 2 about the synthetic gene zeta2.",
+  "| Strain | Genotype | Source |\n| --- | --- | --- |\n| XS1 | zeta1 mutant. | Lab A |\n| XS2 | zeta2 null. | Lab B |\n\nMade-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sentence 3 about the synthetic gene zeta3 and its partner. text Made-up sent.",
+  "Strains\n\n| Strain | Description | Notes | Source |\n| --- | --- | --- | --- |\n| XS001 | zeta1(made-up allele 1) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS002 | zeta2(made-up allele 2) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS003 | zeta3(made-up allele 3) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS004 | zeta4(made-up allele 4) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS005 | zeta5(made-up allele 5) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS006 | zeta6(made-up allele 6) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS007 | zeta7(made-up allele 7) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS008 | zeta8(made-up allele 8) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS009 | zeta9(made-up allele 9) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS010 | zeta10(made-up allele 10) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS011 | zeta11(made-up allele 11) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS012 | zeta12(made-up allele 12) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS013 | zeta13(made-up allele 13) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS014 | zeta14(made-up allele 14) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS015 | zeta15(made-up allele 15) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+  "| XS016 | zeta16(made-up allele 16) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS017 | zeta17(made-up allele 17) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS018 | zeta18(made-up allele 18) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS019 | zeta19(made-up allele 19) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS020 | zeta20(made-up allele 20) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS021 | zeta21(made-up allele 21) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS022 | zeta22(made-up allele 22) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS023 | zeta23(made-up allele 23) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS024 | zeta24(made-up allele 24) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS025 | zeta25(made-up allele 25) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS026 | zeta26(made-up allele 26) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS027 | zeta27(made-up allele 27) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS028 | zeta28(made-up allele 28) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS029 | zeta29(made-up allele 29) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS030 | zeta30(made-up allele 30) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+  "| XS031 | zeta31(made-up allele 31) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS032 | zeta32(made-up allele 32) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS033 | zeta33(made-up allele 33) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS034 | zeta34(made-up allele 34) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS035 | zeta35(made-up allele 35) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS036 | zeta36(made-up allele 36) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS037 | zeta37(made-up allele 37) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS038 | zeta38(made-up allele 38) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS039 | zeta39(made-up allele 39) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS040 | zeta40(made-up allele 40) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS041 | zeta41(made-up allele 41) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS042 | zeta42(made-up allele 42) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS043 | zeta43(made-up allele 43) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS044 | zeta44(made-up allele 44) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS045 | zeta45(made-up allele 45) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+  "| XS046 | zeta46(made-up allele 46) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS047 | zeta47(made-up allele 47) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS048 | zeta48(made-up allele 48) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS049 | zeta49(made-up allele 49) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS050 | zeta50(made-up allele 50) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS051 | zeta51(made-up allele 51) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS052 | zeta52(made-up allele 52) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS053 | zeta53(made-up allele 53) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS054 | zeta54(made-up allele 54) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS055 | zeta55(made-up allele 55) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |\n| XS056 | zeta56(made-up allele 56) is a synthetic line. | Kept at 20 C. Fed daily. | Lab B |\n| XS057 | zeta57(made-up allele 57) is a synthetic line. | Kept at 20 C. Fed daily. | Lab C |\n| XS058 | zeta58(made-up allele 58) is a synthetic line. | Kept at 20 C. Fed daily. | Lab D |\n| XS059 | zeta59(made-up allele 59) is a synthetic line. | Kept at 20 C. Fed daily. | Lab E |\n| XS060 | zeta60(made-up allele 60) is a synthetic line. | Kept at 20 C. Fed daily. | Lab A |",
+  "Discussion\n\nMade-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about the synthetic gene zeta4 and its partner. text Made-up sentence 4 about."
+ ]
+}

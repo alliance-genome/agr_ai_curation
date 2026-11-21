@@ -83,6 +83,8 @@ def _document_result_view(tool_name: str, result: Any) -> tuple[Any, list[dict]]
             record.pop(key, None)
         if "evidence_spans" in record:
             record["text"] = _numbered_span_text(record)
+        elif record.get("tables"):
+            record["table_labels"] = [table_rows_label(table) for table in record.pop("tables")]
         _drop_none(record)
     _drop_none(view)
     return view, events
@@ -96,25 +98,69 @@ def _numbered_span_text(record: dict) -> str:
 
     Every span is checked against the exact returned text before it is shown, so
     the model sees only sentences the canonical source actually contains. A span
-    can hold single line breaks (a table row, a primer list); its continuation
-    lines are indented so that only a real span number ever starts a line.
+    can hold single line breaks (a primer list); its continuation lines are
+    indented so that only a real span number ever starts a line. Each table
+    the record holds rows of gets one unnumbered label above its first shown
+    row (``table_rows_label``); the label is never a span.
     """
     text = record.pop("content")
     spans = record.pop("evidence_spans")
+    tables = record.pop("tables", None) or []
     start = (record.pop("content_range", None) or {}).get("start", 0)
     if not isinstance(text, str):
         raise ValueError("Document record has no exact text")
+    labelled: set[int] = set()
     lines = []
     for span in spans:
         lo, hi = span["char_start"] - start, span["char_end"] - start
         if lo < 0 or hi > len(text) or hi <= lo or text[lo:hi] != span.get("text"):
             raise ValueError("Evidence span does not match the exact returned document text")
+        for position, table in enumerate(tables):
+            if (position not in labelled
+                    and table["char_start"] <= span["char_start"] and span["char_end"] <= table["char_end"]):
+                labelled.add(position)
+                lines.append(table_rows_label(table))
         shown = span["text"].replace("\n", "\n" + _CONTINUATION_INDENT)
         lines.append(f"[{span['span_index']}] {shown}")
     return "\n".join(lines)
 
 
 _CONTINUATION_INDENT = "    "
+# TraceReview's document_read_results analyzer recognises label lines by this prefix.
+TABLE_LABEL_PREFIX = "Column names of the "
+
+
+def ordinal(number: int) -> str:
+    """English ordinal of a positive whole number: 1st, 2nd, 3rd, 4th, 11th, 21st, 111th."""
+    if type(number) is not int or number < 1:
+        raise ValueError("ordinal() takes a whole number of at least 1")
+    if number % 100 in (11, 12, 13):
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number:,}{suffix}"
+
+
+def table_rows_label(table: dict) -> str:
+    """The unnumbered label shown above a passage's rows of one table.
+
+    It gives the table's header rows (stored in chunk metadata, never in the
+    passage text) and which rows the passage holds. Further header rows are
+    indented like continuation lines, so no label line starts with a number.
+    """
+    first, last, total = table["first_data_row"], table["last_data_row"], table["total_data_rows"]
+    if first is None:
+        position = f"this passage holds only its header rows; the table has {total:,} rows"
+    elif first == last:
+        position = f"this passage holds row {first:,} of {total:,}"
+    else:
+        position = f"this passage holds rows {first:,} to {last:,} of {total:,}"
+    header_rows = table["header_text"].split("\n")
+    head = (
+        f"{TABLE_LABEL_PREFIX}{ordinal(table['table_index'])} table in this file's text "
+        f"({position}): {header_rows[0]}"
+    )
+    return "\n".join([head, *(_CONTINUATION_INDENT + row for row in header_rows[1:])])
 
 
 def _drop_none(mapping: dict) -> None:

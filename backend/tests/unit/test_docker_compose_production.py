@@ -12,6 +12,8 @@ import yaml
 
 from src.lib.openai_agents.config import (
     get_batch_zip_metadata_chunk_size,
+    get_document_table_header_max_rows,
+    get_document_table_header_min_filled_fraction,
     get_langfuse_timeout,
     get_max_parallel_validators,
     get_pdf_max_file_size_bytes,
@@ -90,6 +92,34 @@ def test_compose_forwards_weaviate_chunk_fetch_page_size(monkeypatch, configured
     else:
         monkeypatch.setenv(key, configured)
     assert get_weaviate_chunk_fetch_page_size() == expected
+
+
+@pytest.mark.parametrize(
+    "key,default,configured,expected,getter",
+    [
+        ("DOCUMENT_TABLE_HEADER_MAX_ROWS", "5", None, 5, get_document_table_header_max_rows),
+        ("DOCUMENT_TABLE_HEADER_MAX_ROWS", "5", "3", 3, get_document_table_header_max_rows),
+        ("DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION", "0.5", None, 0.5, get_document_table_header_min_filled_fraction),
+        ("DOCUMENT_TABLE_HEADER_MIN_FILLED_FRACTION", "0.5", "0.75", 0.75, get_document_table_header_min_filled_fraction),
+    ],
+)
+def test_compose_forwards_table_header_rule_to_every_chunking_service(
+    monkeypatch, key, default, configured, expected, getter
+):
+    """The backend and the benchmark worker both cut text into pieces."""
+    production = _load_compose()["services"]
+    development = _load_dev_compose()["services"]
+    reference = "${" + key + ":-" + default + "}"
+    for service in ("backend", "benchmark_worker"):
+        assert production[service]["environment"][key] == reference
+    assert dict(item.split("=", 1) for item in development["backend"]["environment"])[key] == reference
+    assert development["benchmark_worker"]["environment"][key] == reference
+    assert _load_env_assignments(ENV_EXAMPLE_PATH)[key] == default
+    if configured is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, configured)
+    assert getter() == expected
 
 
 def _load_dev_compose() -> dict:
@@ -427,6 +457,21 @@ def test_production_compose_forwards_abstract_extraction_input_limit():
     assert production_env["ABSTRACT_EXTRACTION_INPUT_MAX_CHARS"] == (
         f"${{ABSTRACT_EXTRACTION_INPUT_MAX_CHARS:-{documented_default}}}"
     )
+
+
+def test_compose_forwards_document_file_converted_text_cap():
+    dev_env = _list_environment(
+        _load_dev_compose()["services"]["backend"]["environment"]
+    )
+    production_env = _load_compose()["services"]["backend"]["environment"]
+    documented_default = _load_env_assignments(ENV_EXAMPLE_PATH)[
+        "DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"
+    ]
+
+    assert documented_default == "1000000"
+    expected = f"${{DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES:-{documented_default}}}"
+    assert dev_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
+    assert production_env["DOCUMENT_FILE_MAX_CONVERTED_TEXT_BYTES"] == expected
 
 
 def test_compose_propagates_optional_openrouter_key_name_only():

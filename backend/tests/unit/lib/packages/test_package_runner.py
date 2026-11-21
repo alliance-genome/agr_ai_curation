@@ -706,6 +706,7 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(
                 "score": 0.91,
                 "content": "Wingless expression expanded in the mutant tissue.",
                 "doc_items": [{"id": "bbox-search"}],
+                "tables": None,
             }
         ],
         "error_code": None,

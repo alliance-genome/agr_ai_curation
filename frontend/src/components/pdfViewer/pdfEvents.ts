@@ -108,3 +108,27 @@ export function onPDFViewerNavigateEvidence(
   window.addEventListener('pdf-viewer-navigate-evidence', listener)
   return () => window.removeEventListener('pdf-viewer-navigate-evidence', listener)
 }
+
+export interface PDFViewerDocumentClearedDetail {
+  ownerToken?: string
+}
+
+/**
+ * The active document has nothing for the PDF viewer to show (a text paper).
+ * The viewer ends any pending load and clears the previous PDF.
+ */
+export function dispatchPDFViewerDocumentCleared(ownerToken?: string): void {
+  window.dispatchEvent(
+    new CustomEvent<PDFViewerDocumentClearedDetail>('pdf-viewer-document-cleared', {
+      detail: { ownerToken },
+    }),
+  )
+}
+
+export function onPDFViewerDocumentCleared(
+  handler: (event: CustomEvent<PDFViewerDocumentClearedDetail>) => void,
+): () => void {
+  const listener = (event: Event) => handler(event as CustomEvent<PDFViewerDocumentClearedDetail>)
+  window.addEventListener('pdf-viewer-document-cleared', listener)
+  return () => window.removeEventListener('pdf-viewer-document-cleared', listener)
+}

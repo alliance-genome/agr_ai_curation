@@ -237,6 +237,7 @@ describe('HomePage durable session bootstrap', () => {
       if (url === '/api/pdf-viewer/documents/doc-42/url') {
         return jsonResponse({
           viewer_url: '/viewer/doc-42',
+          viewer_mode: 'local_pdf',
         })
       }
 
@@ -334,7 +335,7 @@ describe('HomePage durable session bootstrap', () => {
         return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
       }
       if (url === '/api/pdf-viewer/documents/doc-b/url') {
-        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b' }))
+        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf' }))
       }
       throw new Error(`Unexpected fetch: ${url}`)
     })
@@ -418,7 +419,7 @@ describe('HomePage durable session bootstrap', () => {
         return Promise.resolve(jsonResponse({ filename: 'b.pdf', page_count: 2 }))
       }
       if (url === '/api/pdf-viewer/documents/doc-b/url') {
-        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b' }))
+        return Promise.resolve(jsonResponse({ viewer_url: '/viewer/doc-b', viewer_mode: 'local_pdf' }))
       }
       throw new Error(`Unexpected fetch: ${url}`)
     })
@@ -602,7 +603,7 @@ describe('HomePage durable session bootstrap', () => {
       }
 
       if (url === '/api/pdf-viewer/documents/doc-upload/url') {
-        return jsonResponse({ viewer_url: '/viewer/doc-upload' })
+        return jsonResponse({ viewer_url: '/viewer/doc-upload', viewer_mode: 'local_pdf' })
       }
 
       throw new Error(`Unexpected fetch: ${url}`)
@@ -773,6 +774,7 @@ describe('HomePage durable session bootstrap', () => {
       if (url === '/api/pdf-viewer/documents/doc-route/url') {
         return jsonResponse({
           viewer_url: '/viewer/doc-route',
+          viewer_mode: 'local_pdf',
         })
       }
 
@@ -1114,6 +1116,7 @@ describe('HomePage durable session bootstrap', () => {
         if (url === '/api/pdf-viewer/documents/doc-42/url') {
           return jsonResponse({
             viewer_url: '/viewer/doc-42',
+            viewer_mode: 'local_pdf',
           })
         }
 
@@ -1876,7 +1879,7 @@ describe('flow document selection', () => {
       if (url === '/api/chat/conversation/reset') return resetResponse ?? jsonResponse({ session_id: 'session-new' })
       if (url.startsWith('/api/pdf-viewer/documents/')) return jsonResponse(url.endsWith('/url')
         ? { viewer_url: textOnly ? null : '/paper.pdf', viewer_mode: textOnly ? 'text' : 'local_pdf' }
-        : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: 1 })
+        : { filename: selectedDocument?.filename ?? 'paper.pdf', page_count: textOnly ? null : 1 })
       const support = realChatSupportResponse(url, init)
       if (support) return support
       throw new Error(`Unexpected fetch: ${url}`)
