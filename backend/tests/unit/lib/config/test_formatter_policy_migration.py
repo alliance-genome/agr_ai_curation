@@ -1,4 +1,4 @@
-"""Only missing formatter policy rows are seeded; explicit decisions survive."""
+"""Only missing runtime helper policy rows are seeded; explicit decisions survive."""
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,3 +72,34 @@ def test_extraction_resolver_helpers_stop_being_inherited(monkeypatch):
         assert sql.strip().startswith('UPDATE tool_policies')
         assert "'{system_managed_inheritance}'" in sql
         assert values['value'] == 'false'
+
+
+def test_topic_entity_tag_policy_backfill_seeds_the_five_builder_tools(monkeypatch):
+    root = find_repo_root(Path(__file__))
+    path = root / 'backend/alembic/versions/a9b8c7d6e5f4_backfill_topic_entity_tag_tool_policies.py'
+    spec = spec_from_file_location('topic_entity_tag_policy_migration_test', path)
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.down_revision == 'b5c6d7e8f9a0'
+    for key in ['AGR_RUNTIME_ROOT', 'AGR_RUNTIME_CONFIG_DIR', 'AGR_RUNTIME_PACKAGES_DIR',
+                'TOOL_POLICY_DEFAULTS_CONFIG_PATH', 'APP_VERSION', 'AGR_RUNTIME_PACKAGE_API_VERSION']:
+        monkeypatch.delenv(key, raising=False)
+    calls = []
+    monkeypatch.setattr(module.op, 'get_bind', lambda: SimpleNamespace(execute=lambda sql, values: calls.append((str(sql), values))))
+    module.upgrade()
+    assert [values['tool_key'] for _, values in calls] == [
+        'stage_topic_entity_tag', 'patch_topic_entity_tag', 'discard_topic_entity_tag',
+        'list_staged_topic_entity_tags', 'finalize_topic_entity_tag_extraction',
+    ]
+    for sql, values in calls:
+        # Insert-only: a row an operator already has is left as it is.
+        assert 'ON CONFLICT (tool_key) DO NOTHING' in sql
+        assert 'UPDATE' not in sql
+        # Same policy as the neighbouring builder tools, read from the package defaults.
+        assert values['category'] == 'Runtime Helpers'
+        assert not values['allow_attach']
+        assert not values['curator_visible']
+        assert values['allow_execute']
+        assert json.loads(values['config']) == {'system_managed_inheritance': True}
+    module.downgrade()
+    assert len(calls) == 5
