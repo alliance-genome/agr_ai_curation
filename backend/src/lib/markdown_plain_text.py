@@ -9,21 +9,30 @@ that only look like markup stay, for example the asterisk in a stop codon
 What is removed or rewritten:
 
 - ``<u>``, ``<sup>`` and ``<sub>`` tag pairs (the tags only, before the
-  emphasis parse, so ``Ca**<sup>2+</sup>**`` reads as ``Ca2+``);
+  emphasis parse, so ``Ca**<sup>2+</sup>**`` reads as ``Ca2+``). Characters
+  that were inside such a pair are never read as markup, so
+  ``val<sup>*</sup>sig<sup>*</sup>`` keeps both asterisks;
 - emphasis and strong emphasis with ``*`` or ``_``, and ``~~`` strikethrough
-  (single-tilde strikethrough is off);
+  (single-tilde strikethrough is off). Underscores inside a word are never
+  emphasis (``snake_case``); a pair at word edges is (``_x_``, ``__init__``);
 - code span backticks (the code text is kept exactly);
-- links and autolinks (the link text is kept);
-- backslash escapes are undone and character references are decoded
-  (``\\*`` gives ``*``, ``&amp;`` gives ``&``).
+- links and images (the link text or image description is kept);
+- backslash escapes are undone (``\\*`` gives ``*``), except an escaped
+  backslash, which stays as two backslashes everywhere because in a table
+  cell undoing it would turn the next pipe into part of the cell;
+- character references are decoded (``&amp;`` gives ``&``, ``&nbsp;`` gives a
+  no-break space, ``&#0;`` and NUL give U+FFFD);
+- line endings: a carriage return becomes a line feed.
 
-Other HTML is kept as literal text. Block structure (headings, list markers,
-table pipes) is handled by the caller, which hands this module one element's
-text at a time.
+Kept exactly as written: text in angle brackets (``<UAS:GFP>``,
+``Tg(<lexAop:GFP>)``, ``<https://example.org>``, e-mail addresses), because
+autolinks and raw HTML are both off; other HTML tags; a single ``~``.
+Block structure (headings, list markers, table pipes) is handled by the
+caller, which hands this module one element's text at a time.
 
 The clean-up must run exactly once per text: a second run would read an
 asterisk that was escaped in the source (``\\*x\\*``) as emphasis and delete
-it.
+it. Every step is linear in the length of the text.
 """
 
 from __future__ import annotations
@@ -33,11 +42,10 @@ import re
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-_INLINE_TAG_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"<u>(.+?)</u>", re.IGNORECASE),
-    re.compile(r"<sup>(.+?)</sup>", re.IGNORECASE),
-    re.compile(r"<sub>(.+?)</sub>", re.IGNORECASE),
-)
+# One opening or closing tag. Fixed alternatives, so matching cannot backtrack.
+_INLINE_TAG = re.compile(r"<(/?)(u|sup|sub)>", re.IGNORECASE)
+# An existing backslash escape, or a markup character that must be escaped.
+_ESCAPE_OR_MARKER = re.compile(r"(\\.)|([*_~`])", re.DOTALL)
 
 _MARKUP_ONLY_TOKENS = frozenset(
     {
@@ -52,10 +60,96 @@ _MARKUP_ONLY_TOKENS = frozenset(
     }
 )
 
-# CommonMark with raw HTML off (HTML stays literal text) and ``~~``
-# strikethrough on. markdown-it's strikethrough rule needs two tildes, so a
-# single "~" is always literal.
-_PARSER = MarkdownIt("commonmark", {"html": False}).enable("strikethrough")
+# CommonMark with raw HTML and autolinks off (text in angle brackets stays as
+# written) and ``~~`` strikethrough on. markdown-it's strikethrough rule needs
+# two tildes, so a single "~" is always literal.
+_PARSER = (
+    MarkdownIt("commonmark", {"html": False})
+    .enable("strikethrough")
+    .disable("autolink")
+)
+
+_ESCAPED_BACKSLASH = "\\\\"
+# Escapes that hold a row's cell structure: an escaped pipe, and an escaped
+# backslash (undoing it would leave a backslash that escapes the next pipe).
+_STRUCTURAL_CELL_ESCAPES = frozenset({"\\|", _ESCAPED_BACKSLASH})
+_PROSE_KEPT_ESCAPES = frozenset({_ESCAPED_BACKSLASH})
+
+
+def _escape_markers(segment: str) -> str:
+    """Backslash-escape markup characters that are not escaped already."""
+
+    return _ESCAPE_OR_MARKER.sub(
+        lambda match: match.group(1) or "\\" + match.group(2),
+        segment,
+    )
+
+
+def _strip_inline_tags(text: str) -> str:
+    """Remove ``<u>``/``<sup>``/``<sub>`` pairs in one left-to-right pass.
+
+    A closing tag pairs with the nearest open tag of the same name on the same
+    line; a pair must hold at least one character. Unpaired tags stay as
+    literal text. Markup characters inside a pair are escaped, so they stay
+    literal after the emphasis parse instead of pairing with text outside.
+    """
+
+    tags = list(_INLINE_TAG.finditer(text))
+    if not tags:
+        return text
+    open_tags: dict[str, list[int]] = {}
+    paired = [False] * len(tags)
+    previous_end = 0
+    for position, tag in enumerate(tags):
+        if "\n" in text[previous_end : tag.start()]:
+            open_tags = {}
+        previous_end = tag.end()
+        name = tag.group(2).lower()
+        if not tag.group(1):
+            open_tags.setdefault(name, []).append(position)
+            continue
+        openers = open_tags.get(name)
+        if not openers:
+            continue
+        opener = openers.pop()
+        if tags[opener].end() < tag.start():
+            paired[opener] = paired[position] = True
+
+    parts: list[str] = []
+    depth = 0
+    cursor = 0
+    for position, tag in enumerate(tags):
+        if not paired[position]:
+            continue
+        segment = text[cursor : tag.start()]
+        parts.append(_escape_markers(segment) if depth else segment)
+        depth += -1 if tag.group(1) else 1
+        cursor = tag.end()
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
+def _split_on_kept_escapes(text: str, kept: frozenset[str]) -> list[str]:
+    """Split text into runs of text and the kept two-character escapes."""
+
+    pieces: list[str] = []
+    current: list[str] = []
+    index = 0
+    while index < len(text):
+        escape = text[index : index + 2]
+        if escape in kept:
+            pieces.append("".join(current))
+            pieces.append(escape)
+            current = []
+            index += 2
+        elif text[index] == "\\" and index + 1 < len(text):
+            current.append(escape)
+            index += 2
+        else:
+            current.append(text[index])
+            index += 1
+    pieces.append("".join(current))
+    return pieces
 
 
 def _render_inline_tokens(tokens: list[Token]) -> str:
@@ -74,17 +168,26 @@ def _render_inline_tokens(tokens: list[Token]) -> str:
     return "".join(parts)
 
 
+def _parse_inline(text: str) -> str:
+    if not text:
+        return ""
+    rendered: list[str] = []
+    for block_token in _PARSER.parseInline(text):
+        rendered.append(_render_inline_tokens(block_token.children or []))
+    return "".join(rendered)
+
+
+def _clean_inline(text: str, kept_escapes: frozenset[str]) -> str:
+    pieces = _split_on_kept_escapes(_strip_inline_tags(text), kept_escapes)
+    return "".join(piece if piece in kept_escapes else _parse_inline(piece) for piece in pieces)
+
+
 def markdown_inline_to_plain_text(text: str) -> str:
     """Return ``text`` with its Markdown inline markup removed."""
 
     if not text:
         return ""
-    for pattern in _INLINE_TAG_PATTERNS:
-        text = pattern.sub(r"\1", text)
-    rendered: list[str] = []
-    for block_token in _PARSER.parseInline(text):
-        rendered.append(_render_inline_tokens(block_token.children or []))
-    return "".join(rendered)
+    return _clean_inline(text, _PROSE_KEPT_ESCAPES)
 
 
 def split_table_row_cells(row: str) -> list[str]:
@@ -115,45 +218,13 @@ def split_table_row_cells(row: str) -> list[str]:
     return cells
 
 
-# Escapes that hold a row's cell structure: an escaped pipe, and an escaped
-# backslash (undoing it would leave a backslash that escapes the next pipe).
-_STRUCTURAL_CELL_ESCAPES = frozenset({"\\|", "\\\\"})
-
-
-def _split_cell_on_structural_escapes(content: str) -> list[str]:
-    """Split cell text into runs of text and structural escapes kept apart."""
-
-    pieces: list[str] = []
-    current: list[str] = []
-    index = 0
-    while index < len(content):
-        escape = content[index : index + 2]
-        if escape in _STRUCTURAL_CELL_ESCAPES:
-            pieces.append("".join(current))
-            pieces.append(escape)
-            current = []
-            index += 2
-        elif content[index] == "\\" and index + 1 < len(content):
-            current.append(escape)
-            index += 2
-        else:
-            current.append(content[index])
-            index += 1
-    pieces.append("".join(current))
-    return pieces
-
-
 def _clean_table_cell(cell: str) -> str:
     content = cell.strip()
     if not content:
         return cell
     leading = cell[: len(cell) - len(cell.lstrip())]
     trailing = cell[len(cell.rstrip()) :]
-    cleaned = "".join(
-        piece if piece in _STRUCTURAL_CELL_ESCAPES else markdown_inline_to_plain_text(piece)
-        for piece in _split_cell_on_structural_escapes(content)
-    )
-    return f"{leading}{cleaned}{trailing}"
+    return f"{leading}{_clean_inline(content, _STRUCTURAL_CELL_ESCAPES)}{trailing}"
 
 
 def markdown_table_to_plain_text(table: str) -> str:
