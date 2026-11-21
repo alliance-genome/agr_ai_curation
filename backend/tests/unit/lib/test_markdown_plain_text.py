@@ -7,6 +7,7 @@ file was written. It is kept next to the new value so each change in stored
 text is visible; the tests assert the new value.
 """
 
+import random
 import time
 
 import pytest
@@ -147,7 +148,9 @@ def test_a_character_code_ends_the_same_as_its_literal_character(literal, encode
         ("| a&#92;| b |", "| a\\\\| b |"),
         ("| a&#92;&#92;| b |", "| a\\\\| b |"),
         ("| &#65372; | b |", "| \\| | b |"),
-        ("| &#92; |", "| \\\\ |"),
+        # A decoded backslash followed by a space cannot escape the pipe.
+        ("| &#92; |", "| \\ |"),
+        ("| a&#92; | b |", "| a\\ | b |"),
     ],
 )
 def test_decoded_characters_never_move_a_cell_boundary(raw, after):
@@ -155,6 +158,27 @@ def test_decoded_characters_never_move_a_cell_boundary(raw, after):
 
     assert cleaned == after
     assert len(split_table_row_cells(cleaned)) == len(split_table_row_cells(raw))
+
+
+@pytest.mark.parametrize(
+    "row",
+    ["| C:\\Users\\data\\ | x |", "| path C:\\ |", "| a | b\\"],
+)
+def test_a_literal_trailing_backslash_before_a_space_or_the_row_end_is_kept(row):
+    assert markdown_table_to_plain_text(row) == row
+    assert len(split_table_row_cells(markdown_table_to_plain_text(row))) == len(split_table_row_cells(row))
+
+
+def test_random_rows_keep_their_cells_and_plain_cells_stay_unchanged():
+    rng = random.Random(1460)
+    for _ in range(2000):
+        plain = "|" + "".join(rng.choice(["a", "b", " ", "\\", "|"]) for _ in range(rng.randint(1, 16)))
+        assert markdown_table_to_plain_text(plain) == plain
+        coded = "|" + "".join(
+            rng.choice(["a", " ", "\\", "|", "&#92;", "&#124;", "&vert;", "*"])
+            for _ in range(rng.randint(1, 12))
+        )
+        assert len(split_table_row_cells(markdown_table_to_plain_text(coded))) == len(split_table_row_cells(coded))
 
 
 def test_escaped_pipe_inside_a_cell_stays_escaped_and_in_its_cell():

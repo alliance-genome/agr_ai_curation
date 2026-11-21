@@ -184,13 +184,15 @@ def _parse_inline(text: str) -> str:
     return unicodedata.normalize("NFKC", "".join(rendered))
 
 
-def _keep_cell_boundaries(cleaned: str) -> str:
+def _keep_cell_boundaries(cleaned: str, *, pipe_follows: bool) -> str:
     """Re-escape a parsed cell piece so it cannot move the row's cell boundaries.
 
     Decoding can produce a pipe (``&#124;``) or a backslash (``&#92;``). The
     row splitter treats a pipe after an odd number of backslashes as part of
-    the cell, so a pipe after an even run gets one more backslash, and a piece
-    that ends in an odd run gets one more so it cannot escape the next pipe.
+    the cell, so a pipe after an even run gets one more backslash. A piece that
+    ends in an odd run gets one more only when ``pipe_follows``: when the next
+    stored character is a pipe or a kept escape, which that backslash would
+    otherwise escape. A backslash followed by a space is left as written.
     """
 
     parts: list[str] = []
@@ -200,19 +202,28 @@ def _keep_cell_boundaries(cleaned: str) -> str:
             parts.append("\\")
         parts.append(character)
         run = run + 1 if character == "\\" else 0
-    if run % 2:
+    if run % 2 and pipe_follows:
         parts.append("\\")
     return "".join(parts)
 
 
-def _clean_inline(text: str, kept_escapes: frozenset[str], *, in_cell: bool = False) -> str:
+def _clean_inline(
+    text: str,
+    kept_escapes: frozenset[str],
+    *,
+    in_cell: bool = False,
+    pipe_follows_text: bool = False,
+) -> str:
     pieces = _split_on_kept_escapes(_strip_inline_tags(text), kept_escapes)
     cleaned: list[str] = []
-    for piece in pieces:
+    for index, piece in enumerate(pieces):
         if piece in kept_escapes:
             cleaned.append(piece)
         elif in_cell:
-            cleaned.append(_keep_cell_boundaries(_parse_inline(piece)))
+            # A kept escape always starts with a backslash; ``pipe_follows_text``
+            # says whether the cell's boundary pipe comes right after the text.
+            pipe_follows = index + 1 < len(pieces) or pipe_follows_text
+            cleaned.append(_keep_cell_boundaries(_parse_inline(piece), pipe_follows=pipe_follows))
         else:
             cleaned.append(_parse_inline(piece))
     return "".join(cleaned)
@@ -254,13 +265,19 @@ def split_table_row_cells(row: str) -> list[str]:
     return cells
 
 
-def _clean_table_cell(cell: str) -> str:
+def _clean_table_cell(cell: str, *, pipe_follows: bool) -> str:
     content = cell.strip()
     if not content:
         return cell
     leading = cell[: len(cell) - len(cell.lstrip())]
     trailing = cell[len(cell.rstrip()) :]
-    return f"{leading}{_clean_inline(content, _STRUCTURAL_CELL_ESCAPES, in_cell=True)}{trailing}"
+    cleaned = _clean_inline(
+        content,
+        _STRUCTURAL_CELL_ESCAPES,
+        in_cell=True,
+        pipe_follows_text=pipe_follows and not trailing,
+    )
+    return f"{leading}{cleaned}{trailing}"
 
 
 def markdown_table_to_plain_text(table: str) -> str:
@@ -275,8 +292,13 @@ def markdown_table_to_plain_text(table: str) -> str:
     cleaned_lines: list[str] = []
     for line in table.split("\n"):
         if line.lstrip().startswith("|"):
+            cells = split_table_row_cells(line)
+            last = len(cells) - 1
             cleaned_lines.append(
-                "|".join(_clean_table_cell(cell) for cell in split_table_row_cells(line))
+                "|".join(
+                    _clean_table_cell(cell, pipe_follows=index < last)
+                    for index, cell in enumerate(cells)
+                )
             )
         else:
             cleaned_lines.append(markdown_inline_to_plain_text(line))
