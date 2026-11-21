@@ -207,6 +207,7 @@ class PDFDocumentFile(Base):
     source_file_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_file_extension: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_artifact_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # The provider import's status; NULL on files without a provider import.
     source_import_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_imported_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,

@@ -43,7 +43,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from src.lib.document_files.piece_numbers import PaperOwner, PieceNumbers, scan_papers
-from src.lib.document_files.service import element_text_bytes
+from src.lib.document_files.service import DocumentFileError, element_text_bytes
 from src.models.sql.pdf_document import (
     FILE_ROLE_MAIN,
     FILE_STATUS_READY,
@@ -140,7 +140,8 @@ def measure(session, client: Any, storage_root: Path) -> tuple[list[MainFileMeas
         value: PieceNumbers = numbers[str(paper.id)]
         try:
             text_bytes = _measure_text(storage_root, main_file.processed_json_path)
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, DocumentFileError, OSError):
+            # JSON that is not a list of elements with text, or a file that cannot be read.
             unreadable_json.append(str(paper.id))
             continue
         measurements.append(MainFileMeasurement(

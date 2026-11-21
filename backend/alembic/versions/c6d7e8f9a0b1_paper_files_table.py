@@ -14,8 +14,9 @@ before traffic reopens.
 
 Forward-only, and safe to restart: Alembic runs every pending migration in one
 transaction, so a failure anywhere leaves the database exactly as it was. Any
-row this migration cannot convert stops it with ``PaperFilesMigrationError``
-naming the affected internal row ids; nothing is skipped and no missing value
+row this migration cannot convert (an unknown ``viewer_mode``, a missing
+required value, a hash or file path shared with another paper) stops it with
+``PaperFilesMigrationError`` naming the affected internal row ids; nothing is skipped and no missing value
 is invented. The copy is one set-based statement (about 1,200 papers in
 production), so there is no per-row work to batch. It verifies its own result
 before dropping the old columns. The schema changes take short ACCESS EXCLUSIVE
@@ -119,6 +120,19 @@ def _require_convertible_rows(bind) -> None:
         raise PaperFilesMigrationError(
             f"{len(missing)} papers lack a required file value; nothing was changed: {_ids(missing)}"
         )
+    # Main-file hashes and file paths are unique in the new table. The old unique
+    # constraints may be missing where a hand-run 2025 SQL script dropped them.
+    for column in ("file_hash", "file_path"):
+        duplicated = bind.execute(sa.text(
+            f"SELECT id FROM pdf_documents WHERE {column} IN ("
+            f"SELECT {column} FROM pdf_documents GROUP BY {column} HAVING count(*) > 1"
+            ") ORDER BY id"
+        )).all()
+        if duplicated:
+            raise PaperFilesMigrationError(
+                f"{len(duplicated)} papers share a {column} with another paper; "
+                f"nothing was changed: {_ids(duplicated)}"
+            )
 
 
 def _create_files_table() -> None:

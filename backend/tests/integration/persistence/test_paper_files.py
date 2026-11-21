@@ -92,9 +92,30 @@ def test_a_new_paper_main_file_takes_pieces_from_zero_and_numbers_are_never_reus
         assert ready_piece_total(db, document_id) == 0
 
     mark_file_ready(file_id, text_bytes=42)
+    mark_file_ready(second_id, text_bytes=7)
     with SessionLocal() as db:
-        assert ready_piece_total(db, document_id) == 5
+        assert ready_piece_total(db, document_id) == 7
+        # A file without a provider import keeps no import status.
+        assert db.get(PDFDocumentFile, file_id).source_import_status is None
+
+
+def test_a_provider_import_status_follows_the_file(owner_id):
+    document_id, file_id = _paper(owner_id, source_import_status="pending")
+    reserve_file_chunk_range(document_id, file_id, 1)
+    mark_file_ready(file_id, text_bytes=1)
+    with SessionLocal() as db:
         assert db.get(PDFDocumentFile, file_id).source_import_status == "completed"
+
+
+def test_a_range_cannot_be_reserved_for_another_papers_file(owner_id):
+    document_id, _ = _paper(owner_id)
+    other_document_id, other_file_id = _paper(owner_id)
+    with pytest.raises(DocumentFileError, match="is not a file of document"):
+        reserve_file_chunk_range(document_id, other_file_id, 2)
+    with SessionLocal() as db:
+        assert db.get(PDFDocument, document_id).next_chunk_index == 0
+        assert db.get(PDFDocumentFile, other_file_id).chunk_index_start is None
+    assert other_document_id != document_id
 
 
 def test_an_unmeasured_paper_cannot_reserve_a_range(owner_id):

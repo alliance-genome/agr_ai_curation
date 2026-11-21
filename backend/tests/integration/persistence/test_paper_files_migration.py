@@ -258,3 +258,61 @@ def test_migrated_papers_keep_their_constraints(historical_migration_database):
     } <= constraints
     assert cascade == "c"
 
+
+
+def _expect_stop(match: str) -> str:
+    with pytest.raises(Exception) as raised:
+        command.upgrade(_config(), REVISION)
+    assert type(raised.value).__name__ == "PaperFilesMigrationError"
+    assert match in str(raised.value)
+    with SessionLocal() as db:
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == PREVIOUS_HEAD
+        assert db.scalar(text("SELECT to_regclass('pdf_document_files')")) is None
+    return str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("relax", "overrides"),
+    [
+        ("ALTER TABLE pdf_documents ALTER COLUMN file_path DROP NOT NULL", {"file_path": None}),
+        ("ALTER TABLE pdf_documents ALTER COLUMN file_hash DROP NOT NULL", {"file_hash": None}),
+        ("ALTER TABLE pdf_documents DROP CONSTRAINT ck_pdf_documents_file_size", {"file_size": 0}),
+        ("ALTER TABLE pdf_documents DROP CONSTRAINT ck_pdf_documents_page_count", {"page_count": 0}),
+        ("ALTER TABLE pdf_documents ALTER COLUMN page_count DROP NOT NULL",
+         {"page_count": None, "viewer_mode": "local_pdf"}),
+    ],
+)
+def test_a_missing_required_file_value_stops_the_migration(historical_migration_database, relax, overrides):
+    command.upgrade(_config(), PREVIOUS_HEAD)
+    with SessionLocal.begin() as db:
+        # Simulate a database whose old constraints were relaxed by hand.
+        db.execute(text(relax))
+        owner_id = _owner(db, "migration-files-missing")
+        broken = _paper(owner_id, 1, **overrides)
+        _insert(db, broken)
+        _insert(db, _paper(owner_id, 2))
+
+    message = _expect_stop("lack a required file value")
+    assert message.startswith("1 papers") and str(broken["id"]) in message
+
+
+@pytest.mark.parametrize(
+    ("column", "constraint"),
+    [("file_hash", "uq_pdf_documents_file_hash"), ("file_path", "uq_pdf_documents_file_path")],
+)
+def test_a_shared_hash_or_path_stops_the_migration_naming_both_rows(
+    historical_migration_database, column, constraint,
+):
+    command.upgrade(_config(), PREVIOUS_HEAD)
+    with SessionLocal.begin() as db:
+        # A hand-run 2025 SQL script dropped these constraints; some databases may lack them.
+        db.execute(text(f"ALTER TABLE pdf_documents DROP CONSTRAINT {constraint}"))
+        owner_id = _owner(db, "migration-files-shared")
+        first = _paper(owner_id, 1)
+        second = _paper(owner_id, 2, **{column: first[column]})
+        for row in (first, second, _paper(owner_id, 3)):
+            _insert(db, row)
+
+    message = _expect_stop(f"2 papers share a {column}")
+    assert str(first["id"]) in message and str(second["id"]) in message
+    assert first[column] not in message

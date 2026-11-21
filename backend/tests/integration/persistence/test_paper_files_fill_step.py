@@ -43,14 +43,16 @@ def migrated_library(historical_migration_database, weaviate_connection, setup_c
         db.flush()
         owner_id = owner.id
 
-    def add_paper(*, status: str, file_status: str, pieces: list[int], processed: bool = True) -> str:
+    def add_paper(*, status: str, file_status: str, pieces: list[int], processed: bool = True,
+                  elements: list | None = None, write_json: bool = True) -> str:
         document_id = uuid4()
         processed_path = None
         if processed:
             processed_path = f"owner/processed_json/{document_id}.json"
-            path = tmp_path / processed_path
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(ELEMENTS), encoding="utf-8")
+            if write_json:
+                path = tmp_path / processed_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(ELEMENTS if elements is None else elements), encoding="utf-8")
         with SessionLocal.begin() as db:
             paper = PDFDocument(
                 id=document_id, user_id=owner_id, filename=f"made-up-{document_id}.pdf",
@@ -158,3 +160,18 @@ def test_read_only_check_reports_counts_and_internal_ids_only(migrated_library, 
     assert "made-up-" not in printed and "made-up piece" not in printed
     with SessionLocal() as db:
         assert db.get(PDFDocument, gapped).next_chunk_index is None
+
+
+def test_a_ready_file_whose_processed_json_is_missing_on_disk_stops_the_fill_step(migrated_library):
+    missing = migrated_library(status="completed", file_status="ready", pieces=[0], write_json=False)
+    with pytest.raises(fill_existing.FillStepError, match="ready files without processed JSON") as raised:
+        fill_existing.run(verify_only=False)
+    assert raised.value.document_ids == [missing]
+
+
+def test_processed_json_with_an_element_without_text_stops_the_fill_step(migrated_library):
+    broken = migrated_library(status="failed", file_status="failed", pieces=[0],
+                              elements=[{"metadata": {}}])
+    with pytest.raises(fill_existing.FillStepError, match="cannot be read as elements") as raised:
+        fill_existing.run(verify_only=False)
+    assert raised.value.document_ids == [broken]

@@ -149,7 +149,8 @@ def mark_file_ready(file_id: UUID, *, text_bytes: int) -> None:
             raise DocumentFileError(f"File {file_id} does not exist")
         require_chunk_range(file_row)
         file_row.status = FILE_STATUS_READY
-        file_row.source_import_status = "completed"
+        if file_row.source_import_status is not None:
+            file_row.source_import_status = "completed"
         file_row.error_message = None
         file_row.text_bytes = text_bytes
 
@@ -167,7 +168,10 @@ def _update_file(file_id: UUID, *, status: str, import_status: str, error_messag
         if file_row is None:
             raise DocumentFileError(f"File {file_id} does not exist")
         file_row.status = status
-        file_row.source_import_status = import_status
+        # Only files with a provider import carry an import status (it starts
+        # "pending" when the import is planned); plain uploads keep NULL.
+        if file_row.source_import_status is not None:
+            file_row.source_import_status = import_status
         file_row.error_message = (
             None if error_message is None else error_message[:get_pdf_document_error_message_max_chars()]
         )
