@@ -271,6 +271,51 @@ async def test_section_read_issues_its_spans_for_record_evidence_without_read_ch
 
 
 @pytest.mark.asyncio
+async def test_table_rows_read_by_section_are_recorded_one_row_at_a_time(store, scope, monkeypatch):
+    """P4: a whole-row table piece is read as one span per row; the column label
+    above the rows has no number, so it can never be selected as evidence."""
+    from uuid import UUID
+    from src.lib.pipeline.chunk import chunk_parsed_document
+    from src.models.strategy import ChunkingStrategy
+
+    names = "| Strain | Genotype | Temp |"
+    rows = [f"| XS{i:04d} | zeta{i} made-up. | 25 C |" for i in range(1, 121)]
+    table = "\n".join([names, "| --- | --- | --- |", *rows])
+    pieces = await chunk_parsed_document(
+        [{"type": "Table", "text": table, "metadata": {"section_title": "Results"}}],
+        ChunkingStrategy.get_research_strategy(), "doc-a",
+    )
+    chunks = [
+        {**_section_chunk(piece.chunk_index, piece.content),
+         "id": str(UUID(int=piece.chunk_index + 1)),
+         "metadata": json.loads(json.dumps(piece.metadata.model_dump(), default=str))}
+        for piece in pieces
+    ]
+    assert len(chunks) > 2
+    tools = _section_reading_setup(store, scope, monkeypatch, chunks)
+
+    section = await _invoke(tools["read_section"], {"section_name": "Results"})
+    later = section.section.passages[2]
+    row = later.evidence_spans[3]
+    assert row.span_type == "table_row"
+
+    accepted = await _invoke(tools["record_evidence"], {
+        "entity": "zeta", "selections": [{"chunk_index": later.chunk_index, "span_index": row.span_index}],
+    })
+    assert accepted["status"] == "verified"
+    assert accepted["verified_quote"] == row.text
+    assert accepted["verified_quote"] in rows
+    assert names not in accepted["verified_quote"]
+    assert accepted["source_fragments"][0]["span_type"] == "table_row"
+
+    # The label is not a span: the next free number after the rows is refused.
+    with pytest.raises(refs.DocumentReferenceError, match="unavailable"):
+        await binding(store, scope).resolve([
+            DocumentSelection(chunk_index=later.chunk_index, span_index=len(later.evidence_spans)),
+        ])
+
+
+@pytest.mark.asyncio
 async def test_text_contains_read_issues_only_the_matching_chunks(store, scope, monkeypatch):
     chunks = [
         _section_chunk(20, "Stock A was obtained from Bloomington."),
